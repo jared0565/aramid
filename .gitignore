@@ -1,0 +1,6 @@
+graph-out/
+.graphite*/
+.cache/
+.aramid/
+__pycache__/
+*.pyc
