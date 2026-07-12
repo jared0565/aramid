@@ -77,3 +77,21 @@ class Ledger:
         self.append(Event(EventType.RUN_FINISHED, run_id, at,
                           payload={"blocking": sum(1 for f in findings if str(f.verdict)=="block")}))
         return new_ids
+
+    def has_baseline(self) -> bool:
+        return any(e.type == EventType.BASELINE_SNAPSHOT for e in self.events())
+
+    def write_baseline(self, run_id, at, fingerprints: set[str]) -> None:
+        self.append(Event(EventType.BASELINE_SNAPSHOT, run_id, at,
+                          payload={"ids": sorted(fingerprints)}))
+
+    def baseline_ids(self) -> set[str]:
+        ids: set[str] = set()
+        for e in self.events():
+            if e.type == EventType.BASELINE_SNAPSHOT:
+                ids = set(e.payload.get("ids", []))
+        return ids
+
+    def is_new(self, finding_id: str) -> bool:
+        _, seen = _materialize(self.events())
+        return finding_id not in self.baseline_ids() and finding_id not in seen
