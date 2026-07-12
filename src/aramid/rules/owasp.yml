@@ -126,7 +126,12 @@ rules:
       confidence: HIGH
       cwe: "CWE-95: Improper Neutralization of Directives in Dynamically Evaluated Code"
       owasp: "A03:2021 - Injection"
-    pattern: new Function(...)
+    patterns:
+      - pattern: new Function(...)
+      - pattern-not: new Function("...")
+      - pattern-not: new Function("...", "...")
+      - pattern-not: new Function("...", "...", "...")
+      - pattern-not: new Function("...", "...", "...", "...")
 
   # --- A08:2021 Software and Data Integrity Failures -- unsafe deserialization
   - id: owasp-top-ten.a08-deserialization.python-pickle-loads
@@ -175,9 +180,11 @@ rules:
       confidence: HIGH
       cwe: "CWE-502: Deserialization of Untrusted Data"
       owasp: "A08:2021 - Software and Data Integrity Failures"
-    pattern-either:
-      - pattern: eval($X)
-      - pattern: eval("(" + $X + ")")
+    patterns:
+      - pattern-either:
+          - pattern: eval($X)
+          - pattern: eval("(" + $X + ")")
+      - pattern-not: eval("...")
 
   # --- A02:2021 Cryptographic Failures ----------------------------------------
   - id: owasp-top-ten.a02-crypto-failures.python-weak-hash-md5-sha1

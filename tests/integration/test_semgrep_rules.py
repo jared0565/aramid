@@ -148,3 +148,93 @@ def test_live_scan_clean_code_yields_zero_findings(tmp_path, semgrep_path_env):
 
     findings = semgrep_runner.parse(result, ctx)
     assert findings == []
+
+
+# --- Task 8a precision fix: JS BLOCK-tier eval/Function rules must not fire
+# on literal-only arguments (I1/I2). Each pair below drives the exact
+# aramid.runners.semgrep.run()/parse() path against real semgrep so the
+# vendored `pattern-not` exclusions are proven live, not just YAML-valid.
+# NOTE: the eval()/new Function() calls below are inert JS *source text*
+# stored as Python string literals -- they are written to temp .js files for
+# semgrep to statically scan and are never executed by this test process. ---
+
+_NEW_FUNCTION_LITERAL_SRC = (
+    'function safe() {\n'
+    '  return new Function("return 1+1");\n'
+    '}\n'
+)
+_NEW_FUNCTION_TAINTED_SRC = (
+    'function unsafe(userInput) {\n'
+    '  return new Function(userInput);\n'
+    '}\n'
+)
+_EVAL_LITERAL_SRC = (
+    'function safe() {\n'
+    '  return eval("1+1");\n'
+    '}\n'
+)
+_EVAL_TAINTED_SRC = (
+    'function unsafe(userInput) {\n'
+    '  return eval(userInput);\n'
+    '}\n'
+)
+
+
+@pytest.mark.skipif(_SEMGREP_BIN is None, reason=_SKIP_REASON)
+def test_live_scan_function_constructor_literal_arg_no_finding(tmp_path, semgrep_path_env):
+    """I1: new Function() with only a string-literal argument is safe,
+    fixed source -- must NOT trip javascript-dangerous-function-constructor."""
+    (tmp_path / "newfunc_literal.js").write_text(_NEW_FUNCTION_LITERAL_SRC, encoding="utf-8")
+    ctx = RunContext(root=tmp_path, files=["newfunc_literal.js"])
+
+    result = semgrep_runner.run(ctx)
+    assert result.state is ToolState.OK, (result.state, result.stderr)
+
+    findings = semgrep_runner.parse(result, ctx)
+    function_ctor = [f for f in findings if "dangerous-function-constructor" in f.rule]
+    assert function_ctor == [], findings
+
+
+@pytest.mark.skipif(_SEMGREP_BIN is None, reason=_SKIP_REASON)
+def test_live_scan_function_constructor_tainted_arg_still_fires(tmp_path, semgrep_path_env):
+    """I1 regression guard: new Function(variable) still trips ERROR."""
+    (tmp_path / "newfunc_tainted.js").write_text(_NEW_FUNCTION_TAINTED_SRC, encoding="utf-8")
+    ctx = RunContext(root=tmp_path, files=["newfunc_tainted.js"])
+
+    result = semgrep_runner.run(ctx)
+    assert result.state is ToolState.OK, (result.state, result.stderr)
+
+    findings = semgrep_runner.parse(result, ctx)
+    function_ctor = [f for f in findings if "dangerous-function-constructor" in f.rule]
+    assert function_ctor, findings
+    assert all(f.severity_raw == "ERROR" for f in function_ctor)
+
+
+@pytest.mark.skipif(_SEMGREP_BIN is None, reason=_SKIP_REASON)
+def test_live_scan_eval_literal_arg_no_finding(tmp_path, semgrep_path_env):
+    """I2: eval() with only a string-literal argument is safe, fixed source
+    -- must NOT trip javascript-eval-untrusted-data."""
+    (tmp_path / "eval_literal.js").write_text(_EVAL_LITERAL_SRC, encoding="utf-8")
+    ctx = RunContext(root=tmp_path, files=["eval_literal.js"])
+
+    result = semgrep_runner.run(ctx)
+    assert result.state is ToolState.OK, (result.state, result.stderr)
+
+    findings = semgrep_runner.parse(result, ctx)
+    eval_untrusted = [f for f in findings if "eval-untrusted-data" in f.rule]
+    assert eval_untrusted == [], findings
+
+
+@pytest.mark.skipif(_SEMGREP_BIN is None, reason=_SKIP_REASON)
+def test_live_scan_eval_tainted_arg_still_fires(tmp_path, semgrep_path_env):
+    """I2 regression guard: eval(variable) still trips ERROR."""
+    (tmp_path / "eval_tainted.js").write_text(_EVAL_TAINTED_SRC, encoding="utf-8")
+    ctx = RunContext(root=tmp_path, files=["eval_tainted.js"])
+
+    result = semgrep_runner.run(ctx)
+    assert result.state is ToolState.OK, (result.state, result.stderr)
+
+    findings = semgrep_runner.parse(result, ctx)
+    eval_untrusted = [f for f in findings if "eval-untrusted-data" in f.rule]
+    assert eval_untrusted, findings
+    assert all(f.severity_raw == "ERROR" for f in eval_untrusted)
