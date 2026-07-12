@@ -1,0 +1,22 @@
+# Curated BLOCK-tier rule list (design doc section 3, "Block-list definition").
+# Implementation-owned artifact: ruff S-rules whose bandit equivalents are
+# HIGH-confidence/HIGH-severity, and semgrep rules in the injection/
+# deserialization/crypto classes. Repos demote noisy entries via aramid.toml
+# (layered over this file by aramid.config.load_config), never edit this
+# packaged copy per-repo.
+
+[ruff]
+# S102 exec-builtin-used, S105/S106/S107 hardcoded-password-*,
+# S608 hardcoded-sql-expression, S301/S302 pickle/marshal deserialization.
+block = ["S102", "S105", "S106", "S107", "S608", "S301", "S302"]
+
+[semgrep]
+# fnmatch patterns against semgrep's check_id.
+block = ["owasp-top-ten.*", "*sqli*", "*deserialization*", "*command-injection*"]
+
+[deps]
+# CVE severity (OSV/npm-family vocabulary) at or above this tier blocks;
+# below it warns. Single source of truth for the dependency block
+# threshold -- aramid.config.Config has no separate cve_block_severity
+# field, only this key, overridable via aramid.toml.
+block_severity = "critical"

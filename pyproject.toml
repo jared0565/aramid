@@ -13,3 +13,6 @@ aramid = "aramid.cli:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.setuptools.package-data]
+aramid = ["data/*.toml"]
