@@ -68,3 +68,29 @@ def read_for_fingerprint(root: Path, ref: str, rel_path: str) -> str:
         if p.exists():
             return p.read_text(errors="replace").replace("\r\n", "\n")
     return ""
+
+def rev_sha(root: Path, rev: str) -> str | None:
+    cp = _run(root, "rev-parse", "--verify", f"{rev}^{{commit}}")
+    return cp.stdout.strip() if cp.returncode == 0 else None
+
+
+def first_parent(root: Path, rev: str) -> str | None:
+    cp = _run(root, "rev-parse", "--verify", f"{rev}^")
+    return cp.stdout.strip() if cp.returncode == 0 else None
+
+
+def diff_paths(root: Path, base: str | None, head: str) -> list[str]:
+    if base is None:
+        cp = _run(root, "diff-tree", "--no-commit-id", "--name-only", "-r", "--root", head)
+    else:
+        cp = _run(root, "diff", "--name-only", "--diff-filter=ACMR", f"{base}..{head}")
+    return [ln for ln in cp.stdout.splitlines() if ln] if cp.returncode == 0 else []
+
+
+def diff_text(root: Path, base: str | None, head: str, max_bytes: int = 400_000) -> str:
+    if base is None:
+        cp = _run(root, "show", "--format=", head)
+    else:
+        cp = _run(root, "diff", f"{base}..{head}")
+    text = cp.stdout if cp.returncode == 0 else ""
+    return text[:max_bytes]

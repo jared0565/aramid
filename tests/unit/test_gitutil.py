@@ -10,6 +10,12 @@ def _repo(tmp_path) -> Path:
     _git(r, "config", "user.email", "t@t"); _git(r, "config", "user.name", "t")
     return r
 
+def _commit(root: Path, name: str, content: str, msg: str) -> None:
+    (root / name).parent.mkdir(parents=True, exist_ok=True)
+    (root / name).write_text(content, encoding="utf-8")
+    subprocess.run(["git", "add", name], cwd=root, check=True, capture_output=True)
+    subprocess.run(["git", "commit", "-m", msg], cwd=root, check=True, capture_output=True)
+
 def test_repo_root_and_blob(tmp_path):
     r = _repo(tmp_path)
     (r / "a.py").write_text("print(1)\n")
@@ -36,3 +42,34 @@ def test_read_for_fingerprint_untracked_uses_worktree(tmp_path):
     # literal \r\n into \r\r\n before it ever reaches read_for_fingerprint)
     content = gitutil.read_for_fingerprint(r, "HEAD", "u.py")
     assert content == "secret=1\n"            # non-empty, LF-normalized
+
+def test_rev_sha_and_first_parent(tmp_path):
+    r = _repo(tmp_path)
+    _commit(r, "a.py", "x = 1\n", "first")
+    root_sha = gitutil.rev_sha(r, "HEAD")
+    assert root_sha and len(root_sha) == 40
+    assert gitutil.first_parent(r, "HEAD") is None  # root commit
+    _commit(r, "b.py", "y = 2\n", "second")
+    assert gitutil.first_parent(r, "HEAD") == root_sha
+    assert gitutil.rev_sha(r, "not-a-rev") is None
+
+
+def test_diff_paths_single_commit_and_root(tmp_path):
+    r = _repo(tmp_path)
+    _commit(r, "a.py", "x = 1\n", "first")
+    head1 = gitutil.rev_sha(r, "HEAD")
+    assert gitutil.diff_paths(r, None, head1) == ["a.py"]  # root commit: full tree
+    _commit(r, "sub/b.py", "y = 2\n", "second")
+    head2 = gitutil.rev_sha(r, "HEAD")
+    assert gitutil.diff_paths(r, head1, head2) == ["sub/b.py"]
+
+
+def test_diff_text_contains_added_lines_and_truncates(tmp_path):
+    r = _repo(tmp_path)
+    _commit(r, "a.py", "x = 1\n", "first")
+    h1 = gitutil.rev_sha(r, "HEAD")
+    _commit(r, "a.py", "x = 1\nexec(x)\n", "second")
+    h2 = gitutil.rev_sha(r, "HEAD")
+    text = gitutil.diff_text(r, h1, h2)
+    assert "+exec(x)" in text
+    assert len(gitutil.diff_text(r, h1, h2, max_bytes=10)) <= 10
