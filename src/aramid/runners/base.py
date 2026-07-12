@@ -1,5 +1,5 @@
 import os, shutil, subprocess, sys, time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import StrEnum
 from pathlib import Path
 from typing import Protocol
@@ -10,6 +10,24 @@ class ToolState(StrEnum):
 @dataclass
 class RunnerResult:
     tool: str; state: ToolState; raw: str = ""; stderr: str = ""; duration_s: float = 0.0
+
+@dataclass
+class RunContext:
+    """Shared invocation context passed to every adapter's run()/parse().
+
+    root: repo root (cwd for subprocesses, and the base gitutil paths are
+      relative to).
+    files: the file set in scope (staged files for pre-commit, changed files
+      for pre-push/--all, etc.) -- adapters that scan by range/config ignore
+      this.
+    rng: git revision range (e.g. "@{u}..HEAD") when scanning history/commits;
+      None means "staged" / "not range-based".
+    pkg_manager: detected JS package manager ("npm"/"pnpm"/"yarn") or None.
+    """
+    root: Path
+    files: list[str] = field(default_factory=list)
+    rng: str | None = None
+    pkg_manager: str | None = None
 
 _WIN = sys.platform == "win32"
 

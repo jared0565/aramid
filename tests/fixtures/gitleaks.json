@@ -1,0 +1,22 @@
+[
+  {
+    "Description": "AWS Access Key",
+    "StartLine": 3,
+    "EndLine": 3,
+    "StartColumn": 15,
+    "EndColumn": 54,
+    "Match": "AKIAIOSFODNN7EXAMPLE",
+    "Secret": "AKIAIOSFODNN7EXAMPLE",
+    "File": "src/config.py",
+    "SymlinkFile": "",
+    "Commit": "",
+    "Entropy": 3.1699219,
+    "Author": "",
+    "Email": "",
+    "Date": "",
+    "Message": "",
+    "Tags": [],
+    "RuleID": "aws-access-token",
+    "Fingerprint": "src/config.py:aws-access-token:3"
+  }
+]
