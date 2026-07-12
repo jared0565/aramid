@@ -2,13 +2,20 @@
 
 Not a framework -- just the two bits of boilerplate that would otherwise be
 copy-pasted into every adapter: making a tool's file paths safe to hand to
-git as a pathspec, and turning a JSON-emitting subprocess run into a
+git as a pathspec, and turning an already-run subprocess result into a
 RunnerResult with per-runner (not exit-code-based) CRASHED detection.
+
+Deliberately does NOT call run_subprocess itself: each adapter imports and
+calls run_subprocess in its own module namespace so that
+`monkeypatch.setattr(<adapter_module>, "run_subprocess", fake)` in tests
+actually intercepts the call (a module-level helper calling its own
+same-module binding would silently bypass such a patch -- see
+aramid.gitutil.read_for_fingerprint / normalizer.py for the same convention).
 """
 import json
 from pathlib import Path
 
-from aramid.runners.base import RunnerResult, ToolState, run_subprocess
+from aramid.runners.base import RunnerResult, ToolState
 
 
 def relativize(path_str: str, root: Path) -> str:
@@ -28,16 +35,14 @@ def relativize(path_str: str, root: Path) -> str:
         return path_str.replace("\\", "/")
 
 
-def run_json_tool(tool: str, argv: list[str], root: Path, timeout_s: float,
-                   empty: str = "[]") -> RunnerResult:
-    """Run argv, then validate stdout as JSON (empty stdout treated as `empty`).
+def json_or_crashed(tool: str, result: RunnerResult, empty: str = "[]") -> RunnerResult:
+    """Validate an already-run subprocess result's stdout as JSON.
 
     MISSING/TIMEOUT pass through unchanged. A tool that runs to completion but
     finds issues typically exits non-zero -- that alone is not a crash, so we
     never look at the exit code here. CRASHED is reserved for output that
     doesn't parse as JSON (the tool errored before producing a report).
     """
-    result = run_subprocess(argv, root, timeout_s)
     if result.state in (ToolState.MISSING, ToolState.TIMEOUT):
         return result
     try:

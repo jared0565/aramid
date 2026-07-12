@@ -1,0 +1,15 @@
+[
+  {
+    "cell": null,
+    "code": "S102",
+    "end_location": {"column": 12, "row": 3},
+    "filename": "app.py",
+    "fix": null,
+    "location": {"column": 1, "row": 3},
+    "message": "Use of `exec` detected",
+    "name": "exec-builtin",
+    "noqa_row": 3,
+    "severity": "error",
+    "url": "https://docs.astral.sh/ruff/rules/exec-builtin"
+  }
+]
