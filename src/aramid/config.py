@@ -146,11 +146,19 @@ def load_suppressions(root: Path) -> tuple[list[OverrideRecord], list[Finding]]:
     return records, warnings
 
 
-def render_repo_stub(stack, pkg_mgr, *, today: str | None = None) -> str:
+def render_repo_stub(stack, pkg_mgr, *, today: str | None = None,
+                      scope_subpath: str | None = None,
+                      extra_ignore_paths: list[str] | tuple[str, ...] = ()) -> str:
     """Near-empty per-repo `aramid.toml` stub written by `init`. `stack`/
     `pkg_mgr` are surfaced only as an informational header comment -- the
     Config schema itself carries no stack/pkg-manager fields (those are
-    re-detected each run by aramid.detectors, not persisted config)."""
+    re-detected each run by aramid.detectors, not persisted config).
+
+    `scope_subpath` (init step 2, target != true repo root) and
+    `extra_ignore_paths` (nested `.git` dirs excluded from scan scope) are
+    both omitted entirely when not given -- a repo initted at its own root
+    with no nested repos gets a stub with neither key, matching the
+    pre-existing stub shape exactly (backward compatible)."""
     from datetime import date
 
     day = today or date.today().isoformat()
@@ -159,9 +167,14 @@ def render_repo_stub(stack, pkg_mgr, *, today: str | None = None) -> str:
 
     header = (f"# aramid repo config -- detected stack: {stack_note}; "
               f"package manager: {pkg_note}\n")
-    body = tomli_w.dumps({
+    body_dict = {
         "schema_version": CURRENT_SCHEMA_VERSION,
         "semgrep_block_armed": False,
         "bake_started": day,
-    })
+    }
+    if scope_subpath:
+        body_dict["scope_subpath"] = scope_subpath
+    if extra_ignore_paths:
+        body_dict["ignore_paths"] = list(extra_ignore_paths)
+    body = tomli_w.dumps(body_dict)
     return header + body

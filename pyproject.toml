@@ -15,4 +15,4 @@ aramid = "aramid.cli:main"
 where = ["src"]
 
 [tool.setuptools.package-data]
-aramid = ["data/*.toml"]
+aramid = ["data/*.toml", "data/*.tmpl"]

@@ -158,3 +158,24 @@ def test_render_repo_stub_contains_mandated_keys():
     assert f"schema_version = {config.CURRENT_SCHEMA_VERSION}" in text
     assert "semgrep_block_armed = false" in text
     assert 'bake_started = "2026-07-12"' in text
+
+
+def test_render_repo_stub_omits_scope_subpath_and_ignore_paths_by_default():
+    """A repo initted at its own root (no scope narrowing, no nested .git
+    exclusions) gets a stub with neither key -- init's target==root case."""
+    text = config.render_repo_stub({"python"}, None, today="2026-07-12")
+    assert "scope_subpath" not in text
+    assert "ignore_paths" not in text
+
+
+def test_render_repo_stub_records_scope_subpath_when_given():
+    text = config.render_repo_stub({"python"}, None, today="2026-07-12",
+                                    scope_subpath="sub/dir")
+    assert 'scope_subpath = "sub/dir"' in text
+
+
+def test_render_repo_stub_records_extra_ignore_paths_when_given():
+    text = config.render_repo_stub({"python"}, None, today="2026-07-12",
+                                    extra_ignore_paths=["vendor/sub/"])
+    assert "ignore_paths" in text
+    assert "vendor/sub/" in text

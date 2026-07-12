@@ -1,0 +1,58 @@
+<!-- aramid:managed -- regenerated verbatim by `aramid init` every time it runs;
+     hand-edits here are overwritten on the next init. Repo-specific config
+     (demoted rules, test command override, scan scope, ignore paths) belongs
+     in `aramid.toml` instead, which init never overwrites once it exists. -->
+
+# ARAMID.md
+
+This repo is armed with **aramid** -- a deterministic security and quality gate
+that runs in git hooks (`pre-commit`, `pre-push`) and is CI-ready via `aramid
+check --strict --json`.
+
+- **Detected stack:** __STACK__
+- **Package manager:** __PKG_MGR__
+- **Onboarded:** __DATE__
+
+## What aramid checks
+
+| Gate | Budget | Scope | Tools | Failure mode |
+|---|---|---|---|---|
+| pre-commit | 5s | staged files | gitleaks, ruff (security rules) | fail-open |
+| pre-push | 300s | changed files | gitleaks, semgrep, eslint, typecheck, dependency audit, tests | fail-closed |
+
+Secrets (gitleaks) always **BLOCK**. Everything else is severity-tiered:
+security-relevant findings block, quality findings warn.
+
+A **two-week WARN-only bake** is in effect for semgrep on this repo (see
+`aramid.toml`'s `bake_started` / `semgrep_block_armed`). While unarmed,
+semgrep BLOCK-tier findings report as WARN so the operator can demote noisy
+rules first. End the bake explicitly with `aramid arm` -- there is no
+auto-promotion.
+
+## Honesty note
+
+Phase 1 is 100% deterministic: no LLM calls, zero tokens. It covers the
+secrets, injection, vulnerable-dependency, and crypto-misuse slices of OWASP
+via static analysis -- **not** the full OWASP Top 10. Access control (A01),
+security misconfiguration (A05), and authentication (A07) are largely out of
+scope for this deterministic layer; that coverage is Phase 2 red-team
+territory. Don't mistake a clean `aramid check` for full security coverage.
+
+## Commands
+
+- `aramid check [--gate pre-commit|pre-push] [--staged|--range|--all]` -- run the gate manually.
+- `aramid status` -- open findings, new-since-baseline, unrotated historical secrets.
+- `aramid doctor [--fix]` -- verify/repair the toolchain and the installed hook's interpreter.
+- `aramid override <id> --reason "..."` -- suppress a WARN finding (ledger-logged).
+- `aramid arm` -- end the semgrep WARN-only bake.
+- `aramid uninstall` -- remove aramid's hooks/ARAMID.md/gitignore entries (ledger kept).
+
+## About the full-history secrets scan
+
+`aramid init` ran a one-time full-history gitleaks scan across this repo. Any
+hits are recorded in the ledger as historical, non-blocking findings -- see
+`aramid status`. **Deleting the line does not fix a leaked credential --
+rotate it**, then retire the finding with
+`aramid ledger mark-rotated <id> --reason "rotated in <system>"`.
+
+<!-- /aramid:managed -->
