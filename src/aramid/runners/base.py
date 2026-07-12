@@ -24,11 +24,16 @@ class RunContext:
     rng: git revision range (e.g. "@{u}..HEAD") when scanning history/commits;
       None means "staged" / "not range-based".
     pkg_manager: detected JS package manager ("npm"/"pnpm"/"yarn") or None.
+    stacks: detected language stacks (subset of {"python","js"}, from
+      aramid.detectors.detect_stacks) -- consulted by aramid.pipeline for
+      gate+stack runner applicability (a repo with no "js" stack never gets
+      eslint selected, etc.).
     """
     root: Path
     files: list[str] = field(default_factory=list)
     rng: str | None = None
     pkg_manager: str | None = None
+    stacks: set[str] = field(default_factory=set)
 
 _WIN = sys.platform == "win32"
 

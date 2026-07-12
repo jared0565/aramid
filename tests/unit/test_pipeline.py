@@ -1,4 +1,5 @@
 import subprocess
+import time
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -98,6 +99,10 @@ def test_one_block_finding_exits_one(tmp_path, monkeypatch):
 
 def test_missing_block_tier_tool_at_prepush_exits_one(tmp_path, monkeypatch):
     root = _repo(tmp_path)
+    (root / "tests").mkdir()  # a test suite IS present -> "tests" stays
+    # applicable (detect_tests non-empty); the fake below simulates the
+    # runner itself self-reporting MISSING (e.g. pytest binary absent),
+    # which is the scenario this test is actually about.
     cfg = _cfg(root, tmp_path, monkeypatch)
     ledger = _ledger(tmp_path)
 
@@ -114,6 +119,7 @@ def test_missing_block_tier_tool_at_prepush_exits_one(tmp_path, monkeypatch):
 
 def test_missing_block_tier_tool_with_accept_degraded_exits_two_and_logs_bypass(tmp_path, monkeypatch):
     root = _repo(tmp_path)
+    (root / "tests").mkdir()  # see comment above -- keeps "tests" applicable.
     cfg = _cfg(root, tmp_path, monkeypatch)
     ledger = _ledger(tmp_path)
 
@@ -128,6 +134,40 @@ def test_missing_block_tier_tool_with_accept_degraded_exits_two_and_logs_bypass(
     bypass_events = [e for e in ledger.events() if e.type is EventType.INFRASTRUCTURE_BYPASS]
     assert len(bypass_events) == 1
     assert bypass_events[0].payload["reason"] == "ci runner has no test binary"
+    ledger.close()
+
+
+# --------------------------------------- (c2) applicability -- no test setup -
+
+def test_no_test_setup_at_prepush_tests_not_selected_clean_exit(tmp_path, monkeypatch):
+    """Important #1 regression test: a repo with NO test setup (no tests/,
+    no package.json test script) must never have `tests` selected at
+    pre-push -- previously it was selected unconditionally, self-reported
+    MISSING, and (as a BLOCK_TIER_KEYS member) forced exit_code=1 on every
+    single pre-push. Real gitleaks/semgrep are stubbed clean here only so
+    the test doesn't depend on those binaries being installed; `tests` is
+    left as the REAL runner module specifically so a spy can prove it is
+    never invoked at all."""
+    root = _repo(tmp_path)  # only a.py -- no tests/, no package.json
+    cfg = _cfg(root, tmp_path, monkeypatch)
+    ledger = _ledger(tmp_path)
+
+    monkeypatch.setitem(pipeline.RUNNERS, "gitleaks",
+                         _fake(RunnerResult("gitleaks", ToolState.OK)))
+    monkeypatch.setitem(pipeline.RUNNERS, "semgrep",
+                         _fake(RunnerResult("semgrep", ToolState.OK)))
+
+    calls: list = []
+    real_tests_run = pipeline.RUNNERS["tests"].run
+    monkeypatch.setattr(pipeline.RUNNERS["tests"], "run",
+                         lambda ctx: (calls.append(1), real_tests_run(ctx))[1])
+
+    result = pipeline.run_gate(root, Gate.PRE_PUSH, "range", cfg, ledger, run_id="run-h")
+
+    assert calls == []                     # tests.run() never invoked
+    assert "tests" not in result.degraded
+    assert result.degraded == []
+    assert result.exit_code == 0
     ledger.close()
 
 
@@ -223,4 +263,60 @@ def test_mode_all_uses_tracked_files(tmp_path, monkeypatch):
     pipeline.run_gate(root, Gate.PRE_COMMIT, "all", cfg, ledger, run_id="run-g")
 
     assert captured_files == [["a.py"]]
+    ledger.close()
+
+
+# --------------------------------------------- (i) wall-clock budget -------
+
+def test_hung_runner_does_not_block_past_gate_budget(tmp_path, monkeypatch):
+    """Important #2 regression test: a runner that hangs well past the
+    gate's wall-clock budget must not block run_gate -- previously the
+    ThreadPoolExecutor context manager's implicit shutdown(wait=True)
+    joined every submitted thread, including hung ones, on the way out."""
+    root = _repo(tmp_path)
+    cfg = _cfg(root, tmp_path, monkeypatch)
+    ledger = _ledger(tmp_path)
+
+    cfg.timeouts["pre_commit"] = 0.2  # tiny budget
+
+    def hang_run(ctx):
+        time.sleep(2.0)  # far past the budget
+        return RunnerResult("hangy", ToolState.OK)
+
+    monkeypatch.setitem(pipeline.RUNNERS, "hangy",
+                         SimpleNamespace(run=hang_run, parse=lambda r, c: []))
+    monkeypatch.setitem(pipeline.GATE_RUNNER_KEYS, Gate.PRE_COMMIT, ["hangy"])
+
+    start = time.monotonic()
+    result = pipeline.run_gate(root, Gate.PRE_COMMIT, "staged", cfg, ledger, run_id="run-timeout")
+    elapsed = time.monotonic() - start
+
+    assert elapsed < 1.0  # returned near the 0.2s budget, not after the 2s sleep
+    assert result.degraded == ["hangy"]
+    assert result.exit_code == 2  # WARN-tier degrade only (not a BLOCK_TIER_KEYS member)
+    ledger.close()
+
+
+# ------------------------------------------- lock §8b: backslash paths -----
+
+def test_backslash_path_under_ignored_dir_is_filtered_pre_fingerprint(tmp_path, monkeypatch):
+    """Locks the §8b guarantee: config.is_ignored normalizes its input
+    (normalize_path -- backslash-to-forward-slash + casefold) before
+    matching, so a RawFinding.file reported with Windows-style backslashes
+    under an ignored directory is still dropped by the layer-2 post-parse
+    filter (pipeline.py's `raws_in_scope` comprehension), never reaching
+    normalize()/fingerprinting."""
+    root = _repo(tmp_path)
+    cfg = _cfg(root, tmp_path, monkeypatch)
+    ledger = _ledger(tmp_path)
+
+    raw = RawFinding(tool="fake", rule="r1", severity_raw="high",
+                      file="graph-out\\leak.json", line=1, message="m")
+    monkeypatch.setitem(pipeline.RUNNERS, "fake",
+                         _fake(RunnerResult("fake", ToolState.OK), raws=[raw]))
+    monkeypatch.setitem(pipeline.GATE_RUNNER_KEYS, Gate.PRE_COMMIT, ["fake"])
+
+    result = pipeline.run_gate(root, Gate.PRE_COMMIT, "staged", cfg, ledger, run_id="run-i")
+
+    assert result.findings == []
     ledger.close()

@@ -27,7 +27,7 @@ from typing import Callable
 
 from aramid import config as config_mod
 from aramid import gitutil, policy, redact
-from aramid.detectors import detect_package_manager
+from aramid.detectors import detect_package_manager, detect_stacks, detect_tests
 from aramid.fingerprint import normalize_path
 from aramid.ledger import Ledger
 from aramid.models import Event, EventType, Finding, Gate, Verdict
@@ -103,9 +103,32 @@ def _ref_for_builder(mode: str, root: Path, rng: str | None) -> Callable[[str], 
 
 # ------------------------------------------------------------- execution -----
 
-def _select_runners(gate: Gate) -> dict[str, object]:
+# Per-runner gate+stack applicability (Important #1 fix). A runner that
+# isn't applicable to this repo is simply never selected -- it must NOT
+# surface as a MISSING/degraded tool (that was the bug: `tests` used to be
+# selected at every pre-push regardless of whether the repo had any test
+# setup, so a repo with none forced exit_code=1 on every push). gitleaks
+# and semgrep have no stack condition (cross-language secrets/SAST) and
+# ruff/eslint/typecheck/deps/tests keep their existing GATE_RUNNER_KEYS gate
+# assignment -- this only narrows *within* that gate, it never adds a gate.
+def _is_applicable(key: str, ctx: RunContext) -> bool:
+    if key == "ruff":
+        return "python" in ctx.stacks
+    if key == "eslint":
+        return "js" in ctx.stacks
+    if key == "typecheck":
+        return typecheck.has_tsconfig(ctx.root) or typecheck.has_mypy_config(ctx.root)
+    if key == "deps":
+        return ctx.pkg_manager is not None or any(ctx.root.glob("requirements*.txt"))
+    if key == "tests":
+        return bool(detect_tests(ctx.root))
+    # gitleaks, semgrep, and any unrecognized key (e.g. test doubles): always applicable.
+    return True
+
+
+def _select_runners(gate: Gate, ctx: RunContext) -> dict[str, object]:
     keys = GATE_RUNNER_KEYS.get(gate, [])
-    return {key: RUNNERS[key] for key in keys}
+    return {key: RUNNERS[key] for key in keys if _is_applicable(key, ctx)}
 
 
 def _run_selected(selected: dict[str, object], ctx: RunContext,
@@ -113,7 +136,15 @@ def _run_selected(selected: dict[str, object], ctx: RunContext,
     results: dict[str, RunnerResult] = {}
     if not selected:
         return results
-    with ThreadPoolExecutor(max_workers=len(selected)) as ex:
+    # Important #2 fix: don't use the executor as a context manager -- its
+    # implicit `shutdown(wait=True)` on exit blocks until EVERY submitted
+    # thread returns, including ones already bucketed into `not_done` below,
+    # so a single hung runner could block run_gate (and the git hook) well
+    # past the gate's wall-clock budget. Submit, wait up to the budget, then
+    # shut down without waiting -- any still-running thread is abandoned
+    # (its result is already recorded as TIMEOUT) rather than joined.
+    ex = ThreadPoolExecutor(max_workers=len(selected))
+    try:
         future_to_key = {ex.submit(module.run, ctx): key for key, module in selected.items()}
         done, not_done = wait(future_to_key, timeout=budget_s)
         for fut in done:
@@ -125,6 +156,8 @@ def _run_selected(selected: dict[str, object], ctx: RunContext,
         for fut in not_done:
             key = future_to_key[fut]
             results[key] = RunnerResult(key, ToolState.TIMEOUT)
+    finally:
+        ex.shutdown(wait=False, cancel_futures=True)
     return results
 
 
@@ -156,7 +189,7 @@ def _overrides_from_ledger(ledger: Ledger) -> list[OverrideRecord]:
         if rec.get("status") == "overridden":
             records.append(OverrideRecord(
                 id=finding_id, tool=rec.get("tool", ""), rule=rec.get("rule", ""),
-                path=normalize_path(rec.get("file", "")), reason=""))
+                path=normalize_path(rec.get("file", "")), reason=rec.get("reason", "")))
     return records
 
 
@@ -173,9 +206,12 @@ def run_gate(root: Path, gate: Gate, mode: str, cfg: config_mod.Config, ledger: 
     raw_files, rng = _discover_files(root, mode)
     files = config_mod.filter_paths(raw_files, cfg)
 
-    # 2. select runners for this gate; build the shared RunContext.
-    selected = _select_runners(gate)
-    ctx = RunContext(root=root, files=files, rng=rng, pkg_manager=detect_package_manager(root))
+    # 2. build the shared RunContext (stack detection feeds runner
+    #    applicability), then select applicable runners for this gate.
+    ctx = RunContext(root=root, files=files, rng=rng,
+                      pkg_manager=detect_package_manager(root),
+                      stacks=detect_stacks(root, root))
+    selected = _select_runners(gate, ctx)
 
     # 3. run concurrently under the gate's wall-clock budget.
     budget_s = cfg.timeouts.get(_BUDGET_KEY.get(gate, "pre_push"), 60.0)
