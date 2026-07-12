@@ -13,3 +13,12 @@ def test_occurrence_index_disambiguates_identical_lines():
 def test_editing_line_changes_id():
     assert compute_fingerprint("ruff","S102","a.py","exec(x)",0) != \
            compute_fingerprint("ruff","S102","a.py","exec(y)",0)
+
+def test_tool_and_rule_are_in_the_id():
+    base = compute_fingerprint("ruff","S102","a.py","exec(x)",0)
+    assert compute_fingerprint("bandit","S102","a.py","exec(x)",0) != base
+    assert compute_fingerprint("ruff","S307","a.py","exec(x)",0) != base
+
+def test_path_backslashes_normalized():
+    assert compute_fingerprint("ruff","S102","src\\a.py","exec(x)",0) == \
+           compute_fingerprint("ruff","S102","src/a.py","exec(x)",0)
