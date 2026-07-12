@@ -1,0 +1,17 @@
+{
+  "auditReportVersion": 2,
+  "report": {
+    "vulnerabilities": {"info": 0, "low": 0, "moderate": 0, "high": 0, "critical": 1, "total": 1},
+    "advisories": {
+      "1096457": {
+        "id": 1096457,
+        "module_name": "minimatch",
+        "severity": "critical",
+        "title": "ReDoS in minimatch",
+        "url": "https://github.com/advisories/GHSA-f8q6-p94x-37v3",
+        "vulnerable_versions": "<3.0.5",
+        "findings": [{"version": "3.0.4", "paths": ["minimatch"]}]
+      }
+    }
+  }
+}

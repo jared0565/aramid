@@ -1,0 +1,22 @@
+{
+  "dependencies": [
+    {
+      "name": "django",
+      "version": "3.2.0",
+      "vulns": [
+        {
+          "id": "PYSEC-2021-9",
+          "fix_versions": ["3.2.1"],
+          "aliases": ["CVE-2021-1234"],
+          "description": "Django before 3.2.1 allows SQL injection via a crafted QuerySet."
+        }
+      ]
+    },
+    {
+      "name": "requests",
+      "version": "2.25.0",
+      "vulns": []
+    }
+  ],
+  "fixes": []
+}
