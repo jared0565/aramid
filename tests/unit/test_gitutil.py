@@ -68,8 +68,9 @@ def test_diff_text_contains_added_lines_and_truncates(tmp_path):
     r = _repo(tmp_path)
     _commit(r, "a.py", "x = 1\n", "first")
     h1 = gitutil.rev_sha(r, "HEAD")
-    _commit(r, "a.py", "x = 1\nexec(x)\n", "second")
+    _commit(r, "a.py", "x = 1\nexec(x)  # обед\n", "second")
     h2 = gitutil.rev_sha(r, "HEAD")
     text = gitutil.diff_text(r, h1, h2)
     assert "+exec(x)" in text
-    assert len(gitutil.diff_text(r, h1, h2, max_bytes=10)) <= 10
+    truncated = gitutil.diff_text(r, h1, h2, max_bytes=50)
+    assert len(truncated.encode("utf-8")) <= 50

@@ -93,4 +93,6 @@ def diff_text(root: Path, base: str | None, head: str, max_bytes: int = 400_000)
     else:
         cp = _run(root, "diff", f"{base}..{head}")
     text = cp.stdout if cp.returncode == 0 else ""
-    return text[:max_bytes]
+    if len(text.encode("utf-8", "replace")) <= max_bytes:
+        return text
+    return text.encode("utf-8", "replace")[:max_bytes].decode("utf-8", "ignore")
