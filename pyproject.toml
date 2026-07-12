@@ -8,6 +8,9 @@ version = "0.1.0"
 requires-python = ">=3.11"
 dependencies = ["tomli-w>=1.0", "pip-audit>=2.7", "ruff>=0.6", "semgrep>=1.100"]
 
+[project.optional-dependencies]
+dev = ["pytest>=8"]
+
 [project.scripts]
 aramid = "aramid.cli:main"
 

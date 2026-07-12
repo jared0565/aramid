@@ -27,7 +27,7 @@ jobs:
           python-version: "3.12"
 
       - name: Install aramid (pulls in ruff, semgrep, pip-audit as deps)
-        run: pip install -e .
+        run: pip install -e .[dev]
 
       - name: Install pinned gitleaks binary onto PATH
         uses: gacts/gitleaks@v1
