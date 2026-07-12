@@ -24,6 +24,7 @@ special forwarding logic needed here.
 """
 import stat
 import subprocess
+import sys
 from pathlib import Path
 
 from aramid.models import Gate
@@ -175,7 +176,17 @@ def install(root: Path, interpreter: Path) -> None:
 def uninstall(root: Path) -> None:
     """Remove aramid's own shims and restore any `.aramid-chained`
     originals back to their original hook names. A repo that was never
-    `install()`-ed is a no-op."""
+    `install()`-ed is a no-op.
+
+    Guard against losing a hook: the restore step only fires when the
+    current `<hook>` file is still aramid's own shim (or absent). If a
+    third-party hook manager (e.g. husky's `prepare` script) rewrote
+    `<hook>` directly after aramid installed -- so a LIVE foreign hook now
+    occupies the slot, with no aramid marker -- restoring the stale
+    `.aramid-chained` original over it would silently destroy that live
+    hook. In that case the live foreign hook is left untouched and the
+    now-orphaned `.aramid-chained` backup is discarded instead, with a
+    printed notice."""
     hdir = hooks_dir(root)
     if not hdir.exists():
         return
@@ -185,9 +196,21 @@ def uninstall(root: Path) -> None:
         shim_path = hdir / hook
         chained_path = hdir / f"{hook}{CHAINED_SUFFIX}"
 
-        if _is_aramid_shim(shim_path):
+        was_ours = _is_aramid_shim(shim_path)
+        if was_ours:
             shim_path.unlink()
 
-        if chained_path.exists():
+        if not chained_path.exists():
+            continue
+
+        if was_ours or not shim_path.exists():
             chained_path.replace(shim_path)
             _make_executable(shim_path)
+        else:
+            # shim_path exists and is NOT aramid's shim: a foreign hook
+            # manager replaced it after install. Never overwrite a live
+            # foreign hook -- discard the orphaned chained backup instead.
+            chained_path.unlink()
+            print(f"aramid: uninstall: {hook}: a foreign hook replaced aramid's "
+                  f"shim after install -- left the live foreign hook in place "
+                  f"and discarded the stale chained backup.", file=sys.stderr)

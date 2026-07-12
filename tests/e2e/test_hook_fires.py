@@ -184,15 +184,46 @@ def test_chained_foreign_hook_that_blocks_stops_the_commit(tmp_path):
 
 def test_uninstall_restores_foreign_hook_and_stops_blocking(tmp_path):
     r = _repo(tmp_path)
+    hdir = r / ".git" / "hooks"
+    hdir.mkdir(exist_ok=True)
+    marker = r / "foreign-ran.txt"
+    foreign = hdir / "pre-commit"
+    foreign_content = f'#!/bin/sh\necho ran > "{hooks.win_sh_path(marker)}"\nexit 0\n'.encode()
+    foreign.write_bytes(foreign_content)
+    foreign.chmod(foreign.stat().st_mode | 0o111)
+
     hooks.install(r, _fake_engine(tmp_path))
 
+    chained = hdir / "pre-commit.aramid-chained"
+    assert chained.exists(), "install must chain the pre-existing foreign hook"
+    assert chained.read_bytes() == foreign_content
+    shim_bytes = (hdir / "pre-commit").read_bytes()
+    assert hooks.MARKER_START.encode() in shim_bytes
+    assert b"pre-commit.aramid-chained" in shim_bytes
+
+    # sanity: while chained, aramid's own engine still gates the commit --
+    # proves the aramid shim (not just the exit-0 chained foreign hook)
+    # currently occupies the slot, and that the chained hook runs first.
     (r / "a.txt").write_text("x\n")
     _git(r, "add", "a.txt")
     cp = _git(r, "commit", "-m", "blocked", env={"FAKE_EXIT_CODE": "1"})
     assert cp.returncode != 0
+    assert marker.exists(), "chained foreign hook must run before the aramid engine"
+    marker.unlink()
 
     hooks.uninstall(r)
 
+    assert not chained.exists()
+    assert foreign.read_bytes() == foreign_content, (
+        "original foreign hook content must be restored verbatim"
+    )
+
+    # the restored original foreign hook actually fires again through real
+    # git dispatch (proving it's a live, working hook, not just an inert
+    # restored file), AND aramid's own gate is gone (the FAKE_EXIT_CODE=1
+    # that blocked above is now irrelevant -- only the restored,
+    # exit-0 foreign hook occupies the slot).
     _git(r, "add", "a.txt")
     cp = _git(r, "commit", "-m", "now-allowed", env={"FAKE_EXIT_CODE": "1"})
     assert cp.returncode == 0, cp.stdout + cp.stderr
+    assert marker.exists(), "restored foreign hook must actually execute through real git dispatch"

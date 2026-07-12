@@ -183,3 +183,35 @@ def test_uninstall_with_no_foreign_hook_just_removes_shim(tmp_path):
 def test_uninstall_on_never_installed_repo_is_a_noop(tmp_path):
     r = _repo(tmp_path)
     uninstall(r)  # must not raise
+
+
+def test_uninstall_does_not_clobber_live_foreign_hook_that_replaced_the_shim(tmp_path, capsys):
+    """Guard: if a third-party hook manager (e.g. husky's `prepare` script)
+    rewrites `<hook>` directly after aramid installed -- so a LIVE foreign
+    hook (no aramid marker) now occupies the slot -- `uninstall()` must NOT
+    overwrite it with the stale `.aramid-chained` original. It must leave
+    the live foreign hook untouched and discard the orphaned backup."""
+    r = _repo(tmp_path)
+    hdir = r / ".git" / "hooks"
+    hdir.mkdir(exist_ok=True)
+    original_foreign = b"#!/bin/sh\necho original-foreign-hook\n"
+    (hdir / "pre-commit").write_bytes(original_foreign)
+
+    install(r, Path("C:/py/python.exe"))  # chains original_foreign into .aramid-chained
+
+    chained = hdir / "pre-commit.aramid-chained"
+    assert chained.exists()
+    assert chained.read_bytes() == original_foreign
+
+    # A third party overwrites aramid's shim directly -- no aramid marker,
+    # aramid has no idea this happened.
+    new_foreign = b"#!/bin/sh\necho new-foreign-hook-installed-by-husky\n"
+    (hdir / "pre-commit").write_bytes(new_foreign)
+
+    uninstall(r)
+
+    assert (hdir / "pre-commit").read_bytes() == new_foreign, (
+        "live foreign hook must be preserved, not clobbered by the stale chained backup"
+    )
+    assert not chained.exists(), "orphaned .aramid-chained backup must be discarded"
+    assert "foreign hook" in capsys.readouterr().err
