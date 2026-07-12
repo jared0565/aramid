@@ -1,0 +1,27 @@
+{
+  "errors": [],
+  "paths": {
+    "scanned": ["app.py"]
+  },
+  "results": [
+    {
+      "check_id": "python.lang.security.audit.exec-detected.exec-detected",
+      "path": "app.py",
+      "start": {"line": 3, "col": 1, "offset": 20},
+      "end": {"line": 3, "col": 10, "offset": 29},
+      "extra": {
+        "message": "Detected the use of exec(). exec() can be dangerous if used to evaluate dynamic content.",
+        "metavars": {},
+        "severity": "ERROR",
+        "lines": "exec(x)",
+        "fingerprint": "abc123",
+        "metadata": {
+          "cwe": ["CWE-95: Improper Neutralization of Directives in Dynamically Evaluated Code"],
+          "owasp": ["A03:2021 - Injection"],
+          "references": ["https://owasp.org/Top10/A03_2021-Injection/"]
+        }
+      }
+    }
+  ],
+  "version": "1.100.0"
+}
