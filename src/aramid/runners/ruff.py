@@ -14,6 +14,10 @@ from aramid.runners._util import json_or_crashed, relativize
 NAME = "ruff"
 TIMEOUT_S = 30.0
 
+# ruff check's documented exit codes: 0 = clean, 1 = violations found.
+# Anything else means ruff errored (bad args, internal error, ...).
+_OK_RETURNCODES = frozenset({0, 1})
+
 
 def _build_argv(ctx) -> list[str]:
     return [
@@ -24,7 +28,7 @@ def _build_argv(ctx) -> list[str]:
 
 def run(ctx) -> RunnerResult:
     result = run_subprocess(_build_argv(ctx), ctx.root, TIMEOUT_S)
-    return json_or_crashed(NAME, result)
+    return json_or_crashed(NAME, result, _OK_RETURNCODES)
 
 
 def parse(result: RunnerResult, ctx) -> list[RawFinding]:

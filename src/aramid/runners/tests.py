@@ -8,6 +8,14 @@ into a single RawFinding(rule="tests-failed") rather than attempting to
 parse individual failures out of pytest/jest/mocha/vitest output, whose
 formats are too varied to parse reliably and generically -- the exit code
 is the only universal signal.
+
+A hung suite (TIMEOUT) or an unexpected non-completion (CRASHED) must NOT
+read as a pass just because there's no exit code to check -- this is a
+BLOCK-tier gate, so both produce the same blocking `tests-failed` finding
+as a non-zero exit, rather than silently falling through the
+`state is not OK -> []` guard other adapters use for their non-blocking
+JSON tools. Only MISSING (no test framework detected -- a legitimate skip,
+not a failure) still yields zero findings.
 """
 from aramid.normalizer import RawFinding
 from aramid.detectors import detect_tests
@@ -40,7 +48,18 @@ def run(ctx) -> RunnerResult:
 
 
 def parse(result: RunnerResult, ctx) -> list[RawFinding]:
-    if result.state is not ToolState.OK or result.returncode == 0:
+    if result.state is ToolState.MISSING:
+        return []
+    if result.state in (ToolState.TIMEOUT, ToolState.CRASHED):
+        return [RawFinding(
+            tool=result.tool,
+            rule="tests-failed",
+            severity_raw="high",
+            file=_SUITE_FILE_MARKER,
+            line=0,
+            message=f"{result.tool} {result.state.value}: test suite failed",
+        )]
+    if result.returncode == 0:
         return []
     return [RawFinding(
         tool=result.tool,

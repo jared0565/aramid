@@ -80,3 +80,17 @@ def test_run_unparseable_output_is_crashed(tmp_path, monkeypatch):
     )
     result = ruff.run(RunContext(root=tmp_path, files=["a.py"]))
     assert result.state is ToolState.CRASHED
+
+
+def test_run_empty_output_with_error_returncode_is_crashed(tmp_path, monkeypatch):
+    """Empty stdout parses fine as '[]' -- without a returncode check this
+    would silently read as a clean 'zero findings' run even though ruff
+    errored (bad args, internal error, ...) with a returncode outside its
+    documented {0, 1}."""
+    monkeypatch.setattr(
+        ruff, "run_subprocess",
+        lambda argv, cwd, timeout_s, env=None: RunnerResult(
+            tool="ruff", state=ToolState.OK, raw="", stderr="error: bad argument", returncode=2),
+    )
+    result = ruff.run(RunContext(root=tmp_path, files=["a.py"]))
+    assert result.state is ToolState.CRASHED

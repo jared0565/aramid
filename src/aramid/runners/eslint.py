@@ -16,6 +16,10 @@ from aramid.runners._util import json_or_crashed, relativize
 NAME = "eslint"
 TIMEOUT_S = 60.0
 
+# eslint's documented exit codes: 0 = clean, 1 = lint problems reported.
+# 2 = fatal error (bad config, internal crash, ...) -- not a verdict.
+_OK_RETURNCODES = frozenset({0, 1})
+
 
 def _eslint_bin(root: Path) -> Path:
     name = "eslint.cmd" if sys.platform == "win32" else "eslint"
@@ -28,7 +32,7 @@ def run(ctx) -> RunnerResult:
         return RunnerResult(NAME, ToolState.MISSING)
     argv = [str(binp), "-f", "json", *ctx.files]
     result = run_subprocess(argv, ctx.root, TIMEOUT_S)
-    return json_or_crashed(NAME, result)
+    return json_or_crashed(NAME, result, _OK_RETURNCODES)
 
 
 def parse(result: RunnerResult, ctx) -> list[RawFinding]:

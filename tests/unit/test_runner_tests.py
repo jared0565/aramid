@@ -31,6 +31,25 @@ def test_parse_skips_non_ok_state():
     assert tests_runner.parse(result, RunContext(root=Path("."))) == []
 
 
+def test_parse_timeout_is_blocking_finding_not_silent_pass():
+    """CRITICAL: a hung test suite must not read as a passing empty result
+    just because there's no exit code to check. Tests is a BLOCK-tier
+    check (design doc §3) -- TIMEOUT has to produce the same blocking
+    tests-failed finding as a non-zero exit, never zero findings."""
+    result = RunnerResult(tool="pytest", state=ToolState.TIMEOUT)
+    findings = tests_runner.parse(result, RunContext(root=Path(".")))
+    assert len(findings) == 1
+    assert findings[0].rule == "tests-failed"
+    assert findings[0].tool == "pytest"
+
+
+def test_parse_crashed_is_blocking_finding_not_silent_pass():
+    result = RunnerResult(tool="npm", state=ToolState.CRASHED)
+    findings = tests_runner.parse(result, RunContext(root=Path(".")))
+    assert len(findings) == 1
+    assert findings[0].rule == "tests-failed"
+
+
 def test_run_pytest_argv(tmp_path, monkeypatch):
     captured = {}
 

@@ -15,6 +15,10 @@ from aramid.runners._util import json_or_crashed, relativize
 NAME = "semgrep"
 TIMEOUT_S = 120.0
 
+# semgrep's documented exit codes: 0 = clean, 1 = findings reported.
+# 2 = fatal error (bad config, parse failure, ...) -- not a verdict.
+_OK_RETURNCODES = frozenset({0, 1})
+
 # Placeholder vendored rules path -- the real curated OWASP ruleset YAML is
 # provided by a later task (ships inside the aramid package so `--config`
 # never needs network access).
@@ -30,7 +34,7 @@ def _build_argv(ctx) -> list[str]:
 
 def run(ctx) -> RunnerResult:
     result = run_subprocess(_build_argv(ctx), ctx.root, TIMEOUT_S)
-    return json_or_crashed(NAME, result, empty="{}")
+    return json_or_crashed(NAME, result, _OK_RETURNCODES, empty="{}")
 
 
 def parse(result: RunnerResult, ctx) -> list[RawFinding]:

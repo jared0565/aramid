@@ -63,7 +63,8 @@ def test_run_reads_back_the_report_file_gitleaks_wrote(tmp_path, monkeypatch):
     def fake_run_subprocess(argv, cwd, timeout_s, env=None):
         report_path = Path(argv[argv.index("--report-path") + 1])
         report_path.write_text(fixture_text)
-        return RunnerResult(tool="gitleaks", state=ToolState.OK, raw="", stderr="", duration_s=0.05)
+        return RunnerResult(tool="gitleaks", state=ToolState.OK, raw="", stderr="",
+                             duration_s=0.05, returncode=1)
 
     monkeypatch.setattr(gitleaks, "run_subprocess", fake_run_subprocess)
 
@@ -77,15 +78,15 @@ def test_run_reads_back_the_report_file_gitleaks_wrote(tmp_path, monkeypatch):
 
 
 def test_run_nonzero_exit_with_leaks_is_not_crashed(tmp_path, monkeypatch):
-    """gitleaks exits non-zero when it finds leaks -- run_subprocess never
-    surfaces the exit code, so this is really just re-confirming that a
-    normally-populated report is treated as OK, not CRASHED."""
+    """gitleaks exits 1 (its documented "leaks found" code) when it finds
+    leaks -- that must be treated as OK, not CRASHED."""
     fixture_text = FIXTURE.read_text()
 
     def fake_run_subprocess(argv, cwd, timeout_s, env=None):
         report_path = Path(argv[argv.index("--report-path") + 1])
         report_path.write_text(fixture_text)
-        return RunnerResult(tool="gitleaks", state=ToolState.OK, raw="", stderr="", duration_s=0.05)
+        return RunnerResult(tool="gitleaks", state=ToolState.OK, raw="", stderr="",
+                             duration_s=0.05, returncode=1)
 
     monkeypatch.setattr(gitleaks, "run_subprocess", fake_run_subprocess)
     result = gitleaks.run(RunContext(root=tmp_path))
@@ -112,12 +113,38 @@ def test_run_unparseable_report_is_crashed(tmp_path, monkeypatch):
     assert result.state is ToolState.CRASHED
 
 
-def test_run_missing_report_file_treated_as_no_leaks(tmp_path, monkeypatch):
-    """If gitleaks exits clean and writes nothing (no leaks case for some
-    versions), reading back an absent file must not crash -- treat as []."""
+def test_run_errored_before_report_written_is_crashed_not_clean(tmp_path, monkeypatch):
+    """CRITICAL: gitleaks can error before writing a report at all (bad
+    --log-opts range, not-a-git-repo, permission error, ...) -- the report
+    file never exists, so text is "" and json.loads("[]") succeeds. Without
+    checking the returncode, that reads as ToolState.OK with zero findings
+    -- a broken BLOCK-tier secrets scanner would silently "pass". The real
+    exit code (anything outside gitleaks' documented {0, 1}) must surface
+    as CRASHED, never as a clean empty scan."""
     monkeypatch.setattr(
         gitleaks, "run_subprocess",
-        lambda argv, cwd, timeout_s, env=None: RunnerResult(tool="gitleaks", state=ToolState.OK, raw="", stderr="", duration_s=0.01),
+        lambda argv, cwd, timeout_s, env=None: RunnerResult(
+            tool="gitleaks", state=ToolState.OK, raw="", stderr="fatal: not a git repository",
+            duration_s=0.01, returncode=2),
+    )
+    result = gitleaks.run(RunContext(root=tmp_path))
+    assert result.state is ToolState.CRASHED
+    # Even though state is CRASHED, parse() itself still yields zero
+    # findings for a non-OK state -- proving why a future pipeline (Task
+    # 5.3) MUST inspect RunnerResult.state directly and cannot rely on
+    # parse() output alone to detect this failure.
+    assert gitleaks.parse(result, RunContext(root=tmp_path)) == []
+
+
+def test_run_clean_exit_with_missing_report_file_is_ok(tmp_path, monkeypatch):
+    """Distinct from the CRASHED case above: if gitleaks exits with its
+    documented "no leaks" code (0) but happens to write nothing, that is
+    still a clean run -- treat as []. The discriminator is the returncode,
+    not merely "was there a report file"."""
+    monkeypatch.setattr(
+        gitleaks, "run_subprocess",
+        lambda argv, cwd, timeout_s, env=None: RunnerResult(
+            tool="gitleaks", state=ToolState.OK, raw="", stderr="", duration_s=0.01, returncode=0),
     )
     result = gitleaks.run(RunContext(root=tmp_path))
     assert result.state is ToolState.OK

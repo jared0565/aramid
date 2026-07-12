@@ -99,3 +99,19 @@ def test_run_unparseable_output_is_crashed(tmp_path, monkeypatch):
     )
     result = eslint.run(RunContext(root=tmp_path, files=["a.js"]))
     assert result.state is ToolState.CRASHED
+
+
+def test_run_empty_output_with_error_returncode_is_crashed(tmp_path, monkeypatch):
+    """Empty stdout parses fine as '[]' -- without a returncode check this
+    would silently read as a clean 'zero findings' run even though eslint
+    exited 2 (its documented fatal-error code) before producing a report."""
+    bin_dir = tmp_path / "node_modules" / ".bin"
+    bin_dir.mkdir(parents=True)
+    eslint._eslint_bin(tmp_path).write_text("#!/bin/sh\n")
+    monkeypatch.setattr(
+        eslint, "run_subprocess",
+        lambda argv, cwd, timeout_s, env=None: RunnerResult(
+            tool="eslint", state=ToolState.OK, raw="", stderr="fatal config error", returncode=2),
+    )
+    result = eslint.run(RunContext(root=tmp_path, files=["a.js"]))
+    assert result.state is ToolState.CRASHED

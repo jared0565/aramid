@@ -5,9 +5,14 @@ gitleaks' --report-path is a filesystem path, not a stdout sentinel: passing
 always write to a real temp file and read it back afterwards.
 
 gitleaks exits non-zero when it finds leaks (that is the whole point of the
-tool) -- that is NOT a crash. run_subprocess doesn't even surface the exit
-code; CRASHED here means the report file came back unparseable/missing with
-an error, not "leaks were found".
+tool) -- that is NOT a crash. gitleaks' own documented exit codes are 0 (no
+leaks) and 1 (leaks found); anything else (bad --log-opts range, not-a-git-
+repo, permission error, ...) means gitleaks errored before/instead of
+producing a trustworthy report. An errored run typically leaves the report
+file missing or empty, which parses just as cleanly as a genuinely-clean
+"[]" -- so the returncode is checked explicitly and BEFORE trusting an
+empty/absent report as "no leaks"; without that check a crashed gitleaks
+(a BLOCK-tier secrets gate) would silently read as "scanned clean".
 """
 import json
 import tempfile
@@ -19,6 +24,10 @@ from aramid.runners._util import relativize
 
 NAME = "gitleaks"
 TIMEOUT_S = 120.0
+
+# gitleaks' own documented exit-code contract: 0 = ran clean, no leaks;
+# 1 = ran clean, leaks found. Anything else is an error, not a verdict.
+_OK_RETURNCODES = frozenset({0, 1})
 
 # gitleaks doesn't emit a per-finding severity in its report; a discovered
 # secret is treated as high severity by default (documented assumption --
@@ -48,13 +57,17 @@ def run(ctx) -> RunnerResult:
             return result
 
         text = report_path.read_text() if report_path.exists() else ""
+
+        if result.returncode not in _OK_RETURNCODES:
+            return RunnerResult(NAME, ToolState.CRASHED, raw=text, stderr=result.stderr,
+                                 duration_s=result.duration_s, returncode=result.returncode)
         try:
             json.loads(text or "[]")
         except json.JSONDecodeError:
             return RunnerResult(NAME, ToolState.CRASHED, raw=text, stderr=result.stderr,
-                                 duration_s=result.duration_s)
+                                 duration_s=result.duration_s, returncode=result.returncode)
         return RunnerResult(NAME, ToolState.OK, raw=text or "[]", stderr=result.stderr,
-                             duration_s=result.duration_s)
+                             duration_s=result.duration_s, returncode=result.returncode)
 
 
 def parse(result: RunnerResult, ctx) -> list[RawFinding]:

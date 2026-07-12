@@ -35,18 +35,35 @@ def relativize(path_str: str, root: Path) -> str:
         return path_str.replace("\\", "/")
 
 
-def json_or_crashed(tool: str, result: RunnerResult, empty: str = "[]") -> RunnerResult:
-    """Validate an already-run subprocess result's stdout as JSON.
+def json_or_crashed(tool: str, result: RunnerResult, ok_returncodes: set[int],
+                     empty: str = "[]") -> RunnerResult:
+    """Validate an already-run subprocess result's stdout as JSON, gated by
+    the tool's own known-good exit codes.
 
-    MISSING/TIMEOUT pass through unchanged. A tool that runs to completion but
-    finds issues typically exits non-zero -- that alone is not a crash, so we
-    never look at the exit code here. CRASHED is reserved for output that
-    doesn't parse as JSON (the tool errored before producing a report).
+    MISSING/TIMEOUT pass through unchanged (the process never ran to
+    completion, so there's no exit code to evaluate and no report to
+    distrust). A tool that runs to completion but finds issues typically
+    exits non-zero -- that alone is not a crash, which is why
+    `ok_returncodes` is a per-tool SET (e.g. {0, 1}), not just "== 0".
+
+    The returncode check runs BEFORE the JSON check and independently of
+    it: empty stdout parses just as cleanly as "[]"/"{}" whether the tool
+    ran clean and found nothing OR errored before writing anything (bad
+    args, permission error, etc). Without the returncode gate those two
+    cases are indistinguishable and a crashed BLOCK-tier scanner silently
+    reads as "ran, zero findings". A returncode outside ok_returncodes is
+    therefore always CRASHED, even if the (usually empty) output happens
+    to parse.
     """
     if result.state in (ToolState.MISSING, ToolState.TIMEOUT):
         return result
+    if result.returncode not in ok_returncodes:
+        return RunnerResult(tool, ToolState.CRASHED, result.raw, result.stderr,
+                             result.duration_s, result.returncode)
     try:
         json.loads(result.raw or empty)
     except json.JSONDecodeError:
-        return RunnerResult(tool, ToolState.CRASHED, result.raw, result.stderr, result.duration_s)
-    return RunnerResult(tool, ToolState.OK, result.raw or empty, result.stderr, result.duration_s)
+        return RunnerResult(tool, ToolState.CRASHED, result.raw, result.stderr,
+                             result.duration_s, result.returncode)
+    return RunnerResult(tool, ToolState.OK, result.raw or empty, result.stderr,
+                         result.duration_s, result.returncode)

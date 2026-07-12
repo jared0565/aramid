@@ -74,3 +74,18 @@ def test_run_unparseable_output_is_crashed(tmp_path, monkeypatch):
     )
     result = semgrep.run(RunContext(root=tmp_path, files=["a.py"]))
     assert result.state is ToolState.CRASHED
+
+
+def test_run_empty_output_with_error_returncode_is_crashed(tmp_path, monkeypatch):
+    """CRITICAL: empty stdout parses fine as '{}' -- without a returncode
+    check this would silently read as a clean 'zero findings' run even
+    though semgrep exited 2 (its documented fatal-error code, e.g. a bad
+    --config) before producing a report. A broken BLOCK-tier SAST scanner
+    must not silently 'pass'."""
+    monkeypatch.setattr(
+        semgrep, "run_subprocess",
+        lambda argv, cwd, timeout_s, env=None: RunnerResult(
+            tool="semgrep", state=ToolState.OK, raw="", stderr="invalid config", returncode=2),
+    )
+    result = semgrep.run(RunContext(root=tmp_path, files=["a.py"]))
+    assert result.state is ToolState.CRASHED
