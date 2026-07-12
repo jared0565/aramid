@@ -1,0 +1,22 @@
+{
+  "node_to_community": {
+    "docs_superpowers_specs_2026_07_12_aramid_phase1_design": 0
+  },
+  "clusters": [
+    {
+      "id": 0,
+      "members": [
+        "docs_superpowers_specs_2026_07_12_aramid_phase1_design"
+      ],
+      "size": 1,
+      "file_count": 1,
+      "function_count": 0,
+      "class_count": 0,
+      "labels": [
+        "docs/superpowers/specs",
+        "files"
+      ]
+    }
+  ],
+  "count": 1
+}

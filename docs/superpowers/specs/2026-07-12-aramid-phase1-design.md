@@ -85,8 +85,9 @@ per-repo onboarding via `init`, per-repo config and state.
 | `aramid check [--gate pre-commit\|pre-push] [--staged\|--range\|--all] [--strict] [--json] [--accept-degraded --reason "…"]` | Run the pipeline. `--strict` treats degraded/error as failure (CI mode). |
 | `aramid doctor` | Verify/repair toolchain and shim interpreter; install pinned gitleaks into the managed tools dir. |
 | `aramid status` | Last run, open findings, NEW-since-baseline, aging ("12 medium findings open >30 days"), skip-visibility ("semgrep: skipped last N runs"), unrotated historical secrets. |
-| `aramid ledger [list\|show\|filter]` | Query findings. |
-| `aramid override <id> --reason "…"` | Suppress a WARN finding (ledger-logged). BLOCK findings require the committed allowlist instead (§6). |
+| `aramid ledger [list\|show\|filter\|mark-rotated <id>]` | Query findings; `mark-rotated` transitions a `historical` secret finding to `rotated` (writes a `finding_rotated` event, requires `--reason`). |
+| `aramid override <id> --reason "…"` | Suppress a WARN finding (ledger-logged). BLOCK findings require the committed allowlist instead (§6). Re-running it re-affirms a stale override (§4). |
+| `aramid arm` | End the per-repo WARN-only bake: sets `semgrep_block_armed = true` in `aramid.toml` (§8). Arming is always manual — no timer state. |
 | `aramid update-rules` | Refresh the vendored semgrep ruleset explicitly. Never happens at commit time. |
 | `aramid uninstall <path>` | Reverse exactly what init installed (hooks, ARAMID.md, gitignore entries); ledger kept by default. |
 | `aramid init --discover <base>` | Marker-based walk (skips `node_modules`, `_tools`, `.venv`) listing initable repos 1–3 levels deep; inits repo-by-repo. |
@@ -100,17 +101,22 @@ per-repo onboarding via `init`, per-repo config and state.
 | Check | Tool | Verdict |
 |---|---|---|
 | Secrets in staged diff | gitleaks | **BLOCK** |
-| Python lint + security (`S`/bandit rules) on changed `.py` | ruff | WARN; high-confidence S-rules **BLOCK** |
+| Python lint + security (`S`/bandit rules) on changed `.py` | ruff | WARN; S-rules on the curated block-list **BLOCK** |
 
 Only sub-second-startup tools live here. Tool crash/timeout → skip with a visible
 notice; the commit proceeds. Speed wins locally.
 
-### Pre-push gate — wall-clock budget 5min, commit RANGE `upstream..HEAD`, FAIL-CLOSED for BLOCK-tier
+### Pre-push gate — wall-clock budget 5min, commit RANGE, FAIL-CLOSED for BLOCK-tier
+
+**Range resolution chain:** `@{u}..HEAD` if an upstream is set; else
+`merge-base(origin/<default>, HEAD)..HEAD` (default branch from `origin/HEAD`); else
+(no remote refs at all — first push of a new repo) scan every commit reachable from
+`HEAD`. Never exit 3 merely because a branch is new.
 
 | Check | Tool | Verdict |
 |---|---|---|
 | Secrets, per-commit across the range (catches add-then-remove) | gitleaks | **BLOCK** |
-| SAST — curated OWASP set, vendored offline, `--metrics=off` | semgrep | **BLOCK** high-confidence-high-severity; WARN rest |
+| SAST — curated OWASP set, vendored offline, `--metrics=off` | semgrep | **BLOCK** rules on the curated block-list; WARN rest |
 | JS/TS lint | repo-local `node_modules/.bin/eslint` (`.cmd`-aware; skip+doctor-note if absent, never global fallback) | WARN |
 | Types | `tsc --noEmit` (if tsconfig) / mypy (if configured) | WARN |
 | Dependency CVEs | pip-audit `-r requirements*.txt` (or repo venv; skip+note if neither) / npm/pnpm/yarn audit by lockfile; results cached in `.aramid/` keyed by lockfile hash, 24h TTL | **BLOCK** critical; WARN below threshold |
@@ -120,12 +126,41 @@ notice; the commit proceeds. Speed wins locally.
 The ratchet makes WARN real: legacy findings collapse into a one-line baseline count;
 new ones are shown first and block the push unless overridden.
 
+**Block-list definition ("high-confidence"):** the BLOCK tier for ruff-S and semgrep is
+a curated rule-ID list shipped in the built-in defaults as
+`aramid/policy/block_rules.toml` — never read from per-finding tool metadata (ruff
+emits no confidence field). Selection criteria: ruff S-rules whose bandit equivalents
+are HIGH-confidence/HIGH-severity (e.g. exec/eval use, hardcoded credentials,
+`shell=True` injection); semgrep rules with registry metadata `confidence: HIGH` +
+`severity: ERROR` in the injection/deserialization/crypto classes. The initial list is
+an implementation-owned artifact reviewed against those criteria; repos demote noisy
+entries via `aramid.toml`.
+
+**Dependency-severity source:** the critical/BLOCK split applies natively to the
+npm-family audits (they report severity). For pip-audit, use OSV severity data where
+the advisory carries it; advisories with **no severity data default to WARN** — they
+never block. Stated so the Python path is decidable offline.
+
+**Ratchet baseline:** the baseline fingerprint set is written as a `baseline_snapshot`
+ledger event by `init`'s validation scan (or the first `check --all`). "New" = not in
+baseline ∪ previously-seen fingerprints. **Fresh clone / empty ledger:** the first
+pre-push run auto-baselines (records, warns, does not block) and says so — legacy
+findings never block a first push on a new machine.
+
 ### Failure policy (tiered — the answer to "silent no-op" and "uninstall-to-bypass")
 
-- **Pre-commit:** fail-open, always.
-- **Pre-push:** BLOCK-tier tool missing/crashed/timed-out → **push blocks** with doctor
-  hint. Escape hatch: `--accept-degraded --reason "…"` writes an auditable
-  `infrastructure_bypass` ledger event.
+- **Pre-commit:** fail-open, always — including engine/config errors (shim mapping
+  below makes this concrete).
+- **Pre-push:** BLOCK-tier tool missing/crashed/timed-out → the engine **escalates the
+  degradation itself to a blocking verdict** (exit 1, reason "gitleaks did not run"),
+  with doctor hint. WARN-tier tool degradation (eslint absent, mypy timeout) → exit 2,
+  push proceeds.
+- **Escape hatch transport** (git passes no flags to hooks): set an environment
+  variable — `ARAMID_ACCEPT_DEGRADED="<reason>" git push`. Hooks inherit the
+  environment; the shim forwards it untouched; the engine honors it only at pre-push,
+  only for infrastructure degradation (never for real findings), and writes the
+  auditable `infrastructure_bypass` event with the reason. The `--accept-degraded
+  --reason "…"` flag is the equivalent for direct CLI/CI invocations.
 - **Owned toolchain:** ruff, semgrep, pip-audit are pip dependencies *of aramid itself*
   (all ship Windows wheels — deterministic install into the blessed interpreter).
   `doctor` installs a pinned gitleaks release binary into a managed tools dir.
@@ -140,12 +175,20 @@ new ones are shown first and block the push unless overridden.
 | Code | Meaning |
 |---|---|
 | 0 | pass |
-| 1 | blocking findings |
-| 2 | pass-but-degraded (tools skipped/timed out) |
+| 1 | blocking verdict — real findings **or** (pre-push only) degraded BLOCK-tier tooling |
+| 2 | pass-but-degraded — WARN-tier tools skipped/timed out |
 | 3 | engine or config error |
 
-The engine always reports truthfully. The **hook shim** (not the engine) maps 2→0 at
-pre-commit. `--strict` treats 2 and 3 as failure. If the engine crashes and cannot even
+The engine always reports truthfully; the tiered failure policy is expressed *inside*
+the engine (degraded BLOCK-tier at pre-push ⇒ exit 1, so exit 2 always means "safe to
+proceed, something advisory was skipped").
+
+**Shim mappings (exhaustive):**
+- pre-commit shim: `{2,3} → 0` — fail-open, always, including engine errors.
+- pre-push shim: `2 → 0`; `1` and `3` pass through and block (an engine that can't run
+  didn't run gitleaks — fail-closed).
+
+`--strict` (CI mode) treats 2 and 3 as failure. If the engine crashes and cannot even
 write its ledger event, it exits 3 — never a silent 0.
 
 Local hooks are convenience, not enforcement (`--no-verify` exists). The authoritative
@@ -168,7 +211,7 @@ message       human explanation
 evidence      redacted excerpt (§6)
 gate, run_id  provenance
 source        "deterministic" (Phase 2 adds "llm")
-status        open | fixed | overridden | historical  (materialized from ledger events)
+status        open | fixed | overridden | historical | rotated  (materialized from ledger events)
 ```
 
 ### Fingerprint (the most load-bearing algorithm in the platform)
@@ -182,14 +225,20 @@ id = sha256( tool
 ```
 
 - **Line number excluded** → findings survive vertical drift; overrides stay attached.
-- **Line content read from the staged blob** (`git show :path`), never the working tree
-  → `core.autocrlf` cannot churn ids.
+- **Line content read from the git object being scanned, never the raw working-tree
+  file** → `core.autocrlf` cannot churn ids. Per mode: **pre-commit** reads the index
+  blob (`git show :path`); **pre-push** reads the commit blob (`git show <sha>:path`,
+  newest commit in the range containing the finding); **`--all`** reads the HEAD blob,
+  falling back to the LF-normalized worktree file only for untracked files.
 - **Occurrence index** → identical violations on identical lines are distinct findings.
 - **Stale-override rule:** an override whose fingerprint no longer matches but has a
-  near-miss (same tool+rule+path, changed line content) is surfaced as
-  *"stale override — re-affirm?"* — never silently dropped, never silently honored.
+  near-miss (same tool+rule+path, changed line content) is **not honored** — the
+  finding re-fires at its normal tier (hooks are non-interactive; "never silently
+  honored" wins). The report flags it: *"stale override — re-affirm with `aramid
+  override <id> --reason` (WARN) or update `.aramid-suppressions.toml` (BLOCK)"*.
 - Pinned by fixture tests: shift-a-violation-50-lines → same id; edit-the-violating-line
-  → stale-override prompt; CRLF flip → same id; two identical lines → two ids.
+  → stale-override re-fire; CRLF flip → same id; two identical lines → two ids;
+  **same violation scanned via pre-commit, pre-push, and `--all` → same id**.
 
 ---
 
@@ -197,9 +246,11 @@ id = sha256( tool
 
 SQLite at `.aramid/ledger.db`, **gitignored**, event-sourced:
 
-- Events: `run_started`, `run_finished`, `finding_detected`, `finding_resolved`,
-  `finding_overridden`, `infrastructure_bypass`. Each carries `run_id` and the run's
-  **scan scope** (files × tools actually evaluated).
+- Events: `run_started`, `run_finished`, `finding_detected` (carries
+  `historical: true` when produced by init's full-history scan), `finding_resolved`,
+  `finding_overridden`, `finding_rotated`, `infrastructure_bypass`,
+  `baseline_snapshot`. Each carries `run_id` and the run's **scan scope** (files ×
+  tools actually evaluated).
 - Current finding state is a materialized view over events.
 - **Scope-aware resolution:** `open → fixed` only when a run whose scope covered that
   finding's file with that finding's tool no longer reports it. A scoped pre-commit run
@@ -218,14 +269,21 @@ must survive review is suppression of blocks, which lives in the committed file.
 ### The scanner must never become the leak
 
 - gitleaks findings store only a `first2…last2` preview plus a **salted hash** of the
-  match — enough to dedupe and recognize, useless to an attacker. Raw secret material
-  never touches ledger, logs, or console.
+  match — enough to dedupe and recognize, useless to an attacker. Salt: generated once
+  per repo at `init`, stored at `.aramid/salt` (gitignored), stable thereafter (a
+  per-run salt would break dedup). Threat model, stated honestly: this protects
+  against ledger exfiltration; a local attacker with repo access could brute-force
+  short/low-entropy secrets against the hash — which is why raw material is never
+  stored at all, not the salt's job alone. Raw secret material never touches ledger,
+  logs, or console.
 - Tool stderr captured to `.aramid/logs/` passes through the same redaction filter.
 - Every secret finding prints: **deleting the line does not fix the leak — rotate the
   credential** (with file:line, and commit hash for history hits).
-- `init` runs a one-time full-history gitleaks scan; hits are recorded as status
-  `historical` — non-blocking, but listed in `status` with rotation guidance until
-  marked rotated.
+- `init` runs a one-time full-history gitleaks scan; hits are recorded via
+  `finding_detected` events flagged `historical: true` — non-blocking, but listed in
+  `status` with rotation guidance until retired with
+  `aramid ledger mark-rotated <id> --reason "rotated in <system>"` (writes a
+  `finding_rotated` event; status becomes `rotated`).
 
 ### Suppression — two tiers
 
@@ -266,6 +324,9 @@ never touched; a `schema_version` bump prints an explicit migration message.
   chaining; wrap an existing foreign `pre-commit` hook (rename to
   `pre-commit.aramid-chained`, exec it from the shim) with a marker comment so re-init
   recognizes its own work.
+- **Shim contract:** shims pass the process environment through untouched (so
+  `ARAMID_ACCEPT_DEGRADED` reaches the engine, §3) and apply exactly the exit-code
+  mappings of §3 — nothing else.
 - **Shim correctness on Windows:** written in binary mode with `\n` endings
   (`core.autocrlf=true` is set system-wide here and CR in the exec line kills
   Git-for-Windows sh); the blessed interpreter's absolute path is baked in,
@@ -276,9 +337,13 @@ never touched; a `schema_version` bump prints an explicit migration message.
   fires — not just that the pipeline runs when invoked directly.
 - **Fleet rollout:** `aramid init --discover F:\Projects` (marker-based walk, 1–3
   levels, skips `node_modules`/`_tools`).
-- **Two-week WARN-only bake per repo:** semgrep BLOCK-tier starts demoted to WARN;
-  `status` reports per-rule hit counts; noisy rules are demoted in `aramid.toml` before
-  blocking is armed. Prevents the false-positive → `--no-verify` muscle-memory spiral.
+- **Two-week WARN-only bake per repo — manual arming, no timer state:** `init` writes
+  `semgrep_block_armed = false` and `bake_started = <date>` into `aramid.toml`. While
+  unarmed, semgrep BLOCK-tier findings report as WARN and `status` shows *"bake in
+  progress, day N — per-rule hit counts: …"*. The operator demotes noisy rules in
+  `aramid.toml`, then ends the bake explicitly with `aramid arm` (sets
+  `semgrep_block_armed = true`). There is no auto-promotion — arming is always a
+  deliberate act. Prevents the false-positive → `--no-verify` muscle-memory spiral.
 
 ---
 
@@ -314,3 +379,9 @@ interpreters visible to hook sh (→ baked absolute interpreter path); semgrep c
 and registry fetch (→ pre-push only + vendored rules); nested/subfolder repo topology
 (→ repo-root resolution + scan scopes); append-only-JSONL vs mutable status
 contradiction (→ event-sourced SQLite).
+
+A second fresh-eyes review pass (consistency + ambiguity lenses) then found 15 spec
+defects — an exit-code contract that could not express the tiered failure policy, an
+escape hatch with no transport into git hooks, an unrotatable "historical" status, an
+undefined ratchet baseline, and undefined behavior for new branches, among others —
+all fixed in this revision before user sign-off.
