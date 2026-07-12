@@ -1,4 +1,5 @@
-import hashlib, os
+import hashlib
+import os
 from pathlib import Path
 
 def load_or_create_salt(aramid_dir: Path) -> bytes:
@@ -8,8 +9,10 @@ def load_or_create_salt(aramid_dir: Path) -> bytes:
     aramid_dir.mkdir(parents=True, exist_ok=True)
     salt = os.urandom(32)
     f.write_bytes(salt)
-    try: os.chmod(f, 0o600)
-    except OSError: pass
+    try:
+        os.chmod(f, 0o600)
+    except OSError:
+        pass
     return salt
 
 def redact(secret: str, salt: bytes) -> tuple[str, str]:

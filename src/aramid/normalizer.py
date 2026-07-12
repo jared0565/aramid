@@ -11,7 +11,12 @@ from aramid.redact import redact, scrub
 
 @dataclass
 class RawFinding:
-    tool: str; rule: str; severity_raw: str; file: str; line: int; message: str
+    tool: str
+    rule: str
+    severity_raw: str
+    file: str
+    line: int
+    message: str
     secret: str | None = None
     # Commit sha the finding was read from, when known (gitleaks' `git log`
     # history-scan path only -- see runners/gitleaks.py). Additive/optional:

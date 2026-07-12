@@ -56,7 +56,11 @@ def win_sh_path(p: Path) -> str:
 
 def _git_config(root: Path, key: str) -> str | None:
     try:
-        cp = subprocess.run(["git", "config", key], cwd=str(root),
+        # noqa justification (S603/S607): "git" is a fixed literal and `key`
+        # is always a hardcoded config key passed by this module's own
+        # callers (currently only "core.hooksPath") -- never external input.
+        # Relying on PATH to resolve "git" matches every other git invoker.
+        cp = subprocess.run(["git", "config", key], cwd=str(root),  # noqa: S603,S607
                              capture_output=True, text=True)
     except OSError:
         # git not on PATH (or otherwise unspawnable) -- treat as "unset"

@@ -4,7 +4,12 @@ from pathlib import Path
 class NotARepo(Exception): ...
 
 def _run(root: Path, *args: str) -> subprocess.CompletedProcess:
-    return subprocess.run(["git", *args], cwd=str(root), capture_output=True, text=True)
+    # noqa justification (S603/S607): aramid's single git wrapper -- "git" is
+    # a fixed literal (never derived from *args) and every call site passes
+    # fixed subcommands (rev-parse, show, rev-list, diff, ls-files, log,
+    # merge-base, symbolic-ref); relying on PATH to resolve "git" is standard
+    # and matches how git itself is invoked by every other tool on the host.
+    return subprocess.run(["git", *args], cwd=str(root), capture_output=True, text=True)  # noqa: S603,S607
 
 def repo_root(path: Path) -> Path:
     cp = _run(path, "rev-parse", "--show-toplevel")
@@ -31,20 +36,20 @@ def resolve_range(root: Path):
 def range_commits(root: Path, rng):
     spec = rng if rng else "HEAD"
     cp = _run(root, "rev-list", spec)
-    return [l for l in cp.stdout.splitlines() if l] if cp.returncode == 0 else []
+    return [line for line in cp.stdout.splitlines() if line] if cp.returncode == 0 else []
 
 def staged_files(root: Path):
     cp = _run(root, "diff", "--cached", "--name-only", "--diff-filter=ACMR")
-    return [l for l in cp.stdout.splitlines() if l]
+    return [line for line in cp.stdout.splitlines() if line]
 
 def all_tracked_files(root: Path):
     cp = _run(root, "ls-files")
-    return [l for l in cp.stdout.splitlines() if l]
+    return [line for line in cp.stdout.splitlines() if line]
 
 def changed_files(root: Path, rng):
     spec = rng if rng else "HEAD"
     cp = _run(root, "diff", "--name-only", "--diff-filter=ACMR", spec)
-    return [l for l in cp.stdout.splitlines() if l]
+    return [line for line in cp.stdout.splitlines() if line]
 
 def newest_commit_touching(root: Path, rng, rel_path):
     spec = rng if rng else "HEAD"

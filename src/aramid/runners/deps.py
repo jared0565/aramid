@@ -209,7 +209,7 @@ def _ndjson_or_crashed(tool: str, result: RunnerResult, ok_returncodes: set[int]
     if result.returncode not in ok_returncodes:
         return RunnerResult(tool, ToolState.CRASHED, result.raw, result.stderr,
                              result.duration_s, result.returncode)
-    lines = [l for l in (result.raw or "").splitlines() if l.strip()]
+    lines = [line for line in (result.raw or "").splitlines() if line.strip()]
     try:
         for line in lines:
             json.loads(line)

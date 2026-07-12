@@ -1,4 +1,5 @@
-import hashlib, re
+import hashlib
+import re
 _WS = re.compile(r"\s+")
 
 def normalize_path(path: str) -> str:

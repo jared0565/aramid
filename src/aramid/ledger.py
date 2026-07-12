@@ -1,4 +1,5 @@
-import json, sqlite3
+import json
+import sqlite3
 from pathlib import Path
 from aramid.models import Event, EventType, Finding
 
@@ -25,11 +26,14 @@ def _materialize(events):
             state[e.finding_id] = {**e.payload,
                                    "status": "historical" if e.payload.get("historical") else "open"}
         elif e.type.value == "finding_resolved":
-            if e.finding_id in state: state[e.finding_id]["status"] = "fixed"
+            if e.finding_id in state:
+                state[e.finding_id]["status"] = "fixed"
         elif e.type.value == "finding_overridden":
-            if e.finding_id in state: state[e.finding_id]["status"] = "overridden"
+            if e.finding_id in state:
+                state[e.finding_id]["status"] = "overridden"
         elif e.type.value == "finding_rotated":
-            if e.finding_id in state: state[e.finding_id]["status"] = "rotated"
+            if e.finding_id in state:
+                state[e.finding_id]["status"] = "rotated"
     return state, seen
 
 
@@ -69,7 +73,8 @@ class Ledger:
             if f.id not in state or state[f.id]["status"] in ("fixed",):
                 self.append(Event(EventType.FINDING_DETECTED, run_id, at,
                                   finding_id=f.id, payload=_detect_payload(f)))
-            if f.id not in seen: new_ids.append(f.id)
+            if f.id not in seen:
+                new_ids.append(f.id)
         for fid, rec in state.items():
             if rec["status"] == "open" and fid not in present \
                and rec.get("tool") in scope_tools and rec.get("file") in scope_files:

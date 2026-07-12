@@ -31,7 +31,6 @@ fetch should pin a specific pack release tag (never `latest`) so
 `--config <vendored path>` scans stay byte-for-byte reproducible offline.
 """
 import sys
-from pathlib import Path
 
 from aramid.runners.semgrep import VENDORED_RULES_PATH
 

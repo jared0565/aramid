@@ -1,15 +1,26 @@
-import os, shutil, subprocess, sys, time
+import os
+import shutil
+import subprocess
+import sys
+import time
 from dataclasses import dataclass, field
 from enum import StrEnum
 from pathlib import Path
 from typing import Protocol
 
 class ToolState(StrEnum):
-    OK="ok"; MISSING="missing"; CRASHED="crashed"; TIMEOUT="timeout"
+    OK = "ok"
+    MISSING = "missing"
+    CRASHED = "crashed"
+    TIMEOUT = "timeout"
 
 @dataclass
 class RunnerResult:
-    tool: str; state: ToolState; raw: str = ""; stderr: str = ""; duration_s: float = 0.0
+    tool: str
+    state: ToolState
+    raw: str = ""
+    stderr: str = ""
+    duration_s: float = 0.0
     returncode: int = 0
 
 @dataclass
@@ -40,7 +51,11 @@ _WIN = sys.platform == "win32"
 def _kill_tree(proc: subprocess.Popen):
     try:
         if _WIN:
-            subprocess.run(["taskkill", "/T", "/F", "/PID", str(proc.pid)],
+            # noqa justification (S603/S607): fixed argv killing a process
+            # tree aramid itself spawned via subprocess.Popen above -- proc.pid
+            # is our own child's PID, not attacker-controlled, and "taskkill"
+            # resolving via PATH is standard on every Windows host.
+            subprocess.run(["taskkill", "/T", "/F", "/PID", str(proc.pid)],  # noqa: S603,S607
                            capture_output=True)
         else:
             os.killpg(os.getpgid(proc.pid), 9)
@@ -54,7 +69,13 @@ def run_subprocess(argv, cwd: Path, timeout_s: float, env=None) -> RunnerResult:
     kwargs = {"creationflags": subprocess.CREATE_NEW_PROCESS_GROUP} if _WIN \
              else {"start_new_session": True}
     start = time.monotonic()
-    proc = subprocess.Popen(argv, cwd=str(cwd), stdout=subprocess.PIPE,
+    # noqa justification (S603): this is aramid's single generic subprocess
+    # launcher -- invoking external static-analysis tools (ruff, semgrep,
+    # gitleaks, pip-audit, npm/pnpm/yarn, eslint, tsc, pytest...) is the
+    # entire purpose of this function, not attacker-controlled input. Every
+    # `argv` is built by a runner's own `_build_argv()` from fixed tool names
+    # and repo-relative file paths, never from untrusted external strings.
+    proc = subprocess.Popen(argv, cwd=str(cwd), stdout=subprocess.PIPE,  # noqa: S603
                             stderr=subprocess.PIPE, text=True,
                             env={**os.environ, **(env or {})}, **kwargs)
     try:
