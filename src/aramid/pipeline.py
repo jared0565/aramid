@@ -74,6 +74,17 @@ class GateResult:
     new_ids: list[str]
     stale_overrides: list[OverrideRecord]
     run_id: str
+    # Whether a BLOCK_TIER_KEYS tool (gitleaks/semgrep/tests) degraded
+    # (MISSING/CRASHED/TIMEOUT) -- i.e. this run's own `degraded_block_tier`
+    # local, exposed so callers (check.py's fresh-clone rule) can reuse the
+    # EXACT value this function computed, rather than re-deriving it from
+    # `degraded` (tool NAMES, from RunnerResult.tool) against BLOCK_TIER_KEYS
+    # (registry KEYS) -- those two can diverge: e.g. the "tests" registry key
+    # can produce a RunnerResult with `.tool == "pytest"` when the pytest
+    # binary itself is missing (see runners/tests.py's `run_pytest` ->
+    # `run_subprocess`), which would never name-match "tests" in
+    # BLOCK_TIER_KEYS even though it IS the BLOCK-tier "tests" slot degrading.
+    degraded_block_tier: bool = False
 
 
 def _default_clock() -> str:
@@ -277,4 +288,5 @@ def run_gate(root: Path, gate: Gate, mode: str, cfg: config_mod.Config, ledger: 
             exit_code = 2
 
     return GateResult(exit_code=exit_code, findings=findings, degraded=degraded_tools,
-                       new_ids=new_ids, stale_overrides=stale, run_id=run_id)
+                       new_ids=new_ids, stale_overrides=stale, run_id=run_id,
+                       degraded_block_tier=degraded_block_tier)

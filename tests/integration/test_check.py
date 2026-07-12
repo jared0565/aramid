@@ -124,6 +124,61 @@ def test_fresh_ledger_prepush_genuine_secret_still_blocks(tmp_path, monkeypatch)
     assert rc == 1
 
 
+# --------------------------- (e) fresh ledger, pre-push, degraded BLOCK-tier -
+
+def test_fresh_ledger_prepush_degraded_block_tier_still_blocks(tmp_path, monkeypatch):
+    """`pipeline.run_gate` has a SECOND, finding-free route to exit_code==1:
+    a BLOCK-tier tool (gitleaks/semgrep/tests -- pipeline.BLOCK_TIER_KEYS)
+    that comes back MISSING/CRASHED/TIMEOUT at pre-push escalates via
+    `policy.escalate_degraded`, with no Finding object produced at all (the
+    tool never ran, so it never emitted anything to classify). The
+    fresh-clone rule must not downgrade this case either -- a broken/absent
+    secret scanner on a fresh clone's very first push must never silently
+    pass. Repro of reviewer's CRITICAL-1 finding (task-7-review.md)."""
+    root = _repo(tmp_path)
+    _no_user_config(tmp_path, monkeypatch)
+    assert not Ledger(root / ".aramid" / "ledger.db").has_baseline()
+
+    monkeypatch.setitem(pipeline.RUNNERS, "gitleaks",
+                         _fake(RunnerResult("gitleaks", ToolState.MISSING)))
+    monkeypatch.setitem(pipeline.GATE_RUNNER_KEYS, Gate.PRE_PUSH, ["gitleaks"])
+
+    rc = cmd_check(root, Gate.PRE_PUSH, "range")
+
+    assert rc == 1
+
+
+# ------- (f) fresh ledger, pre-push, degraded BLOCK-tier, tool-name != key --
+
+def test_fresh_ledger_prepush_degraded_block_tier_tool_name_diverges_from_key(
+        tmp_path, monkeypatch):
+    """`pipeline.run_gate`'s own `degraded_block_tier` computation keys off
+    the RUNNERS *registry key* ("tests"), but a degraded `tests` runner's
+    `RunnerResult.tool` can be a DIFFERENT string -- e.g. "pytest", set
+    inside `run_pytest` -> `run_subprocess` when the pytest binary itself is
+    missing (runners/tests.py). `GateResult.degraded` is built from
+    `RunnerResult.tool` names, not registry keys, so naively intersecting
+    `result.degraded` against `pipeline.BLOCK_TIER_KEYS` (registry keys)
+    would MISS this case. The fix must reuse `result.degraded_block_tier`
+    (pipeline's own already-computed flag), not re-derive it from tool
+    names, to avoid exactly this divergence."""
+    root = _repo(tmp_path)
+    _no_user_config(tmp_path, monkeypatch)
+    (root / "tests").mkdir()  # makes "tests" applicable via detect_tests()
+    assert not Ledger(root / ".aramid" / "ledger.db").has_baseline()
+
+    # Simulate: pytest detected as the test framework, but the pytest
+    # BINARY itself is missing -- RunnerResult.tool ends up "pytest", not
+    # "tests" (the registry key).
+    monkeypatch.setitem(pipeline.RUNNERS, "tests",
+                         _fake(RunnerResult("pytest", ToolState.MISSING)))
+    monkeypatch.setitem(pipeline.GATE_RUNNER_KEYS, Gate.PRE_PUSH, ["tests"])
+
+    rc = cmd_check(root, Gate.PRE_PUSH, "range")
+
+    assert rc == 1
+
+
 # --------------------------------------------------------- --strict mapping -
 
 def test_strict_maps_degraded_exit_2_to_1(tmp_path, monkeypatch):
@@ -143,6 +198,42 @@ def test_strict_maps_degraded_exit_2_to_1(tmp_path, monkeypatch):
 
     rc_strict = cmd_check(root, Gate.PRE_COMMIT, "staged", strict=True)
     assert rc_strict == 1
+
+
+# ------------------------------------------- --strict --json exit-code sync -
+
+def test_strict_json_reports_final_exit_code(tmp_path, monkeypatch):
+    """`cmd_check` reassigns its local `exit_code` twice (fresh-clone
+    downgrade, then --strict remap) but must render the FINAL value, not
+    the pipeline's original, unmutated `result.exit_code` -- otherwise the
+    JSON body's "exit_code" field can disagree with the process's actual
+    return code (Important-1, task-7-review.md). Exercises exactly the
+    invocation pattern check.py's own docstring calls out as the CI use
+    case: `--strict --json` on a degraded (non-block-tier, pre-baselined)
+    case, where non-strict would be 2 but --strict remaps to 1."""
+    import contextlib
+    import io
+    import json
+
+    root = _repo(tmp_path)
+    _no_user_config(tmp_path, monkeypatch)
+    # pre-baseline this repo so the fresh-clone rule doesn't interfere.
+    ledger = Ledger(root / ".aramid" / "ledger.db")
+    ledger.write_baseline("seed", "2026-01-01T00:00:00+00:00", set())
+    ledger.close()
+
+    monkeypatch.setitem(pipeline.RUNNERS, "fake",
+                         _fake(RunnerResult("fake", ToolState.MISSING)))
+    monkeypatch.setitem(pipeline.GATE_RUNNER_KEYS, Gate.PRE_COMMIT, ["fake"])
+
+    buf = io.StringIO()
+    with contextlib.redirect_stdout(buf):
+        rc = cmd_check(root, Gate.PRE_COMMIT, "staged", strict=True, as_json=True)
+
+    assert rc == 1
+    parsed = json.loads(buf.getvalue())
+    assert parsed["exit_code"] == 1
+    assert parsed["exit_code"] == rc
 
 
 # ----------------------------------------------------- --json output mode ---
