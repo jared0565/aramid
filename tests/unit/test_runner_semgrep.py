@@ -1,3 +1,4 @@
+import json
 from pathlib import Path
 
 from aramid.runners import semgrep
@@ -20,6 +21,60 @@ def test_parse_fixture_yields_finding():
     assert f.line == 3
     assert f.severity_raw == "ERROR"
     assert "exec" in f.message
+
+
+def test_parse_normalizes_live_prefixed_check_id_to_canonical_rule_id():
+    """Task 81b regression test. Real semgrep (observed LIVE, v1.169.0
+    against this repo's own vendored config at
+    src/aramid/rules/owasp.yml) does not report the bare rule `id:` as
+    `check_id` -- it prefixes it with the `--config` file's *directory*
+    path, dot-joined (drive letter and every path separator become '.'):
+
+        F.Projects.aramid.src.aramid.rules.owasp-top-ten.a03-injection.python-sqli-string-concat
+
+    for the vendored rule whose `id:` in owasp.yml is
+    `owasp-top-ten.a03-injection.python-sqli-string-concat`.
+    block_rules.toml's `[semgrep] block` list matches rule ids with the
+    fnmatch pattern "owasp-top-ten.*", which anchors at the START of the
+    string -- against the raw, prefixed check_id above it NEVER matches,
+    so `parse()` must normalize `check_id` back to the canonical form
+    before it becomes RawFinding.rule."""
+    raw_check_id = (
+        "F.Projects.aramid.src.aramid.rules."
+        "owasp-top-ten.a03-injection.python-sqli-string-concat"
+    )
+    raw_json = json.dumps({
+        "errors": [],
+        "results": [{
+            "check_id": raw_check_id,
+            "path": "vuln.py",
+            "start": {"line": 2, "col": 1, "offset": 0},
+            "end": {"line": 2, "col": 60, "offset": 60},
+            "extra": {
+                "message": "SQL injection via string concatenation.",
+                "severity": "ERROR",
+            },
+        }],
+    })
+    result = RunnerResult(tool="semgrep", state=ToolState.OK, raw=raw_json)
+    ctx = RunContext(root=Path("."), files=["vuln.py"])
+
+    findings = semgrep.parse(result, ctx)
+
+    assert len(findings) == 1
+    assert findings[0].rule == "owasp-top-ten.a03-injection.python-sqli-string-concat"
+
+
+def test_parse_leaves_non_vendored_check_id_unchanged():
+    """Fallback path: a check_id with no 'owasp-top-ten.' substring at all
+    (a future non-vendored/registry rule) has no vendored-config prefix to
+    strip, so it passes through unchanged -- exactly today's fixture,
+    which is a real (non-vendored) semgrep registry rule id."""
+    findings = semgrep.parse(
+        RunnerResult(tool="semgrep", state=ToolState.OK, raw=FIXTURE.read_text()),
+        RunContext(root=Path("."), files=["app.py"]),
+    )
+    assert findings[0].rule == "python.lang.security.audit.exec-detected.exec-detected"
 
 
 def test_parse_no_results_is_empty():

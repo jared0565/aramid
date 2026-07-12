@@ -208,6 +208,73 @@ def test_seeded_sqli_semgrep_warn_during_bake_then_block_after_arm(
     assert all(f["verdict"] == "block" for f in sqli), sqli
 
 
+# ================================= (a2) Task 81b: owasp-top-ten.* pattern ===
+# semgrep, LIVE. Regression test for the BLOCK-tier bug found via
+# integration testing with the real semgrep binary: LIVE `check_id` is
+# prefixed with the `--config` file's directory path
+# (e.g. "F.Projects.aramid.src.aramid.rules.owasp-top-ten.a03-injection.
+# python-sqli-string-concat"), so block_rules.toml's `owasp-top-ten.*`
+# fnmatch pattern NEVER matched live output -- only the substring globs
+# (`*sqli*`, `*deserialization*`, `*command-injection*`) happened to still
+# fire, which is why test (a) above (using the FULL, unmodified
+# block_rules.toml) already blocked before this fix and proves nothing
+# about the `owasp-top-ten.*` pattern specifically.
+#
+# This test isolates the `[semgrep] block` list down to ONLY
+# `owasp-top-ten.*` (no substring globs) via aramid.toml's `block_rules`
+# override layer (aramid.config.load_config deep-merges `block_rules` from
+# repo aramid.toml over the packaged defaults -- see test_config.py's own
+# `[block_rules.deps]` override). With the substring globs removed, a BLOCK
+# verdict here can ONLY be explained by aramid.runners.semgrep.parse()
+# normalizing the live, prefixed check_id back to its canonical
+# "owasp-top-ten...." form before classification -- pre-fix this test's
+# assertions fail (verdict stays WARN, rc != 1, and the reported `rule`
+# still carries semgrep's raw path prefix); post-fix it passes.
+
+def _write_aramid_toml_owasp_pattern_isolated(root: Path) -> None:
+    (root / "aramid.toml").write_text(
+        "# aramid repo config -- detected stack: python\n"
+        "schema_version = 1\n"
+        "semgrep_block_armed = true\n"
+        'bake_started = "2026-01-01"\n'
+        "\n"
+        "[block_rules.semgrep]\n"
+        'block = ["owasp-top-ten.*"]\n',
+        encoding="utf-8")
+
+
+@pytest.mark.skipif(_SEMGREP_BIN is None, reason=_SKIP_SEMGREP)
+def test_seeded_sqli_blocks_via_owasp_top_ten_wildcard_pattern_only(
+        tmp_path, monkeypatch, live_tools_path_env):
+    root = _init_repo(tmp_path)
+    _no_user_config(tmp_path, monkeypatch)
+    _write_aramid_toml_owasp_pattern_isolated(root)
+
+    (root / "vuln.py").write_text(_SQLI_SRC, encoding="utf-8")
+    _git(root, "add", "vuln.py", "aramid.toml")
+    _git(root, "commit", "-q", "-m", "add vulnerable query")
+
+    monkeypatch.setitem(pipeline.RUNNERS, "gitleaks", _gitleaks_clean())
+
+    # semgrep_block_armed=true from the very first run, and the finding is
+    # genuinely BLOCK-classified (not merely ratchet-escalated), so
+    # cmd_check's fresh-clone rule does not downgrade it -- a single run
+    # suffices here (unlike test (a) above, which needs 3 runs to isolate
+    # the ratchet's own first-sighting escalation from the armed verdict).
+    buf = io.StringIO()
+    with contextlib.redirect_stdout(buf):
+        rc = cmd_check(root, Gate.PRE_PUSH, "all", as_json=True)
+
+    assert rc == 1
+    payload = json.loads(buf.getvalue())
+    sqli = [f for f in payload["findings"] if "sqli" in f["rule"]]
+    assert sqli, payload["findings"]
+    assert all(f["verdict"] == "block" for f in sqli), sqli
+    # The reported rule id itself must be the canonical vendored form, not
+    # semgrep's raw, config-path-prefixed check_id.
+    assert all(f["rule"].startswith("owasp-top-ten.") for f in sqli), sqli
+
+
 # ======================================================= (b) ruff S102 ======
 # ruff, LIVE. exec(x) -> S102 (in block_rules.toml's ruff block-list) ->
 # BLOCK directly at pre-commit (ruff carries no armed/bake gate, unlike
