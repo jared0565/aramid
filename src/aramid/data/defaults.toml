@@ -1,0 +1,20 @@
+# Built-in defaults -- the bottom layer of aramid.config.load_config's
+# three-layer merge (defaults <- ~/.aramid/config.toml <- <root>/aramid.toml).
+# `bake_started`, `test_command`, and `scope_subpath` are intentionally
+# absent here (TOML has no null literal): load_config falls back to None
+# for any key missing after the full merge.
+schema_version = 1
+semgrep_block_armed = false
+
+# Prefix/fnmatch entries dropped before any runner sees a file (spec section 8b).
+# aramid.config.load_config ALWAYS unions these back in after merging repo/user
+# config, regardless of what a repo's aramid.toml sets -- never removable.
+ignore_paths = [
+    ".aramid/", "graph-out/", ".graphite*", ".cache/",
+    "node_modules/", ".venv/", "__pycache__/", ".git/",
+]
+
+[timeouts]
+# Wall-clock budget in seconds, per gate (design doc section 3).
+pre_commit = 5
+pre_push = 300
