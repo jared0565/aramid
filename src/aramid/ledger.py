@@ -95,3 +95,38 @@ class Ledger:
     def is_new(self, finding_id: str) -> bool:
         _, seen = _materialize(self.events())
         return finding_id not in self.baseline_ids() and finding_id not in seen
+
+    def compact(self) -> int:
+        rows = self._c.execute(
+            "SELECT seq,type,finding_id FROM events ORDER BY seq").fetchall()
+
+        # Latest FINDING_DETECTED seq per finding — carries the tool/file/payload
+        # that _materialize needs to resurrect the finding.
+        last_detect: dict[str, int] = {}
+        for seq, type_, finding_id in rows:
+            if type_ == EventType.FINDING_DETECTED.value and finding_id:
+                last_detect[finding_id] = seq
+
+        # Latest terminal transition per finding, but only one that occurred
+        # AFTER that finding's latest detect — anything before it would have
+        # been overwritten by the re-detect and is redundant.
+        terminal_types = {EventType.FINDING_RESOLVED.value,
+                           EventType.FINDING_OVERRIDDEN.value,
+                           EventType.FINDING_ROTATED.value}
+        last_terminal: dict[str, int] = {}
+        for seq, type_, finding_id in rows:
+            if type_ in terminal_types and finding_id and finding_id in last_detect \
+               and seq > last_detect[finding_id]:
+                if finding_id not in last_terminal or seq > last_terminal[finding_id]:
+                    last_terminal[finding_id] = seq
+
+        keep = set(last_detect.values()) | set(last_terminal.values())
+        for seq, type_, finding_id in rows:
+            if type_ == EventType.BASELINE_SNAPSHOT.value:
+                keep.add(seq)
+
+        to_delete = [seq for seq, _, _ in rows if seq not in keep]
+        if to_delete:
+            self._c.executemany("DELETE FROM events WHERE seq=?", [(s,) for s in to_delete])
+            self._c.commit()
+        return len(to_delete)
