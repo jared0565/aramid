@@ -145,7 +145,10 @@ def test_run_js_dispatches_yarn(tmp_path, monkeypatch):
     assert result.tool == "yarn"
 
 
-def test_run_dispatches_python_over_js_when_both_present(tmp_path, monkeypatch):
+def test_run_mixed_stack_runs_both_python_and_js_audits(tmp_path, monkeypatch):
+    """A repo with BOTH requirements*.txt AND a JS lockfile is a common
+    full-stack layout -- run() must not silently skip the JS audit just
+    because a Python one is also possible (the Important-severity bug)."""
     (tmp_path / "requirements.txt").write_text("a==1\n")
     (tmp_path / "package-lock.json").write_text("{}")
     monkeypatch.setattr(
@@ -153,7 +156,28 @@ def test_run_dispatches_python_over_js_when_both_present(tmp_path, monkeypatch):
         lambda argv, cwd, timeout_s, env=None: RunnerResult(tool="pip-audit", state=ToolState.OK, raw="{}"),
     )
     result = deps.run(RunContext(root=tmp_path))
-    assert result.tool == "pip-audit"
+    assert result.state is ToolState.OK
+    sub_tools = {sub.tool for sub in result.sub_results}
+    assert sub_tools == {"pip-audit", "npm"}
+
+
+def test_run_mixed_stack_merges_findings_from_both_audits(tmp_path, monkeypatch):
+    """End-to-end: findings from the pip-audit AND npm audit fixtures both
+    surface out of deps.parse() for a single deps.run() call."""
+    (tmp_path / "requirements.txt").write_text("django==3.2.0\nrequests==2.25.0\n")
+    (tmp_path / "package-lock.json").write_text("{}")
+
+    monkeypatch.setattr(deps, "run_python",
+                         lambda ctx: RunnerResult("pip-audit", ToolState.OK, raw=PIP_AUDIT.read_text()))
+    monkeypatch.setattr(deps, "run_js",
+                         lambda ctx: RunnerResult("npm", ToolState.OK, raw=NPM_AUDIT.read_text()))
+
+    ctx = RunContext(root=tmp_path, pkg_manager="npm")
+    result = deps.run(ctx)
+    findings = deps.parse(result, ctx)
+
+    assert {f.tool for f in findings} == {"pip-audit", "npm"}
+    assert len(findings) == 2
 
 
 def test_run_falls_back_to_js_when_no_python_deps(tmp_path, monkeypatch):
@@ -190,6 +214,54 @@ def test_run_js_unparseable_output_is_crashed(tmp_path, monkeypatch):
         lambda argv, cwd, timeout_s, env=None: RunnerResult(tool="npm", state=ToolState.OK, raw="not json", stderr="boom"),
     )
     result = deps.run_js(RunContext(root=tmp_path, pkg_manager="npm"))
+    assert result.state is ToolState.CRASHED
+
+
+def test_run_python_empty_output_with_error_returncode_is_crashed(tmp_path, monkeypatch):
+    """Empty stdout parses fine as '{}' -- without a returncode check this
+    would silently read as a clean 'zero vulnerabilities' run even though
+    pip-audit errored (bad requirements file, no network, ...) before
+    producing a report."""
+    (tmp_path / "requirements.txt").write_text("a==1\n")
+    monkeypatch.setattr(
+        deps, "run_subprocess",
+        lambda argv, cwd, timeout_s, env=None: RunnerResult(
+            tool="pip-audit", state=ToolState.OK, raw="", stderr="fatal error", returncode=2),
+    )
+    result = deps.run_python(RunContext(root=tmp_path))
+    assert result.state is ToolState.CRASHED
+
+
+def test_run_js_npm_empty_output_with_error_returncode_is_crashed(tmp_path, monkeypatch):
+    (tmp_path / "package-lock.json").write_text("{}")
+    monkeypatch.setattr(
+        deps, "run_subprocess",
+        lambda argv, cwd, timeout_s, env=None: RunnerResult(
+            tool="npm", state=ToolState.OK, raw="", stderr="ENOTFOUND", returncode=2),
+    )
+    result = deps.run_js(RunContext(root=tmp_path, pkg_manager="npm"))
+    assert result.state is ToolState.CRASHED
+
+
+def test_run_js_pnpm_empty_output_with_error_returncode_is_crashed(tmp_path, monkeypatch):
+    (tmp_path / "pnpm-lock.yaml").write_text("lockfileVersion: '9.0'\n")
+    monkeypatch.setattr(
+        deps, "run_subprocess",
+        lambda argv, cwd, timeout_s, env=None: RunnerResult(
+            tool="pnpm", state=ToolState.OK, raw="", stderr="fatal error", returncode=2),
+    )
+    result = deps.run_js(RunContext(root=tmp_path, pkg_manager="pnpm"))
+    assert result.state is ToolState.CRASHED
+
+
+def test_run_js_yarn_empty_output_with_error_returncode_is_crashed(tmp_path, monkeypatch):
+    (tmp_path / "yarn.lock").write_text("# yarn lockfile v1\n")
+    monkeypatch.setattr(
+        deps, "run_subprocess",
+        lambda argv, cwd, timeout_s, env=None: RunnerResult(
+            tool="yarn", state=ToolState.OK, raw="", stderr="fatal error", returncode=2),
+    )
+    result = deps.run_js(RunContext(root=tmp_path, pkg_manager="yarn"))
     assert result.state is ToolState.CRASHED
 
 

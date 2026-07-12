@@ -31,6 +31,22 @@ discovered requirements*.txt files for the Python path (pip has no lockfile
 in the brief's scope). `ctx.force_refresh` (an optional, undeclared
 RunContext attribute -- Task 5.3's pipeline isn't implemented yet) bypasses
 a fresh cache; `check --all` is expected to set it.
+
+Mixed-stack repos (both requirements*.txt AND a JS lockfile -- a common
+full-stack layout): `run()` runs BOTH `run_python()` and `run_js()` rather
+than picking one and silently skipping the other. Since the Runner
+protocol is one `run()` -> one RunnerResult, the two sub-results are
+attached to the combined result via an ad-hoc `.sub_results` attribute
+(same undeclared-attribute convention as `ctx.force_refresh` above) instead
+of being serialized/lossily merged into `.raw` -- each sub-result keeps its
+own `.state`/`.tool`/`.returncode` intact. `parse()` checks for
+`.sub_results` first and recurses into each. NOTE for Task 5.3: collapsing
+two independent results into one top-level `.state` is inherently lossy --
+the combined state is OK if *either* side is OK, so a caller that only
+checks the combined `.state` can miss one side having CRASHED/TIMEOUT.
+A consumer that needs to gate on "did BOTH audits succeed" must inspect
+`.sub_results` directly (or call `run_python`/`run_js` independently, both
+still exported for exactly this reason).
 """
 import hashlib
 import json
@@ -48,6 +64,11 @@ CACHE_TTL_S = 24 * 3600
 
 # pip-audit's JSON output never carries severity -- see module docstring.
 _PIP_AUDIT_SEVERITY_RAW = "low"
+
+# Documented exit-code contracts: 0 = clean, 1 = vulnerabilities/issues
+# found. Anything else means the tool errored before producing a report
+# (pip-audit and all three JS audit tools share this 0/1 convention).
+_OK_RETURNCODES = frozenset({0, 1})
 
 _LOCKFILES = {"npm": "package-lock.json", "pnpm": "pnpm-lock.yaml", "yarn": "yarn.lock"}
 _JS_AUDIT_ARGV = {
@@ -120,7 +141,7 @@ def run_python(ctx) -> RunnerResult:
     argv += ["-f", "json"]
 
     result = run_subprocess(argv, ctx.root, TIMEOUT_S)
-    result = json_or_crashed(NAME_PIP_AUDIT, result, empty="{}")
+    result = json_or_crashed(NAME_PIP_AUDIT, result, _OK_RETURNCODES, empty="{}")
     if result.state is ToolState.OK:
         _write_cache(cache_path, result.raw)
     return result
@@ -174,24 +195,29 @@ def run_js(ctx) -> RunnerResult:
 
     result = run_subprocess(_JS_AUDIT_ARGV[pm], ctx.root, TIMEOUT_S)
     if pm == "yarn":
-        result = _ndjson_or_crashed(pm, result)
+        result = _ndjson_or_crashed(pm, result, _OK_RETURNCODES)
     else:
-        result = json_or_crashed(pm, result, empty="{}")
+        result = json_or_crashed(pm, result, _OK_RETURNCODES, empty="{}")
     if result.state is ToolState.OK:
         _write_cache(cache_path, result.raw)
     return result
 
 
-def _ndjson_or_crashed(tool: str, result: RunnerResult) -> RunnerResult:
+def _ndjson_or_crashed(tool: str, result: RunnerResult, ok_returncodes: set[int]) -> RunnerResult:
     if result.state in (ToolState.MISSING, ToolState.TIMEOUT):
         return result
+    if result.returncode not in ok_returncodes:
+        return RunnerResult(tool, ToolState.CRASHED, result.raw, result.stderr,
+                             result.duration_s, result.returncode)
     lines = [l for l in (result.raw or "").splitlines() if l.strip()]
     try:
         for line in lines:
             json.loads(line)
     except json.JSONDecodeError:
-        return RunnerResult(tool, ToolState.CRASHED, result.raw, result.stderr, result.duration_s)
-    return RunnerResult(tool, ToolState.OK, result.raw, result.stderr, result.duration_s)
+        return RunnerResult(tool, ToolState.CRASHED, result.raw, result.stderr,
+                             result.duration_s, result.returncode)
+    return RunnerResult(tool, ToolState.OK, result.raw, result.stderr,
+                         result.duration_s, result.returncode)
 
 
 def parse_npm(result: RunnerResult, ctx) -> list[RawFinding]:
@@ -266,16 +292,39 @@ def parse_yarn(result: RunnerResult, ctx) -> list[RawFinding]:
 
 # --------------------------------------------------------------- dispatch ----
 
+def _run_mixed(ctx) -> RunnerResult:
+    """Both a Python requirements*.txt AND a JS lockfile are present: run
+    BOTH audits and bundle their results (see module docstring for why
+    `.sub_results` rather than serializing into `.raw`)."""
+    py_result = run_python(ctx)
+    js_result = run_js(ctx)
+    ok = py_result.state is ToolState.OK or js_result.state is ToolState.OK
+    combined = RunnerResult("deps", ToolState.OK if ok else ToolState.MISSING)
+    combined.sub_results = [py_result, js_result]
+    return combined
+
+
 def run(ctx) -> RunnerResult:
-    if _find_requirements(ctx.root):
-        return run_python(ctx)
+    reqs = _find_requirements(ctx.root)
     pm = ctx.pkg_manager or detect_package_manager(ctx.root)
+    has_js = pm is not None and _lockfile_path(ctx.root, pm) is not None
+
+    if reqs and has_js:
+        return _run_mixed(ctx)
+    if reqs:
+        return run_python(ctx)
     if pm:
         return run_js(ctx)
     return RunnerResult("deps", ToolState.MISSING)
 
 
 def parse(result: RunnerResult, ctx) -> list[RawFinding]:
+    sub_results = getattr(result, "sub_results", None)
+    if sub_results is not None:
+        findings: list[RawFinding] = []
+        for sub in sub_results:
+            findings.extend(parse(sub, ctx))
+        return findings
     if result.tool == NAME_PIP_AUDIT:
         return parse_pip_audit(result, ctx)
     if result.tool == "npm":
