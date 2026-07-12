@@ -33,7 +33,13 @@ class RunContext:
       for pre-push/--all, etc.) -- adapters that scan by range/config ignore
       this.
     rng: git revision range (e.g. "@{u}..HEAD") when scanning history/commits;
-      None means "staged" / "not range-based".
+      None means "staged" / "not range-based". An empty string ("",
+      `pipeline.FULL_HISTORY_RNG`) is a distinct sentinel meaning "range
+      mode, but no @{u}/origin/HEAD exists yet -- scan every commit
+      reachable from HEAD" (first push of a brand-new repo, spec §3);
+      gitleaks' `_build_argv` branches on `is not None`, not truthiness, so
+      this sentinel still routes to the `git log`/`--log-opts` history scan
+      rather than falling back to `protect --staged`.
     pkg_manager: detected JS package manager ("npm"/"pnpm"/"yarn") or None.
     stacks: detected language stacks (subset of {"python","js"}, from
       aramid.detectors.detect_stacks) -- consulted by aramid.pipeline for

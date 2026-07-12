@@ -54,6 +54,27 @@ def test_range_argv_uses_git_log_opts(tmp_path):
     assert "--report-path" in argv and str(report_path) in argv
 
 
+def test_full_history_sentinel_argv_uses_git_log_not_staged_fallback(tmp_path):
+    """MUST-FIX 1 (final-review.md): `pipeline.FULL_HISTORY_RNG` ("") is a
+    deliberately falsy-but-not-None sentinel `pipeline._discover_files` now
+    hands back for range mode when there is no @{u}/origin/HEAD yet (a
+    brand-new repo's first push, spec §3: "scan every commit reachable from
+    HEAD"). `_build_argv` must branch on `ctx.rng is not None`, NOT
+    truthiness -- pre-fix, `if ctx.rng:` treated "" exactly like None and
+    fell back to `protect --staged`, which only sees the currently-staged
+    diff and silently scans nothing on a clean working tree. An empty
+    `--log-opts` value is itself gitleaks/`git log`'s own "no revision
+    given -> walk everything reachable from HEAD" default."""
+    ctx = RunContext(root=tmp_path, rng="")
+    report_path = tmp_path / "report.json"
+    argv = gitleaks._build_argv(ctx, report_path)
+    assert argv[:2] == ["gitleaks", "git"]
+    assert "--log-opts" in argv
+    assert argv[argv.index("--log-opts") + 1] == ""
+    assert "protect" not in argv
+    assert "--staged" not in argv
+
+
 def test_run_reads_back_the_report_file_gitleaks_wrote(tmp_path, monkeypatch):
     """gitleaks writes its report to a FILE path, not stdout -- run() must
     write to a temp file and read it back, never pass "-" as a stdout

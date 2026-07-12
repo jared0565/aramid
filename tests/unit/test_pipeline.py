@@ -3,7 +3,7 @@ import time
 from pathlib import Path
 from types import SimpleNamespace
 
-from aramid import config, pipeline
+from aramid import config, gitutil, pipeline
 from aramid.ledger import Ledger
 from aramid.models import EventType, Gate, Verdict
 from aramid.normalizer import RawFinding
@@ -264,6 +264,30 @@ def test_mode_all_uses_tracked_files(tmp_path, monkeypatch):
 
     assert captured_files == [["a.py"]]
     ledger.close()
+
+
+# ---------------- MUST-FIX 1 (final-review.md) -- mode="range", no upstream -
+
+def test_mode_range_no_upstream_scans_full_tracked_set_not_empty_diff(tmp_path):
+    """A brand-new repo (no @{u}, no origin/HEAD) is the FIRST-PUSH case
+    spec §3 calls out explicitly: "no remote refs at all -- first push of a
+    new repo -- scan every commit reachable from HEAD. Never exit 3 merely
+    because a branch is new." Pre-fix, `_discover_files` diffed a bare
+    "HEAD" (`changed_files(root, None)`), which is empty on a clean working
+    tree -- silently under-scanning. It must now fall back to the full
+    tracked file set, and hand back `pipeline.FULL_HISTORY_RNG` ("") --
+    NOT `None` -- so gitleaks' `_build_argv` (ctx.rng is not None) still
+    routes to the full-history `git log` scan instead of `protect --staged`
+    (see test_runner_gitleaks.py's own sentinel test and
+    test_prepush_new_repo_full_scan.py's end-to-end proof)."""
+    root = _repo(tmp_path)
+    assert gitutil.resolve_range(root) is None  # sanity: genuinely no upstream/origin
+
+    files, rng = pipeline._discover_files(root, "range")
+
+    assert files == ["a.py"]
+    assert rng == pipeline.FULL_HISTORY_RNG
+    assert rng is not None
 
 
 # --------------------------------------------- (i) wall-clock budget -------

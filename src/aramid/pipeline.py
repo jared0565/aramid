@@ -93,11 +93,36 @@ def _default_clock() -> str:
 
 # ------------------------------------------------------------- file set ------
 
+# Sentinel `RunContext.rng` value meaning "range mode, but there is no
+# @{u}/origin/HEAD to diff against yet -- scan EVERYTHING reachable from
+# HEAD" (spec §3: "no remote refs at all -- first push of a new repo --
+# scan every commit reachable from HEAD. Never exit 3 merely because a
+# branch is new."). Deliberately distinct from `None` (which every range-
+# mode consumer -- `newest_commit_touching`, `gitleaks._build_argv` --
+# already treats as "not range-based" / "staged"): using the same `None`
+# for both "genuinely staged mode" and "range mode with nothing to diff
+# against" is exactly the bug this sentinel fixes (`gitleaks._build_argv`
+# fell back to `protect --staged`, silently scanning nothing, instead of a
+# full-history scan). Empty string is itself a valid `--log-opts` value for
+# gitleaks' `git log` passthrough -- `git log` with no revision argument
+# defaults to walking every commit reachable from HEAD, which IS "every
+# commit reachable from HEAD."
+FULL_HISTORY_RNG = ""
+
+
 def _discover_files(root: Path, mode: str) -> tuple[list[str], str | None]:
     if mode == "staged":
         return gitutil.staged_files(root), None
     if mode == "range":
         rng = gitutil.resolve_range(root)
+        if rng is None:
+            # No upstream and no origin/HEAD yet -- brand-new repo, first
+            # push. `changed_files(root, None)` would diff the working tree
+            # against bare "HEAD", which is empty on a clean tree (nothing
+            # staged) -- effectively scanning nothing. Use the full tracked
+            # file set instead, and signal gitleaks to scan full history via
+            # FULL_HISTORY_RNG (see above).
+            return gitutil.all_tracked_files(root), FULL_HISTORY_RNG
         return gitutil.changed_files(root, rng), rng
     if mode == "all":
         return gitutil.all_tracked_files(root), None
