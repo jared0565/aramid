@@ -20,3 +20,14 @@ def test_secret_is_redacted_into_evidence(tmp_path, monkeypatch):
     raws = [RawFinding("gitleaks","aws","high","a.py",1,"leak",secret="AKIA12345678")]
     out = normalize(raws, tmp_path, lambda f: "HEAD", b"salt", Gate.PRE_COMMIT, _classify)
     assert "AKIA12345678" not in out[0].evidence and "…" in out[0].evidence
+
+def test_secret_is_scrubbed_from_message_too(tmp_path, monkeypatch):
+    from aramid import gitutil
+    monkeypatch.setattr(gitutil, "read_for_fingerprint", lambda root, ref, f: "leak\n")
+    secret = "AKIA12345678"
+    raws = [RawFinding("gitleaks", "aws", "high", "a.py", 1,
+                        f"found secret {secret} in context", secret=secret)]
+    out = normalize(raws, tmp_path, lambda f: "HEAD", b"salt", Gate.PRE_COMMIT, _classify)
+    assert secret not in out[0].message
+    assert secret not in out[0].evidence
+    assert "…" in out[0].message

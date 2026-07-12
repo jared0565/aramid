@@ -6,7 +6,7 @@ from typing import Callable
 from aramid import gitutil
 from aramid.fingerprint import compute_fingerprint, normalize_line
 from aramid.models import Finding, Gate
-from aramid.redact import redact
+from aramid.redact import redact, scrub
 
 
 @dataclass
@@ -36,14 +36,16 @@ def normalize(raws: list[RawFinding], root: Path, ref_for: Callable[[str], str],
         if raw.secret:
             preview, secret_hash = redact(raw.secret, salt)
             evidence = f"{preview} (sha256:{secret_hash})"
+            message = scrub(raw.message, [raw.secret])
         else:
             evidence = raw.message
+            message = raw.message
 
         severity, verdict = classify(raw.tool, raw.rule, raw.severity_raw, gate)
 
         findings.append(Finding(
             id=finding_id, tool=raw.tool, rule=raw.rule, severity_raw=raw.severity_raw,
             severity=severity, verdict=verdict, file=raw.file, line=raw.line,
-            message=raw.message, evidence=evidence, gate=gate))
+            message=message, evidence=evidence, gate=gate))
 
     return findings

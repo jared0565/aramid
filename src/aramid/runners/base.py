@@ -36,7 +36,11 @@ def run_subprocess(argv, cwd: Path, timeout_s: float, env=None) -> RunnerResult:
     try:
         out, err = proc.communicate(timeout=timeout_s)
     except subprocess.TimeoutExpired:
-        _kill_tree(proc); proc.communicate()
+        _kill_tree(proc)
+        try:
+            proc.communicate(timeout=5)
+        except subprocess.TimeoutExpired:
+            proc.kill()
         return RunnerResult(tool, ToolState.TIMEOUT, duration_s=time.monotonic()-start)
     return RunnerResult(tool, ToolState.OK, out, err, time.monotonic()-start)
 
