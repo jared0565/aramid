@@ -157,6 +157,15 @@ def _scan_history(root: Path, ledger: Ledger, cfg: config_mod.Config) -> int:
         return 0
 
     raws = gitleaks_runner.parse(result, ctx)
+    # §8b hard requirement: graphite artifacts (graph-out/, .graphite*,
+    # .cache/, ...) are NEVER scanned/fingerprinted/recorded, in any mode --
+    # gitleaks scans by git-log range, not by a pre-filtered file list, so a
+    # hit under one of those paths can surface here even though it was never
+    # in any discovered file set. Mirrors pipeline.run_gate's own post-parse
+    # ignore-path filter (same `config.is_ignored`, same built-in-unremovable
+    # `cfg.ignore_paths`) so a historical finding gets exactly the same
+    # treatment a live gate run's finding would.
+    raws = [r for r in raws if not config_mod.is_ignored(r.file, cfg.ignore_paths)]
     if not raws:
         return 0
 
