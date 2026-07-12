@@ -89,6 +89,39 @@ def test_run_uses_resolved_local_binary_argv(tmp_path, monkeypatch):
     assert captured["argv"][-2:] == ["a.js", "b.js"]
 
 
+def test_run_filters_to_js_family_files_only(tmp_path, monkeypatch):
+    """ctx.files is the gate's WHOLE file set; eslint must only be handed
+    JS/TS-family paths (same live-CI bug class as the ruff adapter feeding
+    YAML to a Python parser)."""
+    bin_dir = tmp_path / "node_modules" / ".bin"
+    bin_dir.mkdir(parents=True)
+    binp = eslint._eslint_bin(tmp_path)
+    binp.write_text("#!/bin/sh\n")
+
+    captured = {}
+
+    def fake_run_subprocess(argv, cwd, timeout_s, env=None):
+        captured["argv"] = argv
+        return RunnerResult(tool="eslint", state=ToolState.OK, raw="[]")
+
+    monkeypatch.setattr(eslint, "run_subprocess", fake_run_subprocess)
+    ctx = RunContext(root=tmp_path, files=[
+        "a.js", "app.py", "conf.yml", "web.tsx", "README.md", "mod.mjs",
+    ])
+    eslint.run(ctx)
+
+    assert captured["argv"][-3:] == ["a.js", "web.tsx", "mod.mjs"]
+
+
+def test_run_no_js_files_is_clean_noop_even_without_binary(tmp_path):
+    """A JS-stack repo whose current diff touches no JS/TS files must get a
+    clean no-op, NOT a MISSING degradation -- checked before the binary
+    lookup (no node_modules/.bin/eslint exists under tmp_path here)."""
+    result = eslint.run(RunContext(root=tmp_path, files=["app.py", "conf.yml"]))
+    assert result.state is ToolState.OK
+    assert eslint.parse(result, RunContext(root=tmp_path)) == []
+
+
 def test_run_unparseable_output_is_crashed(tmp_path, monkeypatch):
     bin_dir = tmp_path / "node_modules" / ".bin"
     bin_dir.mkdir(parents=True)

@@ -20,6 +20,15 @@ TIMEOUT_S = 60.0
 # 2 = fatal error (bad config, internal crash, ...) -- not a verdict.
 _OK_RETURNCODES = frozenset({0, 1})
 
+# ctx.files is the gate's whole file set (every staged/changed/tracked file);
+# eslint must only be handed JS/TS-family paths (same class of bug as
+# aramid.runners.ruff._py_files -- see that module).
+_JS_SUFFIXES = (".js", ".jsx", ".mjs", ".cjs", ".ts", ".tsx", ".mts", ".cts")
+
+
+def _js_files(ctx) -> list[str]:
+    return [f for f in ctx.files if f.lower().endswith(_JS_SUFFIXES)]
+
 
 def _eslint_bin(root: Path) -> Path:
     name = "eslint.cmd" if sys.platform == "win32" else "eslint"
@@ -27,10 +36,15 @@ def _eslint_bin(root: Path) -> Path:
 
 
 def run(ctx) -> RunnerResult:
+    files = _js_files(ctx)
+    if not files:
+        # No JS/TS in scope: a clean no-op (checked before the binary so a
+        # Python-only diff in a mixed repo can't degrade on a missing eslint).
+        return RunnerResult(NAME, ToolState.OK, raw="[]")
     binp = _eslint_bin(ctx.root)
     if not binp.exists():
         return RunnerResult(NAME, ToolState.MISSING)
-    argv = [str(binp), "-f", "json", *ctx.files]
+    argv = [str(binp), "-f", "json", *files]
     result = run_subprocess(argv, ctx.root, TIMEOUT_S)
     return json_or_crashed(NAME, result, _OK_RETURNCODES)
 

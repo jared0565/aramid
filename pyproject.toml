@@ -19,3 +19,11 @@ where = ["src"]
 
 [tool.setuptools.package-data]
 aramid = ["data/*.toml", "data/*.tmpl", "rules/*.yml"]
+
+# aramid's own gate runs ruff with the bandit-derived S family armed
+# (src/aramid/runners/ruff.py). The test suite legitimately trips four of
+# those rules by design: pytest asserts (S101) and fake "secret" fixtures
+# exercising the secret-handling paths (S105/S106/S107). Scoped to tests/
+# only -- the S family stays fully armed for src/.
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["S101", "S105", "S106", "S107"]

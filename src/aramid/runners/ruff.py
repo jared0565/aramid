@@ -18,15 +18,28 @@ TIMEOUT_S = 30.0
 # Anything else means ruff errored (bad args, internal error, ...).
 _OK_RETURNCODES = frozenset({0, 1})
 
+# ctx.files is the gate's whole file set (every staged/changed/tracked file);
+# ruff parses whatever explicit paths it is handed as Python, so anything
+# else (YAML, templates, ...) floods the report with invalid-syntax findings.
+_PY_SUFFIXES = (".py", ".pyi")
+
+
+def _py_files(ctx) -> list[str]:
+    return [f for f in ctx.files if f.lower().endswith(_PY_SUFFIXES)]
+
 
 def _build_argv(ctx) -> list[str]:
     return [
         "ruff", "check", "--output-format", "json", "--force-exclude",
-        "--extend-select", "S", "--", *ctx.files,
+        "--extend-select", "S", "--", *_py_files(ctx),
     ]
 
 
 def run(ctx) -> RunnerResult:
+    if not _py_files(ctx):
+        # No Python in scope: a clean no-op, NOT a tool invocation -- ruff
+        # given zero paths would fall back to scanning the whole cwd.
+        return RunnerResult(NAME, ToolState.OK, raw="[]")
     result = run_subprocess(_build_argv(ctx), ctx.root, TIMEOUT_S)
     return json_or_crashed(NAME, result, _OK_RETURNCODES)
 

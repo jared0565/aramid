@@ -51,6 +51,31 @@ def test_argv_mandates_extend_select_s(tmp_path):
     assert argv[sep + 1:] == ["app.py", "b.py"]
 
 
+def test_argv_filters_to_python_files_only(tmp_path):
+    """ctx.files is the gate's WHOLE file set; ruff parses whatever explicit
+    paths it is handed as Python, so non-.py files (YAML, templates, ...)
+    must never reach its argv -- live-CI bug: 958 invalid-syntax findings
+    from owasp.yml / ARAMID.md.tmpl / the workflow YAML."""
+    ctx = RunContext(root=tmp_path, files=[
+        "app.py", "rules/owasp.yml", "data/ARAMID.md.tmpl",
+        ".github/workflows/aramid.yml", "typed.pyi", "README.md",
+    ])
+    argv = ruff._build_argv(ctx)
+    sep = argv.index("--")
+    assert argv[sep + 1:] == ["app.py", "typed.pyi"]
+
+
+def test_run_no_python_files_is_clean_noop(tmp_path, monkeypatch):
+    """Zero paths after filtering must NOT invoke ruff at all -- ruff given
+    no explicit paths falls back to scanning the whole cwd."""
+    def _boom(*a, **k):
+        raise AssertionError("run_subprocess must not be called")
+    monkeypatch.setattr(ruff, "run_subprocess", _boom)
+    result = ruff.run(RunContext(root=tmp_path, files=["rules/owasp.yml", "README.md"]))
+    assert result.state is ToolState.OK
+    assert ruff.parse(result, RunContext(root=tmp_path)) == []
+
+
 def test_run_missing_binary(tmp_path, monkeypatch):
     monkeypatch.setattr(
         ruff, "run_subprocess",
