@@ -11,6 +11,18 @@ def test_ok_captures_stdout(tmp_path):
     r = run_subprocess([sys.executable, "-c", "print('hi')"], tmp_path, 10)
     assert r.state is ToolState.OK and "hi" in r.raw
 
+def test_ok_captures_zero_returncode(tmp_path):
+    r = run_subprocess([sys.executable, "-c", "pass"], tmp_path, 10)
+    assert r.state is ToolState.OK and r.returncode == 0
+
+def test_ok_captures_nonzero_returncode(tmp_path):
+    # A checker that "finds issues" exits non-zero without crashing --
+    # run_subprocess must surface that exit code (needed by the tests
+    # adapter, which has no JSON/text signal other than the exit code
+    # itself to know pytest/npm-test failed).
+    r = run_subprocess([sys.executable, "-c", "import sys;sys.exit(3)"], tmp_path, 10)
+    assert r.state is ToolState.OK and r.returncode == 3
+
 def test_timeout_kills(tmp_path):
     r = run_subprocess([sys.executable, "-c", "import time;time.sleep(30)"], tmp_path, 1)
     assert r.state is ToolState.TIMEOUT

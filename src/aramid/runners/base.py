@@ -10,6 +10,7 @@ class ToolState(StrEnum):
 @dataclass
 class RunnerResult:
     tool: str; state: ToolState; raw: str = ""; stderr: str = ""; duration_s: float = 0.0
+    returncode: int = 0
 
 @dataclass
 class RunContext:
@@ -60,7 +61,7 @@ def run_subprocess(argv, cwd: Path, timeout_s: float, env=None) -> RunnerResult:
         except subprocess.TimeoutExpired:
             proc.kill()
         return RunnerResult(tool, ToolState.TIMEOUT, duration_s=time.monotonic()-start)
-    return RunnerResult(tool, ToolState.OK, out, err, time.monotonic()-start)
+    return RunnerResult(tool, ToolState.OK, out, err, time.monotonic()-start, proc.returncode)
 
 class Runner(Protocol):
     name: str
