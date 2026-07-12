@@ -347,6 +347,30 @@ never touched; a `schema_version` bump prints an explicit migration message.
 
 ---
 
+## 8b. Coexistence with graphite (hard requirement)
+
+Aramid runs side-by-side with graphite in the same repos. Neither may interfere with
+the other:
+
+- **Aramid never scans graphite artifacts.** `graph-out/`, `.graphite*`, and
+  `.cache/graphite/` are in aramid's built-in default ignore paths (not just
+  per-repo config) — no SAST/secret/lint findings, no fingerprints, no ledger noise
+  from generated graph JSON. Verified need: the graphite daemon auto-builds graphs
+  into new repos under `F:\Projects` **by design**, including this one, within
+  minutes of `git init`.
+- **Aramid's `init` gitignores both toolchains' artifacts** (`.aramid/`,
+  `graph-out/`, `.graphite*`, `.cache/`) so daemon-generated files can never sweep
+  into commits — the exact incident that occurred while writing this spec.
+- **Hook coexistence:** graphite integrates via Claude Code Stop hooks (per-turn
+  graph rebuild, e.g. demo-store2); aramid's gates live in git hooks — different
+  dispatch mechanisms, no contention. If a repo ever carries graphite git hooks,
+  aramid's chain-never-clobber rule (§8) applies to them like any foreign hook.
+- **Interpreter sharing is fine:** aramid's blessed interpreter may be the same one
+  graphite uses; they are separate packages with separate state directories.
+- **Deliberate synergy (Phase 2 forward-hook):** graphite's code graph is the
+  planned blast-radius scoper for LLM red-team review — coexistence is a
+  prerequisite, not merely tolerance.
+
 ## 9. Testing aramid itself
 
 - **Unit:** captured real output fixtures per tool → normalizer tests; policy-matrix
