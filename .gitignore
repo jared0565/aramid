@@ -4,3 +4,4 @@ graph-out/
 .aramid/
 __pycache__/
 *.pyc
+.superpowers/
