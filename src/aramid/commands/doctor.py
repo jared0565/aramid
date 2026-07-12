@@ -57,9 +57,12 @@ ALL_TOOLS = ("gitleaks", "semgrep", "ruff", "pip-audit")
 # downloaded binary is ever trusted/extracted/executed. `_fix_gitleaks` is
 # intentionally never exercised by the test suite (no network in tests).
 GITLEAKS_VERSION = "8.21.2"
+# NOTE: no "windows_x32" entry -- `_gitleaks_platform_key` below can never
+# return that key (32-bit Windows falls to the `None` branch), so a pinned
+# checksum for it would be unreachable dead weight. Dropped rather than
+# wired up: 32-bit Windows is not a supported target.
 GITLEAKS_SHA256 = {
     "windows_x64": "f238c85e5f47e18fac779ce71ee11091cf70a0a8fb4415f165efba2800eef133",
-    "windows_x32": "788261d2f92c57320c8bef727ba6277582cb17925252b740c785782ae6bf4a3f",
     "linux_x64": "5bc41815076e6ed6ef8fbecc9d9b75bcae31f39029ceb55da08086315316e3ba",
     "linux_arm64": "654c935542c89f565aabe7bf7c6c500830f116c114f0aeb509d2460c1ac2e6da",
     "darwin_x64": "5b42c6e4b1fd693eaeb2b5b7faa5f17a1434299d4deb2de63d4b2efd7c753128",
@@ -233,8 +236,15 @@ def _fix_gitleaks() -> bool:
     asset = f"gitleaks_{GITLEAKS_VERSION}_{key}.{ext}"
     url = GITLEAKS_RELEASE_URL.format(asset=asset)
 
-    with urllib.request.urlopen(url, timeout=60) as resp:
-        data = resp.read()
+    try:
+        with urllib.request.urlopen(url, timeout=60) as resp:
+            data = resp.read()
+    except OSError as exc:
+        # covers urllib.error.URLError/HTTPError (both OSError subclasses)
+        # plus raw socket errors -- a network failure during `doctor --fix`
+        # should report cleanly, not crash with a raw traceback.
+        print(f"aramid: doctor --fix: could not download gitleaks: {exc}", file=sys.stderr)
+        return False
 
     if hashlib.sha256(data).hexdigest() != GITLEAKS_SHA256[key]:
         return False

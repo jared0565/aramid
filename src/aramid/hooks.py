@@ -55,8 +55,14 @@ def win_sh_path(p: Path) -> str:
 
 
 def _git_config(root: Path, key: str) -> str | None:
-    cp = subprocess.run(["git", "config", key], cwd=str(root),
-                         capture_output=True, text=True)
+    try:
+        cp = subprocess.run(["git", "config", key], cwd=str(root),
+                             capture_output=True, text=True)
+    except OSError:
+        # git not on PATH (or otherwise unspawnable) -- treat as "unset"
+        # rather than propagating a raw exception up through hooks_dir /
+        # install / uninstall / probe_interpreter.
+        return None
     if cp.returncode == 0 and cp.stdout.strip():
         return cp.stdout.strip()
     return None
