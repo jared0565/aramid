@@ -394,6 +394,8 @@ def scrub(text: str, secrets: list[str]) -> str:
   - `range_commits(root: Path, rng: str | None) -> list[str]`
   - `staged_files(root: Path) -> list[str]`; `changed_files(root: Path, rng: str | None) -> list[str]`
   - `newest_commit_touching(root: Path, rng: str | None, rel_path: str) -> str` (returns `":"` when rng is None-for-index contexts; else the newest sha in range that modified the file, else `HEAD`)
+  - `is_tracked(root: Path, rel_path: str) -> bool` (`git ls-files --error-unmatch <path>` returncode == 0)
+  - `read_for_fingerprint(root: Path, ref: str, rel_path: str) -> str` — returns `read_blob(root, ref, rel_path)`; but if that is empty **and** the file is untracked, returns the worktree file's content with CRLF normalized to LF (the `--all` untracked-file case from spec §4). This is the reader the normalizer uses so fingerprints are never computed over empty content.
 
 - [ ] **Step 1: Failing test** (helper builds a repo)
 
@@ -422,10 +424,23 @@ def test_not_a_repo_raises(tmp_path):
     import pytest
     with pytest.raises(gitutil.NotARepo):
         gitutil.repo_root(tmp_path)
+
+def test_resolve_range_new_branch_no_remote_returns_none(tmp_path):
+    # spec §3 invariant: a brand-new branch with no upstream/origin must NOT hard-error;
+    # resolve_range returns None meaning "scan all commits reachable from HEAD".
+    r = _repo(tmp_path)
+    (r / "a.py").write_text("x=1\n"); _git(r, "add", "a.py"); _git(r, "commit", "-m", "c1")
+    assert gitutil.resolve_range(r) is None
+
+def test_read_for_fingerprint_untracked_uses_worktree(tmp_path):
+    r = _repo(tmp_path)
+    (r / "u.py").write_text("secret=1\r\n")   # untracked, CRLF
+    content = gitutil.read_for_fingerprint(r, "HEAD", "u.py")
+    assert content == "secret=1\n"            # non-empty, LF-normalized
 ```
 
 - [ ] **Step 2: Run — expect FAIL.**
-- [ ] **Step 3: Implement** (subprocess wrappers; `resolve_range` tries each rev-parse and swallows `CalledProcessError`)
+- [ ] **Step 3: Implement** (subprocess wrappers; `resolve_range` tries each rev-parse and swallows `CalledProcessError`; `read_for_fingerprint` adds the untracked-worktree fallback)
 
 ```python
 # src/aramid/gitutil.py
@@ -477,6 +492,19 @@ def newest_commit_touching(root: Path, rng, rel_path):
     spec = rng if rng else "HEAD"
     cp = _run(root, "log", "-1", "--format=%H", spec, "--", rel_path)
     return cp.stdout.strip() or "HEAD"
+
+def is_tracked(root: Path, rel_path: str) -> bool:
+    return _run(root, "ls-files", "--error-unmatch", rel_path).returncode == 0
+
+def read_for_fingerprint(root: Path, ref: str, rel_path: str) -> str:
+    blob = read_blob(root, ref, rel_path)
+    if blob:
+        return blob
+    if not is_tracked(root, rel_path):
+        p = root / rel_path
+        if p.exists():
+            return p.read_text(errors="replace").replace("\r\n", "\n")
+    return ""
 ```
 
 - [ ] **Step 4: Verify pass. Step 5: Commit** — `git commit -m "feat: git helpers — root, blob reads, range resolution"`
@@ -761,7 +789,7 @@ def test_baseline_suppresses_legacy_from_new(tmp_path):
 ### Task 3.4: `compact`
 
 **Files:** Modify `src/aramid/ledger.py`; Test `tests/unit/test_ledger_compact.py`.
-**Interfaces:** `Ledger.compact(self) -> int` rewrites the DB keeping only the latest state-defining events (all `BASELINE_SNAPSHOT`, and the terminal event per finding), returns rows removed. Test: append 100 redundant detect/resolve pairs, compact, assert `open_findings()` unchanged and row count dropped. Commit `feat: ledger compaction`.
+**Interfaces:** `Ledger.compact(self) -> int` rewrites the DB keeping, **per finding, its `FINDING_DETECTED` event (which carries the tool/file/payload replay needs) plus that finding's single latest terminal transition** (`FINDING_RESOLVED`/`FINDING_OVERRIDDEN`/`FINDING_ROTATED`, if any), and **all** `BASELINE_SNAPSHOT` events; drops redundant intermediate/duplicate events and `RUN_STARTED`/`RUN_FINISHED`. Returns rows removed. (Dropping `FINDING_DETECTED` would make `_materialize` skip the terminal event — its guard is `if e.finding_id in state` — so the detect event MUST be retained.) Test: append 100 redundant detect/resolve cycles across a detected-then-resolved finding and a still-open finding, compact, assert `open_findings()` is byte-identical before/after (resolved finding still shows `status="fixed"`, open finding still `"open"`) and row count dropped. Commit `feat: ledger compaction`.
 
 ---
 
@@ -860,8 +888,8 @@ class Runner(Protocol):
 
 Each adapter is a small module exposing `run(ctx) -> RunnerResult` plus a `parse(result, ctx) -> list[RawFinding]` used by the normalizer (Task 4.9). `RawFinding` is `@dataclass(tool, rule, severity_raw, file, line, message, secret:str|None)` defined in `normalizer.py` (Task 4.9). Implement each with real argv and a JSON-output parse; test each against a **captured fixture** of the tool's real output stored in `tests/fixtures/<tool>.json` (no live tool needed in unit tests).
 
-- **Task 4.2 gitleaks** — `runners/gitleaks.py`. Staged: `gitleaks protect --staged --report-format json --report-path -`. Range/history: `gitleaks git --log-opts "<rng>" --report-format json`. Parse JSON array → RawFinding per leak with `secret=item["Secret"]`, `rule=item["RuleID"]`, `file=item["File"]`, `line=item["StartLine"]`. Test: fixture with one leak → one RawFinding whose `secret` is set. Commit `feat: gitleaks adapter`.
-- **Task 4.3 ruff** — `runners/ruff.py`. `ruff check --output-format json --force-exclude -- <files>`. Parse → RawFinding(`rule=item["code"]`, `file`, `line=item["location"]["row"]`, `message`). Commit `feat: ruff adapter`.
+- **Task 4.2 gitleaks** — `runners/gitleaks.py`. `--report-path` is a filesystem path, NOT a stdout sentinel (`-` writes a literal file named `-`). Write to a temp file and read it back: staged → `gitleaks protect --staged --report-format json --report-path <tmp>.json` (or `git` subcommand `gitleaks git --log-opts "<rng>" --report-format json --report-path <tmp>.json` for range/history), then `json.loads(Path(tmp).read_text() or "[]")`. Note: gitleaks exits non-zero when leaks are found — that is not `CRASHED`; only treat unparseable-output-with-error as crash. Parse array → RawFinding per leak with `secret=item["Secret"]`, `rule=item["RuleID"]`, `file=item["File"]`, `line=item["StartLine"]`. Test: fixture temp-report with one leak → one RawFinding whose `secret` is set. Commit `feat: gitleaks adapter`.
+- **Task 4.3 ruff** — `runners/ruff.py`. `ruff check --output-format json --force-exclude --extend-select S -- <files>` — **`--extend-select S` is mandatory**: ruff's default rule set excludes the flake8-bandit `S` family, so without it the pre-commit security rules never fire regardless of repo config. Parse → RawFinding(`rule=item["code"]`, `file`, `line=item["location"]["row"]`, `message`). Test: fixture repo with **no ruff config** containing `exec(x)` → an `S102` RawFinding is produced (proves aramid enforces S itself). Commit `feat: ruff adapter with enforced security (S) rules`.
 - **Task 4.4 semgrep** — `runners/semgrep.py`. `semgrep --config <vendored owasp.yml> --json --metrics=off --quiet -- <files>`. Parse `results[]` → RawFinding(`rule=item["check_id"]`, severity from `extra.severity`, `file=item["path"]`, `line=item["start"]["line"]`). Commit `feat: semgrep adapter (offline vendored rules)`.
 - **Task 4.5 eslint** — `runners/eslint.py`. Resolve `<root>/node_modules/.bin/eslint(.cmd on Windows)`; MISSING (skip) if absent — never global. `eslint -f json <files>`. Parse `[].messages[]` → RawFinding(`rule=ruleId`, `file`, `line`). Commit `feat: eslint adapter (repo-local)`.
 - **Task 4.6 typecheck** — `runners/typecheck.py`. tsc: `node_modules/.bin/tsc --noEmit` when `tsconfig.json` exists (parse `file(line,col): error TSxxxx` text). mypy: only when `[tool.mypy]` or `mypy.ini` present; `mypy --no-error-summary --show-column-numbers`. Commit `feat: tsc and mypy adapters`.
@@ -878,7 +906,8 @@ Each adapter is a small module exposing `run(ctx) -> RunnerResult` plus a `parse
 - Consumes: adapters' `parse()`, `gitutil`, `fingerprint`, `redact`, `policy.classify` (Task 5.1).
 - Produces:
   - `@dataclass class RawFinding`: `tool, rule, severity_raw, file, line, message, secret:str|None=None`
-  - `normalize(raws: list[RawFinding], root: Path, ref_for: Callable[[str], str], salt: bytes, gate: Gate, classify) -> list[Finding]` — for each raw: read the flagged line from the correct git object (`ref_for(file)` returns `":"`, a sha, or `HEAD`), compute occurrence index among identical (tool,rule,file,normalized-line) raws, build the fingerprint, redact `secret` into evidence if present (else use the message), and call `classify(tool, rule, severity_raw, gate)` to get `(severity, verdict)`.
+  - `normalize(raws: list[RawFinding], root: Path, ref_for: Callable[[str], str], salt: bytes, gate: Gate, classify) -> list[Finding]` — for each raw: read the flagged line via `gitutil.read_for_fingerprint(root, ref_for(file), file)` (handles index/commit/HEAD refs and the untracked-worktree fallback), **guarding the line index** (`lines[raw.line-1] if 0 <= raw.line-1 < len(lines) else ""`), compute occurrence index among identical `(tool,rule,file,normalized-line)` raws, build the fingerprint, redact `secret` into evidence if present (else use the message), and call `classify(tool, rule, severity_raw, gate)` → `(severity, verdict)`.
+  - **`classify` is the 4-arg callable `(tool, rule, severity_raw, gate) -> (Severity, Verdict)`.** The pipeline (Task 5.3) supplies it as `functools.partial(policy.classify, cfg=cfg)`, binding the config so bake-demotion works without threading `cfg` through the normalizer. (This resolves the signature mismatch with the 5-arg `policy.classify`.)
 
 - [ ] **Step 1: Failing test**
 
@@ -892,22 +921,23 @@ def _classify(tool, rule, sev, gate):
     from aramid.models import Severity, Verdict
     return (Severity.HIGH, Verdict.BLOCK)
 
-def test_two_identical_lines_get_distinct_ids(tmp_path):
-    raws = [RawFinding("ruff","S102","high","a.py",3,"exec"),
-            RawFinding("ruff","S102","high","a.py",7,"exec")]
-    ref_for = lambda f: "HEAD"
-    # line content identical for both -> occurrence index disambiguates
-    out = normalize(raws, tmp_path, lambda f: "STUB", b"salt", Gate.PRE_COMMIT, _classify)
-    # patch: normalize reads via injected reader in real impl; here assert 2 unique ids
-    assert len({f.id for f in out}) == 2
+def test_two_identical_lines_get_distinct_ids(tmp_path, monkeypatch):
+    from aramid import gitutil
+    monkeypatch.setattr(gitutil, "read_for_fingerprint", lambda root, ref, f: "exec(x)\n")
+    raws = [RawFinding("ruff","S102","high","a.py",1,"exec"),
+            RawFinding("ruff","S102","high","a.py",1,"exec")]
+    out = normalize(raws, tmp_path, lambda f: "HEAD", b"salt", Gate.PRE_COMMIT, _classify)
+    assert len({f.id for f in out}) == 2   # occurrence index disambiguates
 
-def test_secret_is_redacted_into_evidence(tmp_path):
+def test_secret_is_redacted_into_evidence(tmp_path, monkeypatch):
+    from aramid import gitutil
+    monkeypatch.setattr(gitutil, "read_for_fingerprint", lambda root, ref, f: "leak\n")
     raws = [RawFinding("gitleaks","aws","high","a.py",1,"leak",secret="AKIA12345678")]
     out = normalize(raws, tmp_path, lambda f: "HEAD", b"salt", Gate.PRE_COMMIT, _classify)
     assert "AKIA12345678" not in out[0].evidence and "…" in out[0].evidence
 ```
 
-> Implementation note: `normalize` reads line content via `gitutil.read_blob(root, ref_for(file), file)` split by lines at `raw.line-1`; inject a reader in tests by monkeypatching `gitutil.read_blob`. Occurrence index = count of prior raws in the list with the same `(tool,rule,file, normalized flagged-line)`.
+> Implementation note: `normalize` reads line content via `gitutil.read_for_fingerprint(root, ref_for(file), file)`, splits on lines, and **guards the index** so a missing/short blob yields `""` rather than `IndexError`. Occurrence index = count of prior raws in the list with the same `(tool,rule,file, normalized flagged-line)`. Tests monkeypatch `gitutil.read_for_fingerprint` so no real repo is needed.
 
 - [ ] **Step 2–5:** implement, verify, commit `feat: normalizer — RawFinding to fingerprinted Finding with redaction`.
 
@@ -925,7 +955,8 @@ def test_secret_is_redacted_into_evidence(tmp_path):
 - Produces:
   - `load_block_rules() -> dict` (reads packaged `data/block_rules.toml`: `[ruff] block = ["S102","S105",...]`, `[semgrep] block = ["owasp.sqli.*",...]`, `[deps] block_severity = "critical"`)
   - `classify(tool, rule, severity_raw, gate, cfg) -> tuple[Severity, Verdict]` — secrets always BLOCK; block-list rules BLOCK; `tests-failed` BLOCK; deps at/above `block_severity` BLOCK else WARN; everything else WARN. During bake (`cfg.semgrep_block_armed is False`) semgrep BLOCKs demote to WARN.
-  - `apply_overrides(findings, overrides: set[str], suppressions: set[str], seen_ledger) -> list[Finding]` — WARN override ids and BLOCK suppression ids get verdict downgraded to INFO; a stale override (id not matching any current finding) is ignored (finding re-fires).
+  - `@dataclass class OverrideRecord`: `id:str, tool:str, rule:str, path:str, reason:str` (an override or suppression entry; `path` is normalized).
+  - `apply_overrides(findings, overrides: list[OverrideRecord], suppressions: list[OverrideRecord]) -> tuple[list[Finding], list[OverrideRecord]]` — a WARN finding whose id matches an override record, or a BLOCK finding whose id matches a suppression record, is downgraded to `Verdict.INFO`. Returns `(findings, stale)` where `stale` = override/suppression records that matched **no** finding by id **but** have a near-miss (same `tool+rule+normalized_path` as a current finding whose line content changed). Stale records do NOT downgrade — the finding re-fires at its normal tier (non-interactive; spec §4). `stale` is handed to the reporter (Task 5.4) which prints the mandated re-affirm message.
   - `escalate_degraded(verdict_exit: int, degraded_block_tier: bool, gate: Gate) -> int` — at pre-push, degraded BLOCK-tier forces exit 1.
 
 - [ ] **Step 1: Failing test**
@@ -963,11 +994,15 @@ def _cfg(armed):
 
 **Interfaces:**
 - Produces:
-  - `@dataclass class Config`: `schema_version:int, semgrep_block_armed:bool, bake_started:str|None, cve_block_severity:str, ignore_paths:list[str], test_command:str|None, scope_subpath:str|None, timeouts:dict, block_rules:dict`
-  - `load_config(root: Path) -> Config` — deep-merge `data/defaults.toml` ← `~/.aramid/config.toml` ← `<root>/aramid.toml`; built-in `ignore_paths` from Global Constraints are always unioned in.
-  - `render_repo_stub(stack, pkg_mgr) -> str` — the near-empty per-repo TOML init writes (only `schema_version`, `semgrep_block_armed=false`, `bake_started`).
+  - `@dataclass class Config`: `schema_version:int, semgrep_block_armed:bool, bake_started:str|None, ignore_paths:list[str], test_command:str|None, scope_subpath:str|None, timeouts:dict, block_rules:dict`. (No `cve_block_severity` field — the single source of truth for the dependency block threshold is `block_rules["deps"]["block_severity"]`, read by `policy.classify`. Overriding it happens in `block_rules`, not a second field.)
+  - `CURRENT_SCHEMA_VERSION: int` constant (bump when the repo-toml shape changes).
+  - `load_config(root: Path) -> Config` — deep-merge `data/defaults.toml` ← `~/.aramid/config.toml` ← `<root>/aramid.toml`; built-in `ignore_paths` from Global Constraints (`.aramid/`, `graph-out/`, `.graphite*`, `.cache/`, `node_modules/`, `.venv/`, `__pycache__/`, `.git/`) are ALWAYS unioned in (never removable by config — spec §8b hard requirement). If the repo toml's `schema_version` differs from `CURRENT_SCHEMA_VERSION`, print the migration message `"aramid: config schema v{old}→v{cur}; review aramid.toml"` to stderr.
+  - `is_ignored(rel_path: str, ignore_paths: list[str]) -> bool` — true if any ignore entry is a path prefix of, or fnmatch-matches, the normalized `rel_path`. Used by detectors and the pipeline to drop files before scanning/fingerprinting.
+  - `filter_paths(files: list[str], cfg: Config) -> list[str]` — `[f for f in files if not is_ignored(f, cfg.ignore_paths)]`.
+  - `load_suppressions(root: Path) -> tuple[list[OverrideRecord], list[Finding]]` — parse `<root>/.aramid-suppressions.toml` (`[[suppress]] id=… tool=… rule=… path=… reason=…`) into `OverrideRecord`s; any entry **missing/empty `reason`** yields a synthetic `Verdict.WARN` Finding (`tool="aramid", rule="suppression-without-reason"`) instead of a suppression (spec §6).
+  - `render_repo_stub(stack, pkg_mgr) -> str` — near-empty per-repo TOML init writes (`schema_version=CURRENT_SCHEMA_VERSION`, `semgrep_block_armed=false`, `bake_started=<date>`).
 
-- [ ] **Step 1: Failing test**: user config raises `cve_block_severity`, repo toml overrides `test_command`; assert both land and built-in ignore paths present. **Steps 2–5:** implement with `tomllib`/`tomli_w`, verify, commit `feat: layered configuration`.
+- [ ] **Step 1: Failing tests**: (a) user config raises `block_rules.deps.block_severity`, repo toml overrides `test_command` → both land, built-in ignore paths present even if repo toml sets `ignore_paths=[]`; (b) `is_ignored("graph-out/x.json", cfg.ignore_paths)` is True and `filter_paths` drops it; (c) a `.aramid-suppressions.toml` entry with no reason yields one synthetic WARN Finding; (d) a repo toml with an older `schema_version` triggers the migration message (capture stderr). **Steps 2–5:** implement with `tomllib`/`tomli_w`, verify, commit `feat: layered config, ignore-path filter, suppressions loader, schema migration`.
 
 ### Task 5.3: Pipeline — run a gate
 
@@ -978,11 +1013,18 @@ def _cfg(armed):
 **Interfaces:**
 - Consumes: detectors, runners registry, normalizer, policy, ledger, config, gitutil, redact.
 - Produces:
-  - `@dataclass class GateResult`: `exit_code:int, findings:list[Finding], degraded:list[str], new_ids:list[str], run_id:str`
-  - `run_gate(root: Path, gate: Gate, mode: str, cfg: Config, ledger: Ledger, accept_degraded: str|None) -> GateResult` — selects applicable runners for the gate+stack; runs them concurrently under the gate wall-clock budget (`ThreadPoolExecutor`, `timeouts["pre_commit"|"pre_push"]`); collects `RunnerResult`s; records degraded (MISSING/CRASHED/TIMEOUT) tools; parses+normalizes; applies overrides/suppressions; records the run in the ledger; computes exit code: `1` if any BLOCK finding; else if degraded BLOCK-tier tool and gate is pre-push and not `accept_degraded` → `1` (write `INFRASTRUCTURE_BYPASS` only if accepted); else `2` if any degradation; else `0`. Enforces the no-new-warnings ratchet at pre-push (new WARN ids in `new_ids` → BLOCK unless overridden).
-  - `run_id` generated from ledger seq + counter (NO `Date.now`/random reliance for determinism in tests: accept an injected `clock: Callable[[], str]` and `run_id: str` param with defaults).
+  - `@dataclass class GateResult`: `exit_code:int, findings:list[Finding], degraded:list[str], new_ids:list[str], stale_overrides:list[OverrideRecord], run_id:str`
+  - `run_gate(root: Path, gate: Gate, mode: str, cfg: Config, ledger: Ledger, accept_degraded: str|None) -> GateResult` — steps:
+    1. Determine the file set for `mode` (staged/range/all) via `gitutil`, then **`config.filter_paths(files, cfg)`** to drop ignore-path matches (spec §8b — applied in ALL modes, before any runner sees a file and before fingerprinting).
+    2. Select applicable runners for gate+stack; run concurrently under the gate wall-clock budget (`ThreadPoolExecutor`, `cfg.timeouts["pre_commit"|"pre_push"]`).
+    3. Collect `RunnerResult`s; record degraded (MISSING/CRASHED/TIMEOUT) tools; for each result, **write `redact.scrub(result.stderr, raw_secrets)` to `.aramid/logs/<tool>-<run_id>.log`** (spec §6 — raw secret material never lands in logs).
+    4. Parse each runner's output → RawFindings; `normalize(...)` with `classify = functools.partial(policy.classify, cfg=cfg)`.
+    5. Load overrides (WARN, from ledger) + `config.load_suppressions(root)` (BLOCK + reasonless→WARN findings); `policy.apply_overrides(...)` → `(findings, stale)`.
+    6. `ledger.record_run(...)` → `new_ids`; enforce the no-new-warnings ratchet at pre-push (new WARN ids → BLOCK unless overridden).
+    7. Exit code: `1` if any BLOCK finding; else if a degraded **BLOCK-tier** tool and gate is pre-push and not `accept_degraded` → `1`; if `accept_degraded`, append `INFRASTRUCTURE_BYPASS` and continue; else `2` if any degradation; else `0`.
+  - `run_id`/timestamps are injected (`clock: Callable[[], str]`, `run_id: str` params with defaults) — NO `Date.now`/random reliance, so tests are deterministic.
 
-- [ ] **Step 1: Failing test** (inject two fake runners — one clean, one returning a BLOCK RawFinding — assert exit 1; then all-clean assert exit 0; then a MISSING BLOCK-tier tool at pre-push assert exit 1, and with `accept_degraded="reason"` assert exit 2 + an INFRASTRUCTURE_BYPASS event). **Steps 2–5:** implement, verify, commit `feat: gate pipeline with concurrency, budget, ratchet, degraded escalation`.
+- [ ] **Step 1: Failing test** (inject fake runners; assert): (a) one clean + one BLOCK RawFinding → exit 1; (b) all-clean → exit 0; (c) MISSING BLOCK-tier tool at pre-push → exit 1, and with `accept_degraded="reason"` → exit 2 + an `INFRASTRUCTURE_BYPASS` event; (d) a seeded RawFinding whose file is under `graph-out/` → **zero findings** (ignore filter drops it before the runner, spec §8b); (e) a runner whose `stderr` contains a raw secret → the written `.aramid/logs/*.log` does NOT contain the raw secret. **Steps 2–5:** implement, verify, commit `feat: gate pipeline with concurrency, budget, ratchet, ignore-filter, log redaction, degraded escalation`.
 
 ### Task 5.4: Reporter — console + json + exit mapping
 
@@ -992,9 +1034,9 @@ def _cfg(armed):
 
 **Interfaces:**
 - Produces:
-  - `render_console(result: GateResult, ledger: Ledger) -> str` — NEW findings first; legacy collapsed to `"(+N baseline findings)"`; each secret finding appends the rotation warning; degraded tools listed as skips; aging line from ledger.
-  - `render_json(result: GateResult) -> str` — machine output: `{exit_code, findings:[...], degraded:[...], new_ids:[...]}` with redacted evidence only.
-- Test: a GateResult with 1 new BLOCK + 2 baseline WARN renders NEW first, shows `(+2 baseline`, and a secret finding shows "rotate". Commit `feat: reporter — console and json output`.
+  - `render_console(result: GateResult, ledger: Ledger) -> str` — NEW findings first; legacy collapsed to `"(+N baseline findings)"`; each secret finding appends the rotation warning (`"rotate the credential — deleting the line does not fix the leak"`); degraded tools listed as skips; aging line from ledger; **for each record in `result.stale_overrides`, prints the mandated line** `"stale override <id> — re-affirm with `aramid override <id> --reason` (WARN) or update .aramid-suppressions.toml (BLOCK)"` (spec §4).
+  - `render_json(result: GateResult) -> str` — machine output: `{exit_code, findings:[...], degraded:[...], new_ids:[...], stale_overrides:[...]}` with redacted evidence only.
+- Test: a GateResult with 1 new BLOCK + 2 baseline WARN renders NEW first, shows `(+2 baseline`; a secret finding shows "rotate"; a populated `stale_overrides` renders the re-affirm line. Commit `feat: reporter — console and json output with stale-override surfacing`.
 
 ---
 
@@ -1057,7 +1099,7 @@ def _cfg(armed):
 **Interfaces:** `cmd_check(root, gate, mode, strict, as_json, accept_degraded) -> int` — load config, open ledger (auto-baseline + non-blocking if `not ledger.has_baseline()` — fresh-clone rule), `run_gate`, render, return exit code (with `--strict` mapping `{2,3}` per §3; env `ARAMID_ACCEPT_DEGRADED` read here). Test: seeded-secret repo → `cmd_check(pre_commit)` returns 1; clean repo returns 0; fresh ledger first run auto-baselines and returns 0/2 not 1. Commit `feat: check command`.
 
 ### Task 7.2: `status`
-Create `src/aramid/commands/status.py`; Test `tests/integration/test_status.py`. `cmd_status(root)` prints last run, open counts, NEW-since-baseline, aging (>30d), per-tool skip streaks, unrotated historical secrets, and `"bake in progress, day N"` when unarmed. Commit `feat: status command`.
+Create `src/aramid/commands/status.py`; Test `tests/integration/test_status.py`. `cmd_status(root)` prints last run, open counts, NEW-since-baseline, aging (>30d), per-tool skip streaks, unrotated historical secrets, and — when unarmed — `"bake in progress, day N"` **followed by per-rule semgrep hit counts** aggregated from the ledger (`rule-id: count`, descending), so the operator can spot and demote noisy rules before `aramid arm` (spec §8 — this is the functional purpose of the bake). Test asserts both the day-N line and at least one `rule-id: count` line appear during bake. Commit `feat: status command with bake per-rule hit counts`.
 
 ### Task 7.3: `ledger` (list/show/filter/mark-rotated)
 Create `src/aramid/commands/ledger_cmd.py`; Test `tests/integration/test_ledger_cmd.py`. `mark-rotated <id> --reason` appends `FINDING_ROTATED`; requires the id be `historical`. Commit `feat: ledger command with mark-rotated`.
@@ -1073,7 +1115,10 @@ Modify `src/aramid/cli.py` to build the full subcommand tree and dispatch to `co
 ## Milestone M8 — Integration, E2E, dogfood
 
 ### Task 8.1: Seeded-violations integration suite
-Create `tests/integration/test_gates_end_to_end.py` + `tests/fixtures/seeded_repo/` builder. Assert: fake AWS key → pre-commit exit 1; SQLi pattern → pre-push semgrep WARN during bake, BLOCK after `arm`; vulnerable pinned dep → dep WARN/BLOCK per severity; failing test → pre-push exit 1; clean → 0. Commit `test: end-to-end gate behavior on seeded violations`.
+Create `tests/integration/test_gates_end_to_end.py` + `tests/fixtures/seeded_repo/` builder. Assert: fake AWS key → pre-commit exit 1; SQLi pattern → pre-push semgrep WARN during bake, BLOCK after `arm`; vulnerable pinned dep → dep WARN/BLOCK per severity; failing test → pre-push exit 1; clean → 0. **Graphite-coexistence (spec §8b):** seed a fake AWS key inside `graph-out/leak.json` and a SAST pattern inside `.graphite_cache/x.py`, run every mode (`--staged`/`--range`/`--all`), and assert **zero findings and zero ledger `finding_detected` events** for those paths. Commit `test: end-to-end gate behavior + graphite-artifact exclusion`.
+
+### Task 8.1b: Fingerprint cross-mode stability + stale-override re-fire
+Create `tests/integration/test_fingerprint_modes.py`. Seed one real violation in a temp git repo; scan it three ways — pre-commit (index blob), pre-push (commit blob), `--all` (HEAD blob) — and assert an **identical finding id** across all three (validates the per-mode blob reading in spec §4 does not churn ids). Then record an override for that id, edit the violating line, re-scan, and assert the finding **re-fires** (override not honored) and the reporter output contains the `"stale override"` re-affirm line. Commit `test: fingerprint cross-mode stability and stale-override re-fire`.
 
 ### Task 8.2: Windows E2E hook + chaining + uninstall
 Create `tests/e2e/test_windows_hooks.py` (skip if not win32): real `git commit`/`git push` (to a bare local remote), assert hooks fire through git dispatch, a pre-existing foreign hook still runs (chaining), and `uninstall` reverses everything. Commit `test: Windows E2E hooks, chaining, uninstall`.
