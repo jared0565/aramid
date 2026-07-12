@@ -19,6 +19,13 @@ def test_out_of_scope_absence_does_not_resolve(tmp_path):
     led.record_run("r2","t","pre-push",{"ruff"},{"b.py"},[])   # a.py not scanned
     assert led.open_findings()["id1"]["status"] == "open"
 
+def test_out_of_tool_scope_absence_does_not_resolve(tmp_path):
+    led = Ledger(tmp_path / "l.db")
+    led.record_run("r1","t","pre-push",{"ruff"},{"a.py"},[_f("id1")])   # ruff finding on a.py
+    # next run scans a.py but only with semgrep in scope; the ruff finding must NOT be marked fixed
+    led.record_run("r2","t","pre-push",{"semgrep"},{"a.py"},[])
+    assert led.open_findings()["id1"]["status"] == "open"
+
 def test_new_ids_returned_for_ratchet(tmp_path):
     led = Ledger(tmp_path / "l.db")
     new = led.record_run("r1","t","pre-push",{"ruff"},{"a.py"},[_f("id1")])
