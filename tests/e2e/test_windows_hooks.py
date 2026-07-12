@@ -17,7 +17,10 @@ these tests -- see the manual smoke test this module's assertions mirror:
     generalized here to just ruff via `_find_ruff`. A real `ruff check` on a
     one-line `exec(x)` file completed in ~0.17s, comfortably inside the 5s
     `pre_commit` wall-clock budget (data/defaults.toml `[timeouts]`).
-  - gitleaks is NOT installed, no network in this environment. This does not
+  - gitleaks must be MISSING for scenario 1's fail-open assertions. On this
+    host it simply isn't installed; on hosts where it is (CI installs a
+    pinned binary), `_live_ruff_env` strips every gitleaks-bearing directory
+    from PATH so the scenario is deterministic everywhere. This does not
     threaten either assertion below: pipeline.run_gate's ONLY route to
     exit_code 1 that isn't gated behind `gate is PRE_PUSH` is a genuine BLOCK
     finding (`block_findings`); a MISSING BLOCK-tier tool at pre-commit only
@@ -79,15 +82,34 @@ _SKIP_RUFF = ("ruff console-script not found via shutil.which, next to sys.execu
               "BLOCK in this environment.")
 
 
+def _path_without_gitleaks(path_value: str) -> str:
+    """PATH minus every directory that resolves a gitleaks binary. Scenario 1's
+    clean commit asserts the fail-open route (gitleaks MISSING -> degraded ->
+    the shim's pre-commit {2,3}->0 mapping); on hosts where gitleaks IS
+    installed that route would silently go unexercised, so strip it to make
+    the scenario deterministic everywhere (module docstring)."""
+    kept = []
+    for entry in path_value.split(os.pathsep):
+        p = Path(entry)
+        if entry and ((p / "gitleaks.exe").exists() or (p / "gitleaks").exists()):
+            continue
+        kept.append(entry)
+    return os.pathsep.join(kept)
+
+
 def _live_ruff_env() -> dict:
-    """PATH extended with ruff's own directory. The REAL `aramid check`
-    process spawned through git's hook dispatch inherits this all the way
-    down the chain (git commit -> sh hook -> baked interpreter -> `aramid
-    check` subprocess) -- git does not sanitize hook environments (hooks.py's
-    module docstring) -- and `aramid.runners.base.run_subprocess` gates on
-    `shutil.which(argv[0])` before it will even attempt to run "ruff"."""
+    """PATH extended with ruff's own directory (and scrubbed of gitleaks).
+    The REAL `aramid check` process spawned through git's hook dispatch
+    inherits this all the way down the chain (git commit -> sh hook -> baked
+    interpreter -> `aramid check` subprocess) -- git does not sanitize hook
+    environments (hooks.py's module docstring) -- and
+    `aramid.runners.base.run_subprocess` gates on `shutil.which(argv[0])`
+    before it will even attempt to run "ruff"."""
     assert _RUFF_BIN is not None
-    return {**os.environ, "PATH": str(_RUFF_BIN.parent) + os.pathsep + os.environ.get("PATH", "")}
+    path = str(_RUFF_BIN.parent) + os.pathsep + _path_without_gitleaks(os.environ.get("PATH", ""))
+    assert shutil.which("gitleaks", path=path) is None, \
+        "gitleaks must be absent from the hook PATH for the fail-open assertions"
+    return {**os.environ, "PATH": path}
 
 
 # --- repo helpers ---------------------------------------------------------
@@ -155,9 +177,10 @@ def test_real_precommit_blocks_on_live_ruff_s102_then_clean_commit_succeeds(tmp_
 
     # --- clean path: unstage the blocking file, stage a clean one, commit
     # again in the SAME repo -- exit 0 path. gitleaks stays MISSING
-    # throughout (not installed in this environment) -- proving this commit
-    # succeeds anyway is exactly the fail-open assertion the shim's
-    # pre-commit `{2,3}->0` mapping exists for (hooks.py module docstring).
+    # throughout (stripped from the hook PATH by _live_ruff_env) -- proving
+    # this commit succeeds anyway is exactly the fail-open assertion the
+    # shim's pre-commit `{2,3}->0` mapping exists for (hooks.py module
+    # docstring).
     _git(r, "reset")
     (r / "good.py").write_text("def f(x):\n    return x + 1\n", encoding="utf-8")
     _git(r, "add", "good.py")
@@ -184,9 +207,9 @@ def test_chained_foreign_hook_runs_alongside_aramid_through_real_git_dispatch(tm
     assert (hdir / "pre-commit.aramid-chained").exists()
     assert hooks.MARKER_START.encode() in (hdir / "pre-commit").read_bytes()
 
-    # a clean commit must succeed (gitleaks MISSING fail-opens at pre-commit,
-    # same as scenario 1) AND run BOTH the chained foreign hook and aramid's
-    # own real engine.
+    # a clean commit must succeed whether gitleaks is present (finds nothing
+    # in a clean file) or MISSING (fail-opens at pre-commit) AND run BOTH the
+    # chained foreign hook and aramid's own real engine.
     (r / "clean.py").write_text("x = 1\n", encoding="utf-8")
     _git(r, "add", "clean.py")
     cp = _git(r, "commit", "-m", "c1")

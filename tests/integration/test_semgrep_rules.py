@@ -92,7 +92,10 @@ def test_semgrep_validate_loads_ruleset_offline(semgrep_path_env):
         capture_output=True, text=True, timeout=120,
     )
     assert result.returncode == 0, result.stdout + result.stderr
-    assert "configuration is valid" in result.stderr.lower(), result.stderr
+    # semgrep's stream for this message moved between releases (stderr on the
+    # 1.100.x line, stdout on current) -- match the combined output.
+    combined = (result.stdout + result.stderr).lower()
+    assert "configuration is valid" in combined, result.stdout + result.stderr
 
 
 # --- (b)/(c): the real aramid.runners.semgrep.run()/parse() path, live ------
