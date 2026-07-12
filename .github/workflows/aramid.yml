@@ -1,0 +1,83 @@
+# CI for aramid itself: install the package, run its test suite, dogfood the
+# gate against its own repo, and sanity-check the built wheel.
+#
+# Runs on windows-latest because the E2E suite (tests/e2e/test_windows_hooks.py)
+# is Windows-only (git hook shims, PATH resolution, taskkill process-tree kill)
+# and skips cleanly off win32 -- running here keeps that coverage live instead
+# of silently skipped.
+name: aramid
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  ci:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # full history: gitleaks/fingerprint scanning wants real commit history
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install aramid (pulls in ruff, semgrep, pip-audit as deps)
+        run: pip install -e .
+
+      - name: Install pinned gitleaks binary onto PATH
+        uses: gacts/gitleaks@v1
+        with:
+          version: 8.28.0
+          run: false # install only -- aramid's own gate invokes gitleaks itself
+
+      - name: Run test suite
+        run: python -m pytest -q
+
+      # Dogfood: run aramid's own gate against this repo as the CI backbone.
+      # Exit-code contract (see docs/superpowers/specs/2026-07-12-aramid-phase1-design.md):
+      #   0 = pass, 1 = blocking finding, 2 = degraded (a tool errored/unavailable),
+      #   3 = engine error. --strict remaps 2 and 3 onto 1 so CI treats "couldn't
+      #   tell" the same as "failed" instead of silently passing.
+      - name: Run aramid gate (--all --strict --json)
+        run: python -m aramid check --all --strict --json
+
+      - name: Install build backend
+        run: pip install build
+
+      - name: Build wheel
+        run: python -m build --wheel
+
+      # Closes the "wheel data inclusion verified by inspection only" gap:
+      # actually unzip the built wheel and assert the packaged data files
+      # exist on disk, rather than trusting package-data globs by eye.
+      - name: Verify packaged data files are present in the wheel
+        shell: python
+        run: |
+          import pathlib
+          import sys
+          import tempfile
+          import zipfile
+
+          wheel = next(pathlib.Path("dist").glob("*.whl"))
+          required = [
+              "aramid/data/block_rules.toml",
+              "aramid/data/defaults.toml",
+              "aramid/rules/owasp.yml",
+          ]
+
+          with tempfile.TemporaryDirectory() as tmp:
+              with zipfile.ZipFile(wheel) as zf:
+                  zf.extractall(tmp)
+              tmp_path = pathlib.Path(tmp)
+              missing = [f for f in required if not (tmp_path / f).exists()]
+
+          if missing:
+              print(f"::error::missing packaged data file(s) in {wheel.name}: {missing}")
+              sys.exit(1)
+
+          print(f"OK: {wheel.name} contains all required data files: {required}")
