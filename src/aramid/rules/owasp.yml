@@ -1,0 +1,230 @@
+rules:
+  # --- A03:2021 Injection -- SQL injection -----------------------------------
+  - id: owasp-top-ten.a03-injection.python-sqli-string-concat
+    languages: [python]
+    severity: ERROR
+    message: >-
+      SQL query built via string concatenation/interpolation/formatting is
+      passed to a database execute() call. This allows SQL injection.
+      Use parameterized queries (pass values through the params argument)
+      instead of building the query string with untrusted data.
+    metadata:
+      confidence: HIGH
+      cwe: "CWE-89: Improper Neutralization of Special Elements used in an SQL Command"
+      owasp: "A03:2021 - Injection"
+    patterns:
+      - pattern-either:
+          - pattern: $CURSOR.execute("..." + $X)
+          - pattern: $CURSOR.execute($X + "...")
+          - pattern: $CURSOR.execute(f"...")
+          - pattern: $CURSOR.execute("..." % $X)
+          - pattern: $CURSOR.execute("..." % ($X, ...))
+          - pattern: $CURSOR.execute("...".format(...))
+
+  - id: owasp-top-ten.a03-injection.javascript-sqli-string-concat
+    languages: [javascript, typescript]
+    severity: ERROR
+    message: >-
+      SQL query built via string concatenation/template literal is passed
+      to a database query()/execute() call. This allows SQL injection.
+      Use a parameterized query (placeholders + a values array) instead of
+      building the query string with untrusted data.
+    metadata:
+      confidence: HIGH
+      cwe: "CWE-89: Improper Neutralization of Special Elements used in an SQL Command"
+      owasp: "A03:2021 - Injection"
+    patterns:
+      - pattern-either:
+          - pattern: $DB.query("..." + $X)
+          - pattern: $DB.query($X + "...")
+          - pattern: $DB.query(`...${$X}...`)
+          - pattern: $DB.execute("..." + $X)
+          - pattern: $DB.execute($X + "...")
+          - pattern: $DB.execute(`...${$X}...`)
+
+  # --- A03:2021 Injection -- command injection -------------------------------
+  - id: owasp-top-ten.a03-injection.python-command-injection-os-system
+    languages: [python]
+    severity: ERROR
+    message: >-
+      os.system() always spawns a shell for its argument. Passing anything
+      other than a fixed string literal (concatenation, an f-string, a bare
+      variable, ...) allows command injection. Use subprocess.run([...],
+      shell=False) with an argument list instead.
+    metadata:
+      confidence: HIGH
+      cwe: "CWE-78: Improper Neutralization of Special Elements used in an OS Command"
+      owasp: "A03:2021 - Injection"
+    patterns:
+      - pattern: os.system($CMD)
+      - pattern-not: os.system("...")
+
+  - id: owasp-top-ten.a03-injection.python-command-injection-subprocess-shell-true
+    languages: [python]
+    severity: ERROR
+    message: >-
+      subprocess call with shell=True runs its command through the shell,
+      so any untrusted data in the command string can inject additional
+      shell commands. Prefer shell=False with an explicit argument list.
+    metadata:
+      confidence: HIGH
+      cwe: "CWE-78: Improper Neutralization of Special Elements used in an OS Command"
+      owasp: "A03:2021 - Injection"
+    pattern-either:
+      - pattern: subprocess.run(..., shell=True, ...)
+      - pattern: subprocess.call(..., shell=True, ...)
+      - pattern: subprocess.check_call(..., shell=True, ...)
+      - pattern: subprocess.check_output(..., shell=True, ...)
+      - pattern: subprocess.Popen(..., shell=True, ...)
+
+  - id: owasp-top-ten.a03-injection.javascript-command-injection-child-process-exec
+    languages: [javascript, typescript]
+    severity: ERROR
+    message: >-
+      child_process.exec() runs its argument through a shell; building the
+      command with string concatenation/template literals allows command
+      injection. Use execFile()/spawn() with an argument array instead.
+    metadata:
+      confidence: HIGH
+      cwe: "CWE-78: Improper Neutralization of Special Elements used in an OS Command"
+      owasp: "A03:2021 - Injection"
+    patterns:
+      - pattern-either:
+          - pattern: child_process.exec("..." + $X)
+          - pattern: child_process.exec($X + "...")
+          - pattern: child_process.exec(`...${$X}...`)
+          - pattern: exec("..." + $X)
+          - pattern: exec($X + "...")
+          - pattern: exec(`...${$X}...`)
+
+  # --- A03:2021 Injection -- dangerous eval/exec ------------------------------
+  - id: owasp-top-ten.a03-injection.python-dangerous-eval-exec
+    languages: [python]
+    severity: ERROR
+    message: >-
+      eval()/exec() on dynamic input executes arbitrary Python code. Avoid
+      entirely; if unavoidable, never pass unsanitized/untrusted input.
+    metadata:
+      confidence: HIGH
+      cwe: "CWE-95: Improper Neutralization of Directives in Dynamically Evaluated Code"
+      owasp: "A03:2021 - Injection"
+    patterns:
+      - pattern-either:
+          - pattern: eval($X)
+          - pattern: exec($X)
+      - pattern-not: eval("...")
+      - pattern-not: exec("...")
+
+  - id: owasp-top-ten.a03-injection.javascript-dangerous-function-constructor
+    languages: [javascript, typescript]
+    severity: ERROR
+    message: >-
+      new Function() compiles a string into executable code, equivalent to
+      eval(). Building it from untrusted input allows arbitrary code
+      execution. Avoid the Function constructor with dynamic source.
+    metadata:
+      confidence: HIGH
+      cwe: "CWE-95: Improper Neutralization of Directives in Dynamically Evaluated Code"
+      owasp: "A03:2021 - Injection"
+    pattern: new Function(...)
+
+  # --- A08:2021 Software and Data Integrity Failures -- unsafe deserialization
+  - id: owasp-top-ten.a08-deserialization.python-pickle-loads
+    languages: [python]
+    severity: ERROR
+    message: >-
+      pickle.loads()/load() can execute arbitrary code embedded in the
+      pickle stream. Never unpickle data from an untrusted source (network,
+      uploaded file, cache, ...) -- use a safe format like JSON instead.
+    metadata:
+      confidence: HIGH
+      cwe: "CWE-502: Deserialization of Untrusted Data"
+      owasp: "A08:2021 - Software and Data Integrity Failures"
+    pattern-either:
+      - pattern: pickle.loads(...)
+      - pattern: pickle.load(...)
+      - pattern: cPickle.loads(...)
+      - pattern: cPickle.load(...)
+
+  - id: owasp-top-ten.a08-deserialization.python-yaml-unsafe-load
+    languages: [python]
+    severity: ERROR
+    message: >-
+      yaml.load() without Loader=yaml.SafeLoader can construct arbitrary
+      Python objects (and execute code) from the YAML document. Use
+      yaml.safe_load() or pass Loader=yaml.SafeLoader explicitly.
+    metadata:
+      confidence: HIGH
+      cwe: "CWE-502: Deserialization of Untrusted Data"
+      owasp: "A08:2021 - Software and Data Integrity Failures"
+    patterns:
+      - pattern-either:
+          - pattern: yaml.load($X)
+          - pattern: yaml.load($X, Loader=yaml.Loader)
+          - pattern: yaml.load($X, Loader=yaml.UnsafeLoader)
+          - pattern: yaml.load($X, Loader=yaml.FullLoader)
+      - pattern-not: yaml.load($X, Loader=yaml.SafeLoader)
+
+  - id: owasp-top-ten.a08-deserialization.javascript-eval-untrusted-data
+    languages: [javascript, typescript]
+    severity: ERROR
+    message: >-
+      eval() used to parse/deserialize data executes arbitrary JavaScript
+      embedded in that data. Use JSON.parse() for data instead of eval().
+    metadata:
+      confidence: HIGH
+      cwe: "CWE-502: Deserialization of Untrusted Data"
+      owasp: "A08:2021 - Software and Data Integrity Failures"
+    pattern-either:
+      - pattern: eval($X)
+      - pattern: eval("(" + $X + ")")
+
+  # --- A02:2021 Cryptographic Failures ----------------------------------------
+  - id: owasp-top-ten.a02-crypto-failures.python-weak-hash-md5-sha1
+    languages: [python]
+    severity: WARNING
+    message: >-
+      MD5/SHA-1 are cryptographically broken and unsuitable for security
+      purposes (passwords, tokens, signatures). Use hashlib.sha256 or a
+      dedicated password-hashing function (bcrypt/scrypt/argon2) for
+      passwords. Fine to ignore for non-security checksums.
+    metadata:
+      confidence: MEDIUM
+      cwe: "CWE-327: Use of a Broken or Risky Cryptographic Algorithm"
+      owasp: "A02:2021 - Cryptographic Failures"
+    pattern-either:
+      - pattern: hashlib.md5(...)
+      - pattern: hashlib.sha1(...)
+
+  - id: owasp-top-ten.a02-crypto-failures.javascript-weak-hash-md5-sha1
+    languages: [javascript, typescript]
+    severity: WARNING
+    message: >-
+      MD5/SHA-1 are cryptographically broken and unsuitable for security
+      purposes (passwords, tokens, signatures). Use SHA-256 or a dedicated
+      password-hashing function (bcrypt/scrypt/argon2) for passwords.
+      Fine to ignore for non-security checksums.
+    metadata:
+      confidence: MEDIUM
+      cwe: "CWE-327: Use of a Broken or Risky Cryptographic Algorithm"
+      owasp: "A02:2021 - Cryptographic Failures"
+    pattern-either:
+      - pattern: crypto.createHash("md5")
+      - pattern: crypto.createHash("sha1")
+
+  - id: owasp-top-ten.a02-crypto-failures.python-hardcoded-crypto-key
+    languages: [python]
+    severity: WARNING
+    message: >-
+      Cryptographic key/secret is hardcoded as a string/byte literal.
+      Load keys from a secrets manager or environment variable -- never
+      commit them to source control.
+    metadata:
+      confidence: MEDIUM
+      cwe: "CWE-798: Use of Hard-coded Credentials"
+      owasp: "A02:2021 - Cryptographic Failures"
+    pattern-either:
+      - pattern: Fernet(b"...")
+      - pattern: Fernet("...")
+      - pattern: AES.new(b"...", ...)
+      - pattern: AES.new("...", ...)
