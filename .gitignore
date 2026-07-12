@@ -5,3 +5,4 @@ graph-out/
 __pycache__/
 *.pyc
 .superpowers/
+*.egg-info/
