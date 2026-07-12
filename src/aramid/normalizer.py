@@ -13,6 +13,14 @@ from aramid.redact import redact, scrub
 class RawFinding:
     tool: str; rule: str; severity_raw: str; file: str; line: int; message: str
     secret: str | None = None
+    # Commit sha the finding was read from, when known (gitleaks' `git log`
+    # history-scan path only -- see runners/gitleaks.py). Additive/optional:
+    # every other adapter and every staged/protect-mode gitleaks finding
+    # leaves this None. Consumed by commands/init.py's `_scan_history` to
+    # build a ref_for that reads a historical secret's line from the commit
+    # it actually lived in, instead of HEAD (where the line may have moved
+    # or the secret may have been removed).
+    commit: str | None = None
 
 
 def normalize(raws: list[RawFinding], root: Path, ref_for: Callable[[str], str],

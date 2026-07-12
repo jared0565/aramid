@@ -74,6 +74,12 @@ def parse(result: RunnerResult, ctx) -> list[RawFinding]:
     if result.state is not ToolState.OK:
         return []
     items = json.loads(result.raw or "[]")
+    # Only the `gitleaks git ...` history path (ctx.rng set, per _build_argv
+    # above) can attribute a leak to a specific historical commit; the
+    # `protect --staged` path scans the working tree/index, not commits, so
+    # it always leaves RawFinding.commit as None (its Commit field, if
+    # present at all, carries no meaningful ref there).
+    is_history_scan = bool(ctx.rng)
     return [
         RawFinding(
             tool=NAME,
@@ -83,6 +89,7 @@ def parse(result: RunnerResult, ctx) -> list[RawFinding]:
             line=item["StartLine"],
             message=item.get("Description") or item["RuleID"],
             secret=item["Secret"],
+            commit=(item.get("Commit") or None) if is_history_scan else None,
         )
         for item in items
     ]

@@ -29,9 +29,11 @@ import dataclasses
 import functools
 import sys
 import uuid
+from collections import defaultdict, deque
 from datetime import date, datetime, timezone
 from importlib import resources
 from pathlib import Path
+from typing import Callable
 
 from aramid import config as config_mod
 from aramid import gitutil, hooks, policy, redact
@@ -93,6 +95,35 @@ def _update_gitignore(root: Path) -> None:
 
 # ------------------------------------------------------- full-history scan ---
 
+def _historical_ref_for(raws: list) -> Callable[[str], str]:
+    """Per-finding ref lookup keyed off each raw's own commit sha, NOT HEAD.
+
+    A historical secret must be fingerprinted from the commit it actually
+    lived in: reading the flagged line from HEAD is wrong once the file has
+    changed or the secret has been removed there entirely -- that produces
+    an unstable/incorrect fingerprint (and, worse, a non-idempotent second
+    `init`, since the "same" secret would fingerprint differently run to
+    run as HEAD moves).
+
+    `normalize()` calls `ref_for(raw.file)` exactly once per raw, in `raws`
+    order (its body is a single `for raw in raws:` loop) -- so a per-file
+    FIFO queue, popped in that same order, correctly disambiguates multiple
+    findings that share a file but come from different commits (e.g. two
+    separate secrets added to the same file in two different commits of a
+    `--all` history scan); a flat `{file: commit}` dict would silently
+    collapse that to one commit and reintroduce the same class of bug for
+    the second finding.
+    """
+    queues: dict[str, deque] = defaultdict(deque)
+    for r in raws:
+        queues[r.file].append(r.commit or "HEAD")
+
+    def ref_for(file: str) -> str:
+        return queues[file].popleft()
+
+    return ref_for
+
+
 def _scan_history(root: Path, ledger: Ledger, cfg: config_mod.Config) -> int:
     """One-time-in-spirit full-history secrets scan (brief step 6, design
     doc section 6/8): the gitleaks runner in git-log mode, walking every ref
@@ -131,7 +162,7 @@ def _scan_history(root: Path, ledger: Ledger, cfg: config_mod.Config) -> int:
 
     salt = redact.load_or_create_salt(root / ".aramid")
     classify = functools.partial(policy.classify, cfg=cfg)
-    findings = normalize(raws, root, lambda f: "HEAD", salt, Gate.ALL, classify)
+    findings = normalize(raws, root, _historical_ref_for(raws), salt, Gate.ALL, classify)
     historical = [dataclasses.replace(f, historical=True) for f in findings]
 
     ledger.record_run(uuid.uuid4().hex, _now(), "historical-scan",
