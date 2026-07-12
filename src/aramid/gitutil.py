@@ -37,6 +37,10 @@ def staged_files(root: Path):
     cp = _run(root, "diff", "--cached", "--name-only", "--diff-filter=ACMR")
     return [l for l in cp.stdout.splitlines() if l]
 
+def all_tracked_files(root: Path):
+    cp = _run(root, "ls-files")
+    return [l for l in cp.stdout.splitlines() if l]
+
 def changed_files(root: Path, rng):
     spec = rng if rng else "HEAD"
     cp = _run(root, "diff", "--name-only", "--diff-filter=ACMR", spec)
