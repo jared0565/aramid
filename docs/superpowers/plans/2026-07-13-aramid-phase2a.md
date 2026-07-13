@@ -670,6 +670,8 @@ git commit -m "feat(config): [triage]/[drain]/[pack] sections with spec defaults
 
 ### Task 5: Triage signals and scorer
 
+> **AMENDMENT (2026-07-13):** the blast-radius snippet below predates inspection of graphite's real schema (imports edges target placeholder module nodes without source_file). The implemented signal resolves targets via module-alias ids derived from changed paths, excludes self-references, and is fail-open on ANY exception. See src/aramid/triage.py.
+
 **Files:**
 - Create: `src/aramid/triage.py`
 - Test: `tests/unit/test_triage.py`

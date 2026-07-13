@@ -1,8 +1,12 @@
 import json
 from pathlib import Path
 
+import pytest
+
 from aramid import queue, triage
 from aramid.ledger import Ledger
+
+REPO_ROOT = Path(__file__).resolve().parents[2]
 
 
 # --- path signal -----------------------------------------------------------
@@ -52,14 +56,29 @@ def test_novelty_signal_new_vs_seen():
     assert score == 20 and "brand_new.py" in reasons[0]
 
 
-# --- blast radius ----------------------------------------------------------
+def test_novelty_signal_normalizes_paths():
+    # seen ledger paths are stored normalized (forward-slash, casefolded);
+    # a Windows-style diff path must not read as "unseen"
+    assert triage.novelty_signal({"src/auth/x.py"}, ["src\\auth\\X.py"]) == (0, [])
 
-def _write_graph(root: Path, edges: list[tuple[str, str]], files: dict[str, str]):
-    (root / "graph-out").mkdir()
-    nodes = [{"id": nid, "kind": "file", "source_file": sf} for nid, sf in files.items()]
+
+# --- blast radius ----------------------------------------------------------
+#
+# Fixture mirrors graphite's REAL graph-out/graph.json schema: file nodes
+# carry source_file; "imports" edges resolve to PLACEHOLDER module-name
+# nodes ({"id": "queue", "kind": "unknown"} -- no source_file) and carry
+# the IMPORTER's source_file. Edges never target file-node ids.
+
+def _write_graph(root: Path, file_nodes: dict[str, str],
+                 placeholders: list[str],
+                 edges: list[tuple[str, str, str]]):
+    nodes = [{"id": nid, "kind": "file", "name": sf.rsplit("/", 1)[-1],
+              "source_file": sf} for nid, sf in file_nodes.items()]
+    nodes += [{"id": pid, "kind": "unknown", "name": pid} for pid in placeholders]
     payload = {"nodes": nodes,
-               "edges": [{"source": s, "target": t, "relation": "imports"}
-                          for s, t in edges]}
+               "edges": [{"source": s, "target": t, "relation": "imports",
+                          "source_file": sf} for s, t, sf in edges]}
+    (root / "graph-out").mkdir(exist_ok=True)
     (root / "graph-out" / "graph.json").write_text(json.dumps(payload), encoding="utf-8")
 
 
@@ -67,19 +86,54 @@ def test_blast_radius_absent_graph_is_zero(tmp_path):
     assert triage.blast_radius_signal(tmp_path, ["core.py"]) == (0, [])
 
 
-def test_blast_radius_scales_with_dependents(tmp_path):
-    files = {"core": "core.py", **{f"d{i}": f"d{i}.py" for i in range(12)}}
-    _write_graph(tmp_path, [(f"d{i}", "core") for i in range(12)], files)
-    score, reasons = triage.blast_radius_signal(tmp_path, ["core.py"])
+def test_blast_radius_resolves_placeholder_targets(tmp_path):
+    # 12 modules import "queue" via its placeholder node; the file node id
+    # (src_aramid_queue) is never an edge target. A self-import edge from
+    # queue.py itself must not count as a dependent.
+    file_nodes = {"src_aramid_queue": "src/aramid/queue.py",
+                  **{f"dep{i}": f"deps/dep{i}.py" for i in range(12)}}
+    edges = [(f"dep{i}", "queue", f"deps/dep{i}.py") for i in range(12)]
+    edges.append(("src_aramid_queue", "queue", "src/aramid/queue.py"))  # self
+    _write_graph(tmp_path, file_nodes, ["queue"], edges)
+    score, reasons = triage.blast_radius_signal(tmp_path, ["src/aramid/queue.py"])
     assert score == 25  # >= 10 dependents
-    score2, _ = triage.blast_radius_signal(tmp_path, ["d3.py"])  # nothing depends on d3
-    assert score2 == 0
+    assert "12 dependents" in reasons[0]
+    # nothing imports dep3 -> no dependents
+    assert triage.blast_radius_signal(tmp_path, ["deps/dep3.py"]) == (0, [])
 
 
 def test_blast_radius_thresholds(tmp_path):
-    files = {"core": "core.py", "a": "a.py", "b": "b.py", "c": "c.py", "d": "d.py"}
-    _write_graph(tmp_path, [("a", "core"), ("b", "core")], files)
-    assert triage.blast_radius_signal(tmp_path, ["core.py"])[0] == 10  # 1-2 dependents
+    # 2 external dependents + 1 self-import edge -> self excluded -> 10
+    file_nodes = {"src_aramid_queue": "src/aramid/queue.py",
+                  "a": "a.py", "b": "b.py", "c": "c.py"}
+    edges = [("a", "queue", "a.py"), ("b", "queue", "b.py"),
+             ("src_aramid_queue", "queue", "src/aramid/queue.py")]
+    _write_graph(tmp_path, file_nodes, ["queue"], edges)
+    assert triage.blast_radius_signal(tmp_path, ["src/aramid/queue.py"])[0] == 10
+    # 3 dependents -> 18
+    edges.append(("c", "queue", "c.py"))
+    _write_graph(tmp_path, file_nodes, ["queue"], edges)
+    assert triage.blast_radius_signal(tmp_path, ["src/aramid/queue.py"])[0] == 18
+
+
+@pytest.mark.skipif(not (REPO_ROOT / "graph-out" / "graph.json").exists(),
+                    reason="no graphite graph in this checkout")
+def test_blast_radius_real_graph_smoke():
+    # Against this repo's ACTUAL graphite output: queue.py is imported by
+    # several modules on this branch, so the signal must find dependents.
+    # This is the test that would have caught the placeholder-schema bug.
+    score, reasons = triage.blast_radius_signal(REPO_ROOT, ["src/aramid/queue.py"])
+    assert score > 0
+    assert reasons and "dependents" in reasons[0]
+
+
+def test_blast_radius_corrupt_graph_is_zero(tmp_path):
+    (tmp_path / "graph-out").mkdir()
+    graph = tmp_path / "graph-out" / "graph.json"
+    graph.write_text("[]", encoding="utf-8")  # valid JSON, wrong shape
+    assert triage.blast_radius_signal(tmp_path, ["core.py"]) == (0, [])
+    graph.write_bytes(b"\xff\xfe{")  # invalid UTF-8
+    assert triage.blast_radius_signal(tmp_path, ["core.py"]) == (0, [])
 
 
 # --- combined scorer + budget ---------------------------------------------

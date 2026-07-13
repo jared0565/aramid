@@ -74,24 +74,48 @@ def content_signal(diff_text: str, paths: list[str]) -> tuple[int, list[str]]:
 
 
 def novelty_signal(seen_paths: set[str], paths: list[str]) -> tuple[int, list[str]]:
-    fresh = sorted(p for p in paths if p not in seen_paths)
+    seen_norm = {normalize_path(s) for s in seen_paths}
+    fresh = sorted(p for p in paths if normalize_path(p) not in seen_norm)
     if fresh:
         return NOVELTY_WEIGHT, [f"novelty: {len(fresh)} unseen path(s) incl. {fresh[0]}"]
     return 0, []
+
+
+def _alias_ids(path: str) -> set[str]:
+    # "src/aramid/queue.py" -> {"queue", "aramid_queue", "src_aramid_queue"}
+    parts = normalize_path(path).rsplit(".", 1)[0].split("/")
+    return {"_".join(parts[i:]) for i in range(len(parts))}
 
 
 def blast_radius_signal(root: Path, paths: list[str]) -> tuple[int, list[str]]:
     graph_file = root / "graph-out" / "graph.json"
     if not graph_file.exists():
         return 0, []
+    # Graphite's real schema resolves "imports" edges to PLACEHOLDER
+    # module-name nodes (kind "unknown", no source_file) -- edges never
+    # target the file-node ids. So edge targets are matched against alias
+    # ids derived from each changed path (every path-suffix joined with
+    # "_"). Best-effort heuristic: a generically-named module (e.g.
+    # "queue") can collide with same-named third-party/stdlib imports,
+    # biasing the risk signal upward -- acceptable for a 0-25 advisory
+    # weight.
     try:
         data = json.loads(graph_file.read_text(encoding="utf-8"))
         changed = {normalize_path(p) for p in paths}
-        target_ids = {n["id"] for n in data.get("nodes", [])
-                      if normalize_path(n.get("source_file") or "") in changed}
+        file_node_ids = {n["id"] for n in data.get("nodes", [])
+                         if normalize_path(n.get("source_file") or "") in changed}
+        target_ids = set(file_node_ids)
+        for p in paths:
+            target_ids |= _alias_ids(p)
         dependents = {e["source"] for e in data.get("edges", [])
-                      if e.get("target") in target_ids and e.get("source") not in target_ids}
-    except (json.JSONDecodeError, OSError, KeyError, TypeError):
+                      if e.get("target") in target_ids
+                      # exclude self-references: edges FROM a changed file
+                      and e.get("source") not in file_node_ids
+                      and normalize_path(e.get("source_file") or "") not in changed}
+    except Exception:
+        # Fail-open (spec section 6): the graph is optional read-only
+        # input; absent, corrupt, or unexpectedly-shaped graphs contribute
+        # 0 and must NEVER raise out of triage.
         return 0, []
     n = len(dependents)
     if n >= 10:
