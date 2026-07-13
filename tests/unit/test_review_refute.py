@@ -30,6 +30,15 @@ def test_parse_refute_malformed_is_none():
     assert review.parse_refute_response(json.dumps({"verdict": "eh"})) is None
 
 
+def test_parse_refute_non_bool_refuted_is_none():
+    # A non-genuine-bool refuted value must not be trusted as a verdict:
+    # locks ambiguity-defaults-to-refuted against a refactor to a truthiness
+    # check (which would silently accept these as real bool verdicts).
+    assert review.parse_refute_response(json.dumps({"refuted": "true", "reason": "x"})) is None
+    assert review.parse_refute_response(json.dumps({"refuted": 1, "reason": "x"})) is None
+    assert review.parse_refute_response(json.dumps({"refuted": 0})) is None
+
+
 def test_apply_refute_demotes():
     got = review.apply_refute(_finding(), True, "auth handled upstream")
     assert got["severity"] == "high"
