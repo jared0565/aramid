@@ -199,6 +199,40 @@ def test_override_dispatch(monkeypatch):
     assert captured["reason"] == "known false positive"
 
 
+def test_pack_list_dispatch(monkeypatch):
+    calls = []
+    monkeypatch.setattr(cli, "cmd_pack_list", lambda root: calls.append(root) or 0)
+
+    assert cli.main(["pack", "list"]) == 0
+    assert calls == [Path.cwd()]
+
+
+def test_pack_add_dispatch(monkeypatch):
+    captured = {}
+    monkeypatch.setattr(cli, "cmd_pack_add",
+                         lambda root, id: captured.update(root=root, id=id) or 0)
+
+    assert cli.main(["pack", "add", "someid"]) == 0
+    assert captured["root"] == Path.cwd()
+    assert captured["id"] == "someid"
+
+
+def test_pack_compile_dispatch(monkeypatch):
+    calls = []
+    monkeypatch.setattr(cli, "cmd_pack_compile", lambda root: calls.append(root) or 0)
+
+    assert cli.main(["pack", "compile"]) == 0
+    assert len(calls) == 1
+
+
+def test_pack_no_subcommand_returns_3(capsys):
+    rc = cli.main(["pack"])
+    err = capsys.readouterr().err
+
+    assert rc == 3
+    assert "pack" in err.lower()
+
+
 def test_arm_dispatch(monkeypatch):
     calls = []
     monkeypatch.setattr(cli, "cmd_arm", lambda root: calls.append(root) or 0)
