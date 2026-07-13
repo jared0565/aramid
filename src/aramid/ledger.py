@@ -14,7 +14,8 @@ CREATE TABLE IF NOT EXISTS events(
 def _detect_payload(f: Finding) -> dict:
     return {"tool": f.tool, "file": f.file, "rule": f.rule, "verdict": str(f.verdict),
             "severity": str(f.severity), "line": f.line, "message": f.message,
-            "evidence": f.evidence, "historical": f.historical}
+            "evidence": f.evidence, "historical": f.historical,
+            "source": str(f.source), "confirmed": f.confirmed}
 
 
 def _materialize(events):

@@ -57,6 +57,10 @@ class Finding:
     gate: Gate
     source: Source = Source.DETERMINISTIC
     historical: bool = False
+    # Phase 2b: refute-survivor flag (spec section 3). Only ever True for
+    # source=LLM findings whose CRITICAL severity survived the refute pass;
+    # the pre-push ledger gate blocks on nothing else.
+    confirmed: bool = False
 
 @dataclass(frozen=True)
 class Event:
