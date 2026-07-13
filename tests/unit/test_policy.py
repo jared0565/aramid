@@ -218,3 +218,17 @@ def test_escalate_degraded_not_forced_at_pre_commit():
 
 def test_escalate_degraded_no_degradation_passes_through():
     assert policy.escalate_degraded(2, False, Gate.PRE_PUSH) == 2
+
+
+# --- classify: llm-review (Phase 2b) ----------------------------------------
+
+def test_llm_review_always_warns_at_drain_time():
+    sev, verdict = policy.classify("llm-review", "llm/a01", "critical", Gate.ALL, _cfg(armed=False))
+    assert sev is Severity.CRITICAL
+    assert verdict is Verdict.WARN
+
+
+def test_llm_review_warns_even_when_semgrep_armed():
+    sev, verdict = policy.classify("llm-review", "llm/logic", "high", Gate.PRE_PUSH, _cfg(armed=True))
+    assert sev is Severity.HIGH
+    assert verdict is Verdict.WARN
