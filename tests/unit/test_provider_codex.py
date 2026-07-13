@@ -77,6 +77,18 @@ def test_review_quota_and_timeout(monkeypatch):
     assert codex_cli.review("P", "", 240.0).error == base.ERR_TIMEOUT
 
 
+def test_review_nonzero_exit_is_error(monkeypatch):
+    monkeypatch.setattr(codex_cli.shutil, "which", lambda n: r"C:\bin\codex.cmd")
+    monkeypatch.setattr(codex_cli.base, "run_provider_subprocess",
+                        lambda *a, **k: (1, "", "boom"))
+    assert codex_cli.review("P", "", 240.0).error == base.ERR_ERROR
+
+
+def test_review_unavailable_when_not_on_path(monkeypatch):
+    monkeypatch.setattr(codex_cli.shutil, "which", lambda n: None)
+    assert codex_cli.review("P", "", 240.0).error == base.ERR_UNAVAILABLE
+
+
 # Extra hardening tests
 def test_review_bare_scalar_in_jsonl_is_skipped(monkeypatch):
     """A bare scalar (5) in JSONL should be skipped, not crash."""
