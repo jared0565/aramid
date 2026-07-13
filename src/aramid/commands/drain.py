@@ -25,6 +25,7 @@ from aramid.models import Event, EventType, Gate
 from aramid.normalizer import normalize
 
 import aramid.consumers.regression_pack  # noqa: F401  -- registers the consumer
+from aramid.consumers import llm_review as _llm_review  # noqa: F401  (registers itself)
 
 
 def _now() -> str:
@@ -151,6 +152,14 @@ def cmd_drain(targets: list, *, dry_run: bool = False, max_items: int | None = N
         if lock is None:
             print("aramid: drain: another drain is running (lock held)", file=sys.stderr)
             return 3
+
+    # Phase 2b: give consumers a per-drain reset point (budget counters,
+    # availability caches). Optional protocol -- only llm_review uses it.
+    for _module in CONSUMERS.values():
+        _begin = getattr(_module, "begin_drain", None)
+        if _begin is not None:
+            _begin()
+
     degraded = False
     started = monotonic()
     try:
