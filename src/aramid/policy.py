@@ -20,6 +20,20 @@ from aramid.models import Finding, Gate, Severity, Verdict
 # Tool names that report dependency-CVE findings (see runners/deps.py).
 _DEPS_TOOLS = {"pip-audit", "npm", "pnpm", "yarn"}
 
+# Regression pack block-tier rule ids (aramid.pack, Task 13/15, spec §5) are
+# namespaced "aramid-regression.block.<finding-id[:8]>". Deviation from the
+# Task 15 brief's file list (policy.py wasn't named there): these already
+# passed the BLOCK/armed decision once, when the source finding was
+# resolved and the rule was compiled -- a rule's own id encodes that
+# decision (aramid.pack._tier), so a reintroduction blocks unconditionally,
+# independent of the general semgrep OWASP bake's `semgrep_block_armed`
+# flag. Checked before the general `block_rules.toml` [semgrep].block match
+# (which IS gated by `semgrep_block_armed`) so pack-block rules never ride
+# that gate even though "aramid-regression.block.*" is also listed there
+# (block_rules.toml entry is for discoverability/consumers.regression_pack,
+# Task 16 -- not consulted for this decision).
+_PACK_BLOCK_PREFIX = "aramid-regression.block."
+
 _SEVERITY_ORDER = [Severity.INFO, Severity.LOW, Severity.MEDIUM, Severity.HIGH, Severity.CRITICAL]
 
 # Raw severity vocabularies are tool-specific (ruff: "error"; semgrep:
@@ -71,6 +85,8 @@ def classify(tool: str, rule: str, severity_raw: str, gate: Gate, cfg) -> tuple[
         return severity, Verdict.BLOCK
 
     if tool == "semgrep":
+        if rule.startswith(_PACK_BLOCK_PREFIX):
+            return severity, Verdict.BLOCK
         semgrep_block = block_rules.get("semgrep", {}).get("block", [])
         if any(fnmatch.fnmatch(rule, pattern) for pattern in semgrep_block):
             verdict = Verdict.BLOCK if cfg.semgrep_block_armed else Verdict.WARN

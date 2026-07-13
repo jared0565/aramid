@@ -107,6 +107,26 @@ def test_typecheck_warns():
     assert v is Verdict.WARN
 
 
+# --- classify: regression pack rules -----------------------------------------
+
+def test_pack_block_rule_classifies_block(tmp_path, monkeypatch):
+    from aramid import config
+    monkeypatch.setattr(config, "_user_config_path", lambda: tmp_path / "nouser.toml")
+    cfg = config.load_config(tmp_path)
+    severity, verdict = policy.classify(
+        "semgrep", "aramid-regression.block.deadbeef", "ERROR", Gate.PRE_PUSH, cfg=cfg)
+    assert verdict is Verdict.BLOCK
+
+
+def test_pack_warn_rule_classifies_warn(tmp_path, monkeypatch):
+    from aramid import config
+    monkeypatch.setattr(config, "_user_config_path", lambda: tmp_path / "nouser.toml")
+    cfg = config.load_config(tmp_path)
+    severity, verdict = policy.classify(
+        "semgrep", "aramid-regression.warn.deadbeef", "WARNING", Gate.PRE_PUSH, cfg=cfg)
+    assert verdict is Verdict.WARN
+
+
 # --- OverrideRecord / apply_overrides ---------------------------------------
 
 def test_override_downgrades_matching_warn_finding_to_info():

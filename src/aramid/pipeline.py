@@ -32,6 +32,7 @@ from aramid.fingerprint import normalize_path
 from aramid.ledger import Ledger
 from aramid.models import Event, EventType, Finding, Gate, Verdict
 from aramid.normalizer import RawFinding, normalize
+from aramid.pack import RULES_REL_PATH
 from aramid.policy import OverrideRecord
 from aramid.runners import deps, eslint, gitleaks, ruff, semgrep, tests, typecheck
 from aramid.runners.base import RunContext, RunnerResult, ToolState
@@ -244,9 +245,17 @@ def run_gate(root: Path, gate: Gate, mode: str, cfg: config_mod.Config, ledger: 
 
     # 2. build the shared RunContext (stack detection feeds runner
     #    applicability), then select applicable runners for this gate.
+    # Regression pack replay (Task 15, spec §5): the committed pack, if
+    # present and not disabled via aramid.toml's [pack].enabled, rides along
+    # as an extra semgrep --config so a reintroduction is caught by the
+    # NORMAL gates (pre-commit/pre-push), not merely at the next drain.
+    pack_file = root / RULES_REL_PATH
+    extra_configs = ((str(pack_file),)
+                     if cfg.pack.get("enabled", True) and pack_file.exists() else ())
     ctx = RunContext(root=root, files=files, rng=rng,
                       pkg_manager=detect_package_manager(root),
-                      stacks=detect_stacks(root, root))
+                      stacks=detect_stacks(root, root),
+                      extra_semgrep_configs=extra_configs)
     selected = _select_runners(gate, ctx)
 
     # 3. run concurrently under the gate's wall-clock budget.

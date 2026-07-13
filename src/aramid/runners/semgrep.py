@@ -40,29 +40,43 @@ VENDORED_RULES_PATH = Path(__file__).resolve().parent.parent / "rules" / "owasp.
 # intended BLOCK). See Task 81b.
 _CANONICAL_RULE_PREFIX = "owasp-top-ten."
 
+# The regression pack (aramid.pack, Task 13/15, spec §5) is a second
+# `--config` file replayed alongside the vendored OWASP ruleset -- its rule
+# ids are namespaced "aramid-regression.<block|warn>.<finding-id[:8]>".
+# semgrep prefixes those with the SAME config-path-dot-joined scheme (see
+# _CANONICAL_RULE_PREFIX above), so the LIVE check_id needs the identical
+# leftmost-occurrence strip to recover the canonical id block_rules.toml /
+# policy.classify() match against.
+_PACK_RULE_PREFIX = "aramid-regression."
+
 
 def _canonical_rule_id(check_id: str) -> str:
     """Strip semgrep's config-path prefix back to the canonical vendored
     rule id (block_rules.toml, and every override/suppression keyed by
     `rule`, is written against the canonical form). Finds the LEFTMOST
-    occurrence of `_CANONICAL_RULE_PREFIX` and keeps everything from there
-    onward -- every vendored rule id starts with it, so this recovers the
-    exact `id:` from owasp.yml regardless of how deep the repo checkout
-    path is. Falls back to the raw check_id, unchanged, when the prefix is
-    absent (e.g. a future non-vendored/registry rule, like
+    occurrence of `_CANONICAL_RULE_PREFIX` (or, failing that,
+    `_PACK_RULE_PREFIX`) and keeps everything from there onward -- every
+    vendored/pack rule id starts with one of these, so this recovers the
+    exact `id:` regardless of how deep the repo checkout path is. Falls
+    back to the raw check_id, unchanged, when neither prefix is present
+    (e.g. a future non-vendored/registry rule, like
     "python.lang.security.audit.exec-detected.exec-detected" in
     tests/fixtures/semgrep.json) -- there is no vendored-prefix convention
     to strip for those, and returning them unchanged preserves today's
     behavior exactly."""
-    idx = check_id.find(_CANONICAL_RULE_PREFIX)
-    return check_id[idx:] if idx != -1 else check_id
+    for prefix in (_CANONICAL_RULE_PREFIX, _PACK_RULE_PREFIX):
+        idx = check_id.find(prefix)
+        if idx != -1:
+            return check_id[idx:]
+    return check_id
 
 
 def _build_argv(ctx) -> list[str]:
-    return [
-        "semgrep", "--config", str(VENDORED_RULES_PATH), "--json",
-        "--metrics=off", "--quiet", "--", *ctx.files,
-    ]
+    argv = ["semgrep", "--config", str(VENDORED_RULES_PATH)]
+    for extra in getattr(ctx, "extra_semgrep_configs", ()):
+        argv += ["--config", extra]
+    argv += ["--json", "--metrics=off", "--quiet", "--", *ctx.files]
+    return argv
 
 
 def run(ctx) -> RunnerResult:

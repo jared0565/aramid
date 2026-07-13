@@ -45,12 +45,21 @@ class RunContext:
       aramid.detectors.detect_stacks) -- consulted by aramid.pipeline for
       gate+stack runner applicability (a repo with no "js" stack never gets
       eslint selected, etc.).
+    extra_semgrep_configs: additional `--config <path>` values the semgrep
+      adapter appends after the vendored OWASP ruleset (Task 15, spec §5) --
+      populated by aramid.pipeline.run_gate with the repo's committed
+      regression pack (`<root>/.aramid-rules/regression.yml`) when it exists
+      and pack replay is enabled, so a reintroduction is caught by the
+      NORMAL gates, not just the next drain. Additive field: default `()`
+      keeps every existing RunContext(...) construction site (and every
+      adapter that never reads it) valid unchanged.
     """
     root: Path
     files: list[str] = field(default_factory=list)
     rng: str | None = None
     pkg_manager: str | None = None
     stacks: set[str] = field(default_factory=set)
+    extra_semgrep_configs: tuple[str, ...] = ()
 
 _WIN = sys.platform == "win32"
 
