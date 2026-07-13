@@ -24,21 +24,12 @@ NAME = "llm-review"
 _MALFORMED_GIVE_UP = 3
 
 _reviews_used = 0
-_chain_cache: list | None = None
 
 
 def begin_drain() -> None:
     """Reset per-drain state. Called by cmd_drain once per invocation."""
-    global _reviews_used, _chain_cache
+    global _reviews_used
     _reviews_used = 0
-    _chain_cache = None
-
-
-def _chain(cfg) -> list:
-    global _chain_cache
-    if _chain_cache is None:
-        _chain_cache = providers_base.chain(cfg)
-    return _chain_cache
 
 
 def _model_for(module, cfg) -> str:
@@ -94,7 +85,7 @@ def consume(item, ctx: DrainContext) -> ConsumerResult:
     packet = review.build_packet(ctx.root, cfg, item)
     if packet is None:
         return ConsumerResult(consumer=NAME, state="ok", note="empty packet")
-    chain = _chain(cfg)
+    chain = providers_base.chain(cfg)
     if not chain:
         if not _any_installed(cfg):
             return ConsumerResult(consumer=NAME, state="ok",
@@ -125,6 +116,16 @@ def consume(item, ctx: DrainContext) -> ConsumerResult:
                               note=f"malformed response from {provider.NAME}")
 
     verified, rejected = review.verify_findings(candidates, packet, ctx.root, item.head)
+
+    # Trust boundary (FIX 1): `confirmed` is a privileged flag -- it is the
+    # ONLY thing the pre-push ledger gate blocks on. parse_review_response
+    # passes through EVERY key in the (untrusted) model JSON, so a prompt-
+    # injected `"confirmed": true` on a non-critical finding would otherwise
+    # ride straight into RawFinding.confirmed=True with zero refute calls.
+    # Strip it here so `confirmed` can become True ONLY via apply_refute on a
+    # survived CRITICAL below; everything else defaults False.
+    for cand in verified:
+        cand.pop("confirmed", None)
 
     # Pre-refute dedupe (spec section 3): never re-refute what the ledger
     # already knows. record_run would drop the duplicate anyway; this check

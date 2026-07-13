@@ -301,8 +301,14 @@ call), `review(prompt, model, timeout_s) -> ProviderResponse`.
 Quota detection is pattern-based on stderr/exit codes (e.g. the Claude CLI
 usage-limit message); patterns live in the provider modules.
 
-**Worst-case spend per drain** at defaults: `3 items × (1 review + 1 refute)` =
-6 calls; typical 1–3.
+**Spend per drain:** at most `max_items_per_drain` reviews (default 3), plus
+one refute call per *fresh* CRITICAL finding. Refutes are NOT bounded by
+`max_items_per_drain` — the budget caps reviews only; each fresh CRITICAL a
+review surfaces triggers its own refute. So the true worst case is `3 reviews
++ N refutes` where N is the number of fresh CRITICALs across those reviews
+(unbounded in principle, though a single packet rarely yields more than a
+few). At defaults with one CRITICAL per item that is `3 × (1 review + 1
+refute)` = 6 calls; typical 1–3.
 
 ## 5. Blocking, bake & resolution
 
