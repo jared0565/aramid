@@ -28,6 +28,7 @@ from aramid.commands.ledger_cmd import (
 )
 from aramid.commands.override import cmd_override
 from aramid.commands.status import cmd_status
+from aramid.commands.triage_cmd import cmd_triage
 from aramid.commands.uninstall import cmd_uninstall
 from aramid.commands.update_rules import cmd_update_rules
 from aramid.models import Gate
@@ -57,6 +58,9 @@ def build_parser() -> argparse.ArgumentParser:
     p_doctor.add_argument("--fix", action="store_true")
 
     sub.add_parser("status", help="report ledger/config state")
+
+    p_triage = sub.add_parser("triage", help="score a commit (or range) and enqueue if risky")
+    p_triage.add_argument("rev", nargs="?", default="HEAD")
 
     p_ledger = sub.add_parser("ledger", help="query the findings ledger")
     ledger_sub = p_ledger.add_subparsers(dest="ledger_command")
@@ -127,6 +131,9 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.command == "status":
         return cmd_status(root)
+
+    if args.command == "triage":
+        return cmd_triage(root, args.rev)
 
     if args.command == "ledger":
         if args.ledger_command == "list":
