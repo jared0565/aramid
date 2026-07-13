@@ -95,11 +95,18 @@ def diff_paths(root: Path, base: str | None, head: str) -> list[str]:
     return [ln for ln in cp.stdout.splitlines() if ln] if cp.returncode == 0 else []
 
 
-def diff_text(root: Path, base: str | None, head: str, max_bytes: int = 400_000) -> str:
+def diff_text(root: Path, base: str | None, head: str, max_bytes: int = 400_000,
+             paths: list[str] | None = None) -> str:
+    # paths (optional pathspec): scopes the diff to exactly these files. Used
+    # by review.build_packet to keep the diff in lockstep with an
+    # already-filter_paths()-filtered file list -- spec 8b: graphite
+    # artifacts must never leak into an outbound packet via an unscoped
+    # base..head diff even when they were excluded from the file list.
+    pathspec = ["--", *paths] if paths else []
     if base is None:
-        cp = _run(root, "show", "--format=", head)
+        cp = _run(root, "show", "--format=", head, *pathspec)
     else:
-        cp = _run(root, "diff", f"{base}..{head}")
+        cp = _run(root, "diff", f"{base}..{head}", *pathspec)
     text = cp.stdout if cp.returncode == 0 else ""
     if len(text.encode("utf-8", "replace")) <= max_bytes:
         return text

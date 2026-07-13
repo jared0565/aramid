@@ -88,10 +88,12 @@ def _alias_ids(path: str) -> set[str]:
     return {"_".join(parts[i:]) for i in range(len(parts))}
 
 
-def blast_radius_signal(root: Path, paths: list[str]) -> tuple[int, list[str]]:
+def dependents(root: Path, paths: list[str]) -> list[str]:
+    """Sorted dependent-node names from graphite's graph (read-only input;
+    spec section 8b). Fail-open: absent/corrupt/misshapen graphs return []."""
     graph_file = root / "graph-out" / "graph.json"
     if not graph_file.exists():
-        return 0, []
+        return []
     # Graphite's real schema resolves "imports" edges to PLACEHOLDER
     # module-name nodes (kind "unknown", no source_file) -- edges never
     # target the file-node ids. So edge targets are matched against alias
@@ -108,17 +110,21 @@ def blast_radius_signal(root: Path, paths: list[str]) -> tuple[int, list[str]]:
         target_ids = set(file_node_ids)
         for p in paths:
             target_ids |= _alias_ids(p)
-        dependents = {e["source"] for e in data.get("edges", [])
-                      if e.get("target") in target_ids
-                      # exclude self-references: edges FROM a changed file
-                      and e.get("source") not in file_node_ids
-                      and normalize_path(e.get("source_file") or "") not in changed}
+        deps = {e["source"] for e in data.get("edges", [])
+                if e.get("target") in target_ids
+                # exclude self-references: edges FROM a changed file
+                and e.get("source") not in file_node_ids
+                and normalize_path(e.get("source_file") or "") not in changed}
     except Exception:
         # Fail-open (spec section 6): the graph is optional read-only
         # input; absent, corrupt, or unexpectedly-shaped graphs contribute
         # 0 and must NEVER raise out of triage.
-        return 0, []
-    n = len(dependents)
+        return []
+    return sorted(deps)
+
+
+def blast_radius_signal(root: Path, paths: list[str]) -> tuple[int, list[str]]:
+    n = len(dependents(root, paths))
     if n >= 10:
         return BLAST_MAX, [f"blast-radius: {n} dependents"]
     if n >= 3:
