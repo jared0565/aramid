@@ -291,15 +291,25 @@ def test_real_commit_triggers_triage_enqueue(tmp_path):
         led.close()
 
 
-def test_post_commit_fail_open_with_broken_interpreter(tmp_path):
+@pytest.mark.skipif(shutil.which("py") is None,
+                    reason="fail-open fallback assertion needs the py launcher")
+def test_post_commit_broken_baked_interpreter_falls_back_to_py_and_never_blocks(tmp_path):
+    from aramid import queue as queue_mod
     r = _repo(tmp_path)
     hooks.install(r, Path("C:/nonexistent/python.exe"))
-    # both tests commit through the FULL hook set -- the pre-commit gate
-    # also fires (here the broken-interpreter pre-commit shim falls back to
-    # `py -3` and runs a slow real gate), so bypass the pre-commit shim
-    # while keeping post-commit.
+    # keep only the post-commit shim: the pre-commit gate is irrelevant here
+    # and its broken interpreter would otherwise slow the commit.
     (r / ".git" / "hooks" / "pre-commit").unlink()
     (r / "ok.py").write_text("x = 1\n", encoding="utf-8")
     _git(r, "add", "ok.py")
     cp = _git(r, "commit", "-m", "clean")
-    assert cp.returncode == 0, "broken triage interpreter must never block a commit"
+    # git ignores post-commit exit status, so a succeeding commit alone proves
+    # nothing about aramid -- the load-bearing assertion is that the shim ran
+    # its `py -3` fallback (the baked interpreter is unexecutable) and triaged.
+    assert cp.returncode == 0, cp.stdout + cp.stderr
+    led = Ledger(r / ".aramid" / "ledger.db")
+    try:
+        assert queue_mod.last_triaged_head(led) is not None, \
+            "broken baked interpreter must fall back to `py -3` and still triage"
+    finally:
+        led.close()
