@@ -264,3 +264,42 @@ def test_uninstall_removes_shim_restores_chained_original_and_keeps_ledger(tmp_p
     # section 2 / uninstall.py's own module docstring) -- security/audit
     # history must survive an uninstall.
     assert _ledger_ran(r), "ledger must be KEPT (and still readable) after uninstall"
+
+
+# --- 4. post-commit triage fires through real git dispatch ---------------
+
+def test_real_commit_triggers_triage_enqueue(tmp_path):
+    from aramid import queue as queue_mod
+    r = _repo(tmp_path)
+    hooks.install(r, Path(sys.executable))
+    # both tests commit through the FULL hook set -- the pre-commit gate
+    # also fires (here `exec(x)` trips ruff S102 BLOCK) and would abort the
+    # commit, so bypass the pre-commit shim while keeping post-commit.
+    (r / ".git" / "hooks" / "pre-commit").unlink()
+    (r / "src").mkdir()
+    (r / "src" / "auth_login.py").write_text("def f(x):\n    exec(x)\n", encoding="utf-8")
+    _git(r, "add", "src/auth_login.py")
+    cp = _git(r, "commit", "-m", "risky", env={**os.environ})
+    assert cp.returncode == 0, cp.stdout + cp.stderr  # post-commit can NEVER block
+    led = Ledger(r / ".aramid" / "ledger.db")
+    try:
+        assert queue_mod.last_triaged_head(led) is not None, \
+            "real git dispatch must have run aramid triage"
+        item = queue_mod.queued_item(queue_mod.materialize_queue(led.events()))
+        assert item is not None and item.score >= 40
+    finally:
+        led.close()
+
+
+def test_post_commit_fail_open_with_broken_interpreter(tmp_path):
+    r = _repo(tmp_path)
+    hooks.install(r, Path("C:/nonexistent/python.exe"))
+    # both tests commit through the FULL hook set -- the pre-commit gate
+    # also fires (here the broken-interpreter pre-commit shim falls back to
+    # `py -3` and runs a slow real gate), so bypass the pre-commit shim
+    # while keeping post-commit.
+    (r / ".git" / "hooks" / "pre-commit").unlink()
+    (r / "ok.py").write_text("x = 1\n", encoding="utf-8")
+    _git(r, "add", "ok.py")
+    cp = _git(r, "commit", "-m", "clean")
+    assert cp.returncode == 0, "broken triage interpreter must never block a commit"
