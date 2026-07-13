@@ -519,8 +519,13 @@ def test_diff_text_contains_added_lines_and_truncates(tmp_path):
     h2 = gitutil.rev_sha(r, "HEAD")
     text = gitutil.diff_text(r, h1, h2)
     assert "+exec(x)" in text
-    truncated = gitutil.diff_text(r, h1, h2, max_bytes=50)
-    assert len(truncated.encode("utf-8")) <= 50
+    full = gitutil.diff_text(r, h1, h2)
+    full_bytes = len(full.encode("utf-8"))
+    assert len(full) < full_bytes  # precondition: multi-byte content present
+    cap = full_bytes - 2  # cut lands inside the trailing multi-byte run
+    truncated = gitutil.diff_text(r, h1, h2, max_bytes=cap)
+    assert len(truncated.encode("utf-8")) <= cap
+    assert truncated != full  # naive char-slice would return the FULL text here
 ```
 
 - [ ] **Step 2: Run tests to verify they fail**
