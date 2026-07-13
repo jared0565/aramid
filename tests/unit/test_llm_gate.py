@@ -26,6 +26,14 @@ def _seed(led, finding):
     led.record_run("r0", NOW.isoformat(), "drain", set(), set(), [finding])
 
 
+def _seed_raw(led, fid, payload):
+    """Append a raw FINDING_DETECTED event so we can inject a MALFORMED rec
+    (e.g. evidence/line stored as null) that a typed Finding can never carry.
+    _materialize sets status=open when historical is falsy."""
+    led.append(Event(EventType.FINDING_DETECTED, "r0", NOW.isoformat(),
+                     finding_id=fid, payload=payload))
+
+
 def _cfg(armed):
     return SimpleNamespace(llm={"llm_block_armed": armed})
 
@@ -129,6 +137,42 @@ def test_auto_resolve_missing_file_counts_as_gone(tmp_path, monkeypatch):
     finally:
         led.close()
     assert resolved == ["f" * 64]
+
+
+def test_auto_resolve_skips_malformed_rec_without_raising(tmp_path, monkeypatch):
+    """A rec with evidence stored as null (`.get('evidence','')` -> None, not
+    the default) must be SKIPPED -- never crash re.sub, never silently resolve
+    it away. It stays open for manual triage."""
+    led = Ledger(tmp_path / "l.db")
+    monkeypatch.setattr(review.gitutil, "read_for_fingerprint",
+                        lambda root, ref, f: "some other content\n")
+    try:
+        _seed_raw(led, "d" * 64, {"source": "llm", "file": "src/auth.py",
+                                  "evidence": None, "line": 2,
+                                  "severity": "critical", "confirmed": True})
+        resolved = review.auto_resolve_llm(tmp_path, led, "r1", NOW.isoformat())
+        state = led.open_findings()
+    finally:
+        led.close()
+    assert resolved == []                         # not resolved away
+    assert state["d" * 64]["status"] == "open"    # left open for triage
+
+
+def test_gate_skips_malformed_rec_but_blocks_wellformed(tmp_path):
+    """A rec with line stored as null (`int(None)` -> TypeError) is SKIPPED,
+    not crashed; a well-formed armed+confirmed+critical rec alongside it still
+    yields exactly one BLOCK."""
+    led = Ledger(tmp_path / "l.db")
+    try:
+        _seed_raw(led, "d" * 64, {"source": "llm", "file": "src/x.py",
+                                  "evidence": "e", "line": None,
+                                  "severity": "critical", "confirmed": True})
+        _seed(led, _llm_finding())                # well-formed, blockable
+        got = review.llm_gate_findings(_cfg(True), led, Gate.PRE_PUSH)
+    finally:
+        led.close()
+    assert [f.id for f in got] == ["f" * 64]      # malformed rec skipped
+    assert got[0].verdict is Verdict.BLOCK
 
 
 def test_pipeline_pre_push_integration(tmp_path, monkeypatch):

@@ -341,24 +341,35 @@ def auto_resolve_llm(root: Path, ledger, run_id: str, at: str) -> list[str]:
     for fid, rec in ledger.open_findings().items():
         if rec.get("source") != "llm" or rec.get("status") != "open":
             continue
+        # Per-record guard (fail-safe requirement): a MALFORMED rec (e.g.
+        # evidence/line stored as null so `.get(k, default)` returns None,
+        # not the default) must be SKIPPED -- left open for manual triage --
+        # never crash the gate and never be silently resolved away. This
+        # outer guard wraps the whole body; the inner read_for_fingerprint
+        # try/except below keeps its own "unreadable file = gone = resolve"
+        # semantics for WELL-FORMED recs.
         try:
-            content = gitutil.read_for_fingerprint(root, "HEAD", rec.get("file", ""))
+            try:
+                content = gitutil.read_for_fingerprint(root, "HEAD", rec.get("file", ""))
+            except Exception:
+                content = ""
+            # Strip ALL whitespace (not _squash_ws' collapse-runs) on both
+            # sides: deliberately MORE permissive than verify_findings' squash
+            # so a mere reformat of the evidence line (e.g. spaces added inside
+            # parens) does NOT wrongly resolve the finding. Resolving-too-
+            # eagerly is the dangerous direction here -- a wrong resolve drops
+            # a confirmed critical out of the block gate and lets the vuln push
+            # through now, whereas wrongly keeping one only forces an override.
+            # So a quote is "gone" only when its non-whitespace characters no
+            # longer appear.
+            quote = _strip_ws(rec.get("evidence", ""))
+            if quote and quote in _strip_ws(content):
+                continue
+            ledger.append(Event(EventType.FINDING_RESOLVED, run_id, at, finding_id=fid,
+                                payload={"auto_resolved": "evidence_gone"}))
+            resolved.append(fid)
         except Exception:
-            content = ""
-        # Strip ALL whitespace (not _squash_ws' collapse-runs) on both sides:
-        # deliberately MORE permissive than verify_findings' squash so a mere
-        # reformat of the evidence line (e.g. spaces added inside parens) does
-        # NOT wrongly resolve the finding. Resolving-too-eagerly is the
-        # dangerous direction here -- a wrong resolve drops a confirmed
-        # critical out of the block gate and lets the vuln push through now,
-        # whereas wrongly keeping one only forces an override. So a quote is
-        # "gone" only when its non-whitespace characters no longer appear.
-        quote = _strip_ws(rec.get("evidence", ""))
-        if quote and quote in _strip_ws(content):
             continue
-        ledger.append(Event(EventType.FINDING_RESOLVED, run_id, at, finding_id=fid,
-                            payload={"auto_resolved": "evidence_gone"}))
-        resolved.append(fid)
     return resolved
 
 
@@ -374,18 +385,25 @@ def llm_gate_findings(cfg, ledger, gate: Gate) -> list[Finding]:
     for fid, rec in sorted(ledger.open_findings().items()):
         if rec.get("source") != "llm" or rec.get("status") != "open":
             continue
+        # Per-record guard (fail-safe requirement): a MALFORMED rec (e.g.
+        # line stored as null so `int(rec.get("line", 0))` raises TypeError)
+        # must be SKIPPED -- never crash the gate. A skipped rec stays open,
+        # forcing manual triage, which is the safe outcome for a block gate.
         try:
-            severity = Severity(rec.get("severity", "medium"))
-        except ValueError:
-            severity = Severity.MEDIUM
-        confirmed = bool(rec.get("confirmed", False))
-        verdict = (Verdict.BLOCK
-                   if armed and confirmed and severity is Severity.CRITICAL
-                   else Verdict.WARN)
-        out.append(Finding(
-            id=fid, tool="llm-review", rule=rec.get("rule", ""),
-            severity_raw=rec.get("severity", ""), severity=severity, verdict=verdict,
-            file=rec.get("file", ""), line=int(rec.get("line", 0)),
-            message=rec.get("message", ""), evidence=rec.get("evidence", ""),
-            gate=gate, source=Source.LLM, confirmed=confirmed))
+            try:
+                severity = Severity(rec.get("severity", "medium"))
+            except ValueError:
+                severity = Severity.MEDIUM
+            confirmed = bool(rec.get("confirmed", False))
+            verdict = (Verdict.BLOCK
+                       if armed and confirmed and severity is Severity.CRITICAL
+                       else Verdict.WARN)
+            out.append(Finding(
+                id=fid, tool="llm-review", rule=rec.get("rule", ""),
+                severity_raw=rec.get("severity", ""), severity=severity, verdict=verdict,
+                file=rec.get("file", ""), line=int(rec.get("line", 0)),
+                message=rec.get("message", ""), evidence=rec.get("evidence", ""),
+                gate=gate, source=Source.LLM, confirmed=confirmed))
+        except Exception:
+            continue
     return out
