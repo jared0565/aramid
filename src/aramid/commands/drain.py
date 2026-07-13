@@ -167,7 +167,13 @@ def cmd_drain(targets: list, *, dry_run: bool = False, max_items: int | None = N
                     ledger.close()
                 if item is not None and item.score >= int(cfg.triage.get("min_score", 40)):
                     candidates.append((item.score, root, item, cfg))
-            except (gitutil.NotARepo, OSError) as exc:
+            except Exception as exc:
+                # Per-repo isolation (spec section 6): ANY failure probing one
+                # repo -- NotARepo, a missing dir (OSError), a malformed
+                # aramid.toml (tomllib.TOMLDecodeError, a ValueError), a corrupt
+                # ledger.db (sqlite3.DatabaseError), or a bad-config int() coercion
+                # -- degrades that repo only; the rest still drain. Mirrors the
+                # per-item consume loop's `except Exception` below.
                 print(f"aramid drain: skipping {repo_path}: {exc}", file=sys.stderr)
                 degraded = True
         if dry_run:

@@ -121,6 +121,17 @@ def test_drain_isolates_broken_repo_exit_2(tmp_path, seam, fake_consumer):
     assert len(fake_consumer.calls) == 1  # good repo still drained
 
 
+def test_drain_isolates_repo_with_corrupt_config(tmp_path, seam, fake_consumer):
+    broken = _risky_repo(tmp_path, "broken")
+    (broken / "aramid.toml").write_text("this is not = valid toml [", encoding="utf-8")
+    good = _risky_repo(tmp_path, "good")
+    registry.register(broken, "t0")
+    registry.register(good, "t0")
+    rc = cmd_drain([], dry_run=False)
+    assert rc == 2  # degraded, not a crash
+    assert len(fake_consumer.calls) == 1  # the good repo still drained fully
+
+
 def test_drain_lock_contention(tmp_path, seam, fake_consumer):
     r = _risky_repo(tmp_path)
     registry.register(r, "t0")
