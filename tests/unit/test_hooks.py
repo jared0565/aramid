@@ -215,3 +215,33 @@ def test_uninstall_does_not_clobber_live_foreign_hook_that_replaced_the_shim(tmp
     )
     assert not chained.exists(), "orphaned .aramid-chained backup must be discarded"
     assert "foreign hook" in capsys.readouterr().err
+
+
+def test_install_writes_post_commit_shim_fail_open(tmp_path):
+    r = _repo(tmp_path)
+    install(r, Path("C:/py/python.exe"))
+    shim = r / ".git" / "hooks" / "post-commit"
+    assert shim.exists()
+    raw = shim.read_bytes()
+    assert MARKER_START.encode() in raw
+    assert b"\r" not in raw
+    text = raw.decode()
+    assert "-m aramid triage HEAD" in text
+    # fail-open: the LAST executable line is an unconditional exit 0, and the
+    # triage invocation itself cannot propagate a failure (|| true)
+    assert "|| true" in text
+    assert text.rstrip().endswith("exit 0")
+
+
+def test_install_chains_foreign_post_commit_and_uninstall_restores(tmp_path):
+    r = _repo(tmp_path)
+    hdir = r / ".git" / "hooks"
+    hdir.mkdir(exist_ok=True)
+    foreign = b"#!/bin/sh\necho foreign\n"
+    (hdir / "post-commit").write_bytes(foreign)
+    install(r, Path("C:/py/python.exe"))
+    assert (hdir / "post-commit.aramid-chained").read_bytes() == foreign
+    assert MARKER_START.encode() in (hdir / "post-commit").read_bytes()
+    uninstall(r)
+    assert (hdir / "post-commit").read_bytes() == foreign
+    assert not (hdir / "post-commit.aramid-chained").exists()
