@@ -3,6 +3,7 @@ from pathlib import Path
 
 import pytest
 
+from aramid import config as config_mod
 from aramid import queue, triage
 from aramid.ledger import Ledger
 
@@ -148,7 +149,7 @@ def test_score_combines_and_clamps(tmp_path, monkeypatch):
     led = Ledger(tmp_path / "l.db")
     _fake_git(monkeypatch, ["src/auth/handler.py"], "+exec(x)\n")
     cfg_triage = {"min_score": 40, "extra_security_paths": []}
-    cfg = type("C", (), {"triage": cfg_triage})()
+    cfg = type("C", (), {"triage": cfg_triage, "ignore_paths": []})()
     result = triage.score(tmp_path, "a", "b", cfg, led)
     # path 30 + content 25 + novelty 20 (+ blast 0, no graph) = 75
     assert result.score == 75
@@ -159,7 +160,8 @@ def test_score_combines_and_clamps(tmp_path, monkeypatch):
 def test_score_budget_stops_early(tmp_path, monkeypatch):
     led = Ledger(tmp_path / "l.db")
     _fake_git(monkeypatch, ["src/auth/handler.py"], "+exec(x)\n")
-    cfg = type("C", (), {"triage": {"min_score": 40, "extra_security_paths": []}})()
+    cfg = type("C", (), {"triage": {"min_score": 40, "extra_security_paths": []},
+                         "ignore_paths": []})()
     clock = iter([0.0, 0.1, 99.0, 99.0, 99.0, 99.0]).__next__  # budget blown after 1st signal
     result = triage.score(tmp_path, "a", "b", cfg, led, budget_s=2.0, monotonic=clock)
     assert result.score == 30  # only the path signal ran
@@ -170,7 +172,8 @@ def test_score_budget_stops_early(tmp_path, monkeypatch):
 def test_run_triage_records_and_enqueues(tmp_path, monkeypatch):
     led = Ledger(tmp_path / "l.db")
     _fake_git(monkeypatch, ["src/auth/handler.py"], "+exec(x)\n")
-    cfg = type("C", (), {"triage": {"min_score": 40, "extra_security_paths": []}})()
+    cfg = type("C", (), {"triage": {"min_score": 40, "extra_security_paths": []},
+                         "ignore_paths": []})()
     result, queued = triage.run_triage(tmp_path, cfg, led, "a", "b", "2026-07-13T12:00:00+00:00")
     assert queued is True
     assert queue.last_triaged_head(led) == "b"
@@ -182,9 +185,50 @@ def test_run_triage_records_and_enqueues(tmp_path, monkeypatch):
 def test_run_triage_below_threshold_records_but_does_not_enqueue(tmp_path, monkeypatch):
     led = Ledger(tmp_path / "l.db")
     _fake_git(monkeypatch, ["docs/notes.md"], "+hello\n")
-    cfg = type("C", (), {"triage": {"min_score": 40, "extra_security_paths": []}})()
+    cfg = type("C", (), {"triage": {"min_score": 40, "extra_security_paths": []},
+                         "ignore_paths": []})()
     result, queued = triage.run_triage(tmp_path, cfg, led, "a", "b", "2026-07-13T12:00:00+00:00")
     assert queued is False and result.score == 20  # novelty only
     assert queue.queued_item(queue.materialize_queue(led.events())) is None
     assert queue.last_triaged_head(led) == "b"  # still recorded
+    led.close()
+
+
+# --- FIX 4: score()/run_triage() must filter_paths() before feeding paths
+#     into path/novelty/blast-radius signals and record_triage (spec 8b:
+#     tracked graphite artifacts must never be triaged as targets). Uses a
+#     REAL load_config (not the minimal test double above) because
+#     filter_paths needs cfg.ignore_paths, which only a real load_config
+#     populates with the built-in graphite entries. -------------------------
+
+def _real_cfg(tmp_path, monkeypatch):
+    monkeypatch.setattr(config_mod, "_user_config_path",
+                        lambda: tmp_path / "no-such-user-config" / "config.toml")
+    repo = tmp_path / "repo"
+    repo.mkdir(exist_ok=True)
+    return repo, config_mod.load_config(repo)
+
+
+def test_score_filters_graphite_artifacts_from_signals(tmp_path, monkeypatch):
+    repo, cfg = _real_cfg(tmp_path, monkeypatch)
+    led = Ledger(tmp_path / "l.db")
+    _fake_git(monkeypatch, ["graph-out/graph.json", "src/auth.py"], "")
+    result = triage.score(repo, "a", "b", cfg, led)
+    assert "graph-out/graph.json" not in result.paths
+    assert "src/auth.py" in result.paths
+    led.close()
+
+
+def test_run_triage_filters_graphite_artifacts_from_triaged_paths(tmp_path, monkeypatch):
+    repo, cfg = _real_cfg(tmp_path, monkeypatch)
+    led = Ledger(tmp_path / "l.db")
+    _fake_git(monkeypatch, ["graph-out/graph.json", "src/auth.py"], "")
+    result, queued = triage.run_triage(repo, cfg, led, "a", "b",
+                                       "2026-07-13T12:00:00+00:00")
+    recorded = queue.triaged_paths(led)
+    assert "src/auth.py" in recorded
+    assert "graph-out/graph.json" not in recorded
+    # novelty must not have counted the graphite path either
+    assert any("novelty: 1 unseen" in r for r in result.reasons)
+    assert not any("graph-out" in r for r in result.reasons)
     led.close()

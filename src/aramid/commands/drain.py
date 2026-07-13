@@ -106,9 +106,16 @@ def _consume_item(root: Path, cfg, ledger, item, clock) -> bool:
         if result.findings:
             findings = normalize(result.findings, root, lambda f: item.head, salt,
                                  Gate.ALL, functools.partial(policy.classify, cfg=cfg))
-            ledger.record_run(run_id, clock(), "drain",
-                              {r.tool for r in result.findings},
-                              {r.file for r in result.findings}, findings)
+            # The drain runs a narrow ruleset (pack only) -- record detections
+            # but resolve NOTHING. Pack and OWASP findings both use
+            # tool="semgrep", so a scope of {semgrep}x{scanned files} would
+            # still spuriously resolve an open OWASP finding the pack
+            # ruleset never re-detects. Only a full gate, which examines the
+            # complete ruleset, may resolve. Empty scope makes
+            # record_run's resolve loop match nothing; FINDING_DETECTED for
+            # the pack findings still fires (detection doesn't depend on
+            # scope).
+            ledger.record_run(run_id, clock(), "drain", set(), set(), findings)
         ledger.append(Event(EventType.CONSUMER_RUN_FINISHED, run_id, clock(),
                             payload={"consumer": name, "item_id": item.id,
                                      "state": result.state,
@@ -116,9 +123,15 @@ def _consume_item(root: Path, cfg, ledger, item, clock) -> bool:
                                      "cost": result.cost,
                                      "finding_count": len(findings),
                                      "note": result.note}))
-        if result.state == "error":
+        if result.state in ("error", "degraded"):
             ok = False
-    queue.mark_drained(ledger, item.id, run_id, clock())
+    # A not-fully-consumed item (any consumer errored or degraded, e.g. a
+    # semgrep TIMEOUT/CRASHED/MISSING run of the pack ruleset) must NOT be
+    # marked drained: that would drop it from the queue with no retry,
+    # letting a bypassed reintroduction escape the backstop. Only mark it
+    # drained once every consumer finished cleanly.
+    if ok:
+        queue.mark_drained(ledger, item.id, run_id, clock())
     return ok
 
 

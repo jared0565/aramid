@@ -79,3 +79,22 @@ def test_diff_text_contains_added_lines_and_truncates(tmp_path):
     truncated = gitutil.diff_text(r, h1, h2, max_bytes=cap)
     assert len(truncated.encode("utf-8")) <= cap
     assert truncated != full  # naive char-slice would return the FULL text here
+
+
+def test_diff_text_decodes_utf8_not_locale_codec(tmp_path):
+    # FIX 3 regression: _run's subprocess.run(..., text=True) used to decode
+    # with the locale-preferred codec (no encoding= kwarg). On this dev box
+    # (Windows, cp1252 preferred encoding, UTF-8 mode off) that mojibakes
+    # git's UTF-8 output -- reproducing the bug locally. CI (windows-latest,
+    # Python 3.12, also cp1252-preferred) is the real proving ground for the
+    # harder failure mode: a byte sequence cp1252 can't decode at all raises
+    # UnicodeDecodeError and would crash triage's per-commit diff scan.
+    r = _repo(tmp_path)
+    _commit(r, "a.py", "# café\n", "first")
+    h1 = gitutil.rev_sha(r, "HEAD")
+    _commit(r, "a.py", "# café\n# Привет\n", "second")
+    h2 = gitutil.rev_sha(r, "HEAD")
+    text = gitutil.diff_text(r, h1, h2)
+    assert "café" in text
+    assert "Привет" in text
+    assert "Ã©" not in text  # mojibake marker: utf-8 "é" mis-decoded as cp1252

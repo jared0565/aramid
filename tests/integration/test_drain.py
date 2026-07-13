@@ -8,7 +8,7 @@ from aramid.commands import drain as drain_mod
 from aramid.commands.drain import cmd_drain
 from aramid.consumers.base import ConsumerResult
 from aramid.ledger import Ledger
-from aramid.models import EventType
+from aramid.models import Event, EventType
 from aramid.normalizer import RawFinding
 
 
@@ -166,3 +166,102 @@ def test_drain_respects_max_items(tmp_path, seam, fake_consumer):
     registry.register(r2, "t0")
     assert cmd_drain([], dry_run=False, max_items=1) == 0
     assert len(fake_consumer.calls) == 1
+
+
+# --- FIX 1: degraded consumer results must trip exit 2 and leave the item
+#     queued for retry, not be swallowed like a silent "ok". -----------------
+
+class _DegradedConsumer:
+    NAME = "degraded"
+    calls: list = []
+
+    @classmethod
+    def consume(cls, item, ctx):
+        cls.calls.append(item)
+        # Mirrors regression_pack.consume's real "degraded" case: semgrep
+        # TIMEOUT/CRASHED/MISSING -- the ruleset was NOT fully evaluated.
+        return ConsumerResult(consumer=cls.NAME, state="degraded",
+                              note="semgrep timeout")
+
+
+def test_drain_degraded_consumer_exits_2_and_leaves_item_queued(tmp_path, seam, monkeypatch):
+    r = _risky_repo(tmp_path)
+    registry.register(r, "t0")
+    _DegradedConsumer.calls = []
+    monkeypatch.setattr(drain_mod, "CONSUMERS", {"degraded": _DegradedConsumer})
+
+    rc = cmd_drain([], dry_run=False)
+
+    assert rc == 2  # degraded consumer result must surface as exit 2, not 0
+    assert len(_DegradedConsumer.calls) == 1
+    led = Ledger(r / ".aramid" / "ledger.db")
+    try:
+        item = queue.queued_item(queue.materialize_queue(led.events()))
+        # a not-fully-consumed item must NOT be marked drained -- it must
+        # stay queued so the next drain retries it.
+        assert item is not None
+        assert item.state == queue.QUEUED
+    finally:
+        led.close()
+
+
+# --- FIX 2: drain must record its narrow (pack-only) ruleset run with EMPTY
+#     scope, so it can only ADD detections and never spuriously resolve an
+#     open finding from a different (e.g. OWASP) ruleset that also uses
+#     tool="semgrep" and happens to share a scanned file. -------------------
+
+class _PackFakeConsumer:
+    NAME = "fake"
+    calls: list = []
+
+    @classmethod
+    def consume(cls, item, ctx):
+        cls.calls.append(item)
+        raw = RawFinding(tool="semgrep", rule="aramid-regression.block.deadbeef",
+                         severity_raw="ERROR", file="src/api.py", line=1,
+                         message="reintroduction")
+        return ConsumerResult(consumer=cls.NAME, state="ok", findings=[raw])
+
+
+def test_drain_pack_only_scan_does_not_resolve_unrelated_open_finding(tmp_path, seam, monkeypatch):
+    # Order matters: bootstrap sweep triages HEAD only (spec section 2), so
+    # the risky commit (the one that scores >= min_score and gets queued)
+    # must be LAST, with the benign src/api.py commit first.
+    r = _repo(tmp_path)
+    _commit(r, "src/api.py", "def handler():\n    return 1\n", "api handler")
+    _commit(r, "src/auth_login.py", "def f(x):\n    exec(x)\n", "risky")
+    registry.register(r, "t0")
+
+    # Seed a pre-existing OPEN OWASP-style semgrep finding in src/api.py --
+    # a full gate detected it once; the drain (pack ruleset only) must never
+    # touch it.
+    ledger_path = r / ".aramid" / "ledger.db"
+    led = Ledger(ledger_path)
+    try:
+        led.append(Event(EventType.FINDING_DETECTED, "seed-run",
+                         "2020-01-01T00:00:00+00:00", finding_id="owasp-finding-1",
+                         payload={"tool": "semgrep", "file": "src/api.py",
+                                  "rule": "owasp-top-ten.a03", "verdict": "warn",
+                                  "severity": "medium", "line": 1,
+                                  "message": "owasp finding", "evidence": "",
+                                  "historical": False}))
+    finally:
+        led.close()
+
+    _PackFakeConsumer.calls = []
+    monkeypatch.setattr(drain_mod, "CONSUMERS", {"fake": _PackFakeConsumer})
+
+    rc = cmd_drain([], dry_run=False)
+    assert rc == 0
+
+    led = Ledger(ledger_path)
+    try:
+        state = led.open_findings()
+        # the pre-existing OWASP finding must still be open: the drain's
+        # narrow pack ruleset never re-detected it and must not resolve it
+        assert state["owasp-finding-1"]["status"] == "open"
+        # the pack finding itself was still detected
+        assert any(rec.get("rule") == "aramid-regression.block.deadbeef"
+                   for rec in state.values())
+    finally:
+        led.close()

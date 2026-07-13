@@ -9,7 +9,15 @@ def _run(root: Path, *args: str) -> subprocess.CompletedProcess:
     # fixed subcommands (rev-parse, show, rev-list, diff, ls-files, log,
     # merge-base, symbolic-ref); relying on PATH to resolve "git" is standard
     # and matches how git itself is invoked by every other tool on the host.
-    return subprocess.run(["git", *args], cwd=str(root), capture_output=True, text=True)  # noqa: S603,S607
+    # encoding="utf-8": git emits UTF-8 by default regardless of host locale.
+    # Without this, text=True decodes with the locale-preferred codec, which
+    # mojibakes (or raises UnicodeDecodeError on undefined bytes) on cp1252
+    # Windows hosts -- the target platform, and CI's windows-latest runner.
+    # errors="replace": never let a decode hiccup crash triage's per-commit
+    # diff scan; a best-effort mangled character is acceptable, a raised
+    # exception is not.
+    return subprocess.run(["git", *args], cwd=str(root), capture_output=True,  # noqa: S603,S607
+                          text=True, encoding="utf-8", errors="replace")
 
 def repo_root(path: Path) -> Path:
     cp = _run(path, "rev-parse", "--show-toplevel")
