@@ -62,7 +62,7 @@ def compile_dep_rule(finding_id: str, rec: dict) -> dict | None:
         "message": (f"Reintroduction of banned dependency {m.group('pkg')} "
                     f"({rec.get('rule')}, resolved finding {_fid8(finding_id)})."),
         "paths": {"include": [rec.get("file", "**")]},
-        "pattern-regex": m.group("pkg"),
+        "pattern-regex": re.escape(m.group("pkg")),
     }
 
 

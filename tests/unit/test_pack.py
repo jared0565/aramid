@@ -1,3 +1,5 @@
+import re
+
 import yaml  # dev-dependency, tests only
 
 from aramid import pack
@@ -36,8 +38,17 @@ def test_dep_rule_targets_manifest_and_package():
     rule = pack.compile_dep_rule(FID, DEP_REC)
     assert rule["id"] == f"aramid-regression.block.{FID[:8]}"
     assert rule["paths"]["include"] == ["requirements.txt"]
-    assert "insecure-package" in rule["pattern-regex"]
+    assert rule["pattern-regex"] == re.escape("insecure-package")
     assert "PYSEC-2024-1234" in rule["message"]
+
+
+def test_dep_rule_escapes_regex_metacharacters_in_package_name():
+    rec = dict(DEP_REC, message="zope.interface 5.0.0 has PYSEC-2024-9999")
+    rule = pack.compile_dep_rule(FID, rec)
+    assert rule["pattern-regex"] == re.escape("zope.interface")
+    # unescaped, the dot would also match "zopeXinterface"
+    assert re.search(rule["pattern-regex"], "zope.interface")
+    assert not re.search(rule["pattern-regex"], "zopeXinterface")
 
 
 def test_dep_rule_unparseable_message_returns_none():
@@ -60,6 +71,14 @@ def test_render_pack_is_valid_yaml_semgrep_shape():
     assert data["rules"][0]["id"] == rule["id"]
     assert data["rules"][0]["languages"] == ["generic"]
     assert data["rules"][0]["severity"] == "ERROR"
+
+
+def test_render_pack_survives_quotes_backslashes_newlines_in_message():
+    rec = dict(SECRET_REC, message='he said "x\\y"\nline2')
+    rule = pack.compile_secret_rule(FID, rec)
+    rule["message"] = 'he said "x\\y"\nline2 -- ' + rule["message"]
+    data = yaml.safe_load(pack.render_pack([rule]))
+    assert data["rules"][0]["message"].startswith('he said "x\\y"\nline2')
 
 
 def test_append_rules_dedups_and_creates(tmp_path):

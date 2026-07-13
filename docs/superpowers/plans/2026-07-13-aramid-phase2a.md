@@ -2258,6 +2258,8 @@ git commit -m "feat(schedule): Task Scheduler registration with StartWhenAvailab
 
 ```python
 # tests/unit/test_pack.py
+import re
+
 import yaml  # dev-dependency, tests only
 
 from aramid import pack
@@ -2296,7 +2298,7 @@ def test_dep_rule_targets_manifest_and_package():
     rule = pack.compile_dep_rule(FID, DEP_REC)
     assert rule["id"] == f"aramid-regression.block.{FID[:8]}"
     assert rule["paths"]["include"] == ["requirements.txt"]
-    assert "insecure-package" in rule["pattern-regex"]
+    assert rule["pattern-regex"] == re.escape("insecure-package")
     assert "PYSEC-2024-1234" in rule["message"]
 
 
