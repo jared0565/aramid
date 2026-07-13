@@ -77,3 +77,26 @@ def test_review_unparseable_envelope_is_malformed(monkeypatch):
     monkeypatch.setattr(claude_cli.base, "run_provider_subprocess",
                         lambda *a, **k: (0, "garbage not json", ""))
     assert claude_cli.review("P", "sonnet", 240.0).error == base.ERR_MALFORMED
+
+
+def test_review_null_usage_keeps_text_zeroes_tokens(monkeypatch):
+    envelope = json.dumps({"result": "ok text", "usage": None})
+    monkeypatch.setattr(claude_cli.shutil, "which", lambda n: r"C:\bin\claude.exe")
+    monkeypatch.setattr(claude_cli.base, "run_provider_subprocess",
+                        lambda *a, **k: (0, envelope, ""))
+    resp = claude_cli.review("P", "sonnet", 240.0)
+    assert resp.text == "ok text"
+    assert (resp.tokens_in, resp.tokens_out) == (0, 0)
+    assert resp.error == ""
+
+
+def test_review_non_dict_envelope_is_malformed(monkeypatch):
+    monkeypatch.setattr(claude_cli.shutil, "which", lambda n: r"C:\bin\claude.exe")
+    monkeypatch.setattr(claude_cli.base, "run_provider_subprocess",
+                        lambda *a, **k: (0, "[1, 2]", ""))
+    assert claude_cli.review("P", "sonnet", 240.0).error == base.ERR_MALFORMED
+
+
+def test_review_unavailable_when_not_on_path(monkeypatch):
+    monkeypatch.setattr(claude_cli.shutil, "which", lambda n: None)
+    assert claude_cli.review("P", "sonnet", 240.0).error == base.ERR_UNAVAILABLE

@@ -43,9 +43,10 @@ def review(prompt: str, model: str, timeout_s: float) -> ProviderResponse:
         envelope = json.loads(out)
         text = envelope["result"]
         usage = envelope.get("usage", {})
+        usage = usage if isinstance(usage, dict) else {}
         tokens_in = int(usage.get("input_tokens", 0))
         tokens_out = int(usage.get("output_tokens", 0))
-    except (ValueError, KeyError, TypeError):
+    except (ValueError, KeyError, TypeError, AttributeError):
         return ProviderResponse(text="", error=base.ERR_MALFORMED)
     resp = ProviderResponse(text=text, tokens_in=tokens_in, tokens_out=tokens_out,
                             cost_usd=0.0)
