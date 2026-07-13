@@ -28,6 +28,7 @@ from aramid.commands.ledger_cmd import (
     cmd_ledger_show,
 )
 from aramid.commands.override import cmd_override
+from aramid.commands.pack_cmd import cmd_pack_add, cmd_pack_compile, cmd_pack_list
 from aramid.commands.schedule import cmd_schedule
 from aramid.commands.status import cmd_status
 from aramid.commands.triage_cmd import cmd_triage
@@ -88,6 +89,13 @@ def build_parser() -> argparse.ArgumentParser:
     p_override = sub.add_parser("override", help="suppress a WARN finding (ledger-logged)")
     p_override.add_argument("id")
     p_override.add_argument("--reason", required=True)
+
+    p_pack = sub.add_parser("pack", help="manage the regression attack pack")
+    pack_sub = p_pack.add_subparsers(dest="pack_command")
+    pack_sub.add_parser("list")
+    p_pack_add = pack_sub.add_parser("add")
+    p_pack_add.add_argument("id")
+    pack_sub.add_parser("compile")
 
     sub.add_parser("arm", help="end the WARN-only semgrep bake")
     sub.add_parser("update-rules", help="refresh the vendored semgrep ruleset")
@@ -167,6 +175,17 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.command == "override":
         return cmd_override(root, args.id, args.reason)
+
+    if args.command == "pack":
+        if args.pack_command == "list":
+            return cmd_pack_list(root)
+        if args.pack_command == "add":
+            return cmd_pack_add(root, args.id)
+        if args.pack_command == "compile":
+            return cmd_pack_compile(root)
+        print("aramid: pack: a subcommand is required (list|add|compile)",
+              file=sys.stderr)
+        return 3
 
     if args.command == "arm":
         return cmd_arm(root)
