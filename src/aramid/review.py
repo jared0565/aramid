@@ -186,6 +186,8 @@ def _extract_json(text: str) -> dict | list | None:
 
 
 def parse_review_response(text: str) -> list[dict] | None:
+    if not isinstance(text, str):
+        return None
     data = _extract_json(text)
     if not isinstance(data, dict) or not isinstance(data.get("findings"), list):
         return None
@@ -220,6 +222,10 @@ def verify_findings(candidates: list[dict], packet: Packet, root: Path,
     packet_norm = _squash_ws(packet.text)
     verified, rejected = [], 0
     for cand in candidates:
+        if not isinstance(cand.get("file"), str) or not isinstance(cand.get("evidence"), str) \
+                or not cand["evidence"].strip():
+            rejected += 1
+            continue
         if cand["file"] not in packet.files:
             rejected += 1
             continue
@@ -230,6 +236,18 @@ def verify_findings(candidates: list[dict], packet: Packet, root: Path,
         try:
             content = gitutil.read_for_fingerprint(root, head, cand["file"])
         except Exception:
+            rejected += 1
+            continue
+        # Bind the FULL (possibly multi-line) quote to THIS file's live
+        # content -- not just the packet as a whole. Without this, a quote
+        # whose first line matches file A but whose full body only appears
+        # (verbatim) in file B's packet section can attach to A anyway, since
+        # the packet-membership check above is global to the whole packet and
+        # the anchor loop below only checks the quote's first line. This also
+        # subsumes the removed-diff-line rejection: a quote that only exists
+        # in a `-` line isn't a substring of the live head content either.
+        content_norm = _squash_ws(content)
+        if quote_norm not in content_norm:
             rejected += 1
             continue
         anchor = normalize_line(cand["evidence"].strip().splitlines()[0])

@@ -30,6 +30,15 @@ def test_parse_garbage_is_none():
     assert review.parse_review_response("I found three issues: ...") is None
 
 
+def test_parse_non_str_input_is_none():
+    # FIX 3: non-str input must return None, not raise. json.loads(None) and
+    # json.loads(123) raise TypeError; json.loads(bytes) silently succeeds
+    # but bytes is not a valid contract input either -- all map to None.
+    assert review.parse_review_response(None) is None
+    assert review.parse_review_response(123) is None
+    assert review.parse_review_response(b'{"findings":[]}') is None
+
+
 def test_parse_drops_schema_invalid_entries():
     good, bad_sev, missing_ev = _cand(), _cand(severity="urgent"), _cand()
     del missing_ev["evidence"]
@@ -81,6 +90,52 @@ def test_verify_rejects_file_outside_packet(tmp_path, monkeypatch):
     pkt = _pkt("return db.get(order_id)", files=("src/other.py",))
     verified, rejected = review.verify_findings([_cand()], pkt, tmp_path, "h")
     assert verified == [] and rejected == 1
+
+
+def test_verify_drops_malformed_candidates_without_raising(tmp_path, monkeypatch):
+    # FIX 1: verify_findings must never raise on a crafted candidate dict --
+    # missing "file", missing "evidence", or evidence=None must all be
+    # dropped (counted as rejected) rather than raising KeyError/TypeError.
+    monkeypatch.setattr(review.gitutil, "read_for_fingerprint",
+                        lambda root, ref, f: "return db.get(order_id)\n")
+    pkt = _pkt("return db.get(order_id)")
+    missing_file = _cand()
+    del missing_file["file"]
+    missing_evidence = _cand()
+    del missing_evidence["evidence"]
+    none_evidence = _cand(evidence=None)
+    candidates = [missing_file, missing_evidence, none_evidence]
+    verified, rejected = review.verify_findings(candidates, pkt, tmp_path, "h")
+    assert verified == []
+    assert rejected == len(candidates)
+
+
+def test_verify_rejects_multiline_quote_bound_to_wrong_file(tmp_path, monkeypatch):
+    # FIX 2: multi-line evidence bypass. The packet contains file A's body
+    # (with "except Exception:\n    pass") and also names file B in
+    # packet.files. A candidate for B quotes that same multi-line snippet,
+    # which does appear somewhere in the packet (file A's section) and whose
+    # FIRST line ("except Exception:") also appears in B's head content --
+    # but B's head content does NOT contain the quote's full body verbatim.
+    # This must be rejected: the quote has to bind to the NAMED file's own
+    # live content, not merely appear somewhere in the packet.
+    file_a_body = "def f():\n    try:\n        g()\n    except Exception:\n        pass\n"
+    file_b_head = "def h():\n    try:\n        g()\n    except Exception:\n        grant_admin(user)\n"
+
+    def _read(root, ref, f):
+        assert f == "src/b.py"    # verify_findings only reads the candidate's own file
+        return file_b_head
+
+    monkeypatch.setattr(review.gitutil, "read_for_fingerprint", _read)
+    pkt_text = (
+        "--- FILE: src/a.py ---\n" + file_a_body +
+        "--- FILE: src/b.py ---\n" + file_b_head
+    )
+    pkt = _pkt(pkt_text, files=("src/a.py", "src/b.py"))
+    cand = _cand(file="src/b.py", evidence="except Exception:\n        pass")
+    verified, rejected = review.verify_findings([cand], pkt, tmp_path, "h")
+    assert verified == []
+    assert rejected == 1
 
 
 def test_llm_fingerprint_stable():
