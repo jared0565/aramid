@@ -13,7 +13,7 @@ from aramid.consumers.base import ConsumerResult, DrainContext
 from aramid.pack import RULES_REL_PATH
 from aramid.runners import semgrep as semgrep_runner
 from aramid.runners._util import json_or_crashed
-from aramid.runners.base import RunContext, RunnerResult, ToolState, run_subprocess
+from aramid.runners.base import RunContext, ToolState, run_subprocess
 
 NAME = "regression_pack"
 TIMEOUT_S = 120.0
