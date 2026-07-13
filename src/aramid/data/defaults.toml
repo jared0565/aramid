@@ -32,3 +32,8 @@ wall_clock_budget_s = 600
 
 [pack]
 enabled = true
+# Block-tier regression-pack rules (aramid-regression.block.*) enforce
+# immediately when true (the default) -- their OWN arming flag, deliberately
+# separate from the OWASP bake's `semgrep_block_armed` (see policy.py's
+# _PACK_BLOCK_PREFIX). Set false to demote noisy pack rules to WARN.
+pack_block_armed = true

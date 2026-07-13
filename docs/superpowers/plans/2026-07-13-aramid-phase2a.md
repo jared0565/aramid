@@ -2678,6 +2678,18 @@ git commit -m "feat(cli): aramid pack list/add/compile"
 
 ### Task 15: Gates pick up the pack (semgrep extra config + block tier)
 
+> **AMENDMENT (user decision, 2026-07-13):** the block-tier decision for
+> pack rules uses a dedicated arming flag, `[pack].pack_block_armed`
+> (default **true** in `defaults.toml`, read in `policy.classify` via
+> `cfg.pack.get("pack_block_armed", True)`), superseding the design doc's
+> "ride semgrep's existing arming state" phrasing for the pack case.
+> Pack-block rules are confirmed past findings, not new heuristics, so they
+> block immediately -- deliberately OFF the OWASP `semgrep_block_armed`
+> bake gate -- but an operator can demote a noisy one by setting the flag
+> false in `aramid.toml`. This also adds `src/aramid/policy.py` and
+> `src/aramid/data/defaults.toml` to this task's modified-file list.
+> The snippets below predate the amendment and are left as written.
+
 **Files:**
 - Modify: `src/aramid/runners/base.py` (RunContext field), `src/aramid/pipeline.py` (populate it), `src/aramid/runners/semgrep.py` (argv + canonical id), `src/aramid/data/block_rules.toml`
 - Test: `tests/unit/test_runner_semgrep.py` (append), `tests/unit/test_policy.py` (append), `tests/unit/test_pipeline.py` (append)

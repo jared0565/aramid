@@ -110,12 +110,30 @@ def test_typecheck_warns():
 # --- classify: regression pack rules -----------------------------------------
 
 def test_pack_block_rule_classifies_block(tmp_path, monkeypatch):
+    """With DEFAULT config (pack_block_armed defaults true in defaults.toml,
+    semgrep_block_armed defaults false), a pack block-tier rule blocks
+    immediately -- it rides its own [pack].pack_block_armed gate, NOT the
+    OWASP bake's semgrep_block_armed (user decision 2026-07-13)."""
     from aramid import config
     monkeypatch.setattr(config, "_user_config_path", lambda: tmp_path / "nouser.toml")
     cfg = config.load_config(tmp_path)
+    assert cfg.semgrep_block_armed is False  # sanity: OWASP bake still on
     severity, verdict = policy.classify(
         "semgrep", "aramid-regression.block.deadbeef", "ERROR", Gate.PRE_PUSH, cfg=cfg)
     assert verdict is Verdict.BLOCK
+
+
+def test_pack_block_rule_warns_when_pack_block_disarmed(tmp_path, monkeypatch):
+    """An operator can demote noisy pack rules: [pack].pack_block_armed =
+    false in the repo's aramid.toml turns pack block-tier rules into WARN."""
+    from aramid import config
+    monkeypatch.setattr(config, "_user_config_path", lambda: tmp_path / "nouser.toml")
+    (tmp_path / "aramid.toml").write_text(
+        "[pack]\npack_block_armed = false\n", encoding="utf-8")
+    cfg = config.load_config(tmp_path)
+    severity, verdict = policy.classify(
+        "semgrep", "aramid-regression.block.deadbeef", "ERROR", Gate.PRE_PUSH, cfg=cfg)
+    assert verdict is Verdict.WARN
 
 
 def test_pack_warn_rule_classifies_warn(tmp_path, monkeypatch):
