@@ -24,6 +24,8 @@ from aramid.ledger import Ledger
 from aramid.models import Event, EventType, Gate
 from aramid.normalizer import normalize
 
+import aramid.consumers.regression_pack  # noqa: F401  -- registers the consumer
+
 
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat()

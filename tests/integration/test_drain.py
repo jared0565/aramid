@@ -6,7 +6,7 @@ import pytest
 from aramid import queue, registry
 from aramid.commands import drain as drain_mod
 from aramid.commands.drain import cmd_drain
-from aramid.consumers.base import CONSUMERS, ConsumerResult
+from aramid.consumers.base import ConsumerResult
 from aramid.ledger import Ledger
 from aramid.models import EventType
 from aramid.normalizer import RawFinding
@@ -47,8 +47,24 @@ class _FakeConsumer:
 
 @pytest.fixture
 def fake_consumer(monkeypatch):
+    """Isolate drain tests from the real `regression_pack` consumer, which
+    registers itself into the shared `consumers.base.CONSUMERS` dict at
+    import time (Task 16) -- and `drain.py` now imports it unconditionally,
+    so it is present in CONSUMERS for the rest of this test session. REPLACE
+    (not add to) the dict `drain.py` actually iterates so these tests only
+    ever run the fake.
+
+    Patched on `drain_mod`, not `aramid.consumers.base`: `drain.py` does
+    `from aramid.consumers.base import CONSUMERS`, which binds its own
+    module-global name to the dict object at import time. Rebinding
+    `base.CONSUMERS` only changes what `base.CONSUMERS` resolves to -- it
+    does not touch `drain_mod`'s separate binding, which is the one
+    `cmd_drain`'s `_consume_item` loop (`for name, module in
+    CONSUMERS.items()`) actually reads. Patching `base.CONSUMERS` here would
+    silently leave the real consumer in drain's loop.
+    """
     _FakeConsumer.calls = []
-    monkeypatch.setitem(CONSUMERS, "fake", _FakeConsumer)
+    monkeypatch.setattr(drain_mod, "CONSUMERS", {"fake": _FakeConsumer})
     yield _FakeConsumer
 
 
