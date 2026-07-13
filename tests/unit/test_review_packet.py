@@ -102,6 +102,28 @@ def test_redact_masks_secret_shapes():
     assert "MIIE" not in out
     assert "normal = compute(1, 2)" in out          # non-secrets untouched
     assert "[REDACTED]" in out
+    assert 'api_key = "[REDACTED]"' in out          # closing quote stays balanced
+
+
+def test_packet_rename_out_of_ignored_dir_no_leak(tmp_path):
+    # FIX 3 regression: a file renamed OUT of an ignored dir (graph-out/)
+    # into a tracked path must not leak the ignored dir's name into the
+    # packet via a git "rename from graph-out/..." diff header. build_packet
+    # scopes diff_text with a single-endpoint (new-path-only) pathspec,
+    # which makes git render the rename as a full-file add instead of a
+    # tracked rename -- so no "graph-out" text ever reaches pkt.text.
+    r = _repo(tmp_path)
+    _commit(r, "src/a.py", "x = 1\n", "c1")
+    (r / "graph-out").mkdir()
+    (r / "graph-out" / "graph.json").write_text("{}", encoding="utf-8")
+    _git(r, "add", "graph-out/graph.json")
+    _git(r, "commit", "-m", "add graph-out")
+    base = _sha(r)
+    _git(r, "mv", "graph-out/graph.json", "notes.json")
+    _git(r, "commit", "-m", "rename out of graph-out")
+    pkt = review.build_packet(r, _cfg(), _item(base, _sha(r)))
+    assert pkt is not None
+    assert "graph-out" not in pkt.text
 
 
 def test_dependents_extracted_from_triage(tmp_path):

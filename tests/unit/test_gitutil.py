@@ -98,3 +98,25 @@ def test_diff_text_decodes_utf8_not_locale_codec(tmp_path):
     assert "café" in text
     assert "Привет" in text
     assert "Ã©" not in text  # mojibake marker: utf-8 "é" mis-decoded as cp1252
+
+
+def test_diff_text_paths_scoping(tmp_path):
+    # FIX 3 regression: the `paths=` pathspec passed to diff_text scopes the
+    # diff to exactly those files -- an unscoped diff of two changed files
+    # shows both; scoped to one path shows only that file (no other file's
+    # header/hunk text leaks in).
+    r = _repo(tmp_path)
+    _commit(r, "a.py", "x = 1\n", "first")
+    h1 = gitutil.rev_sha(r, "HEAD")
+    (r / "a.py").write_text("x = 2\n", encoding="utf-8")
+    (r / "b.py").write_text("y = 1\n", encoding="utf-8")
+    _git(r, "add", "a.py", "b.py")
+    _git(r, "commit", "-m", "second")
+    h2 = gitutil.rev_sha(r, "HEAD")
+
+    unscoped = gitutil.diff_text(r, h1, h2)
+    assert "a.py" in unscoped and "b.py" in unscoped
+
+    scoped = gitutil.diff_text(r, h1, h2, paths=["a.py"])
+    assert "a.py" in scoped
+    assert "b.py" not in scoped

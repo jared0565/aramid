@@ -25,20 +25,38 @@ _REDACT_PATTERNS = [
     re.compile(r"xox[baprs]-[A-Za-z0-9-]{10,}"),
     re.compile(r"sk-[A-Za-z0-9_\-]{20,}"),
     re.compile(r"""(?i)\b(api[_-]?key|secret|token|passw(?:or)?d)\b(\s*[:=]\s*["']?)"""
-               r"""[A-Za-z0-9+/_\-]{16,}["']?"""),
+               r"""[A-Za-z0-9+/_\-]{16,}(["']?)"""),
 ]
 
 
 def redact_packet(text: str) -> str:
     for rx in _REDACT_PATTERNS[:-1]:
         text = rx.sub("[REDACTED]", text)
-    # keyed-assignment pattern keeps the key name, masks only the value
-    text = _REDACT_PATTERNS[-1].sub(r"\1\2[REDACTED]", text)
+    # keyed-assignment pattern keeps the key name, masks only the value.
+    # \3 replays the trailing quote consumed by the match (if any) so a
+    # quoted secret like `api_key = "abc..."` redacts to `api_key = "[REDACTED]"`
+    # instead of leaving a dangling unbalanced quote.
+    text = _REDACT_PATTERNS[-1].sub(r"\1\2[REDACTED]\3", text)
     return text
 
 
 @dataclass
 class Packet:
+    """text: the assembled, redacted packet body sent to the reviewer.
+
+    files: the changed files in range (post filter_paths) -- a SUPERSET of
+    what survived byte-cap truncation into `text`. Some of these files' body
+    sections may have been dropped when the packet hit `packet_max_bytes`.
+    Consumers must treat the evidence-verbatim check against `packet.text`
+    as the binding gate; `files` is a cheap pre-filter only, never itself
+    sufficient to accept a finding. Rationale: a finding naming a file whose
+    content didn't survive truncation cannot produce a verbatim quote from
+    `packet.text`, so the verify layer (Task 10) rejects it regardless --
+    superset semantics is safe here and avoids did-the-hunk-survive
+    bookkeeping in this module.
+
+    truncated: True if any content was dropped to stay under the byte cap.
+    """
     text: str
     files: list[str]
     truncated: bool
@@ -59,6 +77,25 @@ def build_packet(root: Path, cfg, item) -> Packet | None:
     # paths=files (post filter_paths): defense-in-depth (spec 8b) -- an
     # unscoped base..head diff would include graphite-artifact hunks even
     # though `files` already excludes them from the packet's file list.
+    #
+    # `files` comes from diff_paths' --name-only output, which for a rename
+    # reports only the new (head-side) path -- a single-endpoint pathspec.
+    # Passing just that to `git diff base..head -- <path>` makes git render
+    # a rename as a full-file addition at the new path (confirmed: no
+    # "rename from"/"rename to" header, no old-path text at all) because the
+    # old path isn't in the pathspec for git to match the rename against.
+    # The alternative -- a two-endpoint pathspec including both the old and
+    # new paths -- would let git detect the rename and emit a proper
+    # "rename from <old> / rename to <new>" diff. But for a file renamed OUT
+    # of an ignored dir (e.g. `graph-out/graph.json` -> `notes.json`), that
+    # rename header would put the literal string "graph-out/graph.json"
+    # into the packet text even though `graph-out/` is filtered out of
+    # `files` -- a spec 8b violation via the diff body, same class of bug as
+    # the unscoped-diff issue above. Single-endpoint (current-side-only)
+    # pathspec is therefore the deliberate, safer choice: it trades rename
+    # readability (a rename shows as a full-file add instead of a tracked
+    # rename) for the guarantee that an ignored path string can never
+    # appear in outbound packet text via a rename header.
     diff = gitutil.diff_text(root, item.base, item.head, max_bytes=max_bytes, paths=files)
     if len(diff.encode("utf-8", "replace")) >= max_bytes:
         truncated = True
@@ -73,7 +110,6 @@ def build_packet(root: Path, cfg, item) -> Packet | None:
     parts = [*header, _BEGIN, "--- DIFF ---", diff]
     used = len("\n".join(parts).encode("utf-8", "replace"))
 
-    included: list[str] = []
     for f in files:
         try:
             content = gitutil.read_for_fingerprint(root, item.head, f)
@@ -88,7 +124,6 @@ def build_packet(root: Path, cfg, item) -> Packet | None:
             continue
         parts.append(section)
         used += section_bytes
-        included.append(f)
 
     if deps:
         parts.append("--- DEPENDENTS (modules importing the changed files) ---")
