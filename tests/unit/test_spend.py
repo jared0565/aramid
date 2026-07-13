@@ -38,3 +38,18 @@ def test_month_spend_corrupt_line_returns_none(tmp_path):
     # Fail-closed contract (spec section 6): unreadable spend -> None -> the
     # openrouter provider refuses paid calls. NEVER guess a partial sum.
     assert spend.month_spend_usd("openrouter", "2026-07-13T12:00:00+00:00") is None
+
+
+@pytest.mark.parametrize("bad_line", [
+    "null",  # bare scalar -> AttributeError on rec.get
+    "5",  # bare number
+    "[1, 2, 3]",  # array, not object
+    '{"at": 123, "provider": "openrouter", "cost_usd": 1.0}',  # non-string at -> TypeError
+    '{"at": "2026-07-13T12:00:00+00:00", "provider": "openrouter", "cost_usd": {}}',  # non-numeric cost
+])
+def test_month_spend_misshapen_json_line_returns_none(tmp_path, bad_line):
+    # JSON-valid but misshapen lines must ALSO fail closed (return None),
+    # never crash: the except must swallow AttributeError/TypeError too.
+    p = tmp_path / "llm_spend.jsonl"
+    p.write_text(bad_line + "\n", encoding="utf-8")
+    assert spend.month_spend_usd("openrouter", "2026-07-13T12:00:00+00:00") is None

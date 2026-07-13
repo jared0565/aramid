@@ -42,6 +42,10 @@ def month_spend_usd(provider: str, now_iso: str) -> float | None:
             at = datetime.fromisoformat(rec["at"])
             if (at.year, at.month) == (now.year, now.month):
                 total += float(rec.get("cost_usd", 0.0))
-    except (ValueError, KeyError, OSError):
+    except Exception:
+        # The one fail-closed money path (spec section 6): ANY inability to
+        # compute the sum -- malformed JSON, JSON-valid-but-misshapen lines
+        # (bare scalars, wrong field types), I/O errors -- must return None.
+        # Never crash, never guess a partial sum.
         return None
     return total
