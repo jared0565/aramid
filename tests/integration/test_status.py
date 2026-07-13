@@ -6,6 +6,7 @@ from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
 from aramid import config as config_mod
+from aramid import registry
 from aramid.commands.status import cmd_status
 from aramid.ledger import Ledger
 from aramid.models import Event, EventType, Finding, Gate, Severity, Verdict
@@ -31,6 +32,12 @@ def _no_user_config(tmp_path, monkeypatch):
     monkeypatch.setattr(config_mod, "_user_config_path", lambda: tmp_path / "no-user-config.toml")
 
 
+def _no_registry(tmp_path, monkeypatch):
+    """Phase 2a: cmd_status now materializes registry membership -- never let
+    tests touch the real ~/.aramid/repos.toml on the machine running them."""
+    monkeypatch.setattr(registry, "registry_path", lambda: tmp_path / "no-registry.toml")
+
+
 def _f(fid, tool="semgrep", rule="owasp-top-ten.sqli", verdict=Verdict.WARN, file="a.py",
        historical=False):
     return Finding(fid, tool, rule, "ERROR", Severity.HIGH, verdict, file, 1, "m", "e",
@@ -49,6 +56,7 @@ def _write_toml(root, armed, bake_started):
 def test_status_shows_bake_day_and_semgrep_rule_hit_counts(tmp_path, monkeypatch, capsys):
     root = _repo(tmp_path)
     _no_user_config(tmp_path, monkeypatch)
+    _no_registry(tmp_path, monkeypatch)
     started = (date.today() - timedelta(days=5)).isoformat()
     _write_toml(root, armed=False, bake_started=started)
 
@@ -72,6 +80,7 @@ def test_status_shows_bake_day_and_semgrep_rule_hit_counts(tmp_path, monkeypatch
 def test_status_omits_bake_lines_when_armed(tmp_path, monkeypatch, capsys):
     root = _repo(tmp_path)
     _no_user_config(tmp_path, monkeypatch)
+    _no_registry(tmp_path, monkeypatch)
     _write_toml(root, armed=True, bake_started=date.today().isoformat())
 
     ledger = Ledger(root / ".aramid" / "ledger.db")
@@ -91,6 +100,7 @@ def test_status_omits_bake_lines_when_armed(tmp_path, monkeypatch, capsys):
 def test_status_reports_open_finding_count(tmp_path, monkeypatch, capsys):
     root = _repo(tmp_path)
     _no_user_config(tmp_path, monkeypatch)
+    _no_registry(tmp_path, monkeypatch)
     _write_toml(root, armed=True, bake_started=None)
 
     ledger = Ledger(root / ".aramid" / "ledger.db")
@@ -110,6 +120,7 @@ def test_status_reports_open_finding_count(tmp_path, monkeypatch, capsys):
 def test_status_reports_new_since_baseline(tmp_path, monkeypatch, capsys):
     root = _repo(tmp_path)
     _no_user_config(tmp_path, monkeypatch)
+    _no_registry(tmp_path, monkeypatch)
     _write_toml(root, armed=True, bake_started=None)
 
     ledger = Ledger(root / ".aramid" / "ledger.db")
@@ -130,6 +141,7 @@ def test_status_reports_new_since_baseline(tmp_path, monkeypatch, capsys):
 def test_status_counts_findings_older_than_30_days_as_aging(tmp_path, monkeypatch, capsys):
     root = _repo(tmp_path)
     _no_user_config(tmp_path, monkeypatch)
+    _no_registry(tmp_path, monkeypatch)
     _write_toml(root, armed=True, bake_started=None)
 
     old_at = (datetime.now(timezone.utc) - timedelta(days=45)).isoformat()
@@ -154,6 +166,7 @@ def test_status_counts_findings_older_than_30_days_as_aging(tmp_path, monkeypatc
 def test_status_reports_per_tool_skip_streak(tmp_path, monkeypatch, capsys):
     root = _repo(tmp_path)
     _no_user_config(tmp_path, monkeypatch)
+    _no_registry(tmp_path, monkeypatch)
     _write_toml(root, armed=True, bake_started=None)
 
     ledger = Ledger(root / ".aramid" / "ledger.db")
@@ -180,6 +193,7 @@ def test_status_reports_per_tool_skip_streak(tmp_path, monkeypatch, capsys):
 def test_status_lists_unrotated_historical_secrets(tmp_path, monkeypatch, capsys):
     root = _repo(tmp_path)
     _no_user_config(tmp_path, monkeypatch)
+    _no_registry(tmp_path, monkeypatch)
     _write_toml(root, armed=True, bake_started=None)
 
     ledger = Ledger(root / ".aramid" / "ledger.db")
@@ -199,6 +213,7 @@ def test_status_lists_unrotated_historical_secrets(tmp_path, monkeypatch, capsys
 def test_status_rotated_secret_not_listed_as_unrotated(tmp_path, monkeypatch, capsys):
     root = _repo(tmp_path)
     _no_user_config(tmp_path, monkeypatch)
+    _no_registry(tmp_path, monkeypatch)
     _write_toml(root, armed=True, bake_started=None)
 
     ledger = Ledger(root / ".aramid" / "ledger.db")
@@ -214,3 +229,36 @@ def test_status_rotated_secret_not_listed_as_unrotated(tmp_path, monkeypatch, ca
 
     assert rc == 0
     assert "hist1" not in out
+
+
+# ------------------------------------------------ queue / drain / registry --
+
+def test_status_shows_queue_and_drain_sections(tmp_path, capsys, monkeypatch):
+    from aramid import queue, registry
+    from aramid.models import Event, EventType
+    monkeypatch.setattr(registry, "registry_path", lambda: tmp_path / "repos.toml")
+    root = tmp_path / "repo"
+    (root / ".aramid").mkdir(parents=True)  # cmd_status needs only config+ledger, no git
+    led = Ledger(root / ".aramid" / "ledger.db")
+    queue.enqueue(led, "2026-07-13T00:00:00+00:00", "a", "b", 55, ["security-path: auth.py"])
+    led.append(Event(EventType.CONSUMER_RUN_FINISHED, "r1", "2026-07-13T01:00:00+00:00",
+                     payload={"consumer": "regression_pack", "finding_count": 2}))
+    led.close()
+    assert cmd_status(root) == 0
+    out = capsys.readouterr().out
+    assert "queue: 1 queued (score 55" in out
+    assert "security-path: auth.py" in out
+    assert "last drain: 2026-07-13T01:00:00+00:00 (regression_pack, 2 finding(s))" in out
+    assert "registry: NOT registered" in out
+
+
+def test_status_empty_queue_and_never_drained(tmp_path, capsys, monkeypatch):
+    from aramid import registry
+    monkeypatch.setattr(registry, "registry_path", lambda: tmp_path / "repos.toml")
+    root = tmp_path / "repo"
+    (root / ".aramid").mkdir(parents=True)
+    Ledger(root / ".aramid" / "ledger.db").close()  # empty ledger
+    assert cmd_status(root) == 0
+    out = capsys.readouterr().out
+    assert "queue: empty" in out
+    assert "last drain: never" in out
