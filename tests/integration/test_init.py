@@ -93,6 +93,19 @@ def test_init_arms_a_fresh_repo(tmp_path, monkeypatch):
         ledger.close()
 
 
+def test_init_registers_repo_in_central_registry(tmp_path, monkeypatch):
+    monkeypatch.setattr(doctor, "probe_toolchain", _fake_present)
+    r = _repo(tmp_path)
+
+    from aramid import registry
+    monkeypatch.setattr(registry, "registry_path", lambda: tmp_path / "central" / "repos.toml")
+
+    rc = init.cmd_init(r)
+
+    assert rc == 0
+    assert any(Path(e["path"]).resolve() == r.resolve() for e in registry.load_registry())
+
+
 def test_init_refuses_non_repo(tmp_path, monkeypatch):
     monkeypatch.setattr(doctor, "probe_toolchain", _fake_present)
     not_repo = tmp_path / "not-a-repo"
@@ -277,3 +290,31 @@ def test_scan_history_drops_findings_under_ignored_graphite_paths(tmp_path, monk
             historical_events
     finally:
         ledger.close()
+
+
+# --- Task 7 follow-up: _validate_hook_shim must also cover the post-commit --
+# triage shim (`hooks.TRIAGE_HOOK`), not just `hooks.GATES` -----------------
+#
+# Before this fix, `_validate_hook_shim` looped only `for gate in hooks.GATES`
+# (pre-commit, pre-push) -- so a post-commit shim that silently failed to
+# write would still let `init` print "hooks armed: yes". This test drives
+# `_validate_hook_shim` directly (the `cmd_init` return code doesn't depend
+# on `shim_ok` at all -- it only feeds the printed summary) so it actually
+# exercises the change: run a real `cmd_init`, confirm the post-commit shim
+# it wrote exists and carries aramid's marker, then delete it and confirm
+# `_validate_hook_shim` now reports the repo as NOT fully armed.
+
+def test_validate_hook_shim_detects_missing_post_commit_triage_shim(tmp_path, monkeypatch):
+    monkeypatch.setattr(doctor, "probe_toolchain", _fake_present)
+    r = _repo(tmp_path)
+
+    assert init.cmd_init(r) == 0
+
+    post_commit = hooks.hooks_dir(r) / hooks.TRIAGE_HOOK
+    assert post_commit.exists()
+    assert hooks.MARKER_START.encode() in post_commit.read_bytes()
+    assert init._validate_hook_shim(r) is True
+
+    post_commit.unlink()
+
+    assert init._validate_hook_shim(r) is False
