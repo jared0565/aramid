@@ -59,18 +59,20 @@ def review(prompt: str, model: str, timeout_s: float, *, cfg) -> ProviderRespons
     except (OSError, ValueError):
         return ProviderResponse(text="", error=base.ERR_ERROR)
 
-    # Hardening: parse must never raise. Guard all dict accesses and type checks.
+    # Hardening: any unexpected response shape becomes ERR_MALFORMED instead
+    # of raising out of review(). The choices chain uses STRICT access on
+    # purpose: a body with no choices at all -- e.g. {"error": {"code": 402}}
+    # delivered over HTTP 200 -- must raise into the except and surface as
+    # ERR_MALFORMED, never masquerade as a clean empty review on a PAID call.
     try:
-        # Ensure data is a dict
         if not isinstance(data, dict):
             return ProviderResponse(text="", error=base.ERR_MALFORMED)
 
-        # Extract text, ensuring it's a string
-        text = data.get("choices", [{}])[0].get("message", {}).get("content", "")
+        text = data["choices"][0]["message"]["content"]
         if not isinstance(text, str):
             return ProviderResponse(text="", error=base.ERR_MALFORMED)
 
-        # Extract usage, guarding against None or non-dict types
+        # usage may legitimately be absent or null; treat as empty
         usage = data.get("usage", {})
         usage = usage if isinstance(usage, dict) else {}
 
@@ -78,7 +80,7 @@ def review(prompt: str, model: str, timeout_s: float, *, cfg) -> ProviderRespons
                                 tokens_in=int(usage.get("prompt_tokens", 0)),
                                 tokens_out=int(usage.get("completion_tokens", 0)),
                                 cost_usd=float(usage.get("cost", 0.0)))
-    except (KeyError, IndexError, TypeError, AttributeError):
+    except (ValueError, KeyError, IndexError, TypeError, AttributeError):
         return ProviderResponse(text="", error=base.ERR_MALFORMED)
 
     try:

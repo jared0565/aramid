@@ -168,3 +168,38 @@ def test_review_never_raises(monkeypatch):
     resp = openrouter.review("P", "m", 240.0, cfg=_cfg())
     assert resp.error == base.ERR_ERROR
     assert resp.text == ""
+
+
+def test_review_non_numeric_tokens_is_malformed(monkeypatch):
+    """usage with non-numeric token strings: int('abc') must not raise out
+    of review() -- the widened except tuple (ValueError) maps it to
+    ERR_MALFORMED."""
+    response = json.dumps({
+        "choices": [{"message": {"content": "text"}}],
+        "usage": {"prompt_tokens": "abc", "completion_tokens": 5, "cost": 0.001},
+    })
+
+    def fake_urlopen(req, timeout):
+        return io.BytesIO(response.encode("utf-8"))
+    monkeypatch.setattr(openrouter.urllib.request, "urlopen", fake_urlopen)
+
+    resp = openrouter.review("P", "m", 240.0, cfg=_cfg())
+    assert isinstance(resp, base.ProviderResponse)
+    assert resp.error == base.ERR_MALFORMED
+    assert resp.text == ""
+
+
+def test_review_error_body_without_choices_is_malformed(monkeypatch):
+    """An API error body over HTTP 200 (no choices key at all) must surface
+    as ERR_MALFORMED -- never a silent empty success on a PAID call."""
+    response = json.dumps({
+        "error": {"message": "insufficient credits", "code": 402},
+    })
+
+    def fake_urlopen(req, timeout):
+        return io.BytesIO(response.encode("utf-8"))
+    monkeypatch.setattr(openrouter.urllib.request, "urlopen", fake_urlopen)
+
+    resp = openrouter.review("P", "m", 240.0, cfg=_cfg())
+    assert resp.error == base.ERR_MALFORMED
+    assert resp.text == ""
