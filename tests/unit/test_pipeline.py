@@ -225,6 +225,81 @@ def test_raw_secret_never_lands_in_scrubbed_log(tmp_path, monkeypatch):
     ledger.close()
 
 
+# ---------------------------------------------- (f0) regression pack -------
+
+def test_run_gate_sets_extra_semgrep_configs_when_pack_present(tmp_path, monkeypatch):
+    root = _repo(tmp_path)
+    (root / ".aramid-rules").mkdir()
+    (root / ".aramid-rules" / "regression.yml").write_text("rules:\n", encoding="utf-8")
+    cfg = _cfg(root, tmp_path, monkeypatch)
+    ledger = _ledger(tmp_path)
+
+    captured_ctx: list = []
+
+    def run(ctx):
+        captured_ctx.append(ctx)
+        return RunnerResult("fake", ToolState.OK)
+
+    monkeypatch.setitem(pipeline.RUNNERS, "fake",
+                         SimpleNamespace(run=run, parse=lambda r, c: []))
+    monkeypatch.setitem(pipeline.GATE_RUNNER_KEYS, Gate.PRE_COMMIT, ["fake"])
+
+    pipeline.run_gate(root, Gate.PRE_COMMIT, "staged", cfg, ledger, run_id="run-pack")
+
+    assert captured_ctx[0].extra_semgrep_configs == (
+        str(root / ".aramid-rules" / "regression.yml"),)
+    ledger.close()
+
+
+def test_run_gate_no_extra_semgrep_configs_when_pack_absent(tmp_path, monkeypatch):
+    root = _repo(tmp_path)  # no .aramid-rules/regression.yml
+    cfg = _cfg(root, tmp_path, monkeypatch)
+    ledger = _ledger(tmp_path)
+
+    captured_ctx: list = []
+
+    def run(ctx):
+        captured_ctx.append(ctx)
+        return RunnerResult("fake", ToolState.OK)
+
+    monkeypatch.setitem(pipeline.RUNNERS, "fake",
+                         SimpleNamespace(run=run, parse=lambda r, c: []))
+    monkeypatch.setitem(pipeline.GATE_RUNNER_KEYS, Gate.PRE_COMMIT, ["fake"])
+
+    pipeline.run_gate(root, Gate.PRE_COMMIT, "staged", cfg, ledger, run_id="run-pack-absent")
+
+    assert captured_ctx[0].extra_semgrep_configs == ()
+    ledger.close()
+
+
+def test_run_gate_no_extra_semgrep_configs_when_pack_disabled(tmp_path, monkeypatch):
+    """run_gate gates pack replay on BOTH conditions: the file existing AND
+    [pack].enabled -- the pack file is PRESENT here but aramid.toml disables
+    the pack, so no extra --config may reach the semgrep runner."""
+    root = _repo(tmp_path)
+    (root / ".aramid-rules").mkdir()
+    (root / ".aramid-rules" / "regression.yml").write_text("rules:\n", encoding="utf-8")
+    (root / "aramid.toml").write_text("[pack]\nenabled = false\n", encoding="utf-8")
+    cfg = _cfg(root, tmp_path, monkeypatch)
+    ledger = _ledger(tmp_path)
+
+    captured_ctx: list = []
+
+    def run(ctx):
+        captured_ctx.append(ctx)
+        return RunnerResult("fake", ToolState.OK)
+
+    monkeypatch.setitem(pipeline.RUNNERS, "fake",
+                         SimpleNamespace(run=run, parse=lambda r, c: []))
+    monkeypatch.setitem(pipeline.GATE_RUNNER_KEYS, Gate.PRE_COMMIT, ["fake"])
+
+    pipeline.run_gate(root, Gate.PRE_COMMIT, "staged", cfg, ledger, run_id="run-pack-disabled")
+
+    assert cfg.pack.get("enabled") is False  # sanity: the toml layered in
+    assert captured_ctx[0].extra_semgrep_configs == ()
+    ledger.close()
+
+
 # ------------------------------------------------------ (f) ratchet --------
 
 def test_new_warn_finding_escalates_to_block_at_prepush(tmp_path, monkeypatch):

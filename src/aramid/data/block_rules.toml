@@ -11,8 +11,16 @@
 block = ["S102", "S105", "S106", "S107", "S608", "S301", "S302"]
 
 [semgrep]
-# fnmatch patterns against semgrep's check_id.
-block = ["owasp-top-ten.*", "*sqli*", "*deserialization*", "*command-injection*"]
+# fnmatch patterns against semgrep's check_id. "aramid-regression.block.*"
+# matches the regression pack's block-tier rules (Task 15, spec §5) --
+# these are gated by [pack].pack_block_armed (default true, defaults.toml),
+# NOT by semgrep_block_armed: policy.classify() short-circuits on the
+# aramid-regression.block. prefix (see policy.py's _PACK_BLOCK_PREFIX)
+# before ever consulting this list, so this entry is not what decides the
+# verdict -- it is kept for discoverability and for the Task 16
+# regression-pack drain consumer.
+block = ["owasp-top-ten.*", "*sqli*", "*deserialization*", "*command-injection*",
+         "aramid-regression.block.*"]
 
 [deps]
 # CVE severity (OSV/npm-family vocabulary) at or above this tier blocks;

@@ -179,3 +179,26 @@ def test_render_repo_stub_records_extra_ignore_paths_when_given():
                                     extra_ignore_paths=["vendor/sub/"])
     assert "ignore_paths" in text
     assert "vendor/sub/" in text
+
+
+# --- (e) Phase 2a: triage, drain, pack config sections -----
+
+def test_phase2a_defaults_present(tmp_path, monkeypatch):
+    monkeypatch.setattr(config, "_user_config_path", lambda: tmp_path / "nouser.toml")
+    cfg = config.load_config(tmp_path)
+    assert cfg.triage["min_score"] == 40
+    assert cfg.triage["extra_security_paths"] == []
+    assert cfg.drain["interval_hours"] == 4
+    assert cfg.drain["max_items_per_drain"] == 10
+    assert cfg.drain["item_expiry_days"] == 30
+    assert cfg.drain["wall_clock_budget_s"] == 600
+    assert cfg.pack["enabled"] is True
+
+
+def test_repo_config_overrides_triage(tmp_path, monkeypatch):
+    monkeypatch.setattr(config, "_user_config_path", lambda: tmp_path / "nouser.toml")
+    (tmp_path / "aramid.toml").write_text(
+        'schema_version = 1\n[triage]\nmin_score = 70\n', encoding="utf-8")
+    cfg = config.load_config(tmp_path)
+    assert cfg.triage["min_score"] == 70
+    assert cfg.triage["extra_security_paths"] == []  # deep merge keeps sibling default

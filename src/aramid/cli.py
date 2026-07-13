@@ -19,6 +19,7 @@ from aramid import __version__
 from aramid.commands.arm import cmd_arm
 from aramid.commands.check import cmd_check
 from aramid.commands.doctor import cmd_doctor
+from aramid.commands.drain import cmd_drain
 from aramid.commands.init import cmd_init
 from aramid.commands.ledger_cmd import (
     cmd_ledger_filter,
@@ -27,7 +28,10 @@ from aramid.commands.ledger_cmd import (
     cmd_ledger_show,
 )
 from aramid.commands.override import cmd_override
+from aramid.commands.pack_cmd import cmd_pack_add, cmd_pack_compile, cmd_pack_list
+from aramid.commands.schedule import cmd_schedule
 from aramid.commands.status import cmd_status
+from aramid.commands.triage_cmd import cmd_triage
 from aramid.commands.uninstall import cmd_uninstall
 from aramid.commands.update_rules import cmd_update_rules
 from aramid.models import Gate
@@ -58,6 +62,16 @@ def build_parser() -> argparse.ArgumentParser:
 
     sub.add_parser("status", help="report ledger/config state")
 
+    p_triage = sub.add_parser("triage", help="score a commit (or range) and enqueue if risky")
+    p_triage.add_argument("rev", nargs="?", default="HEAD")
+
+    p_drain = sub.add_parser("drain", help="sweep registered repos, pop queued items, consume")
+    drain_scope = p_drain.add_mutually_exclusive_group()
+    drain_scope.add_argument("--all", action="store_true", help="drain every registered repo")
+    drain_scope.add_argument("--repo", default=None, help="drain a single repo (default: .)")
+    p_drain.add_argument("--dry-run", action="store_true")
+    p_drain.add_argument("--max-items", type=int, default=None)
+
     p_ledger = sub.add_parser("ledger", help="query the findings ledger")
     ledger_sub = p_ledger.add_subparsers(dest="ledger_command")
     ledger_sub.add_parser("list")
@@ -76,11 +90,21 @@ def build_parser() -> argparse.ArgumentParser:
     p_override.add_argument("id")
     p_override.add_argument("--reason", required=True)
 
+    p_pack = sub.add_parser("pack", help="manage the regression attack pack")
+    pack_sub = p_pack.add_subparsers(dest="pack_command")
+    pack_sub.add_parser("list")
+    p_pack_add = pack_sub.add_parser("add")
+    p_pack_add.add_argument("id")
+    pack_sub.add_parser("compile")
+
     sub.add_parser("arm", help="end the WARN-only semgrep bake")
     sub.add_parser("update-rules", help="refresh the vendored semgrep ruleset")
 
     p_uninstall = sub.add_parser("uninstall", help="reverse init")
     p_uninstall.add_argument("path", nargs="?", default=".")
+
+    p_schedule = sub.add_parser("schedule", help="register/remove/query the Windows Task Scheduler drain job")
+    p_schedule.add_argument("action", choices=["install", "remove", "status"])
 
     return p
 
@@ -128,6 +152,13 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "status":
         return cmd_status(root)
 
+    if args.command == "triage":
+        return cmd_triage(root, args.rev)
+
+    if args.command == "drain":
+        targets = [] if args.all else ([args.repo] if args.repo else [str(root)])
+        return cmd_drain(targets, dry_run=args.dry_run, max_items=args.max_items)
+
     if args.command == "ledger":
         if args.ledger_command == "list":
             return cmd_ledger_list(root)
@@ -145,6 +176,17 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "override":
         return cmd_override(root, args.id, args.reason)
 
+    if args.command == "pack":
+        if args.pack_command == "list":
+            return cmd_pack_list(root)
+        if args.pack_command == "add":
+            return cmd_pack_add(root, args.id)
+        if args.pack_command == "compile":
+            return cmd_pack_compile(root)
+        print("aramid: pack: a subcommand is required (list|add|compile)",
+              file=sys.stderr)
+        return 3
+
     if args.command == "arm":
         return cmd_arm(root)
 
@@ -153,6 +195,9 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.command == "uninstall":
         return cmd_uninstall(Path(args.path))
+
+    if args.command == "schedule":
+        return cmd_schedule(root, args.action)
 
     print(f"aramid: unknown command: {args.command}", file=sys.stderr)
     return 3

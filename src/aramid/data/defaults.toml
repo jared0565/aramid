@@ -18,3 +18,22 @@ ignore_paths = [
 # Wall-clock budget in seconds, per gate (design doc section 3).
 pre_commit = 5
 pre_push = 300
+
+# --- Phase 2a (spec sections 3-4): zero-token triage, drain scheduling, pack ---
+[triage]
+min_score = 40
+extra_security_paths = []
+
+[drain]
+interval_hours = 4
+max_items_per_drain = 10
+item_expiry_days = 30
+wall_clock_budget_s = 600
+
+[pack]
+enabled = true
+# Block-tier regression-pack rules (aramid-regression.block.*) enforce
+# immediately when true (the default) -- their OWN arming flag, deliberately
+# separate from the OWASP bake's `semgrep_block_armed` (see policy.py's
+# _PACK_BLOCK_PREFIX). Set false to demote noisy pack rules to WARN.
+pack_block_armed = true

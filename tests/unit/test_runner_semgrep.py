@@ -131,6 +131,21 @@ def test_run_unparseable_output_is_crashed(tmp_path, monkeypatch):
     assert result.state is ToolState.CRASHED
 
 
+def test_argv_includes_extra_configs(tmp_path):
+    ctx = RunContext(root=tmp_path, files=["a.py"],
+                     extra_semgrep_configs=(str(tmp_path / "regression.yml"),))
+    argv = semgrep._build_argv(ctx)
+    assert argv.count("--config") == 2
+    assert str(tmp_path / "regression.yml") in argv
+
+
+def test_canonical_rule_id_strips_prefix_for_pack_rules():
+    live = "repo.aramid-rules.regression.aramid-regression.block.deadbeef"
+    assert semgrep._canonical_rule_id(live) == "aramid-regression.block.deadbeef"
+    # owasp behavior unchanged
+    assert semgrep._canonical_rule_id("x.y.owasp-top-ten.a01") == "owasp-top-ten.a01"
+
+
 def test_run_empty_output_with_error_returncode_is_crashed(tmp_path, monkeypatch):
     """CRITICAL: empty stdout parses fine as '{}' -- without a returncode
     check this would silently read as a clean 'zero findings' run even

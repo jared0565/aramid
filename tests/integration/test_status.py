@@ -5,10 +5,36 @@ import subprocess
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
+import pytest
+
 from aramid import config as config_mod
+from aramid.commands import schedule as schedule_mod
 from aramid.commands.status import cmd_status
 from aramid.ledger import Ledger
 from aramid.models import Event, EventType, Finding, Gate, Severity, Verdict
+
+
+@pytest.fixture(autouse=True)
+def _no_real_schtasks(monkeypatch):
+    """cmd_status's `scheduled drain` line queries the host Task Scheduler via
+    `schtasks /Query`. Keep the suite off the real scheduler (codebase
+    convention: mock `schedule.subprocess.run`, cf. tests/unit/test_schedule.py).
+    status.py's `_scheduled_drain_line` uses a bare `subprocess.run`, which is
+    the very same stdlib module object as `schedule.subprocess` -- so patching
+    `run` here intercepts it too. We branch on argv so only schtasks is faked;
+    everything else (notably `_git`) still runs for real."""
+    real_run = subprocess.run
+
+    def fake_run(argv, *a, **k):
+        if argv and argv[0] == "schtasks":
+            class _R:
+                returncode = 1  # -> status prints "scheduled drain: not installed"
+                stdout = ""
+                stderr = ""
+            return _R()
+        return real_run(argv, *a, **k)
+
+    monkeypatch.setattr(schedule_mod.subprocess, "run", fake_run)
 
 
 def _git(root, *a):
@@ -214,3 +240,39 @@ def test_status_rotated_secret_not_listed_as_unrotated(tmp_path, monkeypatch, ca
 
     assert rc == 0
     assert "hist1" not in out
+
+
+# ------------------------------------------------ queue / drain / registry --
+
+def test_status_shows_queue_and_drain_sections(tmp_path, capsys, monkeypatch):
+    from aramid import queue, registry
+    from aramid.models import Event, EventType
+    monkeypatch.setattr(registry, "registry_path", lambda: tmp_path / "repos.toml")
+    root = tmp_path / "repo"
+    (root / ".aramid").mkdir(parents=True)  # cmd_status needs only config+ledger, no git
+    led = Ledger(root / ".aramid" / "ledger.db")
+    queue.enqueue(led, "2026-07-13T00:00:00+00:00", "a", "b", 55, ["security-path: auth.py"])
+    led.append(Event(EventType.CONSUMER_RUN_FINISHED, "r1", "2026-07-13T01:00:00+00:00",
+                     payload={"consumer": "regression_pack", "finding_count": 2}))
+    led.close()
+    assert cmd_status(root) == 0
+    out = capsys.readouterr().out
+    assert "queue: 1 queued (score 55" in out
+    assert "security-path: auth.py" in out
+    assert "last drain: 2026-07-13T01:00:00+00:00 (regression_pack, 2 finding(s))" in out
+    assert "registry: NOT registered" in out
+
+
+def test_status_empty_queue_and_never_drained(tmp_path, capsys, monkeypatch):
+    from aramid import registry
+    monkeypatch.setattr(registry, "registry_path", lambda: tmp_path / "repos.toml")
+    root = tmp_path / "repo"
+    (root / ".aramid").mkdir(parents=True)
+    Ledger(root / ".aramid" / "ledger.db").close()  # empty ledger
+    assert cmd_status(root) == 0
+    out = capsys.readouterr().out
+    assert "queue: empty" in out
+    assert "last drain: never" in out
+    # Driven by the autouse _no_real_schtasks mock (returncode 1), not the host
+    # scheduler -- confirms status.py's schtasks query is intercepted.
+    assert "scheduled drain: not installed" in out

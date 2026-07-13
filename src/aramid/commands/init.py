@@ -196,8 +196,8 @@ def _validate_hook_shim(root: Path) -> bool:
     the wrong hooksPath", which is what could actually go wrong here."""
     hdir = hooks.hooks_dir(root)
     ok = True
-    for gate in hooks.GATES:
-        shim = hdir / gate.value
+    for hook in [g.value for g in hooks.GATES] + [hooks.TRIAGE_HOOK]:
+        shim = hdir / hook
         if not shim.exists() or hooks.MARKER_START.encode() not in shim.read_bytes():
             ok = False
             print(f"aramid: init: WARNING -- {shim} missing or not aramid-managed "
@@ -253,6 +253,9 @@ def _init_one(target: Path) -> int:
     # step 5: install (idempotent, chain-never-clobber) hook shims.
     interpreter = Path(sys.executable)
     hooks.install(root, interpreter)
+
+    from aramid import registry
+    registry.register(root, _now())
 
     cfg = config_mod.load_config(root)
     ledger = Ledger(root / ".aramid" / "ledger.db")

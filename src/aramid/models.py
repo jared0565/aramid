@@ -34,6 +34,14 @@ class EventType(StrEnum):
     INFRASTRUCTURE_BYPASS = "infrastructure_bypass"
     BASELINE_SNAPSHOT = "baseline_snapshot"
 
+    # --- Phase 2a: triage/queue/drain events (spec section 4) ---
+    TRIAGE_RECORDED = "triage_recorded"
+    QUEUE_ITEM_ADDED = "queue_item_added"
+    QUEUE_ITEM_COALESCED = "queue_item_coalesced"
+    QUEUE_ITEM_DRAINED = "queue_item_drained"
+    QUEUE_ITEM_EXPIRED = "queue_item_expired"
+    CONSUMER_RUN_FINISHED = "consumer_run_finished"
+
 @dataclass(frozen=True)
 class Finding:
     id: str

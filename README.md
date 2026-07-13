@@ -56,3 +56,27 @@ deterministic tool. This is Phase 1 of 4:
 
 Full design spec and implementation plan: `docs/superpowers/specs/` and
 `docs/superpowers/plans/`.
+
+## Phase 2a: watcher chassis
+
+Phase 2 starts with a zero-token chassis — the code has landed and is dogfooded
+here, though it is not yet wired into this repo's own hooks or drain schedule.
+Once installed, every commit is scored at zero cost by a post-commit hook
+(security-surface paths, risky content, novelty, graphite blast radius). Commits
+scoring >= 40 join a review queue drained on a schedule (`aramid drain`, Task
+Scheduler task `aramid-drain`).
+The regression attack pack (`.aramid-rules/regression.yml`, committed) replays
+rules compiled from resolved findings — reintroducing a rotated secret or banned
+dependency blocks at pre-push. `aramid status` shows queue depth and drain
+history; `aramid pack list|add|compile` manages rules.
+
+```bash
+aramid triage HEAD                # score a commit (or range) and enqueue if risky
+aramid drain --repo . --dry-run   # preview what a drain would consume
+aramid schedule install           # register the Task Scheduler drain job (Windows)
+aramid pack list                  # show compiled regression rules
+```
+
+Still deterministic, still zero LLM calls — 2a is the chassis (triage → queue →
+drain) that Phase 2b (LLM adversarial review) and Phase 2c (mutation/fuzz/DAST)
+will ride as new drain-time consumers.

@@ -85,7 +85,7 @@ def _minimal_config() -> config_mod.Config:
     return config_mod.Config(
         schema_version=1, semgrep_block_armed=False, bake_started=None,
         ignore_paths=[], test_command=None, scope_subpath=None,
-        timeouts={}, block_rules={})
+        timeouts={}, block_rules={}, triage={}, drain={}, pack={})
 
 
 def _detected_events(ledger: Ledger):

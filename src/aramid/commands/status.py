@@ -133,6 +133,68 @@ def _bake_lines(cfg: config_mod.Config, state: dict) -> list[str]:
     return lines
 
 
+# --- Phase 2a: queue / drain / registry / schedule (spec section 2) ---
+
+def _queue_lines(ledger: Ledger) -> list[str]:
+    from aramid import queue as queue_mod
+
+    items = queue_mod.materialize_queue(ledger.events())
+    queued = [i for i in items.values() if i.state == queue_mod.QUEUED]
+    drained_n = sum(1 for i in items.values() if i.state == queue_mod.DRAINED)
+    expired_n = sum(1 for i in items.values() if i.state == queue_mod.EXPIRED)
+
+    if not queued:
+        if drained_n or expired_n:
+            return [f"queue: empty | {drained_n} drained | {expired_n} expired"]
+        return ["queue: empty"]
+
+    q = queued[0]
+    age_h = int((datetime.now(timezone.utc)
+                 - datetime.fromisoformat(q.created_at)).total_seconds() // 3600)
+    lines = [f"queue: {len(queued)} queued (score {q.score}, {age_h}h old) | "
+             f"{drained_n} drained | {expired_n} expired"]
+    lines.extend(f"  {reason}" for reason in q.reasons)
+    return lines
+
+
+def _last_drain_line(ledger: Ledger) -> str:
+    last_consumer = None
+    for e in ledger.events():
+        if e.type is EventType.CONSUMER_RUN_FINISHED:
+            last_consumer = e
+    if last_consumer is None:
+        return "last drain: never"
+    return (f"last drain: {last_consumer.at} "
+            f"({last_consumer.payload.get('consumer')}, "
+            f"{last_consumer.payload.get('finding_count', 0)} finding(s))")
+
+
+def _registry_line(root: Path) -> str:
+    from aramid import registry as registry_mod
+    from aramid.fingerprint import normalize_path
+
+    try:
+        this_repo = normalize_path(str(root.resolve()))
+        registered = any(normalize_path(e["path"]) == this_repo
+                          for e in registry_mod.load_registry())
+    except Exception:
+        registered = False
+    return ("registry: registered" if registered
+            else "registry: NOT registered (aramid init to register)")
+
+
+def _scheduled_drain_line() -> str:
+    try:
+        import subprocess
+
+        from aramid.commands.schedule import _query_argv
+        cp = subprocess.run(_query_argv(), capture_output=True, text=True)
+        return ("scheduled drain: installed" if cp.returncode == 0
+                else "scheduled drain: not installed")
+    except Exception:
+        return "scheduled drain: unknown"
+
+
 def cmd_status(root) -> int:
     root = Path(root)
     try:
@@ -164,6 +226,12 @@ def cmd_status(root) -> int:
             lines.extend(historical)
 
         lines.extend(_bake_lines(cfg, state))
+
+        # --- Phase 2a: queue / drain / registry / schedule (spec section 2) ---
+        lines.extend(_queue_lines(ledger))
+        lines.append(_last_drain_line(ledger))
+        lines.append(_registry_line(root))
+        lines.append(_scheduled_drain_line())
 
         print("\n".join(lines))
         return 0

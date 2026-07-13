@@ -103,3 +103,19 @@ def test_uninstall_on_never_initted_repo_is_a_safe_no_op(tmp_path):
     rc = cmd_uninstall(r)
 
     assert rc == 0
+
+
+def test_uninstall_deregisters_repo_from_central_registry(tmp_path, monkeypatch):
+    monkeypatch.setattr(doctor, "probe_toolchain", _fake_present)
+    r = _repo(tmp_path)
+
+    from aramid import registry
+    monkeypatch.setattr(registry, "registry_path", lambda: tmp_path / "central" / "repos.toml")
+
+    assert init.cmd_init(r) == 0
+    assert any(Path(e["path"]).resolve() == r.resolve() for e in registry.load_registry())
+
+    rc = cmd_uninstall(r)
+
+    assert rc == 0
+    assert not any(Path(e["path"]).resolve() == r.resolve() for e in registry.load_registry())

@@ -264,3 +264,65 @@ def test_uninstall_removes_shim_restores_chained_original_and_keeps_ledger(tmp_p
     # section 2 / uninstall.py's own module docstring) -- security/audit
     # history must survive an uninstall.
     assert _ledger_ran(r), "ledger must be KEPT (and still readable) after uninstall"
+
+
+# --- 4. post-commit triage fires through real git dispatch ---------------
+
+def test_real_commit_triggers_triage_enqueue(tmp_path):
+    from aramid import queue as queue_mod
+    r = _repo(tmp_path)
+    hooks.install(r, Path(sys.executable))
+    # both tests commit through the FULL hook set -- the pre-commit gate
+    # also fires (here `exec(x)` trips ruff S102 BLOCK) and would abort the
+    # commit, so bypass the pre-commit shim while keeping post-commit.
+    (r / ".git" / "hooks" / "pre-commit").unlink()
+    (r / "src").mkdir()
+    (r / "src" / "auth_login.py").write_text("def f(x):\n    exec(x)\n", encoding="utf-8")
+    _git(r, "add", "src/auth_login.py")
+    cp = _git(r, "commit", "-m", "risky", env={**os.environ})
+    assert cp.returncode == 0, cp.stdout + cp.stderr  # post-commit can NEVER block
+    led = Ledger(r / ".aramid" / "ledger.db")
+    try:
+        assert queue_mod.last_triaged_head(led) is not None, \
+            "real git dispatch must have run aramid triage"
+        item = queue_mod.queued_item(queue_mod.materialize_queue(led.events()))
+        assert item is not None and item.score >= 40
+    finally:
+        led.close()
+
+
+def test_post_commit_broken_baked_interpreter_never_blocks_and_shim_runs(tmp_path):
+    # Prove the post-commit shim RUNS and FAILS OPEN even when its baked
+    # interpreter is unexecutable -- via a chained foreign hook's sentinel, NOT
+    # via the `py -3` fallback triaging. The shim runs the chained hook first
+    # (`"$CHAINED" "$@" || true`, before the interpreter block), so the sentinel
+    # is an environment-robust signal that the shim executed. The earlier
+    # "fall back to py -3 and triage" assertion was host-specific: on CI the
+    # `py` launcher exists but resolves to a Python WITHOUT aramid installed, so
+    # `py -3 -m aramid triage` is a swallowed no-op and nothing gets triaged.
+    r = _repo(tmp_path)
+    hdir = r / ".git" / "hooks"
+    hdir.mkdir(exist_ok=True)
+    marker = r / "post-commit-ran.txt"
+    foreign_content = f'#!/bin/sh\necho ran > "{hooks.win_sh_path(marker)}"\nexit 0\n'.encode()
+    foreign = hdir / "post-commit"
+    foreign.write_bytes(foreign_content)
+    foreign.chmod(foreign.stat().st_mode | 0o111)
+
+    hooks.install(r, Path("C:/nonexistent/python.exe"))
+    # keep only the post-commit shim: the pre-commit gate is irrelevant here
+    # and its broken interpreter would otherwise slow the commit.
+    (r / ".git" / "hooks" / "pre-commit").unlink()
+    assert (hdir / "post-commit.aramid-chained").exists()  # foreign hook chained
+
+    (r / "ok.py").write_text("x = 1\n", encoding="utf-8")
+    _git(r, "add", "ok.py")
+    cp = _git(r, "commit", "-m", "clean")
+
+    # fail-open: broken baked interpreter + `|| true` + unconditional `exit 0`
+    # mean the commit must succeed regardless.
+    assert cp.returncode == 0, cp.stdout + cp.stderr
+    # the shim actually RAN (not merely absent): its chained-hook step wrote the
+    # sentinel through real git dispatch. Together: fail-open, proven live.
+    assert marker.exists(), \
+        "post-commit shim must run and fail open despite a broken baked interpreter"

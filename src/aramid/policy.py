@@ -20,6 +20,24 @@ from aramid.models import Finding, Gate, Severity, Verdict
 # Tool names that report dependency-CVE findings (see runners/deps.py).
 _DEPS_TOOLS = {"pip-audit", "npm", "pnpm", "yarn"}
 
+# Regression pack block-tier rule ids (aramid.pack, Task 13/15, spec §5) are
+# namespaced "aramid-regression.block.<finding-id[:8]>". They ride their OWN
+# arming flag, `cfg.pack["pack_block_armed"]` (default true), deliberately
+# SEPARATE from `semgrep_block_armed` (the OWASP bake): a pack rule's source
+# finding already passed the block decision once, when it was resolved and
+# the rule compiled (aramid.pack._tier), so a resolved-then-reintroduced
+# finding shouldn't wait out the generic SAST bake -- but an operator can
+# still demote a noisy pack rule by setting [pack].pack_block_armed = false
+# in aramid.toml. Checked before the general `block_rules.toml`
+# [semgrep].block match (which IS gated by `semgrep_block_armed`) so
+# pack-block rules never ride that gate even though
+# "aramid-regression.block.*" is also listed there (that list entry is for
+# discoverability/consumers.regression_pack, Task 16 -- not consulted for
+# this decision). Resolves the spec-vs-implementation conflict ("ride
+# semgrep's existing arming state" vs the Task 15 brief's block-with-
+# default-config test) per the user's decision, 2026-07-13.
+_PACK_BLOCK_PREFIX = "aramid-regression.block."
+
 _SEVERITY_ORDER = [Severity.INFO, Severity.LOW, Severity.MEDIUM, Severity.HIGH, Severity.CRITICAL]
 
 # Raw severity vocabularies are tool-specific (ruff: "error"; semgrep:
@@ -71,6 +89,9 @@ def classify(tool: str, rule: str, severity_raw: str, gate: Gate, cfg) -> tuple[
         return severity, Verdict.BLOCK
 
     if tool == "semgrep":
+        if rule.startswith(_PACK_BLOCK_PREFIX):
+            armed = cfg.pack.get("pack_block_armed", True)
+            return severity, Verdict.BLOCK if armed else Verdict.WARN
         semgrep_block = block_rules.get("semgrep", {}).get("block", [])
         if any(fnmatch.fnmatch(rule, pattern) for pattern in semgrep_block):
             verdict = Verdict.BLOCK if cfg.semgrep_block_armed else Verdict.WARN

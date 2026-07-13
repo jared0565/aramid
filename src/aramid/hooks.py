@@ -36,6 +36,8 @@ MARKER_END = "# <<< aramid managed <<<"
 # a hook.
 GATES: tuple[Gate, ...] = (Gate.PRE_COMMIT, Gate.PRE_PUSH)
 
+TRIAGE_HOOK = "post-commit"  # Phase 2a: fail-open triage enqueue (spec section 2)
+
 CHAINED_SUFFIX = ".aramid-chained"
 
 
@@ -131,6 +133,32 @@ def render_shim(gate: Gate, interpreter: Path) -> bytes:
     return "\n".join(lines).encode("utf-8")
 
 
+def render_triage_shim(interpreter: Path) -> bytes:
+    """Post-commit shim: run triage, swallow EVERYTHING, exit 0. A commit
+    can never be blocked or noisy-failed by triage (spec section 6); the
+    drain's catch-up sweep recovers anything this shim misses."""
+    interp_sh = win_sh_path(interpreter)
+    lines = [
+        "#!/bin/sh",
+        MARKER_START,
+        'DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)',
+        f'CHAINED="$DIR/{TRIAGE_HOOK}{CHAINED_SUFFIX}"',
+        'if [ -f "$CHAINED" ]; then',
+        '    "$CHAINED" "$@" || true',
+        "fi",
+        f'INTERP="{interp_sh}"',
+        'if [ -x "$INTERP" ]; then',
+        '    "$INTERP" -m aramid triage HEAD >/dev/null 2>&1 || true',
+        "elif command -v py >/dev/null 2>&1; then",
+        "    py -3 -m aramid triage HEAD >/dev/null 2>&1 || true",
+        "fi",
+        MARKER_END,
+        "exit 0",
+        "",
+    ]
+    return "\n".join(lines).encode()
+
+
 def _make_executable(path: Path) -> None:
     """`chmod +x` where the platform supports it. Never fatal: NTFS has no
     POSIX permission bits, so this is a best-effort no-op on a bare Windows
@@ -182,6 +210,23 @@ def install(root: Path, interpreter: Path) -> None:
         shim_path.write_bytes(render_shim(gate, interpreter))
         _make_executable(shim_path)
 
+    hook = TRIAGE_HOOK
+    shim_path = hdir / hook
+    chained_path = hdir / f"{hook}{CHAINED_SUFFIX}"
+
+    if shim_path.exists() and not _is_aramid_shim(shim_path):
+        # A real foreign hook (not ours) occupies this slot -- chain it.
+        # If a stale .aramid-chained sibling exists too (e.g. a previous
+        # uninstall didn't run to completion), the current foreign hook
+        # wins as the thing that gets chained.
+        if chained_path.exists():
+            chained_path.unlink()
+        shim_path.replace(chained_path)
+        _make_executable(chained_path)
+
+    shim_path.write_bytes(render_triage_shim(interpreter))
+    _make_executable(shim_path)
+
 
 def uninstall(root: Path) -> None:
     """Remove aramid's own shims and restore any `.aramid-chained`
@@ -201,8 +246,7 @@ def uninstall(root: Path) -> None:
     if not hdir.exists():
         return
 
-    for gate in GATES:
-        hook = gate.value
+    for hook in [g.value for g in GATES] + [TRIAGE_HOOK]:
         shim_path = hdir / hook
         chained_path = hdir / f"{hook}{CHAINED_SUFFIX}"
 

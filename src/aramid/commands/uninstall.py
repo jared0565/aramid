@@ -36,6 +36,9 @@ def cmd_uninstall(path) -> int:
 
     hooks.uninstall(root)
 
+    from aramid import registry
+    registry.deregister(root)
+
     md_path = root / "ARAMID.md"
     if md_path.exists():
         md_path.unlink()

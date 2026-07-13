@@ -515,11 +515,17 @@ def test_diff_text_contains_added_lines_and_truncates(tmp_path):
     r = _make_repo(tmp_path)
     _commit(r, "a.py", "x = 1\n", "first")
     h1 = gitutil.rev_sha(r, "HEAD")
-    _commit(r, "a.py", "x = 1\nexec(x)\n", "second")
+    _commit(r, "a.py", "x = 1\nexec(x)  # обед\n", "second")
     h2 = gitutil.rev_sha(r, "HEAD")
     text = gitutil.diff_text(r, h1, h2)
     assert "+exec(x)" in text
-    assert len(gitutil.diff_text(r, h1, h2, max_bytes=10)) <= 10
+    full = gitutil.diff_text(r, h1, h2)
+    full_bytes = len(full.encode("utf-8"))
+    assert len(full) < full_bytes  # precondition: multi-byte content present
+    cap = full_bytes - 2  # cut lands inside the trailing multi-byte run
+    truncated = gitutil.diff_text(r, h1, h2, max_bytes=cap)
+    assert len(truncated.encode("utf-8")) <= cap
+    assert truncated != full  # naive char-slice would return the FULL text here
 ```
 
 - [ ] **Step 2: Run tests to verify they fail**
@@ -554,7 +560,9 @@ def diff_text(root: Path, base: str | None, head: str, max_bytes: int = 400_000)
     else:
         cp = _run(root, "diff", f"{base}..{head}")
     text = cp.stdout if cp.returncode == 0 else ""
-    return text[:max_bytes]
+    if len(text.encode("utf-8", "replace")) <= max_bytes:
+        return text
+    return text.encode("utf-8", "replace")[:max_bytes].decode("utf-8", "ignore")
 ```
 
 - [ ] **Step 4: Run tests to verify they pass**
@@ -661,6 +669,8 @@ git commit -m "feat(config): [triage]/[drain]/[pack] sections with spec defaults
 ---
 
 ### Task 5: Triage signals and scorer
+
+> **AMENDMENT (2026-07-13):** the blast-radius snippet below predates inspection of graphite's real schema (imports edges target placeholder module nodes without source_file). The implemented signal resolves targets via module-alias ids derived from changed paths, excludes self-references, and is fail-open on ANY exception. See src/aramid/triage.py.
 
 **Files:**
 - Create: `src/aramid/triage.py`
@@ -2248,6 +2258,8 @@ git commit -m "feat(schedule): Task Scheduler registration with StartWhenAvailab
 
 ```python
 # tests/unit/test_pack.py
+import re
+
 import yaml  # dev-dependency, tests only
 
 from aramid import pack
@@ -2286,7 +2298,7 @@ def test_dep_rule_targets_manifest_and_package():
     rule = pack.compile_dep_rule(FID, DEP_REC)
     assert rule["id"] == f"aramid-regression.block.{FID[:8]}"
     assert rule["paths"]["include"] == ["requirements.txt"]
-    assert "insecure-package" in rule["pattern-regex"]
+    assert rule["pattern-regex"] == re.escape("insecure-package")
     assert "PYSEC-2024-1234" in rule["message"]
 
 
@@ -2665,6 +2677,18 @@ git commit -m "feat(cli): aramid pack list/add/compile"
 ---
 
 ### Task 15: Gates pick up the pack (semgrep extra config + block tier)
+
+> **AMENDMENT (user decision, 2026-07-13):** the block-tier decision for
+> pack rules uses a dedicated arming flag, `[pack].pack_block_armed`
+> (default **true** in `defaults.toml`, read in `policy.classify` via
+> `cfg.pack.get("pack_block_armed", True)`), superseding the design doc's
+> "ride semgrep's existing arming state" phrasing for the pack case.
+> Pack-block rules are confirmed past findings, not new heuristics, so they
+> block immediately -- deliberately OFF the OWASP `semgrep_block_armed`
+> bake gate -- but an operator can demote a noisy one by setting the flag
+> false in `aramid.toml`. This also adds `src/aramid/policy.py` and
+> `src/aramid/data/defaults.toml` to this task's modified-file list.
+> The snippets below predate the amendment and are left as written.
 
 **Files:**
 - Modify: `src/aramid/runners/base.py` (RunContext field), `src/aramid/pipeline.py` (populate it), `src/aramid/runners/semgrep.py` (argv + canonical id), `src/aramid/data/block_rules.toml`

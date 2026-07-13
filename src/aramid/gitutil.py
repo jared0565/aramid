@@ -9,7 +9,15 @@ def _run(root: Path, *args: str) -> subprocess.CompletedProcess:
     # fixed subcommands (rev-parse, show, rev-list, diff, ls-files, log,
     # merge-base, symbolic-ref); relying on PATH to resolve "git" is standard
     # and matches how git itself is invoked by every other tool on the host.
-    return subprocess.run(["git", *args], cwd=str(root), capture_output=True, text=True)  # noqa: S603,S607
+    # encoding="utf-8": git emits UTF-8 by default regardless of host locale.
+    # Without this, text=True decodes with the locale-preferred codec, which
+    # mojibakes (or raises UnicodeDecodeError on undefined bytes) on cp1252
+    # Windows hosts -- the target platform, and CI's windows-latest runner.
+    # errors="replace": never let a decode hiccup crash triage's per-commit
+    # diff scan; a best-effort mangled character is acceptable, a raised
+    # exception is not.
+    return subprocess.run(["git", *args], cwd=str(root), capture_output=True,  # noqa: S603,S607
+                          text=True, encoding="utf-8", errors="replace")
 
 def repo_root(path: Path) -> Path:
     cp = _run(path, "rev-parse", "--show-toplevel")
@@ -68,3 +76,31 @@ def read_for_fingerprint(root: Path, ref: str, rel_path: str) -> str:
         if p.exists():
             return p.read_text(errors="replace").replace("\r\n", "\n")
     return ""
+
+def rev_sha(root: Path, rev: str) -> str | None:
+    cp = _run(root, "rev-parse", "--verify", f"{rev}^{{commit}}")
+    return cp.stdout.strip() if cp.returncode == 0 else None
+
+
+def first_parent(root: Path, rev: str) -> str | None:
+    cp = _run(root, "rev-parse", "--verify", f"{rev}^")
+    return cp.stdout.strip() if cp.returncode == 0 else None
+
+
+def diff_paths(root: Path, base: str | None, head: str) -> list[str]:
+    if base is None:
+        cp = _run(root, "diff-tree", "--no-commit-id", "--name-only", "-r", "--root", head)
+    else:
+        cp = _run(root, "diff", "--name-only", "--diff-filter=ACMR", f"{base}..{head}")
+    return [ln for ln in cp.stdout.splitlines() if ln] if cp.returncode == 0 else []
+
+
+def diff_text(root: Path, base: str | None, head: str, max_bytes: int = 400_000) -> str:
+    if base is None:
+        cp = _run(root, "show", "--format=", head)
+    else:
+        cp = _run(root, "diff", f"{base}..{head}")
+    text = cp.stdout if cp.returncode == 0 else ""
+    if len(text.encode("utf-8", "replace")) <= max_bytes:
+        return text
+    return text.encode("utf-8", "replace")[:max_bytes].decode("utf-8", "ignore")

@@ -29,6 +29,16 @@ semgrep BLOCK-tier findings report as WARN so the operator can demote noisy
 rules first. End the bake explicitly with `aramid arm` -- there is no
 auto-promotion.
 
+## Always-on triage (Phase 2a)
+
+Every commit is scored at zero cost by a post-commit hook (security-surface
+paths, risky content, novelty, graphite blast radius). Commits scoring >= 40
+join a review queue drained on a schedule (`aramid drain`, Task Scheduler
+task `aramid-drain`). The regression attack pack (`.aramid-rules/regression.yml`,
+committed) replays rules compiled from resolved findings -- reintroducing a
+rotated secret or banned dependency blocks at pre-push. `aramid status` shows
+queue depth and drain history; `aramid pack list|add|compile` manages rules.
+
 ## Honesty note
 
 Phase 1 is 100% deterministic: no LLM calls, zero tokens. It covers the

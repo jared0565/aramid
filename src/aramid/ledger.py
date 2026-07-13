@@ -130,6 +130,28 @@ class Ledger:
             if type_ == EventType.BASELINE_SNAPSHOT.value:
                 keep.add(seq)
 
+        # --- Phase 2a events (spec section 4). Local import: queue.py already
+        # imports Ledger from this module; importing at module scope would be
+        # circular.
+        from aramid.queue import QUEUED, materialize_queue
+
+        full_events = self.events()
+        queued_ids = {item.id for item in materialize_queue(full_events).values()
+                      if item.state == QUEUED}
+        queue_types = {EventType.QUEUE_ITEM_ADDED.value,
+                       EventType.QUEUE_ITEM_COALESCED.value,
+                       EventType.QUEUE_ITEM_DRAINED.value,
+                       EventType.QUEUE_ITEM_EXPIRED.value}
+        latest_singleton: dict[str, int] = {}  # type -> newest seq
+        for seq, type_, finding_id in rows:
+            if type_ in queue_types and finding_id in queued_ids:
+                keep.add(seq)
+            if type_ in (EventType.TRIAGE_RECORDED.value,
+                         EventType.CONSUMER_RUN_FINISHED.value,
+                         EventType.RUN_FINISHED.value):
+                latest_singleton[type_] = seq
+        keep.update(latest_singleton.values())
+
         to_delete = [seq for seq, _, _ in rows if seq not in keep]
         if to_delete:
             self._c.executemany("DELETE FROM events WHERE seq=?", [(s,) for s in to_delete])
