@@ -11,6 +11,7 @@ from pathlib import Path
 from aramid import config as config_mod
 from aramid import gitutil, triage
 from aramid.fingerprint import compute_fingerprint, normalize_line
+from aramid.models import Event, EventType, Finding, Gate, Severity, Source, Verdict
 
 _BEGIN = "<<<UNTRUSTED_DATA_BEGIN>>>"
 _END = "<<<UNTRUSTED_DATA_END>>>"
@@ -212,6 +213,10 @@ def _squash_ws(text: str) -> str:
     return re.sub(r"\s+", " ", text).strip()
 
 
+def _strip_ws(text: str) -> str:
+    return re.sub(r"\s+", "", text)
+
+
 def verify_findings(candidates: list[dict], packet: Packet, root: Path,
                     head: str) -> tuple[list[dict], int]:
     """Mechanical evidence binding (spec section 3): quote verbatim in the
@@ -321,4 +326,66 @@ def apply_refute(finding: dict, refuted: bool, reason: str) -> dict:
         out["confirmed"] = True
         if reason:
             out["explanation"] = f"{out.get('explanation', '')} [refute survived: {reason}]".strip()
+    return out
+
+
+def auto_resolve_llm(root: Path, ledger, run_id: str, at: str) -> list[str]:
+    """Zero-token deterministic resolution (spec section 5): an OPEN LLM
+    finding whose verbatim evidence quote no longer exists in the HEAD
+    version of its file is fixed -- resolve it BEFORE the block check so a
+    dev who fixed the code is never blocked by a stale finding. A missing/
+    unreadable file counts as gone. False-resolve safety net: the edit that
+    removed the quote is itself a commit, so triage re-enqueues the file and
+    the next drain re-reviews it."""
+    resolved = []
+    for fid, rec in ledger.open_findings().items():
+        if rec.get("source") != "llm" or rec.get("status") != "open":
+            continue
+        try:
+            content = gitutil.read_for_fingerprint(root, "HEAD", rec.get("file", ""))
+        except Exception:
+            content = ""
+        # Strip ALL whitespace (not _squash_ws' collapse-runs) on both sides:
+        # deliberately MORE permissive than verify_findings' squash so a mere
+        # reformat of the evidence line (e.g. spaces added inside parens) does
+        # NOT wrongly resolve the finding. Resolving-too-eagerly is the
+        # dangerous direction here -- a wrong resolve drops a confirmed
+        # critical out of the block gate and lets the vuln push through now,
+        # whereas wrongly keeping one only forces an override. So a quote is
+        # "gone" only when its non-whitespace characters no longer appear.
+        quote = _strip_ws(rec.get("evidence", ""))
+        if quote and quote in _strip_ws(content):
+            continue
+        ledger.append(Event(EventType.FINDING_RESOLVED, run_id, at, finding_id=fid,
+                            payload={"auto_resolved": "evidence_gone"}))
+        resolved.append(fid)
+    return resolved
+
+
+def llm_gate_findings(cfg, ledger, gate: Gate) -> list[Finding]:
+    """Materialize still-open LLM findings as gate findings (spec section 5).
+    PRE_PUSH only. Verdict computed HERE from [llm].llm_block_armed -- never
+    stored at drain time -- so arming applies retroactively: BLOCK only for
+    armed AND confirmed (refute-survivor) AND critical; everything else WARN."""
+    if gate is not Gate.PRE_PUSH:
+        return []
+    armed = bool(cfg.llm.get("llm_block_armed", False))
+    out = []
+    for fid, rec in sorted(ledger.open_findings().items()):
+        if rec.get("source") != "llm" or rec.get("status") != "open":
+            continue
+        try:
+            severity = Severity(rec.get("severity", "medium"))
+        except ValueError:
+            severity = Severity.MEDIUM
+        confirmed = bool(rec.get("confirmed", False))
+        verdict = (Verdict.BLOCK
+                   if armed and confirmed and severity is Severity.CRITICAL
+                   else Verdict.WARN)
+        out.append(Finding(
+            id=fid, tool="llm-review", rule=rec.get("rule", ""),
+            severity_raw=rec.get("severity", ""), severity=severity, verdict=verdict,
+            file=rec.get("file", ""), line=int(rec.get("line", 0)),
+            message=rec.get("message", ""), evidence=rec.get("evidence", ""),
+            gate=gate, source=Source.LLM, confirmed=confirmed))
     return out

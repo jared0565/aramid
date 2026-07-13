@@ -27,6 +27,7 @@ from typing import Callable
 
 from aramid import config as config_mod
 from aramid import gitutil, policy, redact
+from aramid import review as review_mod
 from aramid.detectors import detect_package_manager, detect_stacks, detect_tests
 from aramid.fingerprint import normalize_path
 from aramid.ledger import Ledger
@@ -301,6 +302,12 @@ def run_gate(root: Path, gate: Gate, mode: str, cfg: config_mod.Config, ledger: 
             else f
             for f in findings
         ]
+
+    # Phase 2b (spec section 5): the pre-push LLM ledger gate -- zero tokens,
+    # a DB read. Auto-resolve runs FIRST so fixed findings never block.
+    if gate is Gate.PRE_PUSH:
+        review_mod.auto_resolve_llm(root, ledger, run_id, at)
+        findings = [*findings, *review_mod.llm_gate_findings(cfg, ledger, gate)]
 
     # 8. exit code.
     degraded_tools = sorted({r.tool for r in flat_results if r.state in _BAD_STATES})
