@@ -28,6 +28,7 @@ from aramid.commands.ledger_cmd import (
     cmd_ledger_show,
 )
 from aramid.commands.override import cmd_override
+from aramid.commands.schedule import cmd_schedule
 from aramid.commands.status import cmd_status
 from aramid.commands.triage_cmd import cmd_triage
 from aramid.commands.uninstall import cmd_uninstall
@@ -93,6 +94,9 @@ def build_parser() -> argparse.ArgumentParser:
 
     p_uninstall = sub.add_parser("uninstall", help="reverse init")
     p_uninstall.add_argument("path", nargs="?", default=".")
+
+    p_schedule = sub.add_parser("schedule", help="register/remove/query the Windows Task Scheduler drain job")
+    p_schedule.add_argument("action", choices=["install", "remove", "status"])
 
     return p
 
@@ -172,6 +176,9 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.command == "uninstall":
         return cmd_uninstall(Path(args.path))
+
+    if args.command == "schedule":
+        return cmd_schedule(root, args.action)
 
     print(f"aramid: unknown command: {args.command}", file=sys.stderr)
     return 3

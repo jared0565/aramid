@@ -222,3 +222,14 @@ def test_uninstall_dispatch_maps_path(monkeypatch):
     cli.main(["uninstall", "some/path"])
 
     assert captured["path"] == Path("some/path")
+
+
+def test_schedule_dispatch_maps_action(monkeypatch):
+    captured = {}
+    monkeypatch.setattr(cli, "cmd_schedule",
+                         lambda root, action: captured.update(root=root, action=action) or 0)
+
+    rc = cli.main(["schedule", "install"])
+
+    assert rc == 0
+    assert captured["action"] == "install"
