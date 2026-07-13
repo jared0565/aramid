@@ -37,6 +37,9 @@ class Config:
     scope_subpath: str | None
     timeouts: dict
     block_rules: dict
+    triage: dict
+    drain: dict
+    pack: dict
 
 
 def _user_config_path() -> Path:
@@ -94,6 +97,9 @@ def load_config(root: Path) -> Config:
         scope_subpath=merged.get("scope_subpath"),
         timeouts=merged.get("timeouts", {}),
         block_rules=merged.get("block_rules", {}),
+        triage=merged.get("triage", {}),
+        drain=merged.get("drain", {}),
+        pack=merged.get("pack", {}),
     )
 
 
