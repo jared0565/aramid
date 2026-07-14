@@ -204,7 +204,7 @@ def consume(item, ctx: DrainContext) -> ConsumerResult:
     ) for rule, cand in finals]
 
     degraded = (f" degraded_from={tgt.tier}"
-                if tgt is not None and reviewer_arm.tier != tgt.tier else "")
+                if tgt is not None and reviewer_arm.min_score < tgt.min_score else "")
     note = (f"provider={reviewer_arm.provider} tier={reviewer_arm.tier}{degraded} "
             f"model={reviewer_arm.model} tokens_in={tokens_in} tokens_out={tokens_out} "
             f"refutes={refutes} hallucination_rejected={rejected}"

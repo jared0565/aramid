@@ -70,3 +70,17 @@ def test_openrouter_effort_in_body(monkeypatch):
     monkeypatch.setattr(openrouter.urllib.request, "urlopen", fake_urlopen)
     openrouter.review("P", "m", 240.0, effort="low", cfg=SimpleNamespace(llm={}))
     assert seen["body"]["reasoning"] == {"effort": "low"}
+
+
+def test_openrouter_effort_omitted_when_unset(monkeypatch):
+    from types import SimpleNamespace
+    monkeypatch.setenv("OPENROUTER_API_KEY", "sk-or-x")
+    seen = {}
+
+    def fake_urlopen(req, timeout):
+        seen["body"] = json.loads(req.data.decode("utf-8"))
+        return io.BytesIO(json.dumps(
+            {"choices": [{"message": {"content": "{}"}}], "usage": {}}).encode("utf-8"))
+    monkeypatch.setattr(openrouter.urllib.request, "urlopen", fake_urlopen)
+    openrouter.review("P", "m", 240.0, cfg=SimpleNamespace(llm={}))
+    assert "reasoning" not in seen["body"]

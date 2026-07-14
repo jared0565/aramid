@@ -43,6 +43,11 @@ def test_reviewer_order_target_first_then_degrade_down_then_up():
     assert [a.tier for a in review.reviewer_order(arms, 45, ALL)] == ["cheap", "mid", "frontier"]
 
 
+def test_reviewer_order_mid_target_degrades_down_then_climbs():
+    arms = review.build_arms(_cfg())
+    assert [a.tier for a in review.reviewer_order(arms, 65, ALL)] == ["mid", "cheap", "frontier"]
+
+
 def test_reviewer_order_degrades_when_target_provider_down():
     arms = review.build_arms(_cfg())
     avail = {"codex-cli", "ollama-cloud"}          # claude (frontier) is down
