@@ -5,7 +5,7 @@ from typing import Callable
 
 from aramid import gitutil
 from aramid.fingerprint import compute_fingerprint, normalize_line
-from aramid.models import Finding, Gate
+from aramid.models import Finding, Gate, Source
 from aramid.redact import redact, scrub
 
 
@@ -26,6 +26,15 @@ class RawFinding:
     # it actually lived in, instead of HEAD (where the line may have moved
     # or the secret may have been removed).
     commit: str | None = None
+    # --- Phase 2b (spec section 3): LLM finding passthrough. All optional
+    # and defaulted so every deterministic adapter is untouched.
+    # `evidence` is the verbatim quote the reviewer cited (already verified
+    # against the packet and head file by aramid.review); when set it is
+    # stored as Finding.evidence INSTEAD of the message, because auto-resolve
+    # (review.auto_resolve_llm) string-matches it against the head file.
+    evidence: str | None = None
+    source: Source = Source.DETERMINISTIC
+    confirmed: bool = False
 
 
 def normalize(raws: list[RawFinding], root: Path, ref_for: Callable[[str], str],
@@ -50,6 +59,9 @@ def normalize(raws: list[RawFinding], root: Path, ref_for: Callable[[str], str],
             preview, secret_hash = redact(raw.secret, salt)
             evidence = f"{preview} (sha256:{secret_hash})"
             message = scrub(raw.message, [raw.secret])
+        elif raw.evidence is not None:
+            evidence = raw.evidence
+            message = raw.message
         else:
             evidence = raw.message
             message = raw.message
@@ -59,6 +71,7 @@ def normalize(raws: list[RawFinding], root: Path, ref_for: Callable[[str], str],
         findings.append(Finding(
             id=finding_id, tool=raw.tool, rule=raw.rule, severity_raw=raw.severity_raw,
             severity=severity, verdict=verdict, file=raw.file, line=raw.line,
-            message=message, evidence=evidence, gate=gate))
+            message=message, evidence=evidence, gate=gate,
+            source=raw.source, confirmed=raw.confirmed))
 
     return findings

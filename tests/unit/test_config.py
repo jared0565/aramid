@@ -202,3 +202,29 @@ def test_repo_config_overrides_triage(tmp_path, monkeypatch):
     cfg = config.load_config(tmp_path)
     assert cfg.triage["min_score"] == 70
     assert cfg.triage["extra_security_paths"] == []  # deep merge keeps sibling default
+
+
+# --- (f) Phase 2b: LLM config section ----------------------------------------
+
+def test_llm_defaults_present(tmp_path, monkeypatch):
+    monkeypatch.setattr(config, "_user_config_path", lambda: _no_user_config(tmp_path))
+    cfg = config.load_config(tmp_path)
+    assert cfg.llm["enabled"] is True
+    assert cfg.llm["max_items_per_drain"] == 3
+    assert cfg.llm["call_timeout_s"] == 240
+    assert cfg.llm["packet_max_bytes"] == 120000
+    assert cfg.llm["llm_block_armed"] is False
+    assert cfg.llm["provider_order"] == ["claude-cli", "codex-cli", "openrouter"]
+    assert cfg.llm["model_claude"] == "sonnet"
+    assert cfg.llm["model_codex"] == ""
+    assert cfg.llm["model_openrouter"] == "anthropic/claude-sonnet-4-5"
+    assert cfg.llm["openrouter_monthly_cap_usd"] == 5.0
+
+
+def test_llm_repo_override_merges(tmp_path, monkeypatch):
+    monkeypatch.setattr(config, "_user_config_path", lambda: _no_user_config(tmp_path))
+    (tmp_path / "aramid.toml").write_text(
+        "[llm]\nmax_items_per_drain = 1\n", encoding="utf-8")
+    cfg = config.load_config(tmp_path)
+    assert cfg.llm["max_items_per_drain"] == 1
+    assert cfg.llm["enabled"] is True  # other keys keep defaults (deep merge)

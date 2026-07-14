@@ -97,7 +97,8 @@ def build_parser() -> argparse.ArgumentParser:
     p_pack_add.add_argument("id")
     pack_sub.add_parser("compile")
 
-    sub.add_parser("arm", help="end the WARN-only semgrep bake")
+    p_arm = sub.add_parser("arm", help="end a WARN-only bake (semgrep default, --llm for the LLM reviewer)")
+    p_arm.add_argument("--llm", action="store_true")
     sub.add_parser("update-rules", help="refresh the vendored semgrep ruleset")
 
     p_uninstall = sub.add_parser("uninstall", help="reverse init")
@@ -188,7 +189,7 @@ def main(argv: list[str] | None = None) -> int:
         return 3
 
     if args.command == "arm":
-        return cmd_arm(root)
+        return cmd_arm(root, llm=args.llm)
 
     if args.command == "update-rules":
         return cmd_update_rules(root)

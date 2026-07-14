@@ -24,9 +24,13 @@ is the ratchet's own escalation, downgrades to 0/2.
 `block_findings` branch vs. its `policy.escalate_degraded` branch), so
 "the ratchet's own escalation was the only reason" requires checking BOTH:
   (a) a genuine BLOCK-tier finding (gitleaks secret, armed semgrep, failing
-      tests, critical CVE) -- `_has_genuine_block` re-derives each
-      still-BLOCK finding's pre-ratchet verdict via `policy.classify`, the
-      same pure classifier `run_gate` itself uses.
+      tests, critical CVE, armed+confirmed+critical LLM finding) --
+      `_has_genuine_block` re-derives each still-BLOCK finding's pre-ratchet
+      verdict via `policy.classify`, the same pure classifier `run_gate`
+      itself uses -- EXCEPT source=LLM findings, which are genuine-by-source
+      directly, bypassing classify (which always returns WARN for
+      "llm-review" by design, so it structurally can't see an LLM BLOCK;
+      see `_has_genuine_block`'s own docstring, task-13b).
   (b) a degraded BLOCK-tier tool (gitleaks/semgrep/tests -- `run_gate`'s own
       `degraded_block_tier` local, now exposed on `GateResult` and read back
       here verbatim via `result.degraded_block_tier`) at pre-push. This
@@ -68,7 +72,7 @@ from aramid import pipeline
 from aramid import policy
 from aramid import reporter
 from aramid.ledger import Ledger
-from aramid.models import Gate, Verdict
+from aramid.models import Gate, Source, Verdict
 
 
 def _now() -> str:
@@ -86,6 +90,20 @@ def _has_genuine_block(result, cfg) -> bool:
           by the `f.verdict is Verdict.BLOCK` check (apply_overrides runs
           before the ratchet in run_gate, so a suppressed BLOCK is never
           still BLOCK by the time findings reach here).
+          Exception: an LLM finding (`f.source is Source.LLM`) is treated as
+          genuine directly, WITHOUT going through `policy.classify` -- by
+          deliberate Task 3 design, `policy.classify("llm-review", ...)`
+          ALWAYS returns WARN (the real BLOCK verdict for an LLM finding is
+          computed only in `review.llm_gate_findings`, from ledger state +
+          [llm].llm_block_armed, never in policy.classify), so classify
+          structurally can never see an LLM finding as genuine. An LLM
+          finding only ever carries `verdict is Verdict.BLOCK` when it is
+          armed + confirmed + critical (llm_gate_findings sets BLOCK only in
+          that case) -- a deliberate, refute-confirmed, armed block, not
+          legacy onboarding debt (arming is meant to be retroactive) -- so
+          it must never be downgraded on a fresh ledger (task-13b-review.md
+          HIGH: this gap silently defeated the LLM gate on any fresh clone /
+          CI runner / reset ledger, since `.aramid/` is gitignored).
       (b) `result.degraded_block_tier` -- `run_gate`'s own already-computed
           BLOCK-tier-degradation flag, read back verbatim (see module
           docstring for why this must NOT be re-derived from `result.degraded`
@@ -93,7 +111,8 @@ def _has_genuine_block(result, cfg) -> bool:
     """
     genuine_finding = any(
         f.verdict is Verdict.BLOCK
-        and policy.classify(f.tool, f.rule, f.severity_raw, f.gate, cfg)[1] is Verdict.BLOCK
+        and (f.source is Source.LLM
+             or policy.classify(f.tool, f.rule, f.severity_raw, f.gate, cfg)[1] is Verdict.BLOCK)
         for f in result.findings
     )
     return genuine_finding or result.degraded_block_tier

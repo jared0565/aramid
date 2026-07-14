@@ -84,6 +84,15 @@ def classify(tool: str, rule: str, severity_raw: str, gate: Gate, cfg) -> tuple[
     if tool == "gitleaks":
         return severity, Verdict.BLOCK
 
+    # Phase 2b (spec section 3): LLM findings are classified at drain time
+    # with the severity the reviewer reported (post-refute demotion already
+    # applied by consumers.llm_review) but NEVER a drain-time BLOCK -- the
+    # blocking verdict for confirmed-CRITICAL LLM findings is computed at
+    # the pre-push gate from materialized ledger state + [llm].llm_block_armed
+    # (aramid.review.llm_gate_findings), so arming applies retroactively.
+    if tool == "llm-review":
+        return severity, Verdict.WARN
+
     ruff_block = block_rules.get("ruff", {}).get("block", [])
     if tool == "ruff" and rule in ruff_block:
         return severity, Verdict.BLOCK

@@ -13,7 +13,7 @@ from aramid import config as config_mod
 from aramid import pipeline
 from aramid.commands.check import cmd_check
 from aramid.ledger import Ledger
-from aramid.models import Gate
+from aramid.models import Finding, Gate, Severity, Source, Verdict
 from aramid.normalizer import RawFinding
 from aramid.runners.base import RunnerResult, ToolState
 
@@ -173,6 +173,51 @@ def test_fresh_ledger_prepush_degraded_block_tier_tool_name_diverges_from_key(
     monkeypatch.setitem(pipeline.RUNNERS, "tests",
                          _fake(RunnerResult("pytest", ToolState.MISSING)))
     monkeypatch.setitem(pipeline.GATE_RUNNER_KEYS, Gate.PRE_PUSH, ["tests"])
+
+    rc = cmd_check(root, Gate.PRE_PUSH, "range")
+
+    assert rc == 1
+
+
+# --- (g) fresh ledger, pre-push, armed+confirmed+critical LLM BLOCK finding -
+
+def test_fresh_ledger_prepush_armed_confirmed_critical_llm_finding_still_blocks(
+        tmp_path, monkeypatch):
+    """task-13b HIGH gap (review of Phase 1's fresh-ledger exemption):
+    `policy.classify("llm-review", ...)` ALWAYS returns WARN by deliberate
+    Task 3 design -- the real BLOCK verdict for an LLM finding is computed
+    only in `review.llm_gate_findings` from ledger state + [llm].llm_block_armed,
+    never in policy.classify. `_has_genuine_block`'s `policy.classify`
+    re-derivation therefore can NEVER see an LLM finding as genuine, even one
+    whose verdict IS Verdict.BLOCK (which only happens when armed + confirmed
+    + critical -- a deliberate, refute-confirmed block, not legacy onboarding
+    debt; arming is meant to be retroactive). Without the fix, this silently
+    downgrades to exit 0 on a fresh clone / CI runner / reset ledger (`.aramid/`
+    is gitignored), defeating the LLM gate entirely."""
+    root = _repo(tmp_path)
+    _no_user_config(tmp_path, monkeypatch)
+    (root / "aramid.toml").write_text(
+        'schema_version = 1\n\n[llm]\nllm_block_armed = true\n', encoding="utf-8")
+
+    quote = "return db.get(order_id)"
+    (root / "src").mkdir()
+    (root / "src" / "auth.py").write_text(quote + "\n", encoding="utf-8")
+    _git(root, "add", "src/auth.py")
+    _git(root, "commit", "-q", "-m", "add auth")
+
+    ledger = Ledger(root / ".aramid" / "ledger.db")
+    assert not ledger.has_baseline()
+    finding = Finding(
+        id="f" * 64, tool="llm-review", rule="llm/a01", severity_raw="critical",
+        severity=Severity.CRITICAL, verdict=Verdict.WARN, file="src/auth.py", line=1,
+        message="IDOR: no ownership check", evidence=quote, gate=Gate.ALL,
+        source=Source.LLM, confirmed=True)
+    ledger.record_run("r0", "2026-01-01T00:00:00+00:00", "drain", set(), set(), [finding])
+    ledger.close()
+
+    # No deterministic runners at all this pre-push -- isolates the block to
+    # the materialized LLM finding alone.
+    monkeypatch.setitem(pipeline.GATE_RUNNER_KEYS, Gate.PRE_PUSH, [])
 
     rc = cmd_check(root, Gate.PRE_PUSH, "range")
 

@@ -37,3 +37,19 @@ enabled = true
 # separate from the OWASP bake's `semgrep_block_armed` (see policy.py's
 # _PACK_BLOCK_PREFIX). Set false to demote noisy pack rules to WARN.
 pack_block_armed = true
+
+# --- Phase 2b (spec sections 2-5): the LLM reviewer ---
+[llm]
+enabled = true
+max_items_per_drain = 3
+call_timeout_s = 240
+packet_max_bytes = 120000
+# Bake-then-arm (spec section 5): confirmed-CRITICAL LLM findings WARN until
+# `aramid arm --llm` flips this. Independent of `semgrep_block_armed` and
+# `pack_block_armed`.
+llm_block_armed = false
+provider_order = ["claude-cli", "codex-cli", "openrouter"]
+model_claude = "sonnet"
+model_codex = ""                   # empty = CLI default
+model_openrouter = "anthropic/claude-sonnet-4-5"
+openrouter_monthly_cap_usd = 5.0

@@ -185,3 +185,52 @@ def test_probe_tool_finds_semgrep_despite_pysemgrep_sibling_lookup():
 def test_probe_tool_reports_missing_for_unknown_tool():
     status = doctor.probe_tool("definitely-not-a-real-tool-xyz")
     assert not status.present
+
+
+# --- LLM providers probe (Phase 2b) ---
+
+def test_probe_providers_zero_call(monkeypatch, tmp_path):
+    import shutil as _shutil
+    from aramid.providers import spend as spend_mod
+    monkeypatch.setattr(spend_mod, "spend_path", lambda: tmp_path / "llm_spend.jsonl")
+    monkeypatch.setattr(_shutil, "which",
+                        lambda n: r"C:\bin\claude.exe" if n == "claude" else None)
+    monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
+    lines = doctor.probe_providers()
+    text = "\n".join(lines)
+    assert "claude-cli" in text and "OK" in text
+    assert "codex-cli" in text and "MISSING" in text
+    assert "openrouter" in text and "no OPENROUTER_API_KEY" in text
+
+
+def test_doctor_exit_code_unchanged_by_missing_providers(monkeypatch, tmp_path):
+    """Providers are informational: doctor's exit contract is driven by
+    BLOCK_TIER tools only. Monkeypatch probe_toolchain to all-present and
+    verify exit 0 with no provider installed."""
+    import shutil as _shutil
+    monkeypatch.setattr(doctor, "probe_toolchain", lambda root: {
+        name: doctor.ToolStatus(name, True, "1.0")
+        for name in (*doctor.ALL_TOOLS, "interpreter")})
+    monkeypatch.setattr(_shutil, "which", lambda n: None)
+    monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
+    assert doctor.cmd_doctor(tmp_path) == 0
+
+
+def test_probe_providers_spend_unreadable_with_key_set(monkeypatch, tmp_path):
+    """Fail-closed money path: OPENROUTER_API_KEY is set but the spend log is
+    unreadable (month_spend_usd None). probe_providers must surface 'spend log
+    unreadable -- calls refused' and never raise; and cmd_doctor's exit code
+    stays BLOCK_TIER-driven (0 here, since the toolchain is all-present)."""
+    from aramid.providers import spend as spend_mod
+    monkeypatch.setattr(spend_mod, "spend_path", lambda: tmp_path / "llm_spend.jsonl")
+    monkeypatch.setattr(spend_mod, "month_spend_usd", lambda provider, now_iso: None)
+    monkeypatch.setenv("OPENROUTER_API_KEY", "sk-test")
+
+    lines = doctor.probe_providers()  # must not raise
+    text = "\n".join(lines)
+    assert "openrouter" in text and "spend log unreadable -- calls refused" in text
+
+    monkeypatch.setattr(doctor, "probe_toolchain", lambda root: {
+        name: doctor.ToolStatus(name, True, "1.0")
+        for name in (*doctor.ALL_TOOLS, "interpreter")})
+    assert doctor.cmd_doctor(tmp_path) == 0

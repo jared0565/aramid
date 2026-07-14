@@ -288,6 +288,36 @@ def _fix_gitleaks() -> bool:
     return True
 
 
+def probe_providers() -> list[str]:
+    """Zero-LLM-call provider probe (spec section 7): which/env/spend reads
+    only. Informational -- provider absence never changes doctor's exit code
+    (LLM review degrades gracefully; BLOCK-tier tools do not)."""
+    from datetime import datetime, timezone
+    from aramid.providers import spend as spend_mod
+    lines = []
+    for name, exe in (("claude-cli", "claude"), ("codex-cli", "codex")):
+        found = shutil.which(exe)
+        lines.append(f"  OK       {name:<12} {found}" if found
+                     else f"  MISSING  {name:<12} not found on PATH")
+    if not os.environ.get("OPENROUTER_API_KEY"):
+        lines.append("  MISSING  openrouter   no OPENROUTER_API_KEY in environment")
+    else:
+        # Self-enforcing fail-safe: the "never crashes" contract for doctor
+        # must not depend solely on spend.py's internal guarantees. month is
+        # already None on an unreadable log (fail-closed money path), but any
+        # unexpected error here degrades to an informational line rather than
+        # propagating out of cmd_doctor (which has no outer try/except).
+        try:
+            month = spend_mod.month_spend_usd(
+                "openrouter", datetime.now(timezone.utc).isoformat())
+            detail = ("spend log unreadable -- calls refused" if month is None
+                      else f"this month ${month:.2f}")
+            lines.append(f"  OK       openrouter   key set; {detail}")
+        except Exception:
+            lines.append("  OK       openrouter   key set; openrouter probe unavailable")
+    return lines
+
+
 def cmd_doctor(root: Path, fix: bool = False) -> int:
     """Probe the toolchain (and shim interpreter); when `fix`, repair
     what's missing/owned and re-probe. Returns 0 if both BLOCK-tier tools
@@ -306,6 +336,10 @@ def cmd_doctor(root: Path, fix: bool = False) -> int:
     for name in ALL_TOOLS:
         print(_report_line(statuses[name]))
     print(_report_line(statuses["interpreter"]))
+
+    print("llm providers:")
+    for line in probe_providers():
+        print(line)
 
     missing_block = [name for name in BLOCK_TIER if not statuses[name].present]
     if missing_block:

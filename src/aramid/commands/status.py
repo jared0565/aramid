@@ -133,6 +133,32 @@ def _bake_lines(cfg: config_mod.Config, state: dict) -> list[str]:
     return lines
 
 
+def _llm_lines(cfg: config_mod.Config, state: dict) -> list[str]:
+    """LLM review status: open count, confirmed critical count, armed state,
+    and monthly OpenRouter spend (spec section 7, Phase 2b)."""
+    recs = [r for r in state.values()
+            if r.get("source") == "llm" and r.get("status") == "open"]
+    confirmed = sum(1 for r in recs
+                    if r.get("confirmed") and r.get("severity") == "critical")
+    armed = bool(cfg.llm.get("llm_block_armed", False))
+    lines = [f"llm: {len(recs)} open ({confirmed} confirmed critical) | "
+             f"{'armed' if armed else 'baking'}"]
+    try:
+        from aramid.providers import spend as spend_mod
+        cap = float(cfg.llm.get("openrouter_monthly_cap_usd", 5.0))
+        month = spend_mod.month_spend_usd("openrouter",
+                                          datetime.now(timezone.utc).isoformat())
+        if month is None:
+            lines.append("llm spend (openrouter, this month): "
+                         "unreadable -- openrouter disabled")
+        else:
+            lines.append(f"llm spend (openrouter, this month): "
+                         f"${month:.2f} / ${cap:.2f}")
+    except Exception:
+        lines.append("llm spend (openrouter, this month): unknown")
+    return lines
+
+
 # --- Phase 2a: queue / drain / registry / schedule (spec section 2) ---
 
 def _queue_lines(ledger: Ledger) -> list[str]:
@@ -226,6 +252,9 @@ def cmd_status(root) -> int:
             lines.extend(historical)
 
         lines.extend(_bake_lines(cfg, state))
+
+        # --- Phase 2b: LLM review status (spec section 7) ---
+        lines.extend(_llm_lines(cfg, state))
 
         # --- Phase 2a: queue / drain / registry / schedule (spec section 2) ---
         lines.extend(_queue_lines(ledger))

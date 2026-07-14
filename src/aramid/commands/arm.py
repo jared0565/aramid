@@ -16,9 +16,26 @@ import sys
 from pathlib import Path
 
 _KEY_RE = re.compile(r"(?m)^semgrep_block_armed\s*=\s*\S+\s*$")
+_LLM_KEY_RE = re.compile(r"(?m)^llm_block_armed\s*=\s*\S+\s*$")
+_LLM_SECTION_RE = re.compile(r"(?m)^\[llm\]\s*$")
 
 
-def cmd_arm(root) -> int:
+def _arm_llm_text(text: str) -> str:
+    """Comment-preserving single-key rewrite, mirroring the semgrep path:
+    key exists -> substitute; [llm] section exists -> insert the key right
+    under the header; neither -> append a fresh [llm] section (a bare
+    key at EOF would land inside whatever table happens to be last)."""
+    if _LLM_KEY_RE.search(text):
+        return _LLM_KEY_RE.sub("llm_block_armed = true", text)
+    m = _LLM_SECTION_RE.search(text)
+    if m:
+        insert_at = m.end()
+        return text[:insert_at] + "\nllm_block_armed = true" + text[insert_at:]
+    prefix = "" if not text or text.endswith("\n") else "\n"
+    return text + prefix + "[llm]\nllm_block_armed = true\n"
+
+
+def cmd_arm(root, llm: bool = False) -> int:
     root = Path(root)
     toml_path = root / "aramid.toml"
     if not toml_path.exists():
@@ -26,6 +43,13 @@ def cmd_arm(root) -> int:
         return 3
 
     text = toml_path.read_text(encoding="utf-8")
+    if llm:
+        toml_path.write_text(_arm_llm_text(text), encoding="utf-8")
+        print(f"aramid: arm: llm_block_armed=true written to {toml_path}")
+        print("aramid: arm: LLM bake ended -- confirmed-CRITICAL llm-review "
+              "findings now BLOCK at pre-push.")
+        return 0
+
     if _KEY_RE.search(text):
         new_text = _KEY_RE.sub("semgrep_block_armed = true", text)
     else:

@@ -40,6 +40,7 @@ class Config:
     triage: dict
     drain: dict
     pack: dict
+    llm: dict
 
 
 def _user_config_path() -> Path:
@@ -100,6 +101,7 @@ def load_config(root: Path) -> Config:
         triage=merged.get("triage", {}),
         drain=merged.get("drain", {}),
         pack=merged.get("pack", {}),
+        llm=merged.get("llm", {}),
     )
 
 
