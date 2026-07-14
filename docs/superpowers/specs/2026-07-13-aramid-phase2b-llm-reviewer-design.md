@@ -302,13 +302,17 @@ Quota detection is pattern-based on stderr/exit codes (e.g. the Claude CLI
 usage-limit message); patterns live in the provider modules.
 
 **Spend per drain:** at most `max_items_per_drain` reviews (default 3), plus
-one refute call per *fresh* CRITICAL finding. Refutes are NOT bounded by
-`max_items_per_drain` — the budget caps reviews only; each fresh CRITICAL a
-review surfaces triggers its own refute. So the true worst case is `3 reviews
-+ N refutes` where N is the number of fresh CRITICALs across those reviews
-(unbounded in principle, though a single packet rarely yields more than a
-few). At defaults with one CRITICAL per item that is `3 × (1 review + 1
-refute)` = 6 calls; typical 1–3.
+one refute call per *fresh* CRITICAL finding. A review can surface many
+CRITICALs, so refutes get their own hard per-drain cap,
+`max_refutes_per_drain` (default 6), independent of the review budget. The
+fresh set is also deduped by fingerprint within a response, so a CRITICAL
+restated twice costs one refute, not two. Once the refute cap is hit, a
+further fresh CRITICAL is treated exactly like a transport-failed refute —
+demoted to `high`, `confirmed = False`, never block-eligible — so the cap
+only ever *withholds* a confirmation and can never cause a wrong block. Worst
+case is therefore `min(3, max_items) reviews + min(N, 6) refutes` where N is
+the number of distinct fresh CRITICALs. At defaults with one CRITICAL per
+item that is `3 × (1 review + 1 refute)` = 6 calls; typical 1–3.
 
 ## 5. Blocking, bake & resolution
 

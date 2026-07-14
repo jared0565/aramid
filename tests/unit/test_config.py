@@ -219,6 +219,7 @@ def test_llm_defaults_present(tmp_path, monkeypatch):
     assert cfg.llm["model_codex"] == ""
     assert cfg.llm["model_openrouter"] == "anthropic/claude-sonnet-4-5"
     assert cfg.llm["openrouter_monthly_cap_usd"] == 5.0
+    assert cfg.llm["max_refutes_per_drain"] == 6
 
 
 def test_llm_repo_override_merges(tmp_path, monkeypatch):

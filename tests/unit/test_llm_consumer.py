@@ -227,6 +227,72 @@ def test_dedupe_skips_known_open_finding_no_refute_spend(tmp_path, monkeypatch):
     assert len(b.calls) == 1                                 # refute NOT re-spent
 
 
+def test_dedupe_within_response_refutes_once(tmp_path, monkeypatch):
+    """Two fresh CRITICAL findings in ONE review response that share a
+    fingerprint (same rule/file/line_content) collapse to one: only ONE refute
+    call fires and only one RawFinding emerges. Fail-safe -- dedupe only ever
+    removes a candidate."""
+    r, base_sha, head_sha = _repo(tmp_path)
+    dup = json.dumps({"findings": [
+        {"title": "IDOR", "owasp": "a01", "severity": "critical",
+         "file": "src/auth.py", "line": 2, "evidence": EVIDENCE,
+         "explanation": "no ownership check", "fix_hint": "verify owner"},
+        {"title": "IDOR restated", "owasp": "a01", "severity": "critical",
+         "file": "src/auth.py", "line": 2, "evidence": EVIDENCE,
+         "explanation": "same line, second report", "fix_hint": "verify owner"}]})
+    a = _Fake("fake-a", [ProviderResponse(text=dup)])
+    b = _Fake("fake-b", [ProviderResponse(text=json.dumps({"refuted": False,
+                                                           "reason": "real"})),
+                         ProviderResponse(text=json.dumps({"refuted": False,
+                                                           "reason": "real again"}))])
+    _wire(monkeypatch, a, b)
+    led = Ledger(tmp_path / "l.db")
+    try:
+        got = llm_review.consume(_item(base_sha, head_sha), _ctx(r, led))
+    finally:
+        led.close()
+    assert got.state == "ok"
+    assert len(got.findings) == 1                 # duplicate fingerprint collapsed
+    assert len(b.calls) == 1                       # refute spent exactly once
+    assert "refutes=1" in got.note
+
+
+def test_refute_budget_cap_clips_overflow_critical_failsafe(tmp_path, monkeypatch):
+    """Per-drain refute cap: with max_refutes_per_drain=1 and two DISTINCT
+    fresh CRITICALs, exactly one refute call fires. The overflow critical is
+    demoted to high with confirmed=False, so it can NEVER block -- even armed.
+    This is the load-bearing fail-safe: the cap only ever WITHHOLDS a
+    confirmation, never grants one."""
+    r, base_sha, head_sha = _repo(tmp_path)
+    two = json.dumps({"findings": [
+        {"title": "IDOR read", "owasp": "a01", "severity": "critical",
+         "file": "src/auth.py", "line": 2, "evidence": "return db.get(order_id)",
+         "explanation": "no ownership check", "fix_hint": "verify owner"},
+        {"title": "unguarded entrypoint", "owasp": "a01", "severity": "critical",
+         "file": "src/auth.py", "line": 1, "evidence": "def get_order(order_id):",
+         "explanation": "no authz at entry", "fix_hint": "add authz"}]})
+    a = _Fake("fake-a", [ProviderResponse(text=two)])
+    b = _Fake("fake-b", [ProviderResponse(text=json.dumps({"refuted": False,
+                                                           "reason": "real"}))])
+    _wire(monkeypatch, a, b)
+    led = Ledger(tmp_path / "l.db")
+    ctx = DrainContext(root=r, cfg=_cfg(max_refutes_per_drain=1), ledger=led,
+                       clock=lambda: NOW.isoformat())
+    try:
+        got = llm_review.consume(_item(base_sha, head_sha), ctx)
+    finally:
+        led.close()
+    assert got.state == "ok"
+    assert len(b.calls) == 1                       # only ONE refute call spent
+    assert len(got.findings) == 2                  # both recorded (distinct fingerprints)
+    confirmed = [f for f in got.findings if f.confirmed]
+    clipped = [f for f in got.findings if not f.confirmed]
+    assert len(confirmed) == 1 and confirmed[0].severity_raw == "critical"
+    assert len(clipped) == 1 and clipped[0].severity_raw == "high"   # demoted, can't block
+    assert "budget exhausted" in clipped[0].message
+    assert "refute_clipped=1" in got.note
+
+
 def test_no_providers_installed_skips_ok(tmp_path, monkeypatch):
     r, base_sha, head_sha = _repo(tmp_path)
     ghost = SimpleNamespace(NAME="fake-a", available=lambda cfg: False,
