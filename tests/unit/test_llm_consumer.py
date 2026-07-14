@@ -47,10 +47,16 @@ def _item(base, head):
 
 
 def _cfg(**over):
+    # Default ladder chosen so a score=80 item (the _item() default) selects
+    # fake-a as reviewer and fake-b as the cross-provider refuter -- preserving
+    # every existing test's fake-a=reviewer / fake-b=refuter assumption.
+    ladder = over.pop("ladder", [
+        {"tier": "cheap", "provider": "fake-b", "model": "mb", "effort": "", "min_score": 40},
+        {"tier": "frontier", "provider": "fake-a", "model": "ma", "effort": "", "min_score": 80},
+    ])
     llm = {"enabled": True, "max_items_per_drain": 3, "call_timeout_s": 240,
            "packet_max_bytes": 120000, "provider_order": ["fake-a", "fake-b"],
-           "model_claude": "sonnet", "model_codex": "", "model_openrouter": "m",
-           "llm_block_armed": False, **over}
+           "ladder": ladder, "llm_block_armed": False, **over}
     return SimpleNamespace(llm=llm, ignore_paths=[".aramid/", "graph-out/", ".git/"])
 
 
@@ -67,6 +73,7 @@ class _Fake:
         self.NAME = name
         self.responses = list(responses)
         self.calls = []
+        self.models = []
 
     def available(self, cfg):
         return True
@@ -76,6 +83,7 @@ class _Fake:
 
     def review(self, prompt, model, timeout_s, **kw):
         self.calls.append(prompt)
+        self.models.append(model)
         return self.responses.pop(0)
 
 
@@ -91,6 +99,87 @@ def _fresh():
 
 def _wire(monkeypatch, *fakes):
     monkeypatch.setattr(providers_base, "PROVIDERS", {f.NAME: f for f in fakes})
+
+
+_LADDER_AB = [
+    {"tier": "cheap", "provider": "fake-a", "model": "ma", "effort": "", "min_score": 40},
+    {"tier": "frontier", "provider": "fake-b", "model": "mb", "effort": "", "min_score": 80},
+]
+
+
+def _ctx_ladder(r, led, ladder):
+    return DrainContext(root=r, cfg=_cfg(ladder=ladder), ledger=led,
+                        clock=lambda: NOW.isoformat())
+
+
+def _item_score(base, head, score):
+    return QueueItem(id="q1", base=base, head=head, score=score, reasons=("x",),
+                     state="queued", created_at=NOW.isoformat(), updated_at=NOW.isoformat())
+
+
+def test_high_score_selects_frontier_arm_model_passed(tmp_path, monkeypatch):
+    """score>=80 selects the frontier arm (fake-b/mb); the arm's MODEL reaches
+    the provider and the note carries tier/model."""
+    r, base_sha, head_sha = _repo(tmp_path)
+    a = _Fake("fake-a", [])
+    b = _Fake("fake-b", [ProviderResponse(text=_finding_json("high"))])
+    _wire(monkeypatch, a, b)
+    led = Ledger(tmp_path / "l.db")
+    try:
+        got = llm_review.consume(_item_score(base_sha, head_sha, 90),
+                                 _ctx_ladder(r, led, _LADDER_AB))
+    finally:
+        led.close()
+    assert got.state == "ok"
+    assert "provider=fake-b" in got.note and "tier=frontier" in got.note
+    assert "model=mb" in got.note and b.models == ["mb"]
+
+
+def test_low_score_selects_cheap_arm(tmp_path, monkeypatch):
+    r, base_sha, head_sha = _repo(tmp_path)
+    a = _Fake("fake-a", [ProviderResponse(text=_finding_json("high"))])
+    b = _Fake("fake-b", [])
+    _wire(monkeypatch, a, b)
+    led = Ledger(tmp_path / "l.db")
+    try:
+        got = llm_review.consume(_item_score(base_sha, head_sha, 45),
+                                 _ctx_ladder(r, led, _LADDER_AB))
+    finally:
+        led.close()
+    assert "tier=cheap" in got.note and "provider=fake-a" in got.note and "model=ma" in got.note
+
+
+def test_degrade_when_target_provider_unavailable_notes_it(tmp_path, monkeypatch):
+    """score=90 targets frontier (fake-b), but fake-b is unavailable -> degrade
+    to cheap (fake-a) and record degraded_from=frontier."""
+    r, base_sha, head_sha = _repo(tmp_path)
+    a = _Fake("fake-a", [ProviderResponse(text=_finding_json("high"))])
+    down = SimpleNamespace(NAME="fake-b", available=lambda cfg: False, installed=lambda: True)
+    _wire(monkeypatch, a, down)
+    led = Ledger(tmp_path / "l.db")
+    try:
+        got = llm_review.consume(_item_score(base_sha, head_sha, 90),
+                                 _ctx_ladder(r, led, _LADDER_AB))
+    finally:
+        led.close()
+    assert "tier=cheap" in got.note and "degraded_from=frontier" in got.note
+
+
+def test_refuter_is_cross_provider_arm(tmp_path, monkeypatch):
+    """Critical found by the cheap arm (fake-a) is refuted by the highest-tier
+    different provider (fake-b)."""
+    r, base_sha, head_sha = _repo(tmp_path)
+    a = _Fake("fake-a", [ProviderResponse(text=_finding_json("critical"))])
+    b = _Fake("fake-b", [ProviderResponse(text=json.dumps({"refuted": False, "reason": "real"}))])
+    _wire(monkeypatch, a, b)
+    led = Ledger(tmp_path / "l.db")
+    try:
+        got = llm_review.consume(_item_score(base_sha, head_sha, 45),
+                                 _ctx_ladder(r, led, _LADDER_AB))
+    finally:
+        led.close()
+    assert got.findings[0].confirmed is True
+    assert len(b.calls) == 1 and "disprove" in b.calls[0]   # refute went to fake-b
 
 
 def test_happy_path_high_finding_no_refute(tmp_path, monkeypatch):
