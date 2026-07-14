@@ -214,12 +214,16 @@ def test_llm_defaults_present(tmp_path, monkeypatch):
     assert cfg.llm["call_timeout_s"] == 240
     assert cfg.llm["packet_max_bytes"] == 120000
     assert cfg.llm["llm_block_armed"] is False
-    assert cfg.llm["provider_order"] == ["claude-cli", "codex-cli", "openrouter"]
-    assert cfg.llm["model_claude"] == "sonnet"
-    assert cfg.llm["model_codex"] == ""
+    assert cfg.llm["provider_order"] == ["claude-cli", "codex-cli", "ollama-cloud"]
     assert cfg.llm["model_openrouter"] == "anthropic/claude-sonnet-4-5"
     assert cfg.llm["openrouter_monthly_cap_usd"] == 5.0
     assert cfg.llm["max_refutes_per_drain"] == 6
+    # Ladder assertions
+    ladder = cfg.llm["ladder"]
+    assert [a["tier"] for a in ladder] == ["cheap", "mid", "frontier"]
+    assert [a["provider"] for a in ladder] == ["ollama-cloud", "codex-cli", "claude-cli"]
+    assert [a["min_score"] for a in ladder] == [40, 60, 80]
+    assert all(a["effort"] == "" for a in ladder)
 
 
 def test_llm_repo_override_merges(tmp_path, monkeypatch):

@@ -48,9 +48,11 @@ packet_max_bytes = 120000
 # `aramid arm --llm` flips this. Independent of `semgrep_block_armed` and
 # `pack_block_armed`.
 llm_block_armed = false
-provider_order = ["claude-cli", "codex-cli", "openrouter"]
-model_claude = "sonnet"
-model_codex = ""                   # empty = CLI default
+provider_order = ["claude-cli", "codex-cli", "ollama-cloud"]
+# openrouter is OPT-IN / in-app only -- NOT part of the dev-time default chain
+# (model-source policy). To use it, add "openrouter" to provider_order and an
+# openrouter arm to [[llm.ladder]] in a repo's aramid.toml. These keys are read
+# only by the opt-in openrouter provider:
 model_openrouter = "anthropic/claude-sonnet-4-5"
 openrouter_monthly_cap_usd = 5.0
 # Hard cap on refute calls across a whole drain (spec section 4). A single
@@ -62,3 +64,30 @@ openrouter_monthly_cap_usd = 5.0
 # never a wrong block. 6 comfortably covers a typical 1-2 criticals per item
 # across the default 3 items before it ever clips.
 max_refutes_per_drain = 6
+
+# Reviewer model ladder (deterministic risk-tiered selection, design section 6).
+# The arm whose min_score band contains an item's triage score reviews it;
+# degrade-to-nearest-available on provider outage. Each tier is a different
+# provider so the cross-provider refuter always differs in model family.
+# effort ships "" (flag omitted) until the plan's Task 7 live CLI check verifies
+# accepted values -- intended: cheap=low, mid=medium, frontier=high.
+[[llm.ladder]]
+tier = "cheap"
+provider = "ollama-cloud"
+model = "deepseek-v4-flash"
+effort = ""
+min_score = 40
+
+[[llm.ladder]]
+tier = "mid"
+provider = "codex-cli"
+model = "gpt-5.6"
+effort = ""
+min_score = 60
+
+[[llm.ladder]]
+tier = "frontier"
+provider = "claude-cli"
+model = "opus"
+effort = ""
+min_score = 80
