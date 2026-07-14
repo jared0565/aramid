@@ -13,6 +13,86 @@ from aramid import gitutil, triage
 from aramid.fingerprint import compute_fingerprint, normalize_line
 from aramid.models import Event, EventType, Finding, Gate, Severity, Source, Verdict
 
+
+@dataclass(frozen=True)
+class Arm:
+    """A selectable (provider, model, effort) point on the cheap->frontier
+    ladder. min_score is the lower bound of the arm's risk band."""
+    tier: str
+    provider: str
+    model: str
+    effort: str
+    min_score: int
+
+
+def build_arms(cfg) -> list[Arm]:
+    """Parse [[llm.ladder]] into Arms, sorted ascending by min_score. Malformed
+    entries are dropped (fail-open) -- never crash selection over bad config."""
+    out = []
+    for e in cfg.llm.get("ladder", []):
+        if not isinstance(e, dict):
+            continue
+        try:
+            out.append(Arm(tier=str(e["tier"]), provider=str(e["provider"]),
+                           model=str(e.get("model", "")), effort=str(e.get("effort", "")),
+                           min_score=int(e["min_score"])))
+        except (KeyError, ValueError, TypeError):
+            continue
+    out.sort(key=lambda a: a.min_score)
+    return out
+
+
+def target_arm(arms: list[Arm], score: int) -> Arm | None:
+    """The risk-appropriate arm IGNORING availability: the highest-min_score
+    arm whose band contains score. Below the lowest band -> the cheapest arm.
+    None if there are no arms. (arms must be sorted ascending.)"""
+    if not arms:
+        return None
+    chosen = arms[0]
+    for a in arms:
+        if a.min_score <= score:
+            chosen = a
+        else:
+            break
+    return chosen
+
+
+def reviewer_order(arms: list[Arm], score: int, available: set[str]) -> list[Arm]:
+    """Ordered arms to ATTEMPT for the review: the target-tier arm first, then
+    degrade to nearest available -- prefer at-or-below the target tier
+    (highest first), then climb above it -- deduped by provider. Empty if
+    nothing is available. The list (not a single arm) preserves Phase 2b's
+    call-failure fallthrough: available() cannot see quota exhaustion, so a
+    quota-failed call must still fall through to another provider."""
+    tgt = target_arm(arms, score)
+    if tgt is None:
+        return []
+    avail = [a for a in arms if a.provider in available]
+    if not avail:
+        return []
+    at_or_below = [a for a in avail if a.min_score <= tgt.min_score]
+    above = [a for a in avail if a.min_score > tgt.min_score]
+    ordered = list(reversed(at_or_below)) + above
+    seen, out = set(), []
+    for a in ordered:
+        if a.provider in seen:
+            continue
+        seen.add(a.provider)
+        out.append(a)
+    return out
+
+
+def select_refuter(arms: list[Arm], reviewer_arm: Arm, available: set[str]) -> Arm:
+    """The highest-tier available arm whose provider differs from the
+    reviewer's (max skeptical power + model-family diversity). Falls back to
+    the reviewer's own arm (self-refute) when no other provider is available --
+    preserving Phase 2b's single-provider fallback."""
+    diff = [a for a in arms if a.provider != reviewer_arm.provider and a.provider in available]
+    if diff:
+        return diff[-1]     # arms sorted ascending -> last is highest min_score
+    return reviewer_arm
+
+
 _BEGIN = "<<<UNTRUSTED_DATA_BEGIN>>>"
 _END = "<<<UNTRUSTED_DATA_END>>>"
 

@@ -22,7 +22,7 @@ def test_drain_import_path_registers_all_default_providers():
         "import aramid.commands.drain\n"
         "from aramid.providers import base\n"
         "got = set(base.PROVIDERS)\n"
-        "need = {'claude-cli', 'codex-cli', 'openrouter'}\n"
+        "need = {'claude-cli', 'codex-cli', 'openrouter', 'ollama-cloud'}\n"
         "assert need <= got, f'missing {need - got}; got {got}'\n"
         "print('REGISTERED')\n"
     )
@@ -37,7 +37,7 @@ def test_llm_consumer_import_alone_registers_providers():
     code = (
         "from aramid.consumers import llm_review\n"
         "from aramid.providers import base\n"
-        "assert {'claude-cli', 'codex-cli', 'openrouter'} <= set(base.PROVIDERS)\n"
+        "assert {'claude-cli', 'codex-cli', 'openrouter', 'ollama-cloud'} <= set(base.PROVIDERS)\n"
         "print('REGISTERED')\n"
     )
     cp = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True)

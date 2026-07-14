@@ -26,11 +26,13 @@ def available(cfg) -> bool:
     return installed()
 
 
-def review(prompt: str, model: str, timeout_s: float) -> ProviderResponse:
+def review(prompt: str, model: str, timeout_s: float, *, effort: str = "") -> ProviderResponse:
     exe = shutil.which("claude")
     if exe is None:
         return ProviderResponse(text="", error=base.ERR_UNAVAILABLE)
     argv = [exe, "-p", "--model", model, "--output-format", "json"]
+    if effort:
+        argv += ["--effort", effort]
     got = base.run_provider_subprocess(argv, prompt, timeout_s)
     if got is None:
         return ProviderResponse(text="", error=base.ERR_TIMEOUT)

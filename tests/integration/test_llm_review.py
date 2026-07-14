@@ -140,13 +140,21 @@ def _setup_repo(tmp_path):
 
 def test_full_loop(tmp_path, monkeypatch, seam):
     r = _setup_repo(tmp_path)
+    # This fixture's real triage score is 75 (see module docstring), which
+    # lands in the default ladder's "mid" band [60,80) -> codex-cli is the
+    # tier-selected reviewer, with claude-cli ("frontier", the only other
+    # available provider) as the cross-provider refuter -- NOT claude-cli
+    # review / codex-cli refute as under the old first-available selection.
+    # The response payloads are assigned accordingly; the assertions below
+    # (confirmed/critical/evidence/token totals) don't care which named
+    # provider played which role.
     monkeypatch.setattr(providers_base, "PROVIDERS", {
-        "claude-cli": _Fake("claude-cli", [ProviderResponse(text=REVIEW_JSON,
-                                                            tokens_in=900,
-                                                            tokens_out=80)]),
-        "codex-cli": _Fake("codex-cli", [ProviderResponse(text=REFUTE_SURVIVES,
-                                                          tokens_in=400,
-                                                          tokens_out=20)]),
+        "claude-cli": _Fake("claude-cli", [ProviderResponse(text=REFUTE_SURVIVES,
+                                                            tokens_in=400,
+                                                            tokens_out=20)]),
+        "codex-cli": _Fake("codex-cli", [ProviderResponse(text=REVIEW_JSON,
+                                                          tokens_in=900,
+                                                          tokens_out=80)]),
     })
     # 1. drain reviews the range (catch-up sweep enqueues the new commit).
     # Exit tolerance: check drain.py's actual exit semantics -- a degraded

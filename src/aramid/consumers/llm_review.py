@@ -26,7 +26,7 @@ from aramid.providers import base as providers_base
 # the provider modules, so PROVIDERS stayed empty, chain() returned [], and
 # every drain reported "no providers installed" even with the CLIs on PATH.
 # The consumer that USES the chain is the right place to pull them in.
-from aramid.providers import claude_cli, codex_cli, openrouter  # noqa: F401
+from aramid.providers import claude_cli, codex_cli, openrouter, ollama_cloud  # noqa: F401
 
 NAME = "llm-review"
 _MALFORMED_GIVE_UP = 3
@@ -42,16 +42,12 @@ def begin_drain() -> None:
     _refutes_used = 0
 
 
-def _model_for(module, cfg) -> str:
-    return {"claude-cli": cfg.llm.get("model_claude", "sonnet"),
-            "codex-cli": cfg.llm.get("model_codex", ""),
-            "openrouter": cfg.llm.get("model_openrouter", "")}.get(module.NAME, "")
-
-
-def _call(module, prompt: str, cfg, timeout_s: float):
-    kwargs = {"cfg": cfg} if module.NAME == "openrouter" else {}
+def _call(module, prompt: str, model: str, cfg, timeout_s: float, *, effort: str = ""):
+    kwargs = {"effort": effort}
+    if module.NAME == "openrouter":
+        kwargs["cfg"] = cfg
     try:
-        return module.review(prompt, _model_for(module, cfg), timeout_s, **kwargs)
+        return module.review(prompt, model, timeout_s, **kwargs)
     except Exception:
         return providers_base.ProviderResponse(text="", error=providers_base.ERR_ERROR)
 
@@ -95,8 +91,10 @@ def consume(item, ctx: DrainContext) -> ConsumerResult:
     packet = review.build_packet(ctx.root, cfg, item)
     if packet is None:
         return ConsumerResult(consumer=NAME, state="ok", note="empty packet")
-    chain = providers_base.chain(cfg)
-    if not chain:
+    arms = review.build_arms(cfg)
+    avail = {m.NAME for m in providers_base.chain(cfg)}
+    order = review.reviewer_order(arms, item.score, avail)
+    if not order:
         if not _any_installed(cfg):
             return ConsumerResult(consumer=NAME, state="ok",
                                   note="llm skipped: no providers installed")
@@ -105,16 +103,19 @@ def consume(item, ctx: DrainContext) -> ConsumerResult:
 
     timeout_s = float(cfg.llm.get("call_timeout_s", 240))
     prompt = review.render_review_prompt(packet)
-    resp, provider = None, None
-    for module in chain:
-        r = _call(module, prompt, cfg, timeout_s)
+    tgt = review.target_arm(arms, item.score)
+    resp, reviewer_arm = None, None
+    for arm in order:                       # target tier first, then degrade/fallthrough
+        r = _call(providers_base.PROVIDERS[arm.provider], prompt, arm.model, cfg,
+                  timeout_s, effort=arm.effort)
         if r.error in ("", providers_base.ERR_MALFORMED):
-            resp, provider = r, module
-            break                    # call spent (or clean) -- stop the chain
+            resp, reviewer_arm = r, arm
+            break
         # unavailable/quota/timeout/error: fall through to the next provider
     if resp is None:
         return ConsumerResult(consumer=NAME, state="degraded",
                               note="all providers unavailable")
+    provider = providers_base.PROVIDERS[reviewer_arm.provider]   # for the refute cross-check
 
     _reviews_used += 1
     cost = resp.cost_usd
@@ -178,8 +179,10 @@ def consume(item, ctx: DrainContext) -> ConsumerResult:
                 cand = review.apply_refute(
                     cand, True, "refute unavailable (drain refute budget exhausted)")
             else:
-                refuter = next((m for m in chain if m.NAME != provider.NAME), provider)
-                rr = _call(refuter, review.render_refute_prompt(cand, packet), cfg, timeout_s)
+                refuter_arm = review.select_refuter(arms, reviewer_arm, avail)
+                rr = _call(providers_base.PROVIDERS[refuter_arm.provider],
+                          review.render_refute_prompt(cand, packet), refuter_arm.model, cfg,
+                          timeout_s, effort=refuter_arm.effort)
                 _refutes_used += 1
                 refutes += 1
                 cost += rr.cost_usd
@@ -200,7 +203,10 @@ def consume(item, ctx: DrainContext) -> ConsumerResult:
         confirmed=bool(cand.get("confirmed", False)),
     ) for rule, cand in finals]
 
-    note = (f"provider={provider.NAME} tokens_in={tokens_in} tokens_out={tokens_out} "
+    degraded = (f" degraded_from={tgt.tier}"
+                if tgt is not None and reviewer_arm.min_score < tgt.min_score else "")
+    note = (f"provider={reviewer_arm.provider} tier={reviewer_arm.tier}{degraded} "
+            f"model={reviewer_arm.model} tokens_in={tokens_in} tokens_out={tokens_out} "
             f"refutes={refutes} hallucination_rejected={rejected}"
             + (f" refute_clipped={clipped}" if clipped else "")
             + (" truncated" if packet.truncated else ""))
