@@ -302,3 +302,19 @@ def test_status_reports_llm_lines(tmp_path, capsys, monkeypatch):
     out = capsys.readouterr().out
     assert "llm: 1 open (1 confirmed critical) | baking" in out
     assert "llm spend (openrouter, this month): $1.25 / $5.00" in out
+
+
+def test_status_llm_spend_unreadable_degrades_without_crash(tmp_path, capsys, monkeypatch):
+    """The one deliberate fail-closed money path (spec section 6): when
+    month_spend_usd returns None (corrupt/unreadable spend log), status must
+    surface 'unreadable -- openrouter disabled' and still exit 0 -- never
+    crash, never guess a partial sum."""
+    from aramid.providers import spend as spend_mod
+    monkeypatch.setattr(spend_mod, "spend_path", lambda: tmp_path / "llm_spend.jsonl")
+    monkeypatch.setattr(spend_mod, "month_spend_usd", lambda provider, now_iso: None)
+    _no_user_config(tmp_path, monkeypatch)
+    r = _repo(tmp_path)
+    Ledger(r / ".aramid" / "ledger.db").close()  # empty ledger, no findings
+    assert cmd_status(r) == 0
+    out = capsys.readouterr().out
+    assert "llm spend (openrouter, this month): unreadable -- openrouter disabled" in out

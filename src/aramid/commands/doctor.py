@@ -302,11 +302,19 @@ def probe_providers() -> list[str]:
     if not os.environ.get("OPENROUTER_API_KEY"):
         lines.append("  MISSING  openrouter   no OPENROUTER_API_KEY in environment")
     else:
-        month = spend_mod.month_spend_usd(
-            "openrouter", datetime.now(timezone.utc).isoformat())
-        detail = ("spend log unreadable -- calls refused" if month is None
-                  else f"this month ${month:.2f}")
-        lines.append(f"  OK       openrouter   key set; {detail}")
+        # Self-enforcing fail-safe: the "never crashes" contract for doctor
+        # must not depend solely on spend.py's internal guarantees. month is
+        # already None on an unreadable log (fail-closed money path), but any
+        # unexpected error here degrades to an informational line rather than
+        # propagating out of cmd_doctor (which has no outer try/except).
+        try:
+            month = spend_mod.month_spend_usd(
+                "openrouter", datetime.now(timezone.utc).isoformat())
+            detail = ("spend log unreadable -- calls refused" if month is None
+                      else f"this month ${month:.2f}")
+            lines.append(f"  OK       openrouter   key set; {detail}")
+        except Exception:
+            lines.append("  OK       openrouter   key set; openrouter probe unavailable")
     return lines
 
 
