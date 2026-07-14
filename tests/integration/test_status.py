@@ -63,10 +63,13 @@ def _f(fid, tool="semgrep", rule="owasp-top-ten.sqli", verdict=Verdict.WARN, fil
                     Gate.PRE_PUSH, historical=historical)
 
 
-def _write_toml(root, armed, bake_started):
+def _write_toml(root, armed, bake_started, llm_ladder=None):
     text = f'schema_version = 1\nsemgrep_block_armed = {"true" if armed else "false"}\n'
     if bake_started:
         text += f'bake_started = "{bake_started}"\n'
+    if llm_ladder:
+        text += '\n[llm]\n'
+        text += f'ladder = {llm_ladder}\n'
     (root / "aramid.toml").write_text(text, encoding="utf-8")
 
 
@@ -318,3 +321,19 @@ def test_status_llm_spend_unreadable_degrades_without_crash(tmp_path, capsys, mo
     assert cmd_status(r) == 0
     out = capsys.readouterr().out
     assert "llm spend (openrouter, this month): unreadable -- openrouter disabled" in out
+
+
+def test_status_reports_llm_ladder_line(tmp_path, capsys, monkeypatch):
+    _no_user_config(tmp_path, monkeypatch)
+    r = _repo(tmp_path)
+    text = 'schema_version = 1\nsemgrep_block_armed = true\n'
+    text += '\n[llm]\n'
+    text += 'ladder = [\n'
+    text += '  { tier = "fallback", provider = "openrouter" },\n'
+    text += '  { tier = "primary", provider = "ollama-cloud" },\n'
+    text += ']\n'
+    (r / "aramid.toml").write_text(text, encoding="utf-8")
+    Ledger(r / ".aramid" / "ledger.db").close()
+    assert cmd_status(r) == 0
+    out = capsys.readouterr().out
+    assert any(ln.startswith("llm ladder:") for ln in out.splitlines())

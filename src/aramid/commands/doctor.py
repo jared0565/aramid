@@ -315,6 +315,10 @@ def probe_providers() -> list[str]:
             lines.append(f"  OK       openrouter   key set; {detail}")
         except Exception:
             lines.append("  OK       openrouter   key set; openrouter probe unavailable")
+    if not os.environ.get("OLLAMA_API_KEY"):
+        lines.append("  MISSING  ollama-cloud no OLLAMA_API_KEY in environment")
+    else:
+        lines.append("  OK       ollama-cloud key set")
     return lines
 
 

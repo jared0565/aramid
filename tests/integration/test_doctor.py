@@ -203,6 +203,12 @@ def test_probe_providers_zero_call(monkeypatch, tmp_path):
     assert "openrouter" in text and "no OPENROUTER_API_KEY" in text
 
 
+def test_probe_providers_reports_ollama(monkeypatch):
+    monkeypatch.delenv("OLLAMA_API_KEY", raising=False)
+    lines = doctor.probe_providers()
+    assert any("ollama-cloud" in ln for ln in lines)
+
+
 def test_doctor_exit_code_unchanged_by_missing_providers(monkeypatch, tmp_path):
     """Providers are informational: doctor's exit contract is driven by
     BLOCK_TIER tools only. Monkeypatch probe_toolchain to all-present and

@@ -156,6 +156,10 @@ def _llm_lines(cfg: config_mod.Config, state: dict) -> list[str]:
                          f"${month:.2f} / ${cap:.2f}")
     except Exception:
         lines.append("llm spend (openrouter, this month): unknown")
+    ladder = cfg.llm.get("ladder", [])
+    if ladder:
+        tiers = " -> ".join(f"{a.get('tier')}:{a.get('provider')}" for a in ladder)
+        lines.append(f"llm ladder: {tiers}")
     return lines
 
 
