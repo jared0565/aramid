@@ -53,3 +53,12 @@ model_claude = "sonnet"
 model_codex = ""                   # empty = CLI default
 model_openrouter = "anthropic/claude-sonnet-4-5"
 openrouter_monthly_cap_usd = 5.0
+# Hard cap on refute calls across a whole drain (spec section 4). A single
+# review response can surface many CRITICAL candidates, each of which would
+# otherwise trigger its own refute call -- max_items_per_drain bounds REVIEWS,
+# not refutes. This bounds the pathological many-criticals case: once the cap
+# is hit, a further fresh CRITICAL is treated exactly like a transport-failed
+# refute (demoted to high, confirmed=False, never block-eligible) -- fail-safe,
+# never a wrong block. 6 comfortably covers a typical 1-2 criticals per item
+# across the default 3 items before it ever clips.
+max_refutes_per_drain = 6

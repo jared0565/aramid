@@ -24,12 +24,14 @@ NAME = "llm-review"
 _MALFORMED_GIVE_UP = 3
 
 _reviews_used = 0
+_refutes_used = 0
 
 
 def begin_drain() -> None:
     """Reset per-drain state. Called by cmd_drain once per invocation."""
-    global _reviews_used
+    global _reviews_used, _refutes_used
     _reviews_used = 0
+    _refutes_used = 0
 
 
 def _model_for(module, cfg) -> str:
@@ -71,7 +73,7 @@ def _any_installed(cfg) -> bool:
 
 
 def consume(item, ctx: DrainContext) -> ConsumerResult:
-    global _reviews_used
+    global _reviews_used, _refutes_used
     cfg = ctx.cfg
     if cfg is None or not cfg.llm.get("enabled", True):
         return ConsumerResult(consumer=NAME, state="ok", note="llm disabled")
@@ -128,9 +130,14 @@ def consume(item, ctx: DrainContext) -> ConsumerResult:
         cand.pop("confirmed", None)
 
     # Pre-refute dedupe (spec section 3): never re-refute what the ledger
-    # already knows. record_run would drop the duplicate anyway; this check
-    # exists to save the refute CALL, not the event.
+    # already knows, AND never refute the same fresh fingerprint twice within
+    # one response (a review can surface the same (rule,file,line) more than
+    # once). record_run would drop the duplicate at persist time anyway; this
+    # check exists to save the refute CALL. Dedupe is fail-safe -- it only ever
+    # REMOVES a candidate, so it can never mint a confirmed=True that wouldn't
+    # otherwise exist.
     state = ctx.ledger.open_findings()
+    seen_fids = set()
     fresh = []
     for cand in verified:
         rule = f"llm/{cand['owasp']}"
@@ -138,22 +145,42 @@ def consume(item, ctx: DrainContext) -> ConsumerResult:
         rec = state.get(fid)
         if rec is not None and rec.get("status") in ("open", "overridden", "historical"):
             continue
+        if fid in seen_fids:      # duplicate fingerprint already queued this response
+            continue
+        seen_fids.add(fid)
         fresh.append((rule, cand))
 
+    max_refutes = int(cfg.llm.get("max_refutes_per_drain", 6))
     refutes = 0
+    clipped = 0
     finals = []
     for rule, cand in fresh:
         if cand["severity"] == "critical":
-            refuter = next((m for m in chain if m.NAME != provider.NAME), provider)
-            rr = _call(refuter, review.render_refute_prompt(cand, packet), cfg, timeout_s)
-            refutes += 1
-            cost += rr.cost_usd
-            tokens_in += rr.tokens_in
-            tokens_out += rr.tokens_out
-            parsed = review.parse_refute_response(rr.text) if not rr.error else None
-            if parsed is None:      # transport failure OR malformed refute:
-                parsed = (True, f"refute unavailable ({rr.error or 'malformed'})")
-            cand = review.apply_refute(cand, *parsed)
+            if _refutes_used >= max_refutes:
+                # Per-drain refute budget exhausted: do NOT spend a call. Treat
+                # identically to a transport-failed refute -- ambiguity defaults
+                # to refuted, so the candidate is demoted to high with
+                # confirmed=False and can never block, even armed. Fail-safe:
+                # the cap only ever WITHHOLDS a confirmation, never grants one.
+                # Note the demotion is STICKY: this finding records as open, so
+                # the next drain's fresh-vs-ledger check skips its fingerprint
+                # and never re-refutes it. Under-blocking is the safe direction;
+                # `refute_clipped=N` in the run note surfaces when it happened.
+                clipped += 1
+                cand = review.apply_refute(
+                    cand, True, "refute unavailable (drain refute budget exhausted)")
+            else:
+                refuter = next((m for m in chain if m.NAME != provider.NAME), provider)
+                rr = _call(refuter, review.render_refute_prompt(cand, packet), cfg, timeout_s)
+                _refutes_used += 1
+                refutes += 1
+                cost += rr.cost_usd
+                tokens_in += rr.tokens_in
+                tokens_out += rr.tokens_out
+                parsed = review.parse_refute_response(rr.text) if not rr.error else None
+                if parsed is None:      # transport failure OR malformed refute:
+                    parsed = (True, f"refute unavailable ({rr.error or 'malformed'})")
+                cand = review.apply_refute(cand, *parsed)
         finals.append((rule, cand))
 
     raws = [RawFinding(
@@ -167,6 +194,7 @@ def consume(item, ctx: DrainContext) -> ConsumerResult:
 
     note = (f"provider={provider.NAME} tokens_in={tokens_in} tokens_out={tokens_out} "
             f"refutes={refutes} hallucination_rejected={rejected}"
+            + (f" refute_clipped={clipped}" if clipped else "")
             + (" truncated" if packet.truncated else ""))
     return ConsumerResult(consumer=NAME, state="ok", findings=raws,
                           cost=cost, note=note)
