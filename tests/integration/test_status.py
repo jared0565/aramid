@@ -11,7 +11,7 @@ from aramid import config as config_mod
 from aramid.commands import schedule as schedule_mod
 from aramid.commands.status import cmd_status
 from aramid.ledger import Ledger
-from aramid.models import Event, EventType, Finding, Gate, Severity, Verdict
+from aramid.models import Event, EventType, Finding, Gate, Severity, Source, Verdict
 
 
 @pytest.fixture(autouse=True)
@@ -276,3 +276,29 @@ def test_status_empty_queue_and_never_drained(tmp_path, capsys, monkeypatch):
     # Driven by the autouse _no_real_schtasks mock (returncode 1), not the host
     # scheduler -- confirms status.py's schtasks query is intercepted.
     assert "scheduled drain: not installed" in out
+
+
+# ------------------------------------------------ LLM status lines (Phase 2b) -
+
+def test_status_reports_llm_lines(tmp_path, capsys, monkeypatch):
+    from aramid.providers import spend as spend_mod
+    monkeypatch.setattr(spend_mod, "spend_path", lambda: tmp_path / "llm_spend.jsonl")
+    _no_user_config(tmp_path, monkeypatch)
+    r = _repo(tmp_path)
+    led = Ledger(r / ".aramid" / "ledger.db")
+    try:
+        f = Finding(id="f" * 64, tool="llm-review", rule="llm/a01",
+                    severity_raw="critical", severity=Severity.CRITICAL,
+                    verdict=Verdict.WARN, file="src/auth.py", line=2, message="IDOR",
+                    evidence="return db.get(order_id)", gate=Gate.ALL,
+                    source=Source.LLM, confirmed=True)
+        led.record_run("r0", "2026-07-13T12:00:00+00:00", "drain", set(), set(), [f])
+    finally:
+        led.close()
+    spend_mod.append_spend({"at": "2026-07-13T10:00:00+00:00", "provider": "openrouter",
+                            "model": "m", "tokens_in": 1, "tokens_out": 1,
+                            "cost_usd": 1.25})
+    assert cmd_status(r) == 0
+    out = capsys.readouterr().out
+    assert "llm: 1 open (1 confirmed critical) | baking" in out
+    assert "llm spend (openrouter, this month): $1.25 / $5.00" in out
