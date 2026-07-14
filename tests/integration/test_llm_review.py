@@ -129,7 +129,12 @@ def _setup_repo(tmp_path):
     _git(r, "add", "."); _git(r, "commit", "-q", "-m", "c1")
     assert cmd_init(r) in (0, 2)      # onboard: config, hooks, baseline, registry
     (r / "src" / "auth_login.py").write_text(FILE_BODY, encoding="utf-8")
-    _git(r, "add", "."); _git(r, "commit", "-q", "-m", "risky change")
+    # --no-verify: cmd_init just installed aramid's own pre-commit hook, and this
+    # is fixture scaffolding, not a test of that hook. Without it, on an env where
+    # the gate actually runs (CI: gitleaks/ruff present), the pre-commit gate
+    # aborts this commit and the test errors at git-commit time. The drain's
+    # catch-up sweep (not the post-commit hook) is what triages this range.
+    _git(r, "add", "."); _git(r, "commit", "-q", "--no-verify", "-m", "risky change")
     return r
 
 
@@ -191,7 +196,10 @@ def test_full_loop(tmp_path, monkeypatch, seam):
         "    if cmd in ALLOWED:\n"
         "        dispatch(cmd)\n",
         encoding="utf-8")
-    _git(r, "add", "."); _git(r, "commit", "-q", "-m", "fix exec injection")
+    # --no-verify: same reason as _setup_repo -- aramid's own pre-commit hook is
+    # installed in this repo; this fix commit is scaffolding for the auto-resolve
+    # assertion below, not a test of the pre-commit gate.
+    _git(r, "add", "."); _git(r, "commit", "-q", "--no-verify", "-m", "fix exec injection")
     led = Ledger(r / ".aramid" / "ledger.db")
     try:
         assert pipeline.run_gate(r, Gate.PRE_PUSH, "all", cfg, led).exit_code == 0

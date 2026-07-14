@@ -1,11 +1,13 @@
 # aramid
 
-A deterministic security & quality gate engine. Phase 1 of a larger red/blue-team
-oversight platform for application development: git-hook enforcement that runs
-industry-standard tools — gitleaks (secrets), semgrep (SAST), ruff/eslint (lint),
-pip-audit (dependency CVEs), and the project's own test suite — at `pre-commit` and
-`pre-push`. Findings are severity-tiered: **security blocks, quality warns.** Zero LLM
-calls, zero tokens, fully offline-capable.
+A red/blue-team security & quality oversight engine for application development. The
+foundation is a **deterministic gate**: git-hook enforcement that runs industry-standard
+tools — gitleaks (secrets), semgrep (SAST), ruff/eslint (lint), pip-audit (dependency
+CVEs), and the project's own test suite — at `pre-commit` and `pre-push`. Findings are
+severity-tiered: **security blocks, quality warns.** The gate itself makes **zero LLM
+calls and burns zero tokens** — fully offline-capable. Riding on top of it is a
+token-economical **red team**: a scheduled, budgeted drain that spends LLM quota only on
+the small, novel, high-risk slice of commits, never on every push (see the roadmap below).
 
 ## Install
 
@@ -42,19 +44,26 @@ The authoritative backstop is re-running `aramid check --all --strict --json` in
 build the same as a run that found something. The engine never exits 0 silently on
 its own failure.
 
-## Scope
+## Scope & roadmap
 
-Phase 1 covers the deterministic slice of OWASP: secrets, SAST, dependency CVEs, and
-lint. It does **not** cover access control, security misconfiguration, or
-authentication logic — that's adversarial, judgment-based review, out of scope for a
-deterministic tool. This is Phase 1 of 4:
+The **deterministic gate** covers the mechanical slice of OWASP: secrets, SAST,
+dependency CVEs, and lint. It deliberately does **not** try to reason about access
+control, security misconfiguration, or authentication logic in a regex — that
+adversarial, judgment-based slice is the red team's job (Phase 2b), run at drain time
+under a budget rather than on every commit. Four phases:
 
-1. **Phase 1 (this):** deterministic blue-team gate engine.
-2. **Phase 2:** LLM red-team gate — adversarial review at PR/pre-deploy time.
+1. **Phase 1 — done:** deterministic blue-team gate engine.
+2. **Phase 2 — red team**, staged into three:
+   - **2a — done:** zero-token watcher chassis — commit triage → risk-scored review
+     queue → budgeted scheduled drain → pluggable consumers, plus the regression attack pack.
+   - **2b — done:** the LLM reviewer — evidence-bound adversarial review over a provider
+     chain, cross-provider refute, bake-then-arm blocking (detailed below).
+   - **2c — next:** the heavy adversarial tier — mutation testing, fuzz/property harness,
+     DAST — each a new drain consumer.
 3. **Phase 3:** harness advisory layer — non-blocking, mid-development early warning.
 4. **Phase 4:** metering & governance — token budgets, ledger-derived regression tests.
 
-Full design spec and implementation plan: `docs/superpowers/specs/` and
+Full design specs and implementation plans: `docs/superpowers/specs/` and
 `docs/superpowers/plans/`.
 
 ## Phase 2a: watcher chassis
