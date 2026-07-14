@@ -23,13 +23,15 @@ def available(cfg) -> bool:
     return installed()
 
 
-def review(prompt: str, model: str, timeout_s: float) -> ProviderResponse:
+def review(prompt: str, model: str, timeout_s: float, *, effort: str = "") -> ProviderResponse:
     exe = shutil.which("codex")
     if exe is None:
         return ProviderResponse(text="", error=base.ERR_UNAVAILABLE)
     argv = [exe, "exec", "--json", "--sandbox", "read-only", "--skip-git-repo-check"]
     if model:
         argv += ["-m", model]
+    if effort:
+        argv += ["-c", f"model_reasoning_effort={effort}"]
     argv.append("-")
     got = base.run_provider_subprocess(argv, prompt, timeout_s)
     if got is None:

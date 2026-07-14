@@ -40,15 +40,18 @@ def available(cfg) -> bool:
     return _under_cap(cfg)
 
 
-def review(prompt: str, model: str, timeout_s: float, *, cfg) -> ProviderResponse:
+def review(prompt: str, model: str, timeout_s: float, *, effort: str = "", cfg) -> ProviderResponse:
     key = os.environ.get("OPENROUTER_API_KEY")
     if not key:
         return ProviderResponse(text="", error=base.ERR_UNAVAILABLE)
     if not _under_cap(cfg):
         return ProviderResponse(text="", error=base.ERR_QUOTA)
-    body = json.dumps({"model": model,
-                       "messages": [{"role": "user", "content": prompt}],
-                       "usage": {"include": True}}).encode("utf-8")
+    body_obj = {"model": model,
+                "messages": [{"role": "user", "content": prompt}],
+                "usage": {"include": True}}
+    if effort:
+        body_obj["reasoning"] = {"effort": effort}
+    body = json.dumps(body_obj).encode("utf-8")
     req = urllib.request.Request(_URL, data=body, method="POST", headers={
         "Authorization": f"Bearer {key}", "Content-Type": "application/json"})
     try:
