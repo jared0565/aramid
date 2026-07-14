@@ -98,7 +98,7 @@ misconfiguration (A05), authentication failures (A07), and business-logic
 flaws — adversarial, judgment-based review that a regex or an AST rule
 cannot do. Every queued item's diff and touched files are assembled into a
 redacted, byte-capped packet and sent down a provider chain
-(`claude-cli` → `codex-cli` → `ollama-cloud`, first available wins); every
+(selected by risk tier — low to high: `ollama-cloud` → `codex-cli` → `claude-cli`, degrading to nearest available); every
 finding must cite a verbatim evidence quote that is mechanically verified
 against the packet and the file's HEAD content before it's trusted, and
 every fresh CRITICAL gets one cross-provider refute call before it can be
@@ -114,7 +114,8 @@ on the item's triage score: low-risk items (score 40–59) use ollama-cloud
 (cheap tier), mid-risk (60–79) use codex-cli, and high-risk (80+) use
 claude-cli (frontier tier). OpenRouter is available for opt-in use only —
 not part of the default provider chain per the model-source policy; to enable
-it, add `"openrouter"` to `[llm].provider_order` in `aramid.toml`.
+it, add `"openrouter"` to `[llm].provider_order` in `aramid.toml` and define an
+`openrouter` arm in `[[llm.ladder]]` (with a model and min_score band).
 
 Setup: install the `claude` and/or `codex` CLI on `PATH` (`aramid doctor`
 reports what it sees, informationally — LLM tooling never gates BLOCK-tier
