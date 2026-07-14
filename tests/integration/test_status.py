@@ -63,13 +63,10 @@ def _f(fid, tool="semgrep", rule="owasp-top-ten.sqli", verdict=Verdict.WARN, fil
                     Gate.PRE_PUSH, historical=historical)
 
 
-def _write_toml(root, armed, bake_started, llm_ladder=None):
+def _write_toml(root, armed, bake_started):
     text = f'schema_version = 1\nsemgrep_block_armed = {"true" if armed else "false"}\n'
     if bake_started:
         text += f'bake_started = "{bake_started}"\n'
-    if llm_ladder:
-        text += '\n[llm]\n'
-        text += f'ladder = {llm_ladder}\n'
     (root / "aramid.toml").write_text(text, encoding="utf-8")
 
 
@@ -337,3 +334,21 @@ def test_status_reports_llm_ladder_line(tmp_path, capsys, monkeypatch):
     assert cmd_status(r) == 0
     out = capsys.readouterr().out
     assert any(ln.startswith("llm ladder:") for ln in out.splitlines())
+
+
+def test_status_llm_ladder_skips_non_dict_entry_without_crash(tmp_path, capsys, monkeypatch):
+    """Regression test for Fix 1: _llm_lines must not crash on non-dict ladder
+    entries. Fail-open to match the convention in review.py's build_arms."""
+    _no_user_config(tmp_path, monkeypatch)
+    r = _repo(tmp_path)
+    text = 'schema_version = 1\nsemgrep_block_armed = true\n'
+    text += '\n[llm]\n'
+    text += 'ladder = ["not-a-dict", { tier = "primary", provider = "ollama-cloud" }]\n'
+    text += 'llm_block_armed = false\n'
+    text += 'openrouter_monthly_cap_usd = 5.0\n'
+    (r / "aramid.toml").write_text(text, encoding="utf-8")
+    Ledger(r / ".aramid" / "ledger.db").close()
+    assert cmd_status(r) == 0
+    out = capsys.readouterr().out
+    # Should complete without crash; may include ladder line with valid entries only
+    assert "llm:" in out

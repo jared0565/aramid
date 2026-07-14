@@ -206,7 +206,8 @@ def test_probe_providers_zero_call(monkeypatch, tmp_path):
 def test_probe_providers_reports_ollama(monkeypatch):
     monkeypatch.delenv("OLLAMA_API_KEY", raising=False)
     lines = doctor.probe_providers()
-    assert any("ollama-cloud" in ln for ln in lines)
+    text = "\n".join(lines)
+    assert "ollama-cloud" in text and "MISSING" in text and "OLLAMA_API_KEY" in text
 
 
 def test_doctor_exit_code_unchanged_by_missing_providers(monkeypatch, tmp_path):
