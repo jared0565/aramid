@@ -43,3 +43,21 @@ def test_cmd_arm_plain_still_arms_semgrep(tmp_path, monkeypatch):
 
 def test_cmd_arm_missing_toml_errors(tmp_path):
     assert cmd_arm(tmp_path, llm=True) == 3
+
+
+def test_cmd_arm_llm_leaves_armed_semgrep_and_comment_untouched(tmp_path, monkeypatch):
+    """--llm must not disturb an already-armed semgrep line or its comment."""
+    monkeypatch.setattr(config_mod, "_user_config_path", lambda: tmp_path / "no-user-config.toml")
+    (tmp_path / "aramid.toml").write_text(
+        "# aramid repo config -- detected stack: python\n"
+        "schema_version = 1\n"
+        "semgrep_block_armed = true\n",
+        encoding="utf-8")
+
+    assert cmd_arm(tmp_path, llm=True) == 0
+
+    cfg = config_mod.load_config(tmp_path)
+    assert cfg.semgrep_block_armed is True               # armed line untouched
+    assert cfg.llm["llm_block_armed"] is True            # llm bake ended
+    text = (tmp_path / "aramid.toml").read_text(encoding="utf-8")
+    assert "# aramid repo config -- detected stack: python" in text  # comment preserved
