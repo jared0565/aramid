@@ -235,10 +235,20 @@ def test_pack_no_subcommand_returns_3(capsys):
 
 def test_arm_dispatch(monkeypatch):
     calls = []
-    monkeypatch.setattr(cli, "cmd_arm", lambda root: calls.append(root) or 0)
+    monkeypatch.setattr(cli, "cmd_arm", lambda root, llm=False: calls.append((root, llm)) or 0)
 
     assert cli.main(["arm"]) == 0
     assert len(calls) == 1
+    assert calls[0] == (Path.cwd(), False)
+
+
+def test_arm_dispatch_with_llm_flag(monkeypatch):
+    calls = []
+    monkeypatch.setattr(cli, "cmd_arm", lambda root, llm=False: calls.append((root, llm)) or 0)
+
+    assert cli.main(["arm", "--llm"]) == 0
+    assert len(calls) == 1
+    assert calls[0] == (Path.cwd(), True)
 
 
 def test_update_rules_dispatch(monkeypatch):
