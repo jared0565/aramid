@@ -26,7 +26,7 @@ from aramid.providers import base as providers_base
 # the provider modules, so PROVIDERS stayed empty, chain() returned [], and
 # every drain reported "no providers installed" even with the CLIs on PATH.
 # The consumer that USES the chain is the right place to pull them in.
-from aramid.providers import claude_cli, codex_cli, openrouter  # noqa: F401
+from aramid.providers import claude_cli, codex_cli, openrouter, ollama_cloud  # noqa: F401
 
 NAME = "llm-review"
 _MALFORMED_GIVE_UP = 3
