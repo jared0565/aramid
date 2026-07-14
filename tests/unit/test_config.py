@@ -223,7 +223,10 @@ def test_llm_defaults_present(tmp_path, monkeypatch):
     assert [a["tier"] for a in ladder] == ["cheap", "mid", "frontier"]
     assert [a["provider"] for a in ladder] == ["ollama-cloud", "codex-cli", "claude-cli"]
     assert [a["min_score"] for a in ladder] == [40, 60, 80]
-    assert all(a["effort"] == "" for a in ladder)
+    # effort: mid/frontier verified live (2026-07-14) and set; cheap/ollama
+    # stays "" (unverifiable without OLLAMA_API_KEY -- fail-safe).
+    assert [a["effort"] for a in ladder] == ["", "medium", "high"]
+    assert [a["model"] for a in ladder] == ["deepseek-v4-flash", "gpt-5.5", "opus"]
 
 
 def test_llm_repo_override_merges(tmp_path, monkeypatch):
