@@ -4,6 +4,8 @@
 **Depends on:** Phase 1 (deterministic gate engine) and Phase 2a (watcher chassis +
 regression attack pack), both merged to `main` (423 tests, CI green).
 
+> **Note:** Superseded in part by `2026-07-14-aramid-reviewer-model-selection-design.md` (provider chain + risk-tiered ladder).
+
 ## 1. Overview
 
 Phase 2b is the LLM leg of the red team: an adversarial security reviewer that
