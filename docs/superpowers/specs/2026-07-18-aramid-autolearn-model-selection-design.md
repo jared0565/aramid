@@ -228,15 +228,19 @@ For an item whose deterministic floor arm is F:
 1. Walk arms from F upward in `min_score` order.
 2. For each arm A, sample
    `q ~ Beta(1 + misses(A, band, bucket), PRIOR_CLEAN + clean(A, band, bucket))`
-   where `PRIOR_CLEAN = 9`.
+   where `PRIOR_CLEAN = 9`. A cell with zero evidence (`misses + clean == 0`)
+   does not sample: it uses the deterministic prior mean
+   `1/(1+PRIOR_CLEAN)` = 0.10, so empty posteriors reproduce the ladder
+   exactly (§3.2); Thompson sampling begins once audit evidence exists.
 3. Serve the lowest arm with `q <= cfg uplift_threshold` (default 0.15).
 4. The frontier (highest-`min_score`) arm always qualifies — it is the
    measuring ceiling; if nothing else qualifies, serve it.
 
 Properties:
 
-- No data → `q ~ Beta(1, 9)`, mean 0.10 ≤ 0.15 → the floor arm qualifies →
-  behavior is exactly the deterministic ladder. This is the load-bearing
+- No data → every cell on the walk is zero-evidence → deterministic prior
+  mean 0.10 ≤ 0.15 → the floor arm qualifies → behavior is *exactly* the
+  deterministic ladder, not merely in expectation. This is the load-bearing
   cold-start property (invariant 2).
 - The decision RNG is seeded from `sha256(item.id + state["updated_at"])` —
   deterministic in tests, varies across state updates in production.

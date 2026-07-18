@@ -13,9 +13,10 @@ arm selection.
 Fail-open contract (spec section 11): consumers wrap every call here in
 try/except; load_state additionally degrades any unreadable or
 foreign-version state to empty_state(). Cold start == shipped deterministic
-ladder: with no data the floor arm's sampled miss-probability is
-Beta(1, PRIOR_CLEAN) with mean 1/(1+PRIOR_CLEAN) = 0.10, under the 0.15
-default threshold, so the floor qualifies and no uplift happens.
+ladder: with no data a zero-evidence cell uses the deterministic prior mean
+1/(1+PRIOR_CLEAN) = 0.10, under the 0.15 default threshold, so the floor
+qualifies and no uplift happens -- exactly, not just in expectation (spec
+section 3.2).
 """
 import hashlib
 import json
@@ -111,11 +112,14 @@ def uplift_pick(arms, score: int, bucket: str, state: dict,
                 threshold: float, rng: random.Random):
     """Escalate-only Thompson decision (spec section 8.2). Walk arms from
     the deterministic floor upward; for each, sample its miss-probability
-    q ~ Beta(1+misses, PRIOR_CLEAN+clean); serve the lowest arm with
-    q <= threshold. The top arm always qualifies (it is the measuring
-    ceiling). Returns (arm, floor_q) where floor_q is the q sampled for the
-    floor arm -- the number that explains the decision -- or None when
-    there are no arms."""
+    q ~ Beta(1+misses, PRIOR_CLEAN+clean) -- except a cell with ZERO
+    evidence (misses + clean == 0), which uses the deterministic prior mean
+    1/(1+PRIOR_CLEAN) instead of sampling, so empty posteriors reproduce
+    today's ladder exactly rather than in expectation (spec section 3.2).
+    Serve the lowest arm with q <= threshold. The top arm always qualifies
+    (it is the measuring ceiling). Returns (arm, floor_q) where floor_q is
+    the q for the floor arm -- the number that explains the decision -- or
+    None when there are no arms."""
     tgt = review_mod.target_arm(arms, score)
     if tgt is None:
         return None
@@ -124,8 +128,16 @@ def uplift_pick(arms, score: int, bucket: str, state: dict,
     floor_q = None
     for a in ladder_up[:-1]:
         c = _counts(state, posterior_key(a, band, bucket))
-        q = rng.betavariate(1 + int(c.get("misses", 0)),
-                            PRIOR_CLEAN + int(c.get("clean", 0)))
+        n_evidence = int(c.get("misses", 0)) + int(c.get("clean", 0))
+        if n_evidence == 0:
+            # Zero-evidence cell: deterministic prior mean (spec section 3.2
+            # -- cold start must reproduce the ladder EXACTLY, not just in
+            # expectation; Thompson sampling begins once audit evidence
+            # exists).
+            q = 1.0 / (1.0 + PRIOR_CLEAN)
+        else:
+            q = rng.betavariate(1 + int(c.get("misses", 0)),
+                                PRIOR_CLEAN + int(c.get("clean", 0)))
         if floor_q is None:
             floor_q = q
         if q <= threshold:

@@ -71,16 +71,17 @@ def test_posterior_key():
 # --- uplift decision --------------------------------------------------------
 
 def test_uplift_cold_start_serves_floor():
-    """No data: floor q ~ Beta(1, 1+... wait, Beta(1, PRIOR_CLEAN)) has mean
-    0.10 <= 0.15 -- the floor arm qualifies. THE load-bearing invariant:
-    cold start == deterministic ladder."""
+    """No data: the floor cell has zero evidence, so it uses the
+    deterministic prior mean 1/(1+PRIOR_CLEAN) = 0.10 <= 0.15 -- the floor
+    arm qualifies. THE load-bearing invariant: cold start == deterministic
+    ladder, exactly (no sampling on empty state)."""
     st = autolearn.empty_state()
     rng = autolearn.decision_rng("item-1", st)
     picked = autolearn.uplift_pick(ARMS, 45, "plain", st, 0.15, rng)
     assert picked is not None
     arm, floor_q = picked
     assert arm == CHEAP
-    assert 0.0 <= floor_q <= 1.0
+    assert floor_q == 1.0 / (1.0 + autolearn.PRIOR_CLEAN)
 
 
 def test_uplift_cold_start_is_deterministic_per_item_and_state():
@@ -134,6 +135,18 @@ def test_uplift_empty_arms_returns_none():
     st = autolearn.empty_state()
     assert autolearn.uplift_pick([], 45, "plain", st, 0.15,
                                  autolearn.decision_rng("i", st)) is None
+
+
+def test_uplift_zero_evidence_is_deterministic_not_sampled():
+    """Spec section 3.2: empty posteriors reproduce the ladder EXACTLY.
+    Any rng: the floor always qualifies with the prior mean 0.10."""
+    st = autolearn.empty_state()
+    for item_id in ("a", "b", "c", "q1", "id-7"):
+        picked = autolearn.uplift_pick(ARMS, 45, "plain", st, 0.15,
+                                       autolearn.decision_rng(item_id, st))
+        arm, floor_q = picked
+        assert arm == CHEAP
+        assert floor_q == 1.0 / (1.0 + autolearn.PRIOR_CLEAN)
 
 
 # --- cascade / audit predicates --------------------------------------------
