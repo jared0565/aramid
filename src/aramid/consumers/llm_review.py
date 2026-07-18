@@ -234,7 +234,45 @@ def consume(item, ctx: DrainContext) -> ConsumerResult:
                         verified = verified + v2
                         cascade_info["applied"] = True
 
+    # --- audit sampling (autolearn spec section 10): the data engine --
+    # active in shadow AND armed. One frontier double-review for a hash-
+    # sampled below-frontier item; the diff measures what the served arm
+    # missed; audit findings are REAL and join the same downstream pass.
+    # Own cap (_audits_used), never counted against the review budget.
     audit_info = None
+    if al_enabled and tgt is not None:
+        try:
+            do_audit = (_audits_used < int(al_cfg.get("max_audits_per_drain", 1))
+                        and autolearn.should_audit(
+                            item.id, reviewer_arm, arms,
+                            int(al_cfg.get("audit_every", 8))))
+            aud_arm = autolearn.audit_arm(arms, avail) if do_audit else None
+            if aud_arm is not None and aud_arm != reviewer_arm:
+                ra, lata = _call(providers_base.PROVIDERS[aud_arm.provider],
+                                 prompt, aud_arm.model, cfg, timeout_s,
+                                 effort=aud_arm.effort)
+                attempts.append({"tier": aud_arm.tier,
+                                 "provider": aud_arm.provider,
+                                 "model": aud_arm.model, "error": ra.error,
+                                 "latency_s": lata})
+                _audits_used += 1
+                ca = None if ra.error else review.parse_review_response(ra.text)
+                if ca is not None:
+                    cost += ra.cost_usd
+                    tokens_in += ra.tokens_in
+                    tokens_out += ra.tokens_out
+                    va, _reja = review.verify_findings(ca, packet,
+                                                       ctx.root, item.head)
+                    new_n, missed_n = autolearn.audit_diff(verified, va)
+                    audit_info = {"performed": True, "tier": aud_arm.tier,
+                                  "new_findings": new_n,
+                                  "missed_criticals": missed_n}
+                    verified = verified + va
+                else:
+                    audit_info = {"performed": False, "tier": aud_arm.tier,
+                                  "new_findings": 0, "missed_criticals": 0}
+        except Exception:
+            audit_info = None
 
     # Trust boundary (FIX 1): `confirmed` is a privileged flag -- it is the
     # ONLY thing the pre-push ledger gate blocks on. parse_review_response

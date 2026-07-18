@@ -128,6 +128,13 @@ def _setup_repo(tmp_path):
     (r / "src" / "app.py").write_text("x = 1\n", encoding="utf-8")
     _git(r, "add", "."); _git(r, "commit", "-q", "-m", "c1")
     assert cmd_init(r) in (0, 2)      # onboard: config, hooks, baseline, registry
+    # Auto-learn hermeticity: item ids are random uuids, and the default
+    # audit_every=8 would hash-sample a shadow audit for ~1 in 8 of them,
+    # desyncing the scripted provider responses below. Audits have dedicated
+    # unit coverage (test_llm_consumer.py Task-9 tests); this file pins the
+    # full loop deterministic.
+    with (r / "aramid.toml").open("a", encoding="utf-8") as fh:
+        fh.write("\n[llm.autolearn]\naudit_every = 0\n")
     (r / "src" / "auth_login.py").write_text(FILE_BODY, encoding="utf-8")
     # --no-verify: cmd_init just installed aramid's own pre-commit hook, and this
     # is fixture scaffolding, not a test of that hook. Without it, on an env where

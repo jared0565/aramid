@@ -808,3 +808,107 @@ def test_cascade_candidates_pass_confirmed_strip(tmp_path, monkeypatch):
     # block-path proof (confirmed stripped to False) is unchanged.
     injected = [f for f in got.findings if f.rule == "llm/logic"]
     assert injected and injected[0].confirmed is False
+
+
+# --- auto-learn Task 9: audit sampling --------------------------------------
+
+def _audit_cfg(ladder, **al_over):
+    al = {"enabled": True, "armed": False, "audit_every": 1,
+          "max_audits_per_drain": 1, **al_over}
+    return _cfg(ladder=ladder, autolearn=al)
+
+
+def test_audit_double_reviews_and_counts_miss(tmp_path, monkeypatch):
+    """audit_every=1: the below-frontier review is double-reviewed by the
+    frontier arm; a critical only the audit found counts as a miss AND is
+    filed for real (through the normal refute path)."""
+    r, base_sha, head_sha = _repo(tmp_path)
+    a = _Fake("fake-a", [ProviderResponse(text=_finding_json("high"))])
+    b = _Fake("fake-b", [
+        ProviderResponse(text=_finding_json_line1("critical")),  # audit review
+        ProviderResponse(text=json.dumps(
+            {"refuted": False, "reason": "real"}))])             # refute
+    _wire(monkeypatch, a, b)
+    led = Ledger(tmp_path / "l.db")
+    ctx = DrainContext(root=r, cfg=_audit_cfg(_LADDER_AB), ledger=led,
+                       clock=lambda: NOW.isoformat())
+    try:
+        got = llm_review.consume(_item_score(base_sha, head_sha, 45), ctx)
+    finally:
+        led.close()
+    sel = got.extra["selection"]
+    assert sel["audit"] == {"performed": True, "tier": "frontier",
+                            "new_findings": 1, "missed_criticals": 1}
+    assert len(got.findings) == 2          # served high + audit critical
+    # NOTE: the brief's fixture filters owasp="a03", which parse_review_response
+    # normalizes to rule "llm/logic" (whitelist in review.py: a01/a05/a07/logic
+    # -- same normalization Task 8's cascade test hit). Filter corrected to match.
+    crit = [f for f in got.findings if f.rule == "llm/logic"]
+    assert crit and crit[0].confirmed is True     # survived its refute
+    assert sel["served"]["provider"] == "fake-a"  # audit never replaces served
+
+
+def test_audit_not_counted_against_review_budget(tmp_path, monkeypatch):
+    r, base_sha, head_sha = _repo(tmp_path)
+    a = _Fake("fake-a", [ProviderResponse(text=_finding_json("high"))])
+    b = _Fake("fake-b", [ProviderResponse(text=_finding_json_line1("high"))])
+    _wire(monkeypatch, a, b)
+    led = Ledger(tmp_path / "l.db")
+    ctx = DrainContext(root=r,
+                       cfg=_audit_cfg(_LADDER_AB, max_items_per_drain=1),
+                       ledger=led, clock=lambda: NOW.isoformat())
+    try:
+        got = llm_review.consume(_item_score(base_sha, head_sha, 45), ctx)
+    finally:
+        led.close()
+    assert got.extra["selection"]["audit"]["performed"] is True
+
+
+def test_audit_cap_respected_per_drain(tmp_path, monkeypatch):
+    """max_audits_per_drain=0 -> never audits even at audit_every=1."""
+    r, base_sha, head_sha = _repo(tmp_path)
+    a = _Fake("fake-a", [ProviderResponse(text=_finding_json("high"))])
+    b = _Fake("fake-b", [])
+    _wire(monkeypatch, a, b)
+    led = Ledger(tmp_path / "l.db")
+    ctx = DrainContext(root=r,
+                       cfg=_audit_cfg(_LADDER_AB, max_audits_per_drain=0),
+                       ledger=led, clock=lambda: NOW.isoformat())
+    try:
+        got = llm_review.consume(_item_score(base_sha, head_sha, 45), ctx)
+    finally:
+        led.close()
+    assert got.extra["selection"]["audit"] is None
+
+
+def test_no_audit_when_served_at_frontier(tmp_path, monkeypatch):
+    r, base_sha, head_sha = _repo(tmp_path)
+    a = _Fake("fake-a", [])
+    b = _Fake("fake-b", [ProviderResponse(text=_finding_json("high"))])
+    _wire(monkeypatch, a, b)
+    led = Ledger(tmp_path / "l.db")
+    ctx = DrainContext(root=r, cfg=_audit_cfg(_LADDER_AB), ledger=led,
+                       clock=lambda: NOW.isoformat())
+    try:
+        got = llm_review.consume(_item_score(base_sha, head_sha, 90), ctx)
+    finally:
+        led.close()
+    assert got.extra["selection"]["audit"] is None
+
+
+def test_audit_provider_failure_degrades_silently(tmp_path, monkeypatch):
+    """Audit call errors -> served review stands, performed=False."""
+    r, base_sha, head_sha = _repo(tmp_path)
+    a = _Fake("fake-a", [ProviderResponse(text=_finding_json("high"))])
+    b = _Fake("fake-b", [ProviderResponse(text="",
+                                          error=providers_base.ERR_TIMEOUT)])
+    _wire(monkeypatch, a, b)
+    led = Ledger(tmp_path / "l.db")
+    ctx = DrainContext(root=r, cfg=_audit_cfg(_LADDER_AB), ledger=led,
+                       clock=lambda: NOW.isoformat())
+    try:
+        got = llm_review.consume(_item_score(base_sha, head_sha, 45), ctx)
+    finally:
+        led.close()
+    assert got.state == "ok" and len(got.findings) == 1
+    assert got.extra["selection"]["audit"]["performed"] is False
