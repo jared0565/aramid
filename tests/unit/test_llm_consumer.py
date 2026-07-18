@@ -628,3 +628,78 @@ def test_autolearn_disabled_mode_off(tmp_path, monkeypatch):
     finally:
         led.close()
     assert got.extra["selection"]["uplift"]["mode"] == "off"
+
+
+# --- auto-learn Task 7: armed uplift ----------------------------------------
+
+def _seed_high_miss_state(key="fake-a/ma|cheap|plain"):
+    from aramid import autolearn
+    st = autolearn.empty_state()
+    st["posteriors"][key] = {"misses": 500, "clean": 0}
+    autolearn.save_state(st, NOW.isoformat())
+
+
+def test_armed_uplift_serves_higher_tier(tmp_path, monkeypatch):
+    """Armed + overwhelming miss evidence on the cheap arm -> frontier
+    serves a score-45 item; escalate-only (spec section 8.2)."""
+    _seed_high_miss_state()
+    r, base_sha, head_sha = _repo(tmp_path)
+    a = _Fake("fake-a", [])
+    b = _Fake("fake-b", [ProviderResponse(text=_finding_json("high"))])
+    _wire(monkeypatch, a, b)
+    led = Ledger(tmp_path / "l.db")
+    ctx = DrainContext(root=r, cfg=_cfg(ladder=_LADDER_AB,
+                                        autolearn={"enabled": True,
+                                                   "armed": True}),
+                       ledger=led, clock=lambda: NOW.isoformat())
+    try:
+        got = llm_review.consume(_item_score(base_sha, head_sha, 45), ctx)
+    finally:
+        led.close()
+    assert "tier=frontier" in got.note and "provider=fake-b" in got.note
+    assert "degraded_from" not in got.note      # uplift is not degradation
+    sel = got.extra["selection"]
+    assert sel["uplift"] == {"mode": "armed", "pick": "frontier",
+                             "applied": True,
+                             "sampled_q": sel["uplift"]["sampled_q"]}
+    assert sel["uplift"]["sampled_q"] > 0.15
+    assert sel["target_tier"] == "cheap"        # the floor stays on record
+
+
+def test_shadow_records_pick_but_serves_floor(tmp_path, monkeypatch):
+    """Same evidence, armed=False -> cheap still serves; pick recorded."""
+    _seed_high_miss_state()
+    r, base_sha, head_sha = _repo(tmp_path)
+    a = _Fake("fake-a", [ProviderResponse(text=_finding_json("high"))])
+    b = _Fake("fake-b", [])
+    _wire(monkeypatch, a, b)
+    led = Ledger(tmp_path / "l.db")
+    try:
+        got = llm_review.consume(_item_score(base_sha, head_sha, 45),
+                                 _ctx_ladder(r, led, _LADDER_AB))
+    finally:
+        led.close()
+    assert "tier=cheap" in got.note
+    sel = got.extra["selection"]
+    assert sel["uplift"]["mode"] == "shadow"
+    assert sel["uplift"]["pick"] == "frontier"
+    assert sel["uplift"]["applied"] is False
+
+
+def test_armed_cold_start_serves_floor(tmp_path, monkeypatch):
+    """Armed but NO evidence -> cold start == ladder (spec section 3.2)."""
+    r, base_sha, head_sha = _repo(tmp_path)
+    a = _Fake("fake-a", [ProviderResponse(text=_finding_json("high"))])
+    b = _Fake("fake-b", [])
+    _wire(monkeypatch, a, b)
+    led = Ledger(tmp_path / "l.db")
+    ctx = DrainContext(root=r, cfg=_cfg(ladder=_LADDER_AB,
+                                        autolearn={"enabled": True,
+                                                   "armed": True}),
+                       ledger=led, clock=lambda: NOW.isoformat())
+    try:
+        got = llm_review.consume(_item_score(base_sha, head_sha, 45), ctx)
+    finally:
+        led.close()
+    assert "tier=cheap" in got.note and "provider=fake-a" in got.note
+    assert got.extra["selection"]["uplift"]["applied"] is False

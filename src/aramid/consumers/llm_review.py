@@ -148,6 +148,9 @@ def consume(item, ctx: DrainContext) -> ConsumerResult:
                 uplift_info = {"mode": "armed" if al_armed else "shadow",
                                "pick": arm_pick.tier, "applied": False,
                                "sampled_q": round(floor_q, 4)}
+                if al_armed and arm_pick.min_score > tgt.min_score:
+                    eff_score = arm_pick.min_score   # escalate-only: floor raised, never lowered
+                    uplift_info["applied"] = True
         except Exception:
             uplift_info = {"mode": "error", "pick": None, "applied": False,
                            "sampled_q": None}
