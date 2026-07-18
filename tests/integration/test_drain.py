@@ -1,5 +1,6 @@
 import subprocess
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -265,3 +266,32 @@ def test_drain_pack_only_scan_does_not_resolve_unrelated_open_finding(tmp_path, 
                    for rec in state.values())
     finally:
         led.close()
+
+
+def test_consumer_extra_merged_into_event_payload(tmp_path, monkeypatch):
+    """ConsumerResult.extra rides into the CONSUMER_RUN_FINISHED payload;
+    core keys are never overridden by extra."""
+    from aramid.commands import drain as drain_mod
+    from aramid.ledger import Ledger
+    from aramid.models import EventType
+    from aramid.queue import QueueItem
+
+    led = Ledger(tmp_path / "l.db")
+    fake = SimpleNamespace(consume=lambda item, ctx: ConsumerResult(
+        consumer="fake", state="ok",
+        extra={"selection": {"served": {"provider": "p"}},
+               "note": "MUST NOT WIN"}))
+    monkeypatch.setattr(drain_mod, "CONSUMERS", {"fake": fake})
+    item = QueueItem(id="q1", base=None, head="h", score=50, reasons=(),
+                     state="queued", created_at="2026-07-18T00:00:00+00:00",
+                     updated_at="2026-07-18T00:00:00+00:00")
+    try:
+        ok = drain_mod._consume_item(tmp_path, SimpleNamespace(llm={}), led,
+                                     item, lambda: "2026-07-18T00:00:00+00:00")
+        assert ok is True
+        evs = [e for e in led.events()
+               if e.type is EventType.CONSUMER_RUN_FINISHED]
+    finally:
+        led.close()
+    assert evs[0].payload["selection"] == {"served": {"provider": "p"}}
+    assert evs[0].payload["note"] == ""          # core key wins over extra

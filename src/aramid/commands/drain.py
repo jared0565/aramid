@@ -117,13 +117,16 @@ def _consume_item(root: Path, cfg, ledger, item, clock) -> bool:
             # the pack findings still fires (detection doesn't depend on
             # scope).
             ledger.record_run(run_id, clock(), "drain", set(), set(), findings)
+        payload = {"consumer": name, "item_id": item.id,
+                   "state": result.state,
+                   "duration_s": round(duration, 3),
+                   "cost": result.cost,
+                   "finding_count": len(findings),
+                   "note": result.note}
+        for key, value in (result.extra or {}).items():
+            payload.setdefault(key, value)
         ledger.append(Event(EventType.CONSUMER_RUN_FINISHED, run_id, clock(),
-                            payload={"consumer": name, "item_id": item.id,
-                                     "state": result.state,
-                                     "duration_s": round(duration, 3),
-                                     "cost": result.cost,
-                                     "finding_count": len(findings),
-                                     "note": result.note}))
+                            payload=payload))
         if result.state in ("error", "degraded"):
             ok = False
     # A not-fully-consumed item (any consumer errored or degraded, e.g. a
