@@ -198,7 +198,42 @@ def consume(item, ctx: DrainContext) -> ConsumerResult:
 
     verified, rejected = review.verify_findings(candidates, packet, ctx.root, item.head)
 
+    # --- cascade (autolearn spec section 9): armed-only re-review by the
+    # next-higher arm on danger signs; candidate union feeds the SAME
+    # downstream confirmed-strip/dedupe/refute pass. Consumes a normal
+    # review slot; budget exhausted -> skip (fail-safe).
     cascade_info = {"triggered": False, "trigger": None, "applied": False}
+    if al_enabled and tgt is not None:
+        try:
+            trig = autolearn.cascade_trigger(
+                reviewer_arm, arms, verified, rejected, packet.truncated,
+                int(al_cfg.get("cascade_hallucination_min", 3)))
+        except Exception:
+            trig = None
+        if trig is not None:
+            cascade_info["triggered"] = True
+            cascade_info["trigger"] = trig
+            if al_armed and _reviews_used < max_items:
+                up_arm = autolearn.next_arm_above(arms, reviewer_arm)
+                if up_arm is not None and up_arm.provider in avail:
+                    r2, lat2 = _call(providers_base.PROVIDERS[up_arm.provider],
+                                     prompt, up_arm.model, cfg, timeout_s,
+                                     effort=up_arm.effort)
+                    attempts.append({"tier": up_arm.tier,
+                                     "provider": up_arm.provider,
+                                     "model": up_arm.model, "error": r2.error,
+                                     "latency_s": lat2})
+                    c2 = None if r2.error else review.parse_review_response(r2.text)
+                    if c2 is not None:
+                        _reviews_used += 1
+                        cost += r2.cost_usd
+                        tokens_in += r2.tokens_in
+                        tokens_out += r2.tokens_out
+                        v2, _rej2 = review.verify_findings(c2, packet,
+                                                           ctx.root, item.head)
+                        verified = verified + v2
+                        cascade_info["applied"] = True
+
     audit_info = None
 
     # Trust boundary (FIX 1): `confirmed` is a privileged flag -- it is the
