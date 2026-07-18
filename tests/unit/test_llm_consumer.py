@@ -474,3 +474,157 @@ def test_chain_resolved_per_item_no_cross_cfg_bleed(tmp_path, monkeypatch):
 def test_registered_in_consumers():
     from aramid.consumers import base as consumers_base
     assert consumers_base.CONSUMERS["llm-review"] is llm_review
+
+
+# --- auto-learn Task 6: selection telemetry + shadow ------------------------
+
+def test_selection_payload_recorded_shadow(tmp_path, monkeypatch):
+    """extra['selection'] carries served arm, bucket, attempts, and a shadow
+    uplift record; shadow never changes the served arm."""
+    r, base_sha, head_sha = _repo(tmp_path)
+    a = _Fake("fake-a", [ProviderResponse(text=_finding_json("high"))])
+    b = _Fake("fake-b", [])
+    _wire(monkeypatch, a, b)
+    led = Ledger(tmp_path / "l.db")
+    try:
+        got = llm_review.consume(_item_score(base_sha, head_sha, 45),
+                                 _ctx_ladder(r, led, _LADDER_AB))
+    finally:
+        led.close()
+    sel = got.extra["selection"]
+    assert sel["served"] == {"tier": "cheap", "provider": "fake-a",
+                             "model": "ma", "effort": ""}
+    assert sel["target_tier"] == "cheap" and sel["bucket"] == "plain"
+    assert sel["uplift"]["mode"] == "shadow"
+    assert sel["uplift"]["applied"] is False
+    assert sel["audit"] is None
+    assert sel["cascade"] == {"triggered": False, "trigger": None,
+                              "applied": False}
+    assert sel["attempts"][0]["provider"] == "fake-a"
+    assert sel["attempts"][0]["error"] == ""
+    assert isinstance(sel["attempts"][0]["latency_s"], float)
+    assert sel["tokens"] == {"in": 0, "out": 0}
+
+
+def test_attempts_record_fallthrough_errors(tmp_path, monkeypatch):
+    """Failed arms finally leave a trace (autolearn spec section 6)."""
+    r, base_sha, head_sha = _repo(tmp_path)
+    a = _Fake("fake-a", [ProviderResponse(text=_finding_json("high"))])
+    b = _Fake("fake-b", [ProviderResponse(text="",
+                                          error=providers_base.ERR_QUOTA)])
+    _wire(monkeypatch, a, b)
+    led = Ledger(tmp_path / "l.db")
+    try:
+        got = llm_review.consume(_item_score(base_sha, head_sha, 90),
+                                 _ctx_ladder(r, led, _LADDER_AB))
+    finally:
+        led.close()
+    sel = got.extra["selection"]
+    assert [(x["provider"], x["error"]) for x in sel["attempts"]] == \
+        [("fake-b", "quota"), ("fake-a", "")]
+    assert sel["served"]["provider"] == "fake-a"
+
+
+def test_refute_outcome_recorded(tmp_path, monkeypatch):
+    r, base_sha, head_sha = _repo(tmp_path)
+    a = _Fake("fake-a", [ProviderResponse(text=_finding_json("critical"))])
+    b = _Fake("fake-b", [ProviderResponse(text=json.dumps(
+        {"refuted": False, "reason": "verified"}))])
+    _wire(monkeypatch, a, b)
+    led = Ledger(tmp_path / "l.db")
+    try:
+        got = llm_review.consume(_item_score(base_sha, head_sha, 45),
+                                 _ctx_ladder(r, led, _LADDER_AB))
+    finally:
+        led.close()
+    (ref,) = got.extra["selection"]["refutes"]
+    assert ref["refuter_provider"] == "fake-b"
+    assert ref["refuter_tier"] == "frontier"
+    assert ref["outcome"] == "survived"
+
+
+def test_refute_clipped_outcome_unavailable(tmp_path, monkeypatch):
+    r, base_sha, head_sha = _repo(tmp_path)
+    a = _Fake("fake-a", [ProviderResponse(text=_finding_json("critical"))])
+    b = _Fake("fake-b", [])
+    _wire(monkeypatch, a, b)
+    led = Ledger(tmp_path / "l.db")
+    ctx = DrainContext(root=r, cfg=_cfg(ladder=_LADDER_AB,
+                                        max_refutes_per_drain=0),
+                       ledger=led, clock=lambda: NOW.isoformat())
+    try:
+        got = llm_review.consume(_item_score(base_sha, head_sha, 45), ctx)
+    finally:
+        led.close()
+    (ref,) = got.extra["selection"]["refutes"]
+    assert ref["outcome"] == "unavailable" and ref["refuter_provider"] is None
+
+
+def test_malformed_response_selection_flagged(tmp_path, monkeypatch):
+    r, base_sha, head_sha = _repo(tmp_path)
+    a = _Fake("fake-a", [ProviderResponse(text="not json at all {{{")])
+    b = _Fake("fake-b", [])
+    _wire(monkeypatch, a, b)
+    led = Ledger(tmp_path / "l.db")
+    try:
+        got = llm_review.consume(_item_score(base_sha, head_sha, 45),
+                                 _ctx_ladder(r, led, _LADDER_AB))
+    finally:
+        led.close()
+    assert got.state == "degraded"
+    sel = got.extra["selection"]
+    assert sel["malformed"] is True
+    assert sel["served"]["provider"] == "fake-a"
+
+
+def test_sec_bucket_from_reasons(tmp_path, monkeypatch):
+    r, base_sha, head_sha = _repo(tmp_path)
+    a = _Fake("fake-a", [ProviderResponse(text=_finding_json("high"))])
+    b = _Fake("fake-b", [])
+    _wire(monkeypatch, a, b)
+    item = QueueItem(id="q1", base=base_sha, head=head_sha, score=45,
+                     reasons=("risky-content: eval",), state="queued",
+                     created_at=NOW.isoformat(), updated_at=NOW.isoformat())
+    led = Ledger(tmp_path / "l.db")
+    try:
+        got = llm_review.consume(item, _ctx_ladder(r, led, _LADDER_AB))
+    finally:
+        led.close()
+    assert got.extra["selection"]["bucket"] == "sec"
+
+
+def test_policy_error_fails_open_to_ladder(tmp_path, monkeypatch):
+    """Any autolearn exception -> deterministic ladder, mode='error'
+    (spec section 11)."""
+    from aramid import autolearn
+    r, base_sha, head_sha = _repo(tmp_path)
+    a = _Fake("fake-a", [ProviderResponse(text=_finding_json("high"))])
+    b = _Fake("fake-b", [])
+    _wire(monkeypatch, a, b)
+    monkeypatch.setattr(autolearn, "load_state",
+                        lambda *a, **k: (_ for _ in ()).throw(RuntimeError()))
+    led = Ledger(tmp_path / "l.db")
+    try:
+        got = llm_review.consume(_item_score(base_sha, head_sha, 45),
+                                 _ctx_ladder(r, led, _LADDER_AB))
+    finally:
+        led.close()
+    assert got.state == "ok"
+    assert "tier=cheap" in got.note
+    assert got.extra["selection"]["uplift"]["mode"] == "error"
+
+
+def test_autolearn_disabled_mode_off(tmp_path, monkeypatch):
+    r, base_sha, head_sha = _repo(tmp_path)
+    a = _Fake("fake-a", [ProviderResponse(text=_finding_json("high"))])
+    b = _Fake("fake-b", [])
+    _wire(monkeypatch, a, b)
+    led = Ledger(tmp_path / "l.db")
+    ctx = DrainContext(root=r, cfg=_cfg(ladder=_LADDER_AB,
+                                        autolearn={"enabled": False}),
+                       ledger=led, clock=lambda: NOW.isoformat())
+    try:
+        got = llm_review.consume(_item_score(base_sha, head_sha, 45), ctx)
+    finally:
+        led.close()
+    assert got.extra["selection"]["uplift"]["mode"] == "off"

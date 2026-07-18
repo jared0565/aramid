@@ -12,8 +12,10 @@ decision. Items are consumed priority-descending, so the highest-risk items
 always get the budget first.
 """
 import sys
+import time
 
 from aramid import review
+from aramid import autolearn
 from aramid.consumers import base
 from aramid.consumers.base import ConsumerResult, DrainContext
 from aramid.models import EventType, Source
@@ -33,23 +35,28 @@ _MALFORMED_GIVE_UP = 3
 
 _reviews_used = 0
 _refutes_used = 0
+_audits_used = 0
 
 
 def begin_drain() -> None:
     """Reset per-drain state. Called by cmd_drain once per invocation."""
-    global _reviews_used, _refutes_used
+    global _reviews_used, _refutes_used, _audits_used
     _reviews_used = 0
     _refutes_used = 0
+    _audits_used = 0
 
 
 def _call(module, prompt: str, model: str, cfg, timeout_s: float, *, effort: str = ""):
+    """Returns (ProviderResponse, latency_s)."""
     kwargs = {"effort": effort}
     if module.NAME == "openrouter":
         kwargs["cfg"] = cfg
+    started = time.monotonic()
     try:
-        return module.review(prompt, model, timeout_s, **kwargs)
+        resp = module.review(prompt, model, timeout_s, **kwargs)
     except Exception:
-        return providers_base.ProviderResponse(text="", error=providers_base.ERR_ERROR)
+        resp = providers_base.ProviderResponse(text="", error=providers_base.ERR_ERROR)
+    return resp, round(time.monotonic() - started, 3)
 
 
 def _malformed_attempts(ledger, item_id: str) -> int:
@@ -76,8 +83,29 @@ def _any_installed(cfg) -> bool:
     return False
 
 
+def _selection(tgt, reviewer_arm, bucket, attempts, uplift_info, cascade_info,
+               audit_info, refute_infos, rejected, tokens_in, tokens_out):
+    """The structured telemetry payload (autolearn spec section 6), merged
+    into the CONSUMER_RUN_FINISHED event via ConsumerResult.extra.
+    `bucket` is required by the rollup's posterior key; `target_tier` doubles
+    as the band."""
+    return {
+        "target_tier": tgt.tier if tgt is not None else None,
+        "bucket": bucket,
+        "served": {"tier": reviewer_arm.tier, "provider": reviewer_arm.provider,
+                   "model": reviewer_arm.model, "effort": reviewer_arm.effort},
+        "attempts": attempts,
+        "uplift": uplift_info,
+        "cascade": cascade_info,
+        "audit": audit_info,
+        "refutes": refute_infos,
+        "hallucination_rejected": rejected,
+        "tokens": {"in": tokens_in, "out": tokens_out},
+    }
+
+
 def consume(item, ctx: DrainContext) -> ConsumerResult:
-    global _reviews_used, _refutes_used
+    global _reviews_used, _refutes_used, _audits_used
     cfg = ctx.cfg
     if cfg is None or not cfg.llm.get("enabled", True):
         return ConsumerResult(consumer=NAME, state="ok", note="llm disabled")
@@ -93,7 +121,38 @@ def consume(item, ctx: DrainContext) -> ConsumerResult:
         return ConsumerResult(consumer=NAME, state="ok", note="empty packet")
     arms = review.build_arms(cfg)
     avail = {m.NAME for m in providers_base.chain(cfg)}
-    order = review.reviewer_order(arms, item.score, avail)
+
+    # --- auto-learn uplift consult (autolearn spec section 8.2). Shadow
+    # records the pick without changing eff_score; armed application is
+    # Task 7. Fail-open: any policy failure -> deterministic ladder,
+    # mode="error" on record, never a crashed drain (spec section 11).
+    al_cfg = cfg.llm.get("autolearn", {})
+    if not isinstance(al_cfg, dict):
+        al_cfg = {}
+    al_enabled = bool(al_cfg.get("enabled", True))
+    al_armed = bool(al_cfg.get("armed", False))
+    tgt = review.target_arm(arms, item.score)
+    bucket = autolearn.bucket_for(item.reasons)
+    uplift_info = {"mode": "off", "pick": None, "applied": False,
+                   "sampled_q": None}
+    eff_score = item.score
+    if al_enabled and tgt is not None:
+        try:
+            st = autolearn.load_state()
+            picked = autolearn.uplift_pick(
+                arms, item.score, bucket, st,
+                float(al_cfg.get("uplift_threshold", 0.15)),
+                autolearn.decision_rng(item.id, st))
+            if picked is not None:
+                arm_pick, floor_q = picked
+                uplift_info = {"mode": "armed" if al_armed else "shadow",
+                               "pick": arm_pick.tier, "applied": False,
+                               "sampled_q": round(floor_q, 4)}
+        except Exception:
+            uplift_info = {"mode": "error", "pick": None, "applied": False,
+                           "sampled_q": None}
+
+    order = review.reviewer_order(arms, eff_score, avail)
     if not order:
         if not _any_installed(cfg):
             return ConsumerResult(consumer=NAME, state="ok",
@@ -103,11 +162,14 @@ def consume(item, ctx: DrainContext) -> ConsumerResult:
 
     timeout_s = float(cfg.llm.get("call_timeout_s", 240))
     prompt = review.render_review_prompt(packet)
-    tgt = review.target_arm(arms, item.score)
     resp, reviewer_arm = None, None
+    attempts = []
     for arm in order:                       # target tier first, then degrade/fallthrough
-        r = _call(providers_base.PROVIDERS[arm.provider], prompt, arm.model, cfg,
-                  timeout_s, effort=arm.effort)
+        r, lat = _call(providers_base.PROVIDERS[arm.provider], prompt, arm.model,
+                       cfg, timeout_s, effort=arm.effort)
+        attempts.append({"tier": arm.tier, "provider": arm.provider,
+                         "model": arm.model, "error": r.error,
+                         "latency_s": lat})
         if r.error in ("", providers_base.ERR_MALFORMED):
             resp, reviewer_arm = r, arm
             break
@@ -123,10 +185,18 @@ def consume(item, ctx: DrainContext) -> ConsumerResult:
 
     candidates = None if resp.error else review.parse_review_response(resp.text)
     if candidates is None:
+        sel = _selection(tgt, reviewer_arm, bucket, attempts, uplift_info,
+                         {"triggered": False, "trigger": None, "applied": False},
+                         None, [], 0, tokens_in, tokens_out)
+        sel["malformed"] = True
         return ConsumerResult(consumer=NAME, state="degraded", cost=cost,
-                              note=f"malformed response from {provider.NAME}")
+                              note=f"malformed response from {provider.NAME}",
+                              extra={"selection": sel})
 
     verified, rejected = review.verify_findings(candidates, packet, ctx.root, item.head)
+
+    cascade_info = {"triggered": False, "trigger": None, "applied": False}
+    audit_info = None
 
     # Trust boundary (FIX 1): `confirmed` is a privileged flag -- it is the
     # ONLY thing the pre-push ledger gate blocks on. parse_review_response
@@ -161,6 +231,7 @@ def consume(item, ctx: DrainContext) -> ConsumerResult:
 
     max_refutes = int(cfg.llm.get("max_refutes_per_drain", 6))
     refutes = 0
+    refute_infos = []
     clipped = 0
     finals = []
     for rule, cand in fresh:
@@ -175,20 +246,31 @@ def consume(item, ctx: DrainContext) -> ConsumerResult:
                 # the next drain's fresh-vs-ledger check skips its fingerprint
                 # and never re-refutes it. Under-blocking is the safe direction;
                 # `refute_clipped=N` in the run note surfaces when it happened.
+                refute_infos.append({"refuter_provider": None,
+                                     "refuter_tier": None,
+                                     "outcome": "unavailable",
+                                     "latency_s": 0.0})
                 clipped += 1
                 cand = review.apply_refute(
                     cand, True, "refute unavailable (drain refute budget exhausted)")
             else:
                 refuter_arm = review.select_refuter(arms, reviewer_arm, avail)
-                rr = _call(providers_base.PROVIDERS[refuter_arm.provider],
-                          review.render_refute_prompt(cand, packet), refuter_arm.model, cfg,
-                          timeout_s, effort=refuter_arm.effort)
+                rr, rlat = _call(providers_base.PROVIDERS[refuter_arm.provider],
+                                 review.render_refute_prompt(cand, packet),
+                                 refuter_arm.model, cfg,
+                                 timeout_s, effort=refuter_arm.effort)
                 _refutes_used += 1
                 refutes += 1
                 cost += rr.cost_usd
                 tokens_in += rr.tokens_in
                 tokens_out += rr.tokens_out
                 parsed = review.parse_refute_response(rr.text) if not rr.error else None
+                refute_infos.append({
+                    "refuter_provider": refuter_arm.provider,
+                    "refuter_tier": refuter_arm.tier,
+                    "outcome": ("unavailable" if parsed is None
+                                else ("refuted" if parsed[0] else "survived")),
+                    "latency_s": rlat})
                 if parsed is None:      # transport failure OR malformed refute:
                     parsed = (True, f"refute unavailable ({rr.error or 'malformed'})")
                 cand = review.apply_refute(cand, *parsed)
@@ -211,8 +293,11 @@ def consume(item, ctx: DrainContext) -> ConsumerResult:
             f"refutes={refutes} hallucination_rejected={rejected}"
             + (f" refute_clipped={clipped}" if clipped else "")
             + (" truncated" if packet.truncated else ""))
+    sel = _selection(tgt, reviewer_arm, bucket, attempts, uplift_info,
+                     cascade_info, audit_info, refute_infos, rejected,
+                     tokens_in, tokens_out)
     return ConsumerResult(consumer=NAME, state="ok", findings=raws,
-                          cost=cost, note=note)
+                          cost=cost, note=note, extra={"selection": sel})
 
 
 base.CONSUMERS[NAME] = sys.modules[__name__]
