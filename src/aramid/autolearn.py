@@ -203,3 +203,86 @@ def cascade_trigger(served_arm, arms, verified: list, rejected: int,
     if truncated:
         return "truncated"
     return None
+
+
+# --- reward rollup ----------------------------------------------------------
+
+def rollup(state: dict, events: list, repo_key: str) -> dict:
+    """Fold ledger events past this repo's cursor into posterior counts
+    (spec section 8.3). Pure: returns a NEW state dict; the caller saves.
+    The cursor is an event COUNT (the ledger is append-only and
+    seq-ordered), so replaying the same list twice is a no-op; a shorter
+    list than the cursor (rebuilt/compacted ledger) restarts from 0.
+
+    Primary reward: audit outcomes -> misses/clean on the SERVED arm's
+    (band, bucket) cell. Secondary counters (halluc/malformed/refuted/
+    survived/overridden) are recorded for reporting but NOT read by
+    uplift_pick (spec section 8.3)."""
+    out = json.loads(json.dumps(state))     # deep copy; state is JSON-shaped
+    cursor = int(out.get("cursors", {}).get(repo_key, 0))
+    if cursor > len(events):
+        cursor = 0
+
+    # Join maps from the FULL stream (a finding's detect event may precede
+    # the cursor): llm finding -> its drain run_id -> the served-arm cell.
+    run_key: dict[str, str] = {}
+    fid_run: dict[str, str] = {}
+    for e in events:
+        if e.type is EventType.CONSUMER_RUN_FINISHED:
+            sel = e.payload.get("selection")
+            if isinstance(sel, dict):
+                served = sel.get("served") or {}
+                band, bucket = sel.get("target_tier"), sel.get("bucket")
+                if served.get("provider") and band and bucket:
+                    run_key[e.run_id] = (f"{served['provider']}/"
+                                         f"{served.get('model', '')}"
+                                         f"|{band}|{bucket}")
+        elif (e.type is EventType.FINDING_DETECTED
+              and e.payload.get("source") == "llm" and e.finding_id):
+            fid_run[e.finding_id] = e.run_id
+
+    posts = out.setdefault("posteriors", {})
+
+    def bump(key: str | None, field: str, n: int = 1) -> None:
+        if not key or n <= 0:
+            return
+        rec = posts.setdefault(key, {"misses": 0, "clean": 0, "halluc": 0,
+                                     "malformed": 0, "refuted": 0,
+                                     "survived": 0, "overridden": 0})
+        rec[field] = int(rec.get(field, 0)) + n
+
+    for e in events[cursor:]:
+        if e.type is EventType.CONSUMER_RUN_FINISHED:
+            sel = e.payload.get("selection")
+            if not isinstance(sel, dict):
+                continue
+            key = run_key.get(e.run_id)
+            audit = sel.get("audit")
+            if isinstance(audit, dict) and audit.get("performed"):
+                out["audits"]["performed"] += 1
+                missed = int(audit.get("missed_criticals", 0))
+                out["audits"]["missed_criticals"] += missed
+                if missed:
+                    bump(key, "misses", missed)
+                else:
+                    bump(key, "clean")
+            bump(key, "halluc", int(sel.get("hallucination_rejected", 0)))
+            if sel.get("malformed"):
+                bump(key, "malformed")
+            for r in sel.get("refutes") or []:
+                if not isinstance(r, dict):
+                    continue
+                if r.get("outcome") == "refuted":
+                    bump(key, "refuted")
+                elif r.get("outcome") == "survived":
+                    bump(key, "survived")
+            up = sel.get("uplift")
+            if isinstance(up, dict) and up.get("mode") == "shadow":
+                out["shadow"]["decisions"] += 1
+                if up.get("pick") and up.get("pick") != sel.get("target_tier"):
+                    out["shadow"]["would_uplift"] += 1
+        elif e.type is EventType.FINDING_OVERRIDDEN and e.finding_id in fid_run:
+            bump(run_key.get(fid_run[e.finding_id]), "overridden")
+
+    out.setdefault("cursors", {})[repo_key] = len(events)
+    return out
