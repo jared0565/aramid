@@ -61,6 +61,10 @@ class Finding:
     # source=LLM findings whose CRITICAL severity survived the refute pass;
     # the pre-push ledger gate blocks on nothing else.
     confirmed: bool = False
+    # Auto-learn (autolearn spec section 6): structured refute outcome --
+    # True iff apply_refute demoted this finding (critical -> high). The
+    # gate reads `confirmed`, never this.
+    refuted: bool = False
 
 @dataclass(frozen=True)
 class Event:

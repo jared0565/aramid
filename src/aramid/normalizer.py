@@ -35,6 +35,7 @@ class RawFinding:
     evidence: str | None = None
     source: Source = Source.DETERMINISTIC
     confirmed: bool = False
+    refuted: bool = False
 
 
 def normalize(raws: list[RawFinding], root: Path, ref_for: Callable[[str], str],
@@ -72,6 +73,6 @@ def normalize(raws: list[RawFinding], root: Path, ref_for: Callable[[str], str],
             id=finding_id, tool=raw.tool, rule=raw.rule, severity_raw=raw.severity_raw,
             severity=severity, verdict=verdict, file=raw.file, line=raw.line,
             message=message, evidence=evidence, gate=gate,
-            source=raw.source, confirmed=raw.confirmed))
+            source=raw.source, confirmed=raw.confirmed, refuted=raw.refuted))
 
     return findings

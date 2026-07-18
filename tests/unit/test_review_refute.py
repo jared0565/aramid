@@ -50,3 +50,16 @@ def test_apply_refute_survivor_confirmed():
     got = review.apply_refute(_finding(), False, "no guard found")
     assert got["severity"] == "critical"
     assert got["confirmed"] is True
+
+
+def test_apply_refute_sets_refuted_marker_only_on_refuted_branch():
+    """Auto-learn telemetry marker (autolearn spec section 6): structured
+    refute outcome. The gate reads `confirmed`, never this."""
+    refuted = review.apply_refute({"severity": "critical", "explanation": "e"},
+                                  True, "nope")
+    assert refuted["refuted"] is True
+    assert refuted["confirmed"] is False and refuted["severity"] == "high"
+    survived = review.apply_refute({"severity": "critical", "explanation": "e"},
+                                   False, "ok")
+    assert "refuted" not in survived
+    assert survived["confirmed"] is True

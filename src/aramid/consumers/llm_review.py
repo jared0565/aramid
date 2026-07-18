@@ -201,6 +201,7 @@ def consume(item, ctx: DrainContext) -> ConsumerResult:
                 f"(fix: {cand.get('fix_hint', 'n/a')})",
         evidence=cand["evidence"], source=Source.LLM,
         confirmed=bool(cand.get("confirmed", False)),
+        refuted=bool(cand.get("refuted", False)),
     ) for rule, cand in finals]
 
     degraded = (f" degraded_from={tgt.tier}"
