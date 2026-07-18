@@ -17,9 +17,11 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable
 
+from aramid import autolearn
 from aramid import config as config_mod
 from aramid import gitutil, policy, queue, redact, registry, triage
 from aramid.consumers.base import CONSUMERS, ConsumerResult, DrainContext
+from aramid.fingerprint import normalize_path
 from aramid.ledger import Ledger
 from aramid.models import Event, EventType, Gate
 from aramid.normalizer import normalize
@@ -213,6 +215,7 @@ def cmd_drain(targets: list, *, dry_run: bool = False, max_items: int | None = N
                 max((int(c[3].drain.get("max_items_per_drain", 10))
                      for c in candidates), default=10)
         drained = 0
+        rolled: dict[str, tuple] = {}
         for score_val, root, item, cfg in candidates:
             if drained >= limit or monotonic() - started > budget_s:
                 print(f"aramid drain: budget reached; {len(candidates) - drained} "
@@ -228,6 +231,27 @@ def cmd_drain(targets: list, *, dry_run: bool = False, max_items: int | None = N
             finally:
                 ledger.close()
             drained += 1
+            rolled[str(root)] = (root, cfg)
+
+        # Auto-learn rollup (autolearn spec section 8.3): fold each drained
+        # repo's new ledger events into the machine-global state. Fail-open:
+        # a rollup failure never fails the drain.
+        for root, cfg in rolled.values():
+            al_cfg = cfg.llm.get("autolearn", {})
+            if not isinstance(al_cfg, dict) or not al_cfg.get("enabled", True):
+                continue
+            try:
+                led = Ledger(root / ".aramid" / "ledger.db")
+                try:
+                    events = led.events()
+                finally:
+                    led.close()
+                state = autolearn.rollup(autolearn.load_state(), events,
+                                         normalize_path(str(root)))
+                autolearn.save_state(state, clock())
+            except Exception as exc:
+                print(f"aramid drain: autolearn rollup skipped for {root}: {exc}",
+                      file=sys.stderr)
         print(f"aramid drain: {drained} item(s) drained, "
               f"{len(candidates) - drained} left")
         return 2 if degraded else 0

@@ -295,3 +295,60 @@ def test_consumer_extra_merged_into_event_payload(tmp_path, monkeypatch):
         led.close()
     assert evs[0].payload["selection"] == {"served": {"provider": "p"}}
     assert evs[0].payload["note"] == ""          # core key wins over extra
+
+
+def test_drain_rolls_up_autolearn_state(tmp_path, monkeypatch):
+    """cmd_drain folds drained repos' selection events into the (test-
+    isolated) machine-global state; a rollup failure never fails the drain."""
+    import json as json_mod
+
+    from aramid import autolearn, config as config_mod, gitutil, queue
+    from aramid.commands import drain as drain_mod
+    from aramid.ledger import Ledger
+
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _git = lambda *a: subprocess.run(["git", *a], cwd=repo, check=True,
+                                     capture_output=True, text=True)
+    _git("init", "-q", "-b", "main")
+    _git("config", "user.email", "t@t")
+    _git("config", "user.name", "t")
+    (repo / "a.py").write_text("x = 1\n", encoding="utf-8")
+    _git("add", "."); _git("commit", "-m", "c1")
+    (repo / "aramid.toml").write_text("schema_version = 1\n", encoding="utf-8")
+
+    monkeypatch.setattr(config_mod, "_user_config_path",
+                        lambda: tmp_path / "no-user.toml")
+    monkeypatch.setattr(drain_mod, "_lock_path",
+                        lambda: tmp_path / "drain.lock")
+    monkeypatch.setattr(drain_mod, "_sweep", lambda *a, **k: None)
+
+    led = Ledger(repo / ".aramid" / "ledger.db")
+    try:
+        queue.enqueue(led, "2026-07-18T00:00:00+00:00", None,
+                      gitutil.rev_sha(repo, "HEAD"), 50, ["risky"])
+    finally:
+        led.close()
+
+    fake = SimpleNamespace(consume=lambda item, ctx: ConsumerResult(
+        consumer="fake", state="ok",
+        extra={"selection": {
+            "target_tier": "cheap", "bucket": "plain",
+            "served": {"tier": "cheap", "provider": "p", "model": "m",
+                       "effort": ""},
+            "attempts": [], "uplift": {"mode": "shadow", "pick": "cheap",
+                                       "applied": False, "sampled_q": 0.1},
+            "cascade": {"triggered": False, "trigger": None,
+                        "applied": False},
+            "audit": {"performed": True, "tier": "frontier",
+                      "new_findings": 0, "missed_criticals": 0},
+            "refutes": [], "hallucination_rejected": 0,
+            "tokens": {"in": 1, "out": 1}}}))
+    monkeypatch.setattr(drain_mod, "CONSUMERS", {"fake": fake})
+
+    assert drain_mod.cmd_drain([str(repo)]) == 0
+
+    state = json_mod.loads(autolearn.state_path().read_text(encoding="utf-8"))
+    assert state["audits"]["performed"] == 1
+    assert state["posteriors"]["p/m|cheap|plain"]["clean"] == 1
+    assert list(state["cursors"].values())[0] > 0
