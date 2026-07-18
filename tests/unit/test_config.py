@@ -223,8 +223,8 @@ def test_llm_defaults_present(tmp_path, monkeypatch):
     assert [a["tier"] for a in ladder] == ["cheap", "mid", "frontier"]
     assert [a["provider"] for a in ladder] == ["ollama-cloud", "codex-cli", "claude-cli"]
     assert [a["min_score"] for a in ladder] == [40, 60, 80]
-    # effort: mid/frontier verified live (2026-07-14) and set; cheap/ollama
-    # stays "" (unverifiable without OLLAMA_API_KEY -- fail-safe).
+    # effort: all three tiers live-verified 2026-07-14; cheap/ollama stays ""
+    # deliberately (non-empty effort => think:true, wrong for the cheap tier).
     assert [a["effort"] for a in ladder] == ["", "medium", "high"]
     assert [a["model"] for a in ladder] == ["deepseek-v4-flash", "gpt-5.5", "opus"]
 
@@ -236,3 +236,24 @@ def test_llm_repo_override_merges(tmp_path, monkeypatch):
     cfg = config.load_config(tmp_path)
     assert cfg.llm["max_items_per_drain"] == 1
     assert cfg.llm["enabled"] is True  # other keys keep defaults (deep merge)
+
+
+def test_autolearn_defaults_present(tmp_path, monkeypatch):
+    monkeypatch.setattr(config, "_user_config_path", lambda: _no_user_config(tmp_path))
+    cfg = config.load_config(tmp_path)
+    al = cfg.llm["autolearn"]
+    assert al["enabled"] is True
+    assert al["armed"] is False
+    assert al["uplift_threshold"] == 0.15
+    assert al["audit_every"] == 8
+    assert al["max_audits_per_drain"] == 1
+    assert al["cascade_hallucination_min"] == 3
+
+
+def test_autolearn_repo_override_deep_merges(tmp_path, monkeypatch):
+    monkeypatch.setattr(config, "_user_config_path", lambda: _no_user_config(tmp_path))
+    (tmp_path / "aramid.toml").write_text(
+        "[llm.autolearn]\narmed = true\n", encoding="utf-8")
+    cfg = config.load_config(tmp_path)
+    assert cfg.llm["autolearn"]["armed"] is True
+    assert cfg.llm["autolearn"]["enabled"] is True   # sibling default survives

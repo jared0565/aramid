@@ -71,14 +71,16 @@ max_refutes_per_drain = 6
 # provider so the cross-provider refuter always differs in model family.
 # effort verified live 2026-07-14: `claude --effort high` and codex
 # `-c model_reasoning_effort=medium` both accepted (exit 0) -> set below.
-# cheap/ollama effort stays "" -- no OLLAMA_API_KEY was available to verify, and
-# `think` is structural; unset is the fail-safe (a wrong value can't kill a tier).
+# cheap/ollama effort stays "" DELIBERATELY: any non-empty effort maps to
+# `think: true` (slower reasoning mode) -- wrong for the high-volume cheap
+# tier. The cheap arm itself was live-verified 2026-07-14 (deepseek-v4-flash,
+# 200 OK end-to-end).
 # The mid model was gpt-5.6 (INVALID: "not supported ... with a ChatGPT account")
 # -- corrected to gpt-5.5 (the codex config default) during live verification.
 [[llm.ladder]]
 tier = "cheap"
 provider = "ollama-cloud"
-model = "deepseek-v4-flash"   # unverified (no OLLAMA_API_KEY); tune per your account
+model = "deepseek-v4-flash"   # live-verified 2026-07-14; tune per your account
 effort = ""
 min_score = 40
 
@@ -95,3 +97,23 @@ provider = "claude-cli"
 model = "opus"
 effort = "high"
 min_score = 80
+
+# --- Auto-learn (autolearn spec sections 7-10): learned UPLIFT over the ladder ---
+# Shadow-first, bake-then-arm: with the defaults below the engine records
+# telemetry, computes shadow decisions, and runs audit double-reviews, but
+# NEVER changes which arm serves. `aramid arm --autolearn` flips `armed`
+# per-repo. Escalate-only either way: the ladder tier is a floor.
+[llm.autolearn]
+enabled = true
+armed = false
+# Serve the lowest arm whose Thompson-sampled miss probability is <= this.
+# No-data prior Beta(1, 9) has mean 0.10 <= 0.15, so cold start == ladder.
+uplift_threshold = 0.15
+# Audit 1 in N below-frontier reviews with a frontier double-review
+# (deterministic hash of the item id) -- the miss-rate measurement, active
+# in shadow too; costs flat-rate quota only.
+audit_every = 8
+max_audits_per_drain = 1
+# Cascade re-review (armed only) when the served review shows danger signs:
+# a verified CRITICAL, hallucination_rejected >= this, or a truncated packet.
+cascade_hallucination_min = 3
