@@ -131,8 +131,14 @@ def consume(item, ctx: DrainContext) -> ConsumerResult:
         al_cfg = {}
     al_enabled = bool(al_cfg.get("enabled", True))
     al_armed = bool(al_cfg.get("armed", False))
-    tgt = review.target_arm(arms, item.score)
-    bucket = autolearn.bucket_for(item.reasons)
+    # Fail-open hardening: neither helper raises today, but a crash here
+    # would kill the item instead of degrading to the deterministic ladder
+    # (autolearn spec section 11: policy failure -> ladder, never a crash).
+    try:
+        tgt = review.target_arm(arms, item.score)
+        bucket = autolearn.bucket_for(item.reasons)
+    except Exception:
+        tgt, bucket = None, "plain"
     uplift_info = {"mode": "off", "pick": None, "applied": False,
                    "sampled_q": None}
     eff_score = item.score
@@ -238,12 +244,16 @@ def consume(item, ctx: DrainContext) -> ConsumerResult:
                                      "provider": up_arm.provider,
                                      "model": up_arm.model, "error": r2.error,
                                      "latency_s": lat2})
-                    c2 = None if r2.error else review.parse_review_response(r2.text)
-                    if c2 is not None:
-                        _reviews_used += 1
+                    # Cost accrues on SPEND, not on parse success -- an
+                    # unparseable response still burned real tokens (same
+                    # rule as the primary call above).
+                    if r2.error in ("", providers_base.ERR_MALFORMED):
                         cost += r2.cost_usd
                         tokens_in += r2.tokens_in
                         tokens_out += r2.tokens_out
+                    c2 = None if r2.error else review.parse_review_response(r2.text)
+                    if c2 is not None:
+                        _reviews_used += 1
                         v2, _rej2 = review.verify_findings(c2, packet,
                                                            ctx.root, item.head)
                         verified = verified + v2
@@ -271,11 +281,12 @@ def consume(item, ctx: DrainContext) -> ConsumerResult:
                                  "model": aud_arm.model, "error": ra.error,
                                  "latency_s": lata})
                 _audits_used += 1
-                ca = None if ra.error else review.parse_review_response(ra.text)
-                if ca is not None:
+                if ra.error in ("", providers_base.ERR_MALFORMED):
                     cost += ra.cost_usd
                     tokens_in += ra.tokens_in
                     tokens_out += ra.tokens_out
+                ca = None if ra.error else review.parse_review_response(ra.text)
+                if ca is not None:
                     va, _reja = review.verify_findings(ca, packet,
                                                        ctx.root, item.head)
                     new_n, missed_n = autolearn.audit_diff(verified, va)

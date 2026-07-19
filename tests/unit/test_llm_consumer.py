@@ -998,3 +998,100 @@ def test_cross_provider_refute_not_flagged_self(tmp_path, monkeypatch):
     (ref,) = got.extra["selection"]["refutes"]
     assert ref["self_refute"] is False
     assert "self-refute" not in got.findings[0].message
+
+
+def test_cascade_unparseable_response_still_accounts_cost(tmp_path, monkeypatch):
+    """Money accounting on SPEND, not parse success: an armed cascade whose
+    re-review comes back as garbage still cost real tokens."""
+    r, base_sha, head_sha = _repo(tmp_path)
+    a = _Fake("fake-a", [ProviderResponse(text=_finding_json("critical"))])
+    b = _Fake("fake-b", [
+        ProviderResponse(text="garbage {{{", tokens_in=100, tokens_out=7,
+                         cost_usd=0.5),                       # cascade re-review
+        ProviderResponse(text=json.dumps(
+            {"refuted": True, "reason": "nope"}))])           # refute
+    _wire(monkeypatch, a, b)
+    led = Ledger(tmp_path / "l.db")
+    ctx = DrainContext(root=r, cfg=_cfg(ladder=_LADDER_AB,
+                                        autolearn={"enabled": True,
+                                                   "armed": True}),
+                       ledger=led, clock=lambda: NOW.isoformat())
+    try:
+        got = llm_review.consume(_item_score(base_sha, head_sha, 45), ctx)
+    finally:
+        led.close()
+    sel = got.extra["selection"]
+    assert sel["cascade"] == {"triggered": True, "trigger": "critical",
+                              "applied": False}
+    assert got.cost == 0.5                    # the unparseable call is on the books
+    assert sel["tokens"]["in"] == 100 and sel["tokens"]["out"] == 7
+
+
+def test_audit_unparseable_response_still_accounts_cost(tmp_path, monkeypatch):
+    r, base_sha, head_sha = _repo(tmp_path)
+    a = _Fake("fake-a", [ProviderResponse(text=_finding_json("high"))])
+    b = _Fake("fake-b", [ProviderResponse(text="garbage {{{", tokens_in=55,
+                                          tokens_out=5, cost_usd=0.25)])
+    _wire(monkeypatch, a, b)
+    led = Ledger(tmp_path / "l.db")
+    ctx = DrainContext(root=r, cfg=_audit_cfg(_LADDER_AB), ledger=led,
+                       clock=lambda: NOW.isoformat())
+    try:
+        got = llm_review.consume(_item_score(base_sha, head_sha, 45), ctx)
+    finally:
+        led.close()
+    sel = got.extra["selection"]
+    assert sel["audit"] == {"performed": False, "tier": "frontier",
+                            "new_findings": 0, "missed_criticals": 0}
+    assert got.cost == 0.25
+    assert sel["tokens"]["in"] == 55 and sel["tokens"]["out"] == 5
+
+
+def test_target_arm_crash_fails_open_to_ladder(tmp_path, monkeypatch):
+    """Structural fail-open (T6): a crash in the CONSUMER's direct target_arm
+    call degrades to plain ladder service (tgt=None -> autolearn consult
+    skipped), never a dead item. One-shot raiser: reviewer_order() calls
+    target_arm internally for the ladder itself -- that call site has no
+    fail-open by design (drain's per-repo isolation owns it), so only the
+    first (wrapped, consumer-side) call may raise here."""
+    from aramid import review as review_mod
+    r, base_sha, head_sha = _repo(tmp_path)
+    a = _Fake("fake-a", [ProviderResponse(text=_finding_json("high"))])
+    b = _Fake("fake-b", [])
+    _wire(monkeypatch, a, b)
+    real, calls = review_mod.target_arm, {"n": 0}
+
+    def flaky(*a_, **k):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise RuntimeError()
+        return real(*a_, **k)
+    monkeypatch.setattr(review_mod, "target_arm", flaky)
+    led = Ledger(tmp_path / "l.db")
+    try:
+        got = llm_review.consume(_item_score(base_sha, head_sha, 45),
+                                 _ctx_ladder(r, led, _LADDER_AB))
+    finally:
+        led.close()
+    assert got.state == "ok"
+    sel = got.extra["selection"]
+    assert sel["target_tier"] is None and sel["bucket"] == "plain"
+    assert sel["served"]["tier"] == "cheap"    # review still served off eff_score
+
+
+def test_bucket_for_crash_fails_open_to_ladder(tmp_path, monkeypatch):
+    from aramid import autolearn as autolearn_mod
+    r, base_sha, head_sha = _repo(tmp_path)
+    a = _Fake("fake-a", [ProviderResponse(text=_finding_json("high"))])
+    b = _Fake("fake-b", [])
+    _wire(monkeypatch, a, b)
+    monkeypatch.setattr(autolearn_mod, "bucket_for",
+                        lambda *a_, **k: (_ for _ in ()).throw(RuntimeError()))
+    led = Ledger(tmp_path / "l.db")
+    try:
+        got = llm_review.consume(_item_score(base_sha, head_sha, 45),
+                                 _ctx_ladder(r, led, _LADDER_AB))
+    finally:
+        led.close()
+    assert got.state == "ok"
+    assert got.extra["selection"]["bucket"] == "plain"
