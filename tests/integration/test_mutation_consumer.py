@@ -183,6 +183,42 @@ def test_worktree_removed_on_midloop_exception(tmp_path, monkeypatch):
     assert _no_worktrees(r), "finally must remove the worktree even on a crash"
 
 
+def test_drain_e2e_records_mutation_run(tmp_path, monkeypatch):
+    from aramid import registry
+    from aramid.commands import drain as drain_mod
+    from aramid.commands.drain import cmd_drain
+    from aramid.models import EventType
+    from aramid import queue as queue_mod
+
+    r, base, head = _repo(tmp_path, WEAK_TEST)
+    monkeypatch.setattr(registry, "registry_path", lambda: tmp_path / "repos.toml")
+    monkeypatch.setattr(drain_mod, "_lock_path", lambda: tmp_path / "drain.lock")
+    monkeypatch.setattr(config_mod, "_user_config_path",
+                         lambda: tmp_path / "no-user.toml")
+    registry.register(r, "2026-07-20T10:00:00+00:00")
+    led = Ledger(r / ".aramid" / "ledger.db")
+    try:
+        queue_mod.enqueue(led, "2026-07-20T10:00:00+00:00", base, head, 55, ["seed"])
+    finally:
+        led.close()
+
+    rc = cmd_drain([str(r)])
+    assert rc in (0, 2)  # 2 allowed: llm consumer may degrade w/o providers
+
+    led = Ledger(r / ".aramid" / "ledger.db")
+    try:
+        events = led.events()
+        runs = [e for e in events if e.type is EventType.CONSUMER_RUN_FINISHED
+                and e.payload.get("consumer") == "mutation"]
+        assert runs, "drain must have run the mutation consumer"
+        assert "confirmed" in runs[-1].payload  # extra payload merged
+        state = led.open_findings()
+        assert any(rec.get("tool") == "mutation" for rec in state.values()), \
+            "confirmed survivor must land in the ledger as a finding"
+    finally:
+        led.close()
+
+
 def test_mutation_findings_classify_warn_never_block(tmp_path, monkeypatch):
     from aramid.models import Gate
     from aramid import policy
