@@ -352,3 +352,32 @@ def test_status_llm_ladder_skips_non_dict_entry_without_crash(tmp_path, capsys, 
     out = capsys.readouterr().out
     # Should complete without crash; may include ladder line with valid entries only
     assert "llm:" in out
+
+
+def test_status_shows_autolearn_shadow_line(tmp_path, monkeypatch, capsys):
+    from aramid import autolearn, config as config_mod
+    from aramid.commands.status import cmd_status
+    monkeypatch.setattr(config_mod, "_user_config_path",
+                        lambda: tmp_path / "no-user.toml")
+    st = autolearn.empty_state()
+    st["shadow"] = {"decisions": 17, "would_uplift": 3}
+    st["audits"] = {"performed": 5, "missed_criticals": 1}
+    autolearn.save_state(st, "2026-07-18T00:00:00+00:00")
+    repo = tmp_path / "r"
+    repo.mkdir()
+    assert cmd_status(repo) == 0
+    out = capsys.readouterr().out
+    assert "autolearn: shadow (would-uplift 3/17, audits 5, misses 1)" in out
+
+
+def test_status_shows_autolearn_armed(tmp_path, monkeypatch, capsys):
+    from aramid import config as config_mod
+    from aramid.commands.status import cmd_status
+    monkeypatch.setattr(config_mod, "_user_config_path",
+                        lambda: tmp_path / "no-user.toml")
+    repo = tmp_path / "r"
+    repo.mkdir()
+    (repo / "aramid.toml").write_text("[llm.autolearn]\narmed = true\n",
+                                      encoding="utf-8")
+    assert cmd_status(repo) == 0
+    assert "autolearn: armed" in capsys.readouterr().out

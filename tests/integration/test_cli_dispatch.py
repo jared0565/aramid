@@ -235,20 +235,36 @@ def test_pack_no_subcommand_returns_3(capsys):
 
 def test_arm_dispatch(monkeypatch):
     calls = []
-    monkeypatch.setattr(cli, "cmd_arm", lambda root, llm=False: calls.append((root, llm)) or 0)
+    monkeypatch.setattr(cli, "cmd_arm", lambda root, llm=False, autolearn=False: calls.append((root, llm, autolearn)) or 0)
 
     assert cli.main(["arm"]) == 0
     assert len(calls) == 1
-    assert calls[0] == (Path.cwd(), False)
+    assert calls[0] == (Path.cwd(), False, False)
 
 
 def test_arm_dispatch_with_llm_flag(monkeypatch):
     calls = []
-    monkeypatch.setattr(cli, "cmd_arm", lambda root, llm=False: calls.append((root, llm)) or 0)
+    monkeypatch.setattr(cli, "cmd_arm", lambda root, llm=False, autolearn=False: calls.append((root, llm, autolearn)) or 0)
 
     assert cli.main(["arm", "--llm"]) == 0
     assert len(calls) == 1
-    assert calls[0] == (Path.cwd(), True)
+    assert calls[0] == (Path.cwd(), True, False)
+
+
+def test_arm_dispatch_with_autolearn_flag(monkeypatch):
+    captured = {}
+    monkeypatch.setattr(cli, "cmd_arm",
+                        lambda root, llm=False, autolearn=False: captured.update(llm=llm, autolearn=autolearn) or 0)
+
+    assert cli.main(["arm", "--autolearn"]) == 0
+    assert captured["autolearn"] is True
+    assert captured["llm"] is False
+
+
+def test_arm_dispatch_llm_and_autolearn_mutually_exclusive():
+    rc = subprocess.run([sys.executable, "-m", "aramid", "arm", "--llm", "--autolearn"],
+                        capture_output=True, text=True)
+    assert rc.returncode == 3
 
 
 def test_update_rules_dispatch(monkeypatch):

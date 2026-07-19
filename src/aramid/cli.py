@@ -16,6 +16,7 @@ import sys
 from pathlib import Path
 
 from aramid import __version__
+from aramid.commands.autolearn_cmd import cmd_autolearn
 from aramid.commands.arm import cmd_arm
 from aramid.commands.check import cmd_check
 from aramid.commands.doctor import cmd_doctor
@@ -97,8 +98,14 @@ def build_parser() -> argparse.ArgumentParser:
     p_pack_add.add_argument("id")
     pack_sub.add_parser("compile")
 
-    p_arm = sub.add_parser("arm", help="end a WARN-only bake (semgrep default, --llm for the LLM reviewer)")
-    p_arm.add_argument("--llm", action="store_true")
+    p_autolearn = sub.add_parser("autolearn",
+                                 help="learned model-selection report (--rebuild: replay registry ledgers)")
+    p_autolearn.add_argument("--rebuild", action="store_true")
+
+    p_arm = sub.add_parser("arm", help="end a WARN-only bake (semgrep default, --llm for the LLM reviewer, --autolearn for learned uplift)")
+    arm_which = p_arm.add_mutually_exclusive_group()
+    arm_which.add_argument("--llm", action="store_true")
+    arm_which.add_argument("--autolearn", action="store_true")
     sub.add_parser("update-rules", help="refresh the vendored semgrep ruleset")
 
     p_uninstall = sub.add_parser("uninstall", help="reverse init")
@@ -188,8 +195,11 @@ def main(argv: list[str] | None = None) -> int:
               file=sys.stderr)
         return 3
 
+    if args.command == "autolearn":
+        return cmd_autolearn(root, rebuild=args.rebuild)
+
     if args.command == "arm":
-        return cmd_arm(root, llm=args.llm)
+        return cmd_arm(root, llm=args.llm, autolearn=args.autolearn)
 
     if args.command == "update-rules":
         return cmd_update_rules(root)

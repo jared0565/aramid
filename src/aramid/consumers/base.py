@@ -28,6 +28,10 @@ class ConsumerResult:
     duration_s: float = 0.0
     cost: float = 0.0
     note: str = ""
+    # Auto-learn (autolearn spec section 6): structured payload merged into
+    # the CONSUMER_RUN_FINISHED event by the drain (setdefault -- core keys
+    # always win). llm_review puts its `selection` telemetry dict here.
+    extra: dict = field(default_factory=dict)
 
 
 CONSUMERS: dict[str, object] = {}  # populated by consumer modules (Task 16)

@@ -117,6 +117,23 @@ not part of the default provider chain per the model-source policy; to enable
 it, add `"openrouter"` to `[llm].provider_order` in `aramid.toml` and define an
 `openrouter` arm in `[[llm.ladder]]` (with a model and min_score band).
 
+**Auto-learn (learned uplift).** The deterministic ladder is a *floor*, not
+the final answer: the auto-learn engine measures each arm's real-world miss
+rate with **audit sampling** (1 in N below-frontier reviews is double-reviewed
+by the frontier arm and the finding sets diffed — audit findings are filed for
+real) and applies an escalate-only Thompson **uplift**: an item may be served
+by a *higher* tier than its triage score suggests, never a lower one. It ships
+shadow-first (bake-then-arm): with the default `[llm.autolearn] enabled = true,
+armed = false` it records telemetry, shadow decisions, and audits but never
+changes selection; `aramid arm --autolearn` arms it per-repo once
+`aramid autolearn` shows a shadow record you trust. A **cascade** re-review
+escalates one tier mid-drain (armed only) when a served review shows danger
+signs (a verified CRITICAL, heavy hallucination rejections, a truncated
+packet). Learning state is machine-global (`~/.aramid/autolearn_state.json`),
+derived entirely from per-repo ledgers, and rebuildable at any time with
+`aramid autolearn --rebuild`. Cold start, missing state, and any policy error
+all degrade to exactly the deterministic ladder.
+
 Setup: install the `claude` and/or `codex` CLI on `PATH` (`aramid doctor`
 reports what it sees, informationally — LLM tooling never gates BLOCK-tier
 status). Set `OLLAMA_API_KEY` in the environment to enable ollama-cloud.

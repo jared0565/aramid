@@ -402,6 +402,7 @@ def apply_refute(finding: dict, refuted: bool, reason: str) -> dict:
         out["severity"] = "high"
         out["explanation"] = f"{out.get('explanation', '')} [refuted: {reason}]".strip()
         out["confirmed"] = False
+        out["refuted"] = True   # autolearn telemetry marker; the gate reads `confirmed`, never this
     else:
         out["confirmed"] = True
         if reason:

@@ -133,6 +133,25 @@ def _bake_lines(cfg: config_mod.Config, state: dict) -> list[str]:
     return lines
 
 
+def _autolearn_line(cfg: config_mod.Config) -> str:
+    """One line (autolearn spec section 12): off | armed | shadow with the
+    shadow/audit record. Never raises -- status stays read-only-safe."""
+    al = cfg.llm.get("autolearn", {})
+    if not isinstance(al, dict) or not al.get("enabled", True):
+        return "autolearn: off"
+    if al.get("armed", False):
+        return "autolearn: armed"
+    try:
+        from aramid import autolearn as al_mod
+        st = al_mod.load_state()
+        sh, au = st.get("shadow", {}), st.get("audits", {})
+        return (f"autolearn: shadow (would-uplift {sh.get('would_uplift', 0)}"
+                f"/{sh.get('decisions', 0)}, audits {au.get('performed', 0)}, "
+                f"misses {au.get('missed_criticals', 0)})")
+    except Exception:
+        return "autolearn: shadow (state unreadable)"
+
+
 def _llm_lines(cfg: config_mod.Config, state: dict) -> list[str]:
     """LLM review status: open count, confirmed critical count, armed state,
     and monthly OpenRouter spend (spec section 7, Phase 2b)."""
@@ -161,6 +180,7 @@ def _llm_lines(cfg: config_mod.Config, state: dict) -> list[str]:
     if arms:
         tiers = " -> ".join(f"{a.get('tier')}:{a.get('provider')}" for a in arms)
         lines.append(f"llm ladder: {tiers}")
+    lines.append(_autolearn_line(cfg))
     return lines
 
 
