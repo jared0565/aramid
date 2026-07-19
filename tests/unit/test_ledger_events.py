@@ -18,3 +18,19 @@ def test_detect_payload_carries_refuted_flag():
                 line=1, message="m", evidence="e", gate=Gate.ALL,
                 source=Source.LLM, refuted=True)
     assert _detect_payload(f)["refuted"] is True
+
+
+def test_refuted_flag_materializes_through_open_findings(tmp_path):
+    """T3 gap: the refuted payload key must survive _materialize into the
+    open_findings snapshot (autolearn's rollup reads it from there)."""
+    led = Ledger(tmp_path / "l.db")
+    led.append(Event(EventType.FINDING_DETECTED, "r1", "2026-07-19T00:00:00Z",
+                     finding_id="f-refuted",
+                     payload={"tool": "llm-review", "refuted": True}))
+    led.append(Event(EventType.FINDING_DETECTED, "r1", "2026-07-19T00:00:00Z",
+                     finding_id="f-plain",
+                     payload={"tool": "llm-review"}))
+    state = led.open_findings()
+    led.close()
+    assert state["f-refuted"]["refuted"] is True
+    assert state["f-plain"].get("refuted", False) is False

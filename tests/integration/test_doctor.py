@@ -255,3 +255,18 @@ def test_doctor_reports_autolearn_state(tmp_path, monkeypatch, capsys):
 
     autolearn.state_path().write_text("{corrupt", encoding="utf-8")
     assert "unreadable" in _autolearn_probe_line()
+
+
+def test_doctor_reports_foreign_autolearn_state_version():
+    """T13 gap: a state file from a different aramid version must probe as
+    DEGRADED with the --rebuild hint (engine treats it as empty)."""
+    import json as _json
+
+    from aramid import autolearn
+    from aramid.commands.doctor import _autolearn_probe_line
+    autolearn.state_path().write_text(
+        _json.dumps({"version": 999, "posteriors": {}}), encoding="utf-8")
+    line = _autolearn_probe_line()
+    assert "DEGRADED" in line
+    assert "foreign state version" in line
+    assert "--rebuild" in line

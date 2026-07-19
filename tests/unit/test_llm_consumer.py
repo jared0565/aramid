@@ -822,6 +822,8 @@ def test_cascade_skipped_when_review_budget_exhausted(tmp_path, monkeypatch):
     sel = got.extra["selection"]
     assert sel["cascade"]["triggered"] is True
     assert sel["cascade"]["applied"] is False      # no slot left, fail-safe
+    assert len(a.calls) == 1          # the served review; no cascade call
+    assert len(b.calls) == 1          # the refute only
 
 
 def test_cascade_candidates_pass_confirmed_strip(tmp_path, monkeypatch):
@@ -1095,3 +1097,57 @@ def test_bucket_for_crash_fails_open_to_ladder(tmp_path, monkeypatch):
         led.close()
     assert got.state == "ok"
     assert got.extra["selection"]["bucket"] == "plain"
+
+
+def test_cascade_never_triggers_for_top_tier_review(tmp_path, monkeypatch):
+    """cascade_trigger's own guard: a frontier-served CRITICAL must not
+    trigger (nothing above to escalate to) and must not spend an extra
+    review call -- only the cross-provider refute fires."""
+    r, base_sha, head_sha = _repo(tmp_path)
+    a = _Fake("fake-a", [ProviderResponse(text=json.dumps(
+        {"refuted": True, "reason": "no"}))])                 # refute only
+    b = _Fake("fake-b", [ProviderResponse(text=_finding_json("critical"))])
+    _wire(monkeypatch, a, b)
+    led = Ledger(tmp_path / "l.db")
+    ctx = DrainContext(root=r, cfg=_cfg(ladder=_LADDER_AB,
+                                        autolearn={"enabled": True,
+                                                   "armed": True}),
+                       ledger=led, clock=lambda: NOW.isoformat())
+    try:
+        got = llm_review.consume(_item_score(base_sha, head_sha, 80), ctx)
+    finally:
+        led.close()
+    sel = got.extra["selection"]
+    assert sel["cascade"] == {"triggered": False, "trigger": None,
+                              "applied": False}
+    assert len(b.calls) == 1          # served review only, no cascade call
+    assert len(a.calls) == 1          # the refute
+
+
+def test_cascade_next_arm_provider_unavailable_no_call(tmp_path, monkeypatch):
+    """Armed cascade where the next arm's provider is unavailable: the guard
+    must skip the call entirely (and the refuter falls back to self)."""
+    class _Off(_Fake):
+        def available(self, cfg):
+            return False
+
+    r, base_sha, head_sha = _repo(tmp_path)
+    a = _Fake("fake-a", [ProviderResponse(text=_finding_json("critical")),
+                         ProviderResponse(text=json.dumps(
+                             {"refuted": True, "reason": "nope"}))])
+    b = _Off("fake-b", [])
+    _wire(monkeypatch, a, b)
+    led = Ledger(tmp_path / "l.db")
+    ctx = DrainContext(root=r, cfg=_cfg(ladder=_LADDER_AB,
+                                        autolearn={"enabled": True,
+                                                   "armed": True}),
+                       ledger=led, clock=lambda: NOW.isoformat())
+    try:
+        got = llm_review.consume(_item_score(base_sha, head_sha, 45), ctx)
+    finally:
+        led.close()
+    sel = got.extra["selection"]
+    assert sel["cascade"]["triggered"] is True
+    assert sel["cascade"]["applied"] is False
+    assert b.calls == []              # unavailable arm never called
+    assert len(a.calls) == 2          # served review + (self-)refute
