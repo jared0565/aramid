@@ -16,6 +16,7 @@ import sys
 from pathlib import Path
 
 from aramid import __version__
+from aramid.commands.autolearn_cmd import cmd_autolearn
 from aramid.commands.arm import cmd_arm
 from aramid.commands.check import cmd_check
 from aramid.commands.doctor import cmd_doctor
@@ -96,6 +97,10 @@ def build_parser() -> argparse.ArgumentParser:
     p_pack_add = pack_sub.add_parser("add")
     p_pack_add.add_argument("id")
     pack_sub.add_parser("compile")
+
+    p_autolearn = sub.add_parser("autolearn",
+                                 help="learned model-selection report (--rebuild: replay registry ledgers)")
+    p_autolearn.add_argument("--rebuild", action="store_true")
 
     p_arm = sub.add_parser("arm", help="end a WARN-only bake (semgrep default, --llm for the LLM reviewer, --autolearn for learned uplift)")
     arm_which = p_arm.add_mutually_exclusive_group()
@@ -189,6 +194,9 @@ def main(argv: list[str] | None = None) -> int:
         print("aramid: pack: a subcommand is required (list|add|compile)",
               file=sys.stderr)
         return 3
+
+    if args.command == "autolearn":
+        return cmd_autolearn(root, rebuild=args.rebuild)
 
     if args.command == "arm":
         return cmd_arm(root, llm=args.llm, autolearn=args.autolearn)
