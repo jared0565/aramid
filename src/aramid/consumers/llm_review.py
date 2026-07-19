@@ -131,8 +131,14 @@ def consume(item, ctx: DrainContext) -> ConsumerResult:
         al_cfg = {}
     al_enabled = bool(al_cfg.get("enabled", True))
     al_armed = bool(al_cfg.get("armed", False))
-    tgt = review.target_arm(arms, item.score)
-    bucket = autolearn.bucket_for(item.reasons)
+    # Fail-open hardening: neither helper raises today, but a crash here
+    # would kill the item instead of degrading to the deterministic ladder
+    # (autolearn spec section 11: policy failure -> ladder, never a crash).
+    try:
+        tgt = review.target_arm(arms, item.score)
+        bucket = autolearn.bucket_for(item.reasons)
+    except Exception:
+        tgt, bucket = None, "plain"
     uplift_info = {"mode": "off", "pick": None, "applied": False,
                    "sampled_q": None}
     eff_score = item.score
@@ -238,12 +244,16 @@ def consume(item, ctx: DrainContext) -> ConsumerResult:
                                      "provider": up_arm.provider,
                                      "model": up_arm.model, "error": r2.error,
                                      "latency_s": lat2})
-                    c2 = None if r2.error else review.parse_review_response(r2.text)
-                    if c2 is not None:
-                        _reviews_used += 1
+                    # Cost accrues on SPEND, not on parse success -- an
+                    # unparseable response still burned real tokens (same
+                    # rule as the primary call above).
+                    if r2.error in ("", providers_base.ERR_MALFORMED):
                         cost += r2.cost_usd
                         tokens_in += r2.tokens_in
                         tokens_out += r2.tokens_out
+                    c2 = None if r2.error else review.parse_review_response(r2.text)
+                    if c2 is not None:
+                        _reviews_used += 1
                         v2, _rej2 = review.verify_findings(c2, packet,
                                                            ctx.root, item.head)
                         verified = verified + v2
@@ -271,11 +281,12 @@ def consume(item, ctx: DrainContext) -> ConsumerResult:
                                  "model": aud_arm.model, "error": ra.error,
                                  "latency_s": lata})
                 _audits_used += 1
-                ca = None if ra.error else review.parse_review_response(ra.text)
-                if ca is not None:
+                if ra.error in ("", providers_base.ERR_MALFORMED):
                     cost += ra.cost_usd
                     tokens_in += ra.tokens_in
                     tokens_out += ra.tokens_out
+                ca = None if ra.error else review.parse_review_response(ra.text)
+                if ca is not None:
                     va, _reja = review.verify_findings(ca, packet,
                                                        ctx.root, item.head)
                     new_n, missed_n = autolearn.audit_diff(verified, va)
@@ -342,6 +353,7 @@ def consume(item, ctx: DrainContext) -> ConsumerResult:
                 # `refute_clipped=N` in the run note surfaces when it happened.
                 refute_infos.append({"refuter_provider": None,
                                      "refuter_tier": None,
+                                     "self_refute": False,
                                      "outcome": "unavailable",
                                      "latency_s": 0.0})
                 clipped += 1
@@ -349,6 +361,10 @@ def consume(item, ctx: DrainContext) -> ConsumerResult:
                     cand, True, "refute unavailable (drain refute budget exhausted)")
             else:
                 refuter_arm = review.select_refuter(arms, reviewer_arm, avail)
+                # Single-provider fallback (spec 2b): the refuter can be the
+                # reviewer's own provider. Flag it -- audits must be able to
+                # tell an independent confirmation from a self-confirmation.
+                self_refute = refuter_arm.provider == reviewer_arm.provider
                 rr, rlat = _call(providers_base.PROVIDERS[refuter_arm.provider],
                                  review.render_refute_prompt(cand, packet),
                                  refuter_arm.model, cfg,
@@ -362,11 +378,16 @@ def consume(item, ctx: DrainContext) -> ConsumerResult:
                 refute_infos.append({
                     "refuter_provider": refuter_arm.provider,
                     "refuter_tier": refuter_arm.tier,
+                    "self_refute": self_refute,
                     "outcome": ("unavailable" if parsed is None
                                 else ("refuted" if parsed[0] else "survived")),
                     "latency_s": rlat})
                 if parsed is None:      # transport failure OR malformed refute:
                     parsed = (True, f"refute unavailable ({rr.error or 'malformed'})")
+                if self_refute:
+                    # Marker rides the reason text into the persisted
+                    # explanation: [refute survived: self-refute: ...]
+                    parsed = (parsed[0], f"self-refute: {parsed[1]}")
                 cand = review.apply_refute(cand, *parsed)
         finals.append((rule, cand))
 

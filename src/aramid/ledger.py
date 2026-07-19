@@ -104,6 +104,16 @@ class Ledger:
         return finding_id not in self.baseline_ids() and finding_id not in seen
 
     def compact(self) -> int:
+        # LANDMINE -- compact() is currently DEAD CODE (no src/ call sites).
+        # Wiring it into a command must solve two integrations first:
+        # (1) autolearn.rollup cursors are event COUNTS: compacting shrinks
+        #     the list below a stored cursor -> rollup resets to 0 and
+        #     RE-FOLDS the surviving events -> posterior double-count. Any
+        #     wiring must rebuild the autolearn state (`aramid autolearn
+        #     --rebuild`) in the same operation.
+        # (2) only the latest CONSUMER_RUN_FINISHED row survives (below), so
+        #     llm_review._malformed_attempts loses per-item history and the
+        #     malformed-give-up counter silently resets.
         rows = self._c.execute(
             "SELECT seq,type,finding_id FROM events ORDER BY seq").fetchall()
 

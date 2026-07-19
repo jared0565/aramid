@@ -15,12 +15,29 @@ import re
 import sys
 from pathlib import Path
 
-_KEY_RE = re.compile(r"(?m)^semgrep_block_armed\s*=\s*\S+\s*$")
-_LLM_KEY_RE = re.compile(r"(?m)^llm_block_armed\s*=\s*\S+\s*$")
+# Key-line rewrite family. Horizontal-whitespace-only classes ([^\S\n]) so a
+# match can never swallow the newline/section boundary after the line (the
+# Task-11 _AL_KEY_RE lesson, now applied to all three), and an optional
+# trailing inline comment is captured in group `c` and preserved verbatim by
+# _armed_sub (a missed match here inserts a DUPLICATE key -> tomllib
+# "Cannot overwrite a value" corruption). The value class excludes `#` so a
+# comment abutting the value (`false#x`) lands in `c` instead of being
+# swallowed -- safe because these keys only ever hold true/false.
+_KEY_RE = re.compile(
+    r"(?m)^semgrep_block_armed[^\S\n]*=[^\S\n]*[^\s#]+(?P<c>[^\S\n]*#[^\n]*)?[^\S\n]*$")
+_LLM_KEY_RE = re.compile(
+    r"(?m)^llm_block_armed[^\S\n]*=[^\S\n]*[^\s#]+(?P<c>[^\S\n]*#[^\n]*)?[^\S\n]*$")
 _LLM_SECTION_RE = re.compile(r"(?m)^\[llm\]\s*$")
 _AL_SECTION_RE = re.compile(r"(?m)^\[llm\.autolearn\]\s*$")
-_AL_KEY_RE = re.compile(r"(?m)^armed[^\S\n]*=[^\S\n]*\S+[^\S\n]*$")
+_AL_KEY_RE = re.compile(
+    r"(?m)^armed[^\S\n]*=[^\S\n]*[^\s#]+(?P<c>[^\S\n]*#[^\n]*)?[^\S\n]*$")
 _NEXT_SECTION_RE = re.compile(r"(?m)^\[")
+
+
+def _armed_sub(key_re: re.Pattern, new_line: str, text: str, count: int = 0) -> str:
+    """Comment-preserving key rewrite: whatever trailing `# ...` the old line
+    carried is re-emitted verbatim after the new value."""
+    return key_re.sub(lambda m: new_line + (m.group("c") or ""), text, count=count)
 
 
 def _arm_llm_text(text: str) -> str:
@@ -29,7 +46,7 @@ def _arm_llm_text(text: str) -> str:
     under the header; neither -> append a fresh [llm] section (a bare
     key at EOF would land inside whatever table happens to be last)."""
     if _LLM_KEY_RE.search(text):
-        return _LLM_KEY_RE.sub("llm_block_armed = true", text)
+        return _armed_sub(_LLM_KEY_RE, "llm_block_armed = true", text)
     m = _LLM_SECTION_RE.search(text)
     if m:
         insert_at = m.end()
@@ -49,8 +66,8 @@ def _arm_autolearn_text(text: str) -> str:
         span_end = nxt.start() if nxt else len(text)
         section = text[m.end():span_end]
         if _AL_KEY_RE.search(section):
-            return (text[:m.end()] + _AL_KEY_RE.sub("armed = true", section,
-                                                    count=1) + text[span_end:])
+            return (text[:m.end()] + _armed_sub(_AL_KEY_RE, "armed = true",
+                                                section, count=1) + text[span_end:])
         return text[:m.end()] + "\narmed = true" + text[m.end():]
     prefix = "" if not text or text.endswith("\n") else "\n"
     return text + prefix + "[llm.autolearn]\narmed = true\n"
@@ -90,10 +107,18 @@ def cmd_arm(root, llm: bool = False, autolearn: bool = False) -> int:
         return 0
 
     if _KEY_RE.search(text):
-        new_text = _KEY_RE.sub("semgrep_block_armed = true", text)
+        new_text = _armed_sub(_KEY_RE, "semgrep_block_armed = true", text)
     else:
-        prefix = "" if not text or text.endswith("\n") else "\n"
-        new_text = text + prefix + "semgrep_block_armed = true\n"
+        m = _NEXT_SECTION_RE.search(text)
+        if m:
+            # A bare key appended at EOF would land inside whatever [table]
+            # happens to be last (e.g. the [llm] section arm --llm writes) --
+            # a ROOT key must be inserted before the first section header.
+            new_text = (text[:m.start()] + "semgrep_block_armed = true\n"
+                        + text[m.start():])
+        else:
+            prefix = "" if not text or text.endswith("\n") else "\n"
+            new_text = text + prefix + "semgrep_block_armed = true\n"
 
     toml_path.write_text(new_text, encoding="utf-8")
     print(f"aramid: arm: semgrep_block_armed=true written to {toml_path}")

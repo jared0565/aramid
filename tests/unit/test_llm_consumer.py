@@ -54,13 +54,16 @@ def _cfg(**over):
         {"tier": "cheap", "provider": "fake-b", "model": "mb", "effort": "", "min_score": 40},
         {"tier": "frontier", "provider": "fake-a", "model": "ma", "effort": "", "min_score": 80},
     ])
+    # Hermetic-by-default: an autolearn= override MERGES over the base (it
+    # used to replace it, silently reverting audit_every to the code default
+    # 8 -> hash-sampled audits desynced scripted providers). audit_every=0
+    # persists unless a test sets it explicitly (_audit_cfg does).
+    al = {"enabled": True, "armed": False, "audit_every": 0,
+          **over.pop("autolearn", {})}
     llm = {"enabled": True, "max_items_per_drain": 3, "call_timeout_s": 240,
            "packet_max_bytes": 120000, "provider_order": ["fake-a", "fake-b"],
            "ladder": ladder, "llm_block_armed": False,
-           # audit_every=0: hermetic -- hash-sampled shadow audits never fire
-           # unless a test opts in (autolearn= override below wins if a test
-           # passes its own dict, e.g. via _audit_cfg).
-           "autolearn": {"enabled": True, "armed": False, "audit_every": 0},
+           "autolearn": al,
            **over}
     return SimpleNamespace(llm=llm, ignore_paths=[".aramid/", "graph-out/", ".git/"])
 
@@ -609,6 +612,7 @@ def test_refute_clipped_outcome_unavailable(tmp_path, monkeypatch):
         led.close()
     (ref,) = got.extra["selection"]["refutes"]
     assert ref["outcome"] == "unavailable" and ref["refuter_provider"] is None
+    assert ref["self_refute"] is False         # no call was made
 
 
 def test_malformed_response_selection_flagged(tmp_path, monkeypatch):
@@ -821,6 +825,8 @@ def test_cascade_skipped_when_review_budget_exhausted(tmp_path, monkeypatch):
     sel = got.extra["selection"]
     assert sel["cascade"]["triggered"] is True
     assert sel["cascade"]["applied"] is False      # no slot left, fail-safe
+    assert len(a.calls) == 1          # the served review; no cascade call
+    assert len(b.calls) == 1          # the refute only
 
 
 def test_cascade_candidates_pass_confirmed_strip(tmp_path, monkeypatch):
@@ -953,3 +959,198 @@ def test_audit_provider_failure_degrades_silently(tmp_path, monkeypatch):
         led.close()
     assert got.state == "ok" and len(got.findings) == 1
     assert got.extra["selection"]["audit"]["performed"] is False
+
+
+def test_self_refute_flagged_in_telemetry_and_record(tmp_path, monkeypatch):
+    """Single-provider install: the refuter falls back to the reviewer's own
+    provider -- telemetry marks self_refute=True and the persisted finding's
+    message carries the self-refute marker."""
+    r, base_sha, head_sha = _repo(tmp_path)
+    a = _Fake("fake-a", [ProviderResponse(text=_finding_json("critical")),
+                         ProviderResponse(text=json.dumps(
+                             {"refuted": False, "reason": "still real"}))])
+    _wire(monkeypatch, a)
+    ladder = [
+        {"tier": "cheap", "provider": "fake-a", "model": "ma", "effort": "", "min_score": 40},
+        {"tier": "frontier", "provider": "fake-a", "model": "ma2", "effort": "", "min_score": 80},
+    ]
+    led = Ledger(tmp_path / "l.db")
+    try:
+        got = llm_review.consume(_item_score(base_sha, head_sha, 45),
+                                 _ctx_ladder(r, led, ladder))
+    finally:
+        led.close()
+    (ref,) = got.extra["selection"]["refutes"]
+    assert ref["self_refute"] is True
+    assert ref["outcome"] == "survived"
+    (f,) = got.findings
+    assert f.confirmed is True                 # single-provider can still confirm
+    assert "self-refute:" in f.message
+
+
+def test_cross_provider_refute_not_flagged_self(tmp_path, monkeypatch):
+    r, base_sha, head_sha = _repo(tmp_path)
+    a = _Fake("fake-a", [ProviderResponse(text=_finding_json("critical"))])
+    b = _Fake("fake-b", [ProviderResponse(text=json.dumps(
+        {"refuted": False, "reason": "verified"}))])
+    _wire(monkeypatch, a, b)
+    led = Ledger(tmp_path / "l.db")
+    try:
+        got = llm_review.consume(_item_score(base_sha, head_sha, 45),
+                                 _ctx_ladder(r, led, _LADDER_AB))
+    finally:
+        led.close()
+    (ref,) = got.extra["selection"]["refutes"]
+    assert ref["self_refute"] is False
+    assert "self-refute" not in got.findings[0].message
+
+
+def test_cascade_unparseable_response_still_accounts_cost(tmp_path, monkeypatch):
+    """Money accounting on SPEND, not parse success: an armed cascade whose
+    re-review comes back as garbage still cost real tokens."""
+    r, base_sha, head_sha = _repo(tmp_path)
+    a = _Fake("fake-a", [ProviderResponse(text=_finding_json("critical"))])
+    b = _Fake("fake-b", [
+        ProviderResponse(text="garbage {{{", tokens_in=100, tokens_out=7,
+                         cost_usd=0.5),                       # cascade re-review
+        ProviderResponse(text=json.dumps(
+            {"refuted": True, "reason": "nope"}))])           # refute
+    _wire(monkeypatch, a, b)
+    led = Ledger(tmp_path / "l.db")
+    ctx = DrainContext(root=r, cfg=_cfg(ladder=_LADDER_AB,
+                                        autolearn={"enabled": True,
+                                                   "armed": True}),
+                       ledger=led, clock=lambda: NOW.isoformat())
+    try:
+        got = llm_review.consume(_item_score(base_sha, head_sha, 45), ctx)
+    finally:
+        led.close()
+    sel = got.extra["selection"]
+    assert sel["cascade"] == {"triggered": True, "trigger": "critical",
+                              "applied": False}
+    assert got.cost == 0.5                    # the unparseable call is on the books
+    assert sel["tokens"]["in"] == 100 and sel["tokens"]["out"] == 7
+
+
+def test_audit_unparseable_response_still_accounts_cost(tmp_path, monkeypatch):
+    r, base_sha, head_sha = _repo(tmp_path)
+    a = _Fake("fake-a", [ProviderResponse(text=_finding_json("high"))])
+    b = _Fake("fake-b", [ProviderResponse(text="garbage {{{", tokens_in=55,
+                                          tokens_out=5, cost_usd=0.25)])
+    _wire(monkeypatch, a, b)
+    led = Ledger(tmp_path / "l.db")
+    ctx = DrainContext(root=r, cfg=_audit_cfg(_LADDER_AB), ledger=led,
+                       clock=lambda: NOW.isoformat())
+    try:
+        got = llm_review.consume(_item_score(base_sha, head_sha, 45), ctx)
+    finally:
+        led.close()
+    sel = got.extra["selection"]
+    assert sel["audit"] == {"performed": False, "tier": "frontier",
+                            "new_findings": 0, "missed_criticals": 0}
+    assert got.cost == 0.25
+    assert sel["tokens"]["in"] == 55 and sel["tokens"]["out"] == 5
+
+
+def test_target_arm_crash_fails_open_to_ladder(tmp_path, monkeypatch):
+    """Structural fail-open (T6): a crash in the CONSUMER's direct target_arm
+    call degrades to plain ladder service (tgt=None -> autolearn consult
+    skipped), never a dead item. One-shot raiser: reviewer_order() calls
+    target_arm internally for the ladder itself -- that call site has no
+    fail-open by design (drain's per-repo isolation owns it), so only the
+    first (wrapped, consumer-side) call may raise here."""
+    from aramid import review as review_mod
+    r, base_sha, head_sha = _repo(tmp_path)
+    a = _Fake("fake-a", [ProviderResponse(text=_finding_json("high"))])
+    b = _Fake("fake-b", [])
+    _wire(monkeypatch, a, b)
+    real, calls = review_mod.target_arm, {"n": 0}
+
+    def flaky(*a_, **k):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise RuntimeError()
+        return real(*a_, **k)
+    monkeypatch.setattr(review_mod, "target_arm", flaky)
+    led = Ledger(tmp_path / "l.db")
+    try:
+        got = llm_review.consume(_item_score(base_sha, head_sha, 45),
+                                 _ctx_ladder(r, led, _LADDER_AB))
+    finally:
+        led.close()
+    assert got.state == "ok"
+    sel = got.extra["selection"]
+    assert sel["target_tier"] is None and sel["bucket"] == "plain"
+    assert sel["served"]["tier"] == "cheap"    # review still served off eff_score
+
+
+def test_bucket_for_crash_fails_open_to_ladder(tmp_path, monkeypatch):
+    from aramid import autolearn as autolearn_mod
+    r, base_sha, head_sha = _repo(tmp_path)
+    a = _Fake("fake-a", [ProviderResponse(text=_finding_json("high"))])
+    b = _Fake("fake-b", [])
+    _wire(monkeypatch, a, b)
+    monkeypatch.setattr(autolearn_mod, "bucket_for",
+                        lambda *a_, **k: (_ for _ in ()).throw(RuntimeError()))
+    led = Ledger(tmp_path / "l.db")
+    try:
+        got = llm_review.consume(_item_score(base_sha, head_sha, 45),
+                                 _ctx_ladder(r, led, _LADDER_AB))
+    finally:
+        led.close()
+    assert got.state == "ok"
+    assert got.extra["selection"]["bucket"] == "plain"
+
+
+def test_cascade_never_triggers_for_top_tier_review(tmp_path, monkeypatch):
+    """cascade_trigger's own guard: a frontier-served CRITICAL must not
+    trigger (nothing above to escalate to) and must not spend an extra
+    review call -- only the cross-provider refute fires."""
+    r, base_sha, head_sha = _repo(tmp_path)
+    a = _Fake("fake-a", [ProviderResponse(text=json.dumps(
+        {"refuted": True, "reason": "no"}))])                 # refute only
+    b = _Fake("fake-b", [ProviderResponse(text=_finding_json("critical"))])
+    _wire(monkeypatch, a, b)
+    led = Ledger(tmp_path / "l.db")
+    ctx = DrainContext(root=r, cfg=_cfg(ladder=_LADDER_AB,
+                                        autolearn={"enabled": True,
+                                                   "armed": True}),
+                       ledger=led, clock=lambda: NOW.isoformat())
+    try:
+        got = llm_review.consume(_item_score(base_sha, head_sha, 80), ctx)
+    finally:
+        led.close()
+    sel = got.extra["selection"]
+    assert sel["cascade"] == {"triggered": False, "trigger": None,
+                              "applied": False}
+    assert len(b.calls) == 1          # served review only, no cascade call
+    assert len(a.calls) == 1          # the refute
+
+
+def test_cascade_next_arm_provider_unavailable_no_call(tmp_path, monkeypatch):
+    """Armed cascade where the next arm's provider is unavailable: the guard
+    must skip the call entirely (and the refuter falls back to self)."""
+    class _Off(_Fake):
+        def available(self, cfg):
+            return False
+
+    r, base_sha, head_sha = _repo(tmp_path)
+    a = _Fake("fake-a", [ProviderResponse(text=_finding_json("critical")),
+                         ProviderResponse(text=json.dumps(
+                             {"refuted": True, "reason": "nope"}))])
+    b = _Off("fake-b", [])
+    _wire(monkeypatch, a, b)
+    led = Ledger(tmp_path / "l.db")
+    ctx = DrainContext(root=r, cfg=_cfg(ladder=_LADDER_AB,
+                                        autolearn={"enabled": True,
+                                                   "armed": True}),
+                       ledger=led, clock=lambda: NOW.isoformat())
+    try:
+        got = llm_review.consume(_item_score(base_sha, head_sha, 45), ctx)
+    finally:
+        led.close()
+    sel = got.extra["selection"]
+    assert sel["cascade"]["triggered"] is True
+    assert sel["cascade"]["applied"] is False
+    assert b.calls == []              # unavailable arm never called
+    assert len(a.calls) == 2          # served review + (self-)refute

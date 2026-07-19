@@ -30,6 +30,17 @@ def _under_cap(cfg) -> bool:
     return month < _cap(cfg)
 
 
+def _append_spend_or_warn(entry: dict) -> None:
+    """A failed spend write means the month sum under-counts from here on --
+    that must be LOUD (the cap silently erodes otherwise), but never fatal:
+    the response is already paid for and must still reach the caller."""
+    try:
+        spend.append_spend(entry)
+    except OSError:
+        print("aramid: openrouter: spend log write failed -- month spend is "
+              "now under-counted", file=sys.stderr)
+
+
 def installed() -> bool:
     return bool(os.environ.get("OPENROUTER_API_KEY"))
 
@@ -58,6 +69,13 @@ def review(prompt: str, model: str, timeout_s: float, *, effort: str = "", cfg) 
         with urllib.request.urlopen(req, timeout=timeout_s) as fh:
             data = json.loads(fh.read().decode("utf-8"))
     except TimeoutError:
+        # The request may have completed -- and been billed -- server-side
+        # after the client gave up: leave a zero-cost marker so the spend log
+        # shows the call happened even though its cost is unknown.
+        _append_spend_or_warn({"at": datetime.now(timezone.utc).isoformat(),
+                               "provider": NAME, "model": model,
+                               "tokens_in": 0, "tokens_out": 0,
+                               "cost_usd": 0.0, "note": "timeout -- cost unknown"})
         return ProviderResponse(text="", error=base.ERR_TIMEOUT)
     except (OSError, ValueError):
         return ProviderResponse(text="", error=base.ERR_ERROR)
@@ -86,13 +104,10 @@ def review(prompt: str, model: str, timeout_s: float, *, effort: str = "", cfg) 
     except (ValueError, KeyError, IndexError, TypeError, AttributeError):
         return ProviderResponse(text="", error=base.ERR_MALFORMED)
 
-    try:
-        spend.append_spend({"at": datetime.now(timezone.utc).isoformat(),
-                            "provider": NAME, "model": model,
-                            "tokens_in": resp.tokens_in, "tokens_out": resp.tokens_out,
-                            "cost_usd": resp.cost_usd})
-    except OSError:
-        pass
+    _append_spend_or_warn({"at": datetime.now(timezone.utc).isoformat(),
+                           "provider": NAME, "model": model,
+                           "tokens_in": resp.tokens_in, "tokens_out": resp.tokens_out,
+                           "cost_usd": resp.cost_usd})
     return resp
 
 

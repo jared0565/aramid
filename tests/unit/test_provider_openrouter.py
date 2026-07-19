@@ -203,3 +203,41 @@ def test_review_error_body_without_choices_is_malformed(monkeypatch):
     resp = openrouter.review("P", "m", 240.0, cfg=_cfg())
     assert resp.error == base.ERR_MALFORMED
     assert resp.text == ""
+
+
+def test_timeout_appends_zero_cost_marker(monkeypatch, tmp_path):
+    """A timed-out call may have been billed server-side: the spend log gets
+    a zero-cost marker so audits see the call happened. cost_usd=0.0 means
+    the cap math is unchanged."""
+    def boom(req, timeout):
+        raise TimeoutError()
+    monkeypatch.setattr(openrouter.urllib.request, "urlopen", boom)
+    resp = openrouter.review("P", "m", 240.0, cfg=_cfg())
+    assert resp.error == base.ERR_TIMEOUT
+    lines = (tmp_path / "llm_spend.jsonl").read_text(encoding="utf-8").splitlines()
+    rec = json.loads(lines[0])
+    assert rec["provider"] == "openrouter" and rec["cost_usd"] == 0.0
+    assert "timeout" in rec["note"]
+    assert openrouter.available(_cfg()) is True      # marker never trips the cap
+
+
+def test_spend_write_failure_warns_stderr_success_path(monkeypatch, capsys):
+    def fake_urlopen(req, timeout):
+        return io.BytesIO(RESPONSE.encode("utf-8"))
+    monkeypatch.setattr(openrouter.urllib.request, "urlopen", fake_urlopen)
+    monkeypatch.setattr(openrouter.spend, "append_spend",
+                        lambda entry: (_ for _ in ()).throw(OSError("disk full")))
+    resp = openrouter.review("P", "m", 240.0, cfg=_cfg())
+    assert resp.error == "" and resp.cost_usd == 0.011   # response still returned
+    assert "spend log write failed" in capsys.readouterr().err
+
+
+def test_spend_write_failure_warns_stderr_timeout_path(monkeypatch, capsys):
+    def boom(req, timeout):
+        raise TimeoutError()
+    monkeypatch.setattr(openrouter.urllib.request, "urlopen", boom)
+    monkeypatch.setattr(openrouter.spend, "append_spend",
+                        lambda entry: (_ for _ in ()).throw(OSError("disk full")))
+    resp = openrouter.review("P", "m", 240.0, cfg=_cfg())
+    assert resp.error == base.ERR_TIMEOUT
+    assert "spend log write failed" in capsys.readouterr().err
