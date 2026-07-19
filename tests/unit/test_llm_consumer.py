@@ -609,6 +609,7 @@ def test_refute_clipped_outcome_unavailable(tmp_path, monkeypatch):
         led.close()
     (ref,) = got.extra["selection"]["refutes"]
     assert ref["outcome"] == "unavailable" and ref["refuter_provider"] is None
+    assert ref["self_refute"] is False         # no call was made
 
 
 def test_malformed_response_selection_flagged(tmp_path, monkeypatch):
@@ -953,3 +954,47 @@ def test_audit_provider_failure_degrades_silently(tmp_path, monkeypatch):
         led.close()
     assert got.state == "ok" and len(got.findings) == 1
     assert got.extra["selection"]["audit"]["performed"] is False
+
+
+def test_self_refute_flagged_in_telemetry_and_record(tmp_path, monkeypatch):
+    """Single-provider install: the refuter falls back to the reviewer's own
+    provider -- telemetry marks self_refute=True and the persisted finding's
+    message carries the self-refute marker."""
+    r, base_sha, head_sha = _repo(tmp_path)
+    a = _Fake("fake-a", [ProviderResponse(text=_finding_json("critical")),
+                         ProviderResponse(text=json.dumps(
+                             {"refuted": False, "reason": "still real"}))])
+    _wire(monkeypatch, a)
+    ladder = [
+        {"tier": "cheap", "provider": "fake-a", "model": "ma", "effort": "", "min_score": 40},
+        {"tier": "frontier", "provider": "fake-a", "model": "ma2", "effort": "", "min_score": 80},
+    ]
+    led = Ledger(tmp_path / "l.db")
+    try:
+        got = llm_review.consume(_item_score(base_sha, head_sha, 45),
+                                 _ctx_ladder(r, led, ladder))
+    finally:
+        led.close()
+    (ref,) = got.extra["selection"]["refutes"]
+    assert ref["self_refute"] is True
+    assert ref["outcome"] == "survived"
+    (f,) = got.findings
+    assert f.confirmed is True                 # single-provider can still confirm
+    assert "self-refute:" in f.message
+
+
+def test_cross_provider_refute_not_flagged_self(tmp_path, monkeypatch):
+    r, base_sha, head_sha = _repo(tmp_path)
+    a = _Fake("fake-a", [ProviderResponse(text=_finding_json("critical"))])
+    b = _Fake("fake-b", [ProviderResponse(text=json.dumps(
+        {"refuted": False, "reason": "verified"}))])
+    _wire(monkeypatch, a, b)
+    led = Ledger(tmp_path / "l.db")
+    try:
+        got = llm_review.consume(_item_score(base_sha, head_sha, 45),
+                                 _ctx_ladder(r, led, _LADDER_AB))
+    finally:
+        led.close()
+    (ref,) = got.extra["selection"]["refutes"]
+    assert ref["self_refute"] is False
+    assert "self-refute" not in got.findings[0].message

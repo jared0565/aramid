@@ -342,6 +342,7 @@ def consume(item, ctx: DrainContext) -> ConsumerResult:
                 # `refute_clipped=N` in the run note surfaces when it happened.
                 refute_infos.append({"refuter_provider": None,
                                      "refuter_tier": None,
+                                     "self_refute": False,
                                      "outcome": "unavailable",
                                      "latency_s": 0.0})
                 clipped += 1
@@ -349,6 +350,10 @@ def consume(item, ctx: DrainContext) -> ConsumerResult:
                     cand, True, "refute unavailable (drain refute budget exhausted)")
             else:
                 refuter_arm = review.select_refuter(arms, reviewer_arm, avail)
+                # Single-provider fallback (spec 2b): the refuter can be the
+                # reviewer's own provider. Flag it -- audits must be able to
+                # tell an independent confirmation from a self-confirmation.
+                self_refute = refuter_arm.provider == reviewer_arm.provider
                 rr, rlat = _call(providers_base.PROVIDERS[refuter_arm.provider],
                                  review.render_refute_prompt(cand, packet),
                                  refuter_arm.model, cfg,
@@ -362,11 +367,16 @@ def consume(item, ctx: DrainContext) -> ConsumerResult:
                 refute_infos.append({
                     "refuter_provider": refuter_arm.provider,
                     "refuter_tier": refuter_arm.tier,
+                    "self_refute": self_refute,
                     "outcome": ("unavailable" if parsed is None
                                 else ("refuted" if parsed[0] else "survived")),
                     "latency_s": rlat})
                 if parsed is None:      # transport failure OR malformed refute:
                     parsed = (True, f"refute unavailable ({rr.error or 'malformed'})")
+                if self_refute:
+                    # Marker rides the reason text into the persisted
+                    # explanation: [refute survived: self-refute: ...]
+                    parsed = (parsed[0], f"self-refute: {parsed[1]}")
                 cand = review.apply_refute(cand, *parsed)
         finals.append((rule, cand))
 

@@ -57,7 +57,7 @@ under a budget rather than on every commit. Four phases:
    - **2a — done:** zero-token watcher chassis — commit triage → risk-scored review
      queue → budgeted scheduled drain → pluggable consumers, plus the regression attack pack.
    - **2b — done:** the LLM reviewer — evidence-bound adversarial review over a provider
-     chain, cross-provider refute, bake-then-arm blocking (detailed below).
+     chain, cross-provider refute (self-refute fallback on single-provider installs), bake-then-arm blocking (detailed below).
    - **2c — next:** the heavy adversarial tier — mutation testing, fuzz/property harness,
      DAST — each a new drain consumer.
 3. **Phase 3:** harness advisory layer — non-blocking, mid-development early warning.
@@ -102,7 +102,10 @@ redacted, byte-capped packet and sent down a provider chain
 finding must cite a verbatim evidence quote that is mechanically verified
 against the packet and the file's HEAD content before it's trusted, and
 every fresh CRITICAL gets one cross-provider refute call before it can be
-marked `confirmed`. Findings land in the ledger as WARN — same bake
+marked `confirmed` (when only one provider is installed the refute falls
+back to the same provider — flagged `self_refute` in selection telemetry
+and `self-refute:` in the finding record). Findings land in the ledger as
+WARN — same bake
 discipline as semgrep's: they surface at `pre-push` without blocking until
 the operator explicitly ends the bake with `aramid arm --llm`, after which
 `confirmed`-and-`critical` LLM findings BLOCK. A finding whose evidence quote
