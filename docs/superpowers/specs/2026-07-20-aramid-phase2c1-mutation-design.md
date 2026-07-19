@@ -81,9 +81,16 @@ def generate_mutants(source: str, target_lines: set[int]) -> list[Mutant]
    graphite-artifact exclusion (`config.filter_paths`) — hard requirement.
    Drop test files (rule above). No eligible files → `OK`, note
    `"no python files in range"`, zero findings.
-2. **Stack check**: no Python stack or no pytest detected (existing `detectors`)
-   → `DEGRADED`, note `"no python test stack"` (JS-only repos land here — the
-   2c-1b seam).
+2. **Stack check**: no pytest detected (existing `detectors`) → `OK` with the
+   loud note `"no python test stack (mutation skipped)"` (JS-only repos land
+   here — the 2c-1b seam). AMENDMENT (execution-time, caught by the
+   no-providers drain e2e): this was specced DEGRADED, but the drain refuses
+   to mark an item drained while ANY consumer is degraded (2a whole-branch
+   fix), so a degraded permanent-absence state would pin queue items forever
+   on non-Python repos and re-run every consumer each drain. Permanent
+   structural absence = OK skip (mirrors llm_review's no-providers skip);
+   DEGRADED is reserved for transient states (baseline failing, worktree
+   trouble) where retry-next-drain is the desired semantic.
 3. **Worktree**: `git worktree add <tmp> <item.head>` under the scratch temp
    dir; ALL subsequent steps run inside it; `git worktree remove --force` +
    `prune` in a `finally`. The user's working tree is never written. A worktree
