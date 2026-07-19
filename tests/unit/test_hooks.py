@@ -236,7 +236,7 @@ def test_install_writes_post_commit_shim_fail_open(tmp_path):
     assert MARKER_START.encode() in raw
     assert b"\r" not in raw
     text = raw.decode()
-    assert "-m aramid triage HEAD" in text
+    assert "-m aramid triage HEAD --budget 15" in text
     # fail-open: the LAST executable line is an unconditional exit 0, and the
     # triage invocation itself cannot propagate a failure (|| true)
     assert "|| true" in text

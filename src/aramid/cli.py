@@ -65,6 +65,9 @@ def build_parser() -> argparse.ArgumentParser:
 
     p_triage = sub.add_parser("triage", help="score a commit (or range) and enqueue if risky")
     p_triage.add_argument("rev", nargs="?", default="HEAD")
+    p_triage.add_argument("--budget", type=float, default=None,
+                          help="wall-clock watchdog in seconds; on expiry triage "
+                               "self-kills with exit 3 (used by the post-commit shim)")
 
     p_drain = sub.add_parser("drain", help="sweep registered repos, pop queued items, consume")
     drain_scope = p_drain.add_mutually_exclusive_group()
@@ -161,7 +164,7 @@ def main(argv: list[str] | None = None) -> int:
         return cmd_status(root)
 
     if args.command == "triage":
-        return cmd_triage(root, args.rev)
+        return cmd_triage(root, args.rev, budget=args.budget)
 
     if args.command == "drain":
         targets = [] if args.all else ([args.repo] if args.repo else [str(root)])

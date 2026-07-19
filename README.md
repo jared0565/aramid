@@ -74,6 +74,9 @@ Once installed, every commit is scored at zero cost by a post-commit hook
 (security-surface paths, risky content, novelty, graphite blast radius). Commits
 scoring >= 40 join a review queue drained on a schedule (`aramid drain`, Task
 Scheduler task `aramid-drain`).
+The post-commit hook self-kills after 15s (`--budget`), so a wedged triage can
+never hang `git commit`; shims installed before this feature pick it up on the
+next `aramid init` (idempotent shim regeneration).
 The regression attack pack (`.aramid-rules/regression.yml`, committed) replays
 rules compiled from resolved findings — reintroducing a rotated secret or banned
 dependency blocks at pre-push. `aramid status` shows queue depth and drain
