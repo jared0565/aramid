@@ -20,15 +20,17 @@ from pathlib import Path
 # Task-11 _AL_KEY_RE lesson, now applied to all three), and an optional
 # trailing inline comment is captured in group `c` and preserved verbatim by
 # _armed_sub (a missed match here inserts a DUPLICATE key -> tomllib
-# "Cannot overwrite a value" corruption).
+# "Cannot overwrite a value" corruption). The value class excludes `#` so a
+# comment abutting the value (`false#x`) lands in `c` instead of being
+# swallowed -- safe because these keys only ever hold true/false.
 _KEY_RE = re.compile(
-    r"(?m)^semgrep_block_armed[^\S\n]*=[^\S\n]*\S+(?P<c>[^\S\n]*#[^\n]*)?[^\S\n]*$")
+    r"(?m)^semgrep_block_armed[^\S\n]*=[^\S\n]*[^\s#]+(?P<c>[^\S\n]*#[^\n]*)?[^\S\n]*$")
 _LLM_KEY_RE = re.compile(
-    r"(?m)^llm_block_armed[^\S\n]*=[^\S\n]*\S+(?P<c>[^\S\n]*#[^\n]*)?[^\S\n]*$")
+    r"(?m)^llm_block_armed[^\S\n]*=[^\S\n]*[^\s#]+(?P<c>[^\S\n]*#[^\n]*)?[^\S\n]*$")
 _LLM_SECTION_RE = re.compile(r"(?m)^\[llm\]\s*$")
 _AL_SECTION_RE = re.compile(r"(?m)^\[llm\.autolearn\]\s*$")
 _AL_KEY_RE = re.compile(
-    r"(?m)^armed[^\S\n]*=[^\S\n]*\S+(?P<c>[^\S\n]*#[^\n]*)?[^\S\n]*$")
+    r"(?m)^armed[^\S\n]*=[^\S\n]*[^\s#]+(?P<c>[^\S\n]*#[^\n]*)?[^\S\n]*$")
 _NEXT_SECTION_RE = re.compile(r"(?m)^\[")
 
 

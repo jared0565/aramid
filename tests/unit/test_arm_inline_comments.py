@@ -29,6 +29,17 @@ def test_semgrep_key_comment_without_space_before_hash(tmp_path):
     assert tomllib.loads(got)["semgrep_block_armed"] is True
 
 
+def test_semgrep_key_comment_with_no_whitespace_at_all_preserved(tmp_path):
+    """Review minor: greedy \\S+ used to swallow `false#x` whole and DROP the
+    comment; the value class excludes `#` so it lands in group c verbatim."""
+    (tmp_path / "aramid.toml").write_text(
+        "semgrep_block_armed = false#x\n", encoding="utf-8")
+    assert cmd_arm(tmp_path) == 0
+    got = (tmp_path / "aramid.toml").read_text(encoding="utf-8")
+    assert got == "semgrep_block_armed = true#x\n"
+    assert tomllib.loads(got)["semgrep_block_armed"] is True
+
+
 def test_llm_key_with_inline_comment_rewritten_in_place():
     text = "[llm]\nllm_block_armed = false  # baking since 07-01\n"
     got = _arm_llm_text(text)
