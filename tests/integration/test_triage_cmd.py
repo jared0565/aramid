@@ -1,8 +1,12 @@
 import subprocess
 import sys
+import threading
+import time
 from pathlib import Path
+from types import SimpleNamespace
 
-from aramid import queue
+from aramid import gitutil, queue
+from aramid.commands import triage_cmd as triage_mod
 from aramid.commands.triage_cmd import cmd_triage
 from aramid.ledger import Ledger
 
@@ -62,6 +66,56 @@ def test_triage_bad_rev_is_engine_error(tmp_path):
 
 def test_triage_outside_repo_is_engine_error(tmp_path):
     assert cmd_triage(tmp_path / "empty", "HEAD") == 3
+
+
+def test_watchdog_kills_hung_triage(tmp_path, monkeypatch):
+    # Inject a hang BEFORE repo resolution; the watchdog (armed first) must
+    # fire. os._exit is monkeypatched module-locally to a recorder -- the
+    # real one would kill pytest.
+    exits = []
+    monkeypatch.setattr(triage_mod, "os", SimpleNamespace(_exit=lambda c: exits.append(c)))
+
+    def slow_repo_root(p):
+        time.sleep(1.5)
+        raise gitutil.NotARepo(str(p))
+
+    monkeypatch.setattr(triage_mod.gitutil, "repo_root", slow_repo_root)
+    rc = cmd_triage(tmp_path, "HEAD", budget=0.2)
+    assert exits == [3], "watchdog must have fired during the injected hang"
+    assert rc == 3  # the (faked-survival) body still returns its own error
+
+
+def test_watchdog_cancelled_on_fast_run(tmp_path, monkeypatch):
+    # Not-fired-yet is NOT proof of cancellation (a leaked 30s timer simply
+    # hasn't elapsed) -- capture the real Timer and assert its finished flag,
+    # which only cancel() (or an actual fire) sets. Deleting the finally:
+    # timer.cancel() in cmd_triage fails this test.
+    exits = []
+    monkeypatch.setattr(triage_mod, "os", SimpleNamespace(_exit=lambda c: exits.append(c)))
+    timers = []
+
+    def recording_timer(*a, **kw):
+        t = threading.Timer(*a, **kw)
+        timers.append(t)
+        return t
+
+    monkeypatch.setattr(triage_mod, "threading", SimpleNamespace(Timer=recording_timer))
+    r = _repo(tmp_path)
+    _commit(r, "docs/note.md", "hello\n", "docs")
+    assert cmd_triage(r, "HEAD", budget=30) == 0
+    assert exits == []
+    assert len(timers) == 1
+    assert timers[0].finished.is_set(), "finally must cancel the armed timer"
+
+
+def test_no_budget_arms_no_timer(tmp_path, monkeypatch):
+    created = []
+    monkeypatch.setattr(triage_mod, "threading",
+                         SimpleNamespace(Timer=lambda *a, **kw: created.append(a)))
+    r = _repo(tmp_path)
+    _commit(r, "docs/note.md", "hello\n", "docs")
+    assert cmd_triage(r, "HEAD") == 0
+    assert created == []
 
 
 def test_cli_dispatches_triage(tmp_path):

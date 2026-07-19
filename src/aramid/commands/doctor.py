@@ -147,6 +147,7 @@ def probe_tool(name: str) -> ToolStatus:
         # tuple above, never external input. Probing "<tool> --version" is
         # doctor's whole job.
         cp = subprocess.run([str(exe), "--version"], capture_output=True, text=True,  # noqa: S603
+                             encoding="utf-8", errors="replace",
                              timeout=15, env=env)
     except (OSError, subprocess.TimeoutExpired) as exc:
         return ToolStatus(name, False, detail=str(exc))

@@ -199,6 +199,22 @@ def test_override_dispatch(monkeypatch):
     assert captured["reason"] == "known false positive"
 
 
+def test_triage_dispatch_maps_budget(monkeypatch):
+    calls = []
+    monkeypatch.setattr(cli, "cmd_triage",
+                         lambda root, rev="HEAD", budget=None: calls.append((rev, budget)) or 0)
+    assert cli.main(["triage", "--budget", "15"]) == 0
+    assert calls == [("HEAD", 15.0)]
+
+
+def test_triage_dispatch_defaults_no_budget(monkeypatch):
+    calls = []
+    monkeypatch.setattr(cli, "cmd_triage",
+                         lambda root, rev="HEAD", budget=None: calls.append((rev, budget)) or 0)
+    assert cli.main(["triage", "abc123"]) == 0
+    assert calls == [("abc123", None)]
+
+
 def test_pack_list_dispatch(monkeypatch):
     calls = []
     monkeypatch.setattr(cli, "cmd_pack_list", lambda root: calls.append(root) or 0)

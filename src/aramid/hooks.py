@@ -63,7 +63,8 @@ def _git_config(root: Path, key: str) -> str | None:
         # callers (currently only "core.hooksPath") -- never external input.
         # Relying on PATH to resolve "git" matches every other git invoker.
         cp = subprocess.run(["git", "config", key], cwd=str(root),  # noqa: S603,S607
-                             capture_output=True, text=True)
+                             capture_output=True, text=True,
+                             encoding="utf-8", errors="replace")
     except OSError:
         # git not on PATH (or otherwise unspawnable) -- treat as "unset"
         # rather than propagating a raw exception up through hooks_dir /
@@ -148,9 +149,9 @@ def render_triage_shim(interpreter: Path) -> bytes:
         "fi",
         f'INTERP="{interp_sh}"',
         'if [ -x "$INTERP" ]; then',
-        '    "$INTERP" -m aramid triage HEAD >/dev/null 2>&1 || true',
+        '    "$INTERP" -m aramid triage HEAD --budget 15 >/dev/null 2>&1 || true',
         "elif command -v py >/dev/null 2>&1; then",
-        "    py -3 -m aramid triage HEAD >/dev/null 2>&1 || true",
+        "    py -3 -m aramid triage HEAD --budget 15 >/dev/null 2>&1 || true",
         "fi",
         MARKER_END,
         "exit 0",

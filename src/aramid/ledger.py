@@ -33,6 +33,7 @@ def _materialize(events):
         elif e.type.value == "finding_overridden":
             if e.finding_id in state:
                 state[e.finding_id]["status"] = "overridden"
+                state[e.finding_id]["reason"] = e.payload.get("reason", "")
         elif e.type.value == "finding_rotated":
             if e.finding_id in state:
                 state[e.finding_id]["status"] = "rotated"

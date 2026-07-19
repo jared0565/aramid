@@ -92,6 +92,7 @@ def run_subprocess(argv, cwd: Path, timeout_s: float, env=None) -> RunnerResult:
     # and repo-relative file paths, never from untrusted external strings.
     proc = subprocess.Popen(argv, cwd=str(cwd), stdout=subprocess.PIPE,  # noqa: S603
                             stderr=subprocess.PIPE, text=True,
+                            encoding="utf-8", errors="replace",
                             env={**os.environ, **(env or {})}, **kwargs)
     try:
         out, err = proc.communicate(timeout=timeout_s)
