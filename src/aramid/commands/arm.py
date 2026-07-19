@@ -19,7 +19,7 @@ _KEY_RE = re.compile(r"(?m)^semgrep_block_armed\s*=\s*\S+\s*$")
 _LLM_KEY_RE = re.compile(r"(?m)^llm_block_armed\s*=\s*\S+\s*$")
 _LLM_SECTION_RE = re.compile(r"(?m)^\[llm\]\s*$")
 _AL_SECTION_RE = re.compile(r"(?m)^\[llm\.autolearn\]\s*$")
-_AL_KEY_RE = re.compile(r"(?m)^armed\s*=\s*\S+\s*$")
+_AL_KEY_RE = re.compile(r"(?m)^armed[^\S\n]*=[^\S\n]*\S+[^\S\n]*$")
 _NEXT_SECTION_RE = re.compile(r"(?m)^\[")
 
 

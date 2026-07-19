@@ -1,5 +1,7 @@
 """arm --autolearn: comment-preserving [llm.autolearn] armed=true rewrite
 (mirrors test_arm_llm.py's coverage of _arm_llm_text)."""
+import tomllib
+
 from aramid.commands.arm import _arm_autolearn_text, cmd_arm
 
 
@@ -12,9 +14,17 @@ def test_appends_fresh_section_when_absent():
 def test_substitutes_existing_key_in_section():
     text = "[llm.autolearn]\nenabled = true\narmed = false\n\n[pack]\nenabled = true\n"
     got = _arm_autolearn_text(text)
-    assert "armed = true" in got
-    assert "armed = false" not in got
-    assert "[pack]\nenabled = true" in got          # rest untouched
+    assert got == "[llm.autolearn]\nenabled = true\narmed = true\n\n[pack]\nenabled = true\n"
+    parsed = tomllib.loads(got)
+    assert parsed["llm"]["autolearn"]["armed"] is True
+
+
+def test_substitution_preserves_trailing_newline_when_section_is_last():
+    text = "[llm.autolearn]\narmed = false\n"
+    got = _arm_autolearn_text(text)
+    assert got == "[llm.autolearn]\narmed = true\n"
+    parsed = tomllib.loads(got)
+    assert parsed["llm"]["autolearn"]["armed"] is True
 
 
 def test_inserts_key_under_existing_section_without_key():
