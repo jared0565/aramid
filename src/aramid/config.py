@@ -5,7 +5,7 @@ loader, and the near-empty per-repo config stub `init` writes.
 import fnmatch
 import sys
 from copy import deepcopy
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from importlib import resources
 from pathlib import Path
 
@@ -41,6 +41,7 @@ class Config:
     drain: dict
     pack: dict
     llm: dict
+    mutation: dict = field(default_factory=dict)
 
 
 def _user_config_path() -> Path:
@@ -102,6 +103,7 @@ def load_config(root: Path) -> Config:
         drain=merged.get("drain", {}),
         pack=merged.get("pack", {}),
         llm=merged.get("llm", {}),
+        mutation=merged.get("mutation", {}),
     )
 
 
