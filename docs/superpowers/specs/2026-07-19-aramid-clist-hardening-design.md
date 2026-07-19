@@ -45,9 +45,13 @@ No call-site logic changes anywhere; every change converts a possible
 
 Tests: a real-subprocess round-trip through `runners/base.py` with non-UTF-8
 bytes on stdout (proves no raise + replacement); a `_git_config` decode test
-(monkeypatched or real git with a UTF-8 value); one representative
-`errors="replace"`-group test with a fake `tasklist`/`schtasks` emitting a
-cp1252-undefined byte (proves the probe survives).
+via `hooks_dir` with a real UTF-8 config value. AMENDMENT (plan-time): the
+OEM-group sites get NO dedicated test — a fake `tasklist`/`schtasks` cannot be
+injected (fixed argv resolved by `CreateProcess`, which appends `.exe` only, so
+no PATH/script seam), and a real one cannot be made to emit non-ASCII
+deterministically. The two UTF-8-group tests discriminate the fix through
+Python's actual subprocess decode path — the identical mechanism at all eight
+sites; the OEM sites are the same one-argument pattern, review-verified.
 
 ### Item 2 (behavior): override-reason materialization
 
