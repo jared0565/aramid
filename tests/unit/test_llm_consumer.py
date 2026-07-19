@@ -56,7 +56,12 @@ def _cfg(**over):
     ])
     llm = {"enabled": True, "max_items_per_drain": 3, "call_timeout_s": 240,
            "packet_max_bytes": 120000, "provider_order": ["fake-a", "fake-b"],
-           "ladder": ladder, "llm_block_armed": False, **over}
+           "ladder": ladder, "llm_block_armed": False,
+           # audit_every=0: hermetic -- hash-sampled shadow audits never fire
+           # unless a test opts in (autolearn= override below wins if a test
+           # passes its own dict, e.g. via _audit_cfg).
+           "autolearn": {"enabled": True, "armed": False, "audit_every": 0},
+           **over}
     return SimpleNamespace(llm=llm, ignore_paths=[".aramid/", "graph-out/", ".git/"])
 
 
@@ -418,6 +423,24 @@ def test_installed_but_unavailable_degrades_holds(tmp_path, monkeypatch):
     assert got.state == "degraded" and "all providers unavailable" in got.note
 
 
+def test_total_outage_still_records_attempts(tmp_path, monkeypatch):
+    r, base_sha, head_sha = _repo(tmp_path)
+    a = _Fake("fake-a", [ProviderResponse(text="", error=providers_base.ERR_QUOTA)])
+    b = _Fake("fake-b", [ProviderResponse(text="", error=providers_base.ERR_TIMEOUT)])
+    _wire(monkeypatch, a, b)
+    led = Ledger(tmp_path / "l.db")
+    try:
+        got = llm_review.consume(_item_score(base_sha, head_sha, 90),
+                                 _ctx_ladder(r, led, _LADDER_AB))
+    finally:
+        led.close()
+    assert got.state == "degraded"
+    sel = got.extra["selection"]
+    assert sel["served"] is None
+    assert [(x["provider"], x["error"]) for x in sel["attempts"]] == \
+        [("fake-b", "timeout"), ("fake-a", "quota")]
+
+
 def test_disabled_skips(tmp_path, monkeypatch):
     r, base_sha, head_sha = _repo(tmp_path)
     _wire(monkeypatch)
@@ -454,6 +477,24 @@ def test_injected_confirmed_on_high_finding_is_stripped_no_refute(tmp_path, monk
     assert got.findings[0].confirmed is False    # injected flag stripped
     assert len(b.calls) == 0                      # no refute for a high finding
     assert "refutes=0" in got.note
+
+
+def test_model_supplied_refuted_key_is_stripped(tmp_path, monkeypatch):
+    """Trust boundary: `refuted` may only be minted by apply_refute -- a
+    prompt-injected "refuted": true must not reach the persisted field."""
+    r, base_sha, head_sha = _repo(tmp_path)
+    payload = json.loads(_finding_json("high"))
+    payload["findings"][0]["refuted"] = True
+    a = _Fake("fake-a", [ProviderResponse(text=json.dumps(payload))])
+    b = _Fake("fake-b", [])
+    _wire(monkeypatch, a, b)
+    led = Ledger(tmp_path / "l.db")
+    try:
+        got = llm_review.consume(_item_score(base_sha, head_sha, 45),
+                                 _ctx_ladder(r, led, _LADDER_AB))
+    finally:
+        led.close()
+    assert got.findings[0].refuted is False
 
 
 def test_chain_resolved_per_item_no_cross_cfg_bleed(tmp_path, monkeypatch):

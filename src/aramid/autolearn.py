@@ -25,7 +25,7 @@ import random
 from pathlib import Path
 
 from aramid import review as review_mod
-from aramid.models import EventType  # noqa: F401
+from aramid.models import EventType
 
 STATE_VERSION = 1
 # Trust-the-ladder prior (spec section 8.2): Beta(1, PRIOR_CLEAN) keeps the

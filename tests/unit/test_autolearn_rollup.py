@@ -110,3 +110,10 @@ def test_rollup_does_not_mutate_input_state():
     base = autolearn.empty_state()
     autolearn.rollup(base, [_run_ev("r1", _sel())], "repo1")
     assert base == autolearn.empty_state()
+
+
+def test_rollup_tolerates_null_served():
+    sel = _sel(served=None)
+    st = autolearn.rollup(autolearn.empty_state(), [_run_ev("r1", sel)], "repo1")
+    assert st["posteriors"] == {}
+    assert st["shadow"]["decisions"] == 1

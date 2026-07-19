@@ -178,8 +178,23 @@ def consume(item, ctx: DrainContext) -> ConsumerResult:
             break
         # unavailable/quota/timeout/error: fall through to the next provider
     if resp is None:
+        # Failed arms still leave their trace (autolearn spec section 6):
+        # keep attempts + the shadow decision even on total outage.
+        sel = {
+            "target_tier": tgt.tier if tgt is not None else None,
+            "bucket": bucket,
+            "served": None,
+            "attempts": attempts,
+            "uplift": uplift_info,
+            "cascade": {"triggered": False, "trigger": None, "applied": False},
+            "audit": None,
+            "refutes": [],
+            "hallucination_rejected": 0,
+            "tokens": {"in": 0, "out": 0},
+        }
         return ConsumerResult(consumer=NAME, state="degraded",
-                              note="all providers unavailable")
+                              note="all providers unavailable",
+                              extra={"selection": sel})
     provider = providers_base.PROVIDERS[reviewer_arm.provider]   # for the refute cross-check
 
     _reviews_used += 1
@@ -283,6 +298,9 @@ def consume(item, ctx: DrainContext) -> ConsumerResult:
     # survived CRITICAL below; everything else defaults False.
     for cand in verified:
         cand.pop("confirmed", None)
+        # Same trust boundary for the autolearn telemetry marker: `refuted`
+        # may only be minted by apply_refute, never by the model JSON.
+        cand.pop("refuted", None)
 
     # Pre-refute dedupe (spec section 3): never re-refute what the ledger
     # already knows, AND never refute the same fresh fingerprint twice within
