@@ -1,3 +1,5 @@
+import uuid
+
 from aramid.ledger import Ledger
 from aramid.models import Finding, Severity, Verdict, Gate
 from aramid import queue
@@ -32,6 +34,18 @@ def test_compact_preserves_open_findings_and_drops_rows(tmp_path):
     assert after["id2"]["status"] == "open"
     assert rows_after < rows_before
     assert removed == rows_before - rows_after
+    led.close()
+
+
+def test_compact_preserves_override_reason(tmp_path):
+    led = Ledger(tmp_path / "l.db")
+    led.record_run("r1", "t", "pre-push", {"ruff"}, {"a.py"}, [_f("id1")])
+    led.append(Event(EventType.FINDING_OVERRIDDEN, uuid.uuid4().hex, "t2",
+                     finding_id="id1", payload={"reason": "keep me"}))
+    led.compact()
+    rec = led.open_findings()["id1"]
+    assert rec["status"] == "overridden"
+    assert rec["reason"] == "keep me"
     led.close()
 
 

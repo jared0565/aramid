@@ -419,3 +419,21 @@ def test_backslash_path_under_ignored_dir_is_filtered_pre_fingerprint(tmp_path, 
 
     assert result.findings == []
     ledger.close()
+
+
+def test_overrides_from_ledger_carries_reason(tmp_path):
+    import uuid
+
+    from aramid.models import Event, Finding, Severity
+
+    led = _ledger(tmp_path)
+    f = Finding("id1", "ruff", "S102", "high", Severity.HIGH, Verdict.WARN,
+                "a.py", 1, "m", "e", Gate.PRE_PUSH)
+    led.record_run("r1", "t", "pre-push", {"ruff"}, {"a.py"}, [f])
+    led.append(Event(EventType.FINDING_OVERRIDDEN, uuid.uuid4().hex, "t2",
+                     finding_id="id1", payload={"reason": "audit trail"}))
+    records = pipeline._overrides_from_ledger(led)
+    led.close()
+    assert len(records) == 1
+    assert records[0].id == "id1"
+    assert records[0].reason == "audit trail"

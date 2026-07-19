@@ -26,17 +26,6 @@ override the finding while disarmed (gate only WARNs, so the refusal
 wouldn't fire) and then arm later, defeating arming after the fact. A
 WARN-tier LLM finding (unconfirmed, or confirmed but below critical) is NOT
 refused -- it keeps using this legitimate light override path.
-
-KNOWN GAP (pre-existing, already flagged in .superpowers/sdd/progress.md's
-Task 5.3 cross-task note; out of scope for this milestone):
-`Ledger._materialize` does not fold a `finding_overridden` event's payload
-(including this command's `--reason`) back into materialized state, so
-`aramid.pipeline._overrides_from_ledger` currently always reads `reason=""`
-for a ledger-sourced override regardless of what was passed here. The
-reason IS durably recorded in the raw event stream (`aramid ledger show
-<id>` surfaces it via the payload) -- only the *materialized* convenience
-view drops it. Not fixed here: ledger.py/pipeline.py are already-built and
-tested (M3/M5) modules outside M7's "thin CLI wrapper" scope.
 """
 import sys
 import uuid
