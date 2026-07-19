@@ -241,3 +241,17 @@ def test_probe_providers_spend_unreadable_with_key_set(monkeypatch, tmp_path):
         name: doctor.ToolStatus(name, True, "1.0")
         for name in (*doctor.ALL_TOOLS, "interpreter")})
     assert doctor.cmd_doctor(tmp_path) == 0
+
+
+def test_doctor_reports_autolearn_state(tmp_path, monkeypatch, capsys):
+    from aramid.commands.doctor import _autolearn_probe_line
+    line = _autolearn_probe_line()
+    assert "autolearn" in line and "cold start" in line   # no state yet
+
+    from aramid import autolearn
+    autolearn.save_state(autolearn.empty_state(),
+                         "2026-07-18T00:00:00+00:00")
+    assert "state readable" in _autolearn_probe_line()
+
+    autolearn.state_path().write_text("{corrupt", encoding="utf-8")
+    assert "unreadable" in _autolearn_probe_line()

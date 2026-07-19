@@ -288,6 +288,30 @@ def _fix_gitleaks() -> bool:
     return True
 
 
+def _autolearn_probe_line() -> str:
+    """State-file health (autolearn spec section 12). Informational only --
+    an unreadable state is treated as empty by the engine (cold start)."""
+    import json as _json
+
+    from aramid import autolearn
+    try:
+        p = autolearn.state_path()
+        if not p.exists():
+            return "  OK       autolearn    no state yet (cold start = deterministic ladder)"
+        try:
+            data = _json.loads(p.read_text(encoding="utf-8"))
+        except Exception:
+            return ("  DEGRADED autolearn    state unreadable -- treated as empty; "
+                    "`aramid autolearn --rebuild` repairs it")
+        if not isinstance(data, dict) or data.get("version") != autolearn.STATE_VERSION:
+            return ("  DEGRADED autolearn    foreign state version -- treated as empty; "
+                    "`aramid autolearn --rebuild` repairs it")
+        return (f"  OK       autolearn    state readable; "
+                f"{len(data.get('posteriors', {}))} posterior cell(s)")
+    except Exception:
+        return "  OK       autolearn    probe unavailable"
+
+
 def probe_providers() -> list[str]:
     """Zero-LLM-call provider probe (spec section 7): which/env/spend reads
     only. Informational -- provider absence never changes doctor's exit code
@@ -344,6 +368,9 @@ def cmd_doctor(root: Path, fix: bool = False) -> int:
     print("llm providers:")
     for line in probe_providers():
         print(line)
+
+    print("autolearn:")
+    print(_autolearn_probe_line())
 
     missing_block = [name for name in BLOCK_TIER if not statuses[name].present]
     if missing_block:
