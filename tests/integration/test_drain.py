@@ -308,13 +308,16 @@ def test_drain_rolls_up_autolearn_state(tmp_path, monkeypatch):
 
     repo = tmp_path / "repo"
     repo.mkdir()
-    _git = lambda *a: subprocess.run(["git", *a], cwd=repo, check=True,
-                                     capture_output=True, text=True)
+
+    def _git(*a):
+        return subprocess.run(["git", *a], cwd=repo, check=True,
+                              capture_output=True, text=True)
     _git("init", "-q", "-b", "main")
     _git("config", "user.email", "t@t")
     _git("config", "user.name", "t")
     (repo / "a.py").write_text("x = 1\n", encoding="utf-8")
-    _git("add", "."); _git("commit", "-m", "c1")
+    _git("add", ".")
+    _git("commit", "-m", "c1")
     (repo / "aramid.toml").write_text("schema_version = 1\n", encoding="utf-8")
 
     monkeypatch.setattr(config_mod, "_user_config_path",
