@@ -239,7 +239,8 @@ def _scheduled_drain_line() -> str:
         import subprocess
 
         from aramid.commands.schedule import _query_argv
-        cp = subprocess.run(_query_argv(), capture_output=True, text=True)
+        cp = subprocess.run(_query_argv(), capture_output=True, text=True,
+                            errors="replace")
         return ("scheduled drain: installed" if cp.returncode == 0
                 else "scheduled drain: not installed")
     except Exception:

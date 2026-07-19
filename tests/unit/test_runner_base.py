@@ -27,6 +27,18 @@ def test_timeout_kills(tmp_path):
     r = run_subprocess([sys.executable, "-c", "import time;time.sleep(30)"], tmp_path, 1)
     assert r.state is ToolState.TIMEOUT
 
+def test_invalid_utf8_output_never_raises(tmp_path):
+    # A scanner emitting a byte that is invalid UTF-8 AND undefined in cp1252
+    # (0x81) must yield replaced text, not a UnicodeDecodeError crash. Before
+    # the encoding="utf-8", errors="replace" fix, text=True decoded with the
+    # locale codec strictly -> this raised out of run_subprocess on cp1252
+    # hosts (the target platform and CI's windows-latest).
+    code = "import sys; sys.stdout.buffer.write(b'pre\\x81post')"
+    r = run_subprocess([sys.executable, "-c", code], tmp_path, 10)
+    assert r.state is ToolState.OK
+    assert "pre" in r.raw and "post" in r.raw
+    assert "�" in r.raw  # replaced, never raised
+
 def test_timeout_returns_promptly_and_bounded(tmp_path):
     # Confirms the happy path still returns TIMEOUT promptly after the
     # bounded post-kill drain was added (no regression from the fix).

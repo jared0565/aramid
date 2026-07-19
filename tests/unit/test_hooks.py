@@ -217,6 +217,16 @@ def test_uninstall_does_not_clobber_live_foreign_hook_that_replaced_the_shim(tmp
     assert "foreign hook" in capsys.readouterr().err
 
 
+def test_hooks_dir_decodes_utf8_hooks_path(tmp_path):
+    # git emits config values as UTF-8 regardless of host locale. Without
+    # encoding="utf-8" in _git_config, cp1252 hosts mojibake a non-ASCII
+    # core.hooksPath ("café" -> "cafÃ©") and hooks_dir resolves a wrong dir.
+    r = _repo(tmp_path)
+    with (r / ".git" / "config").open("a", encoding="utf-8") as f:
+        f.write("[core]\n\thooksPath = hooks-café\n")
+    assert hooks_dir(r) == (r / "hooks-café").resolve()
+
+
 def test_install_writes_post_commit_shim_fail_open(tmp_path):
     r = _repo(tmp_path)
     install(r, Path("C:/py/python.exe"))

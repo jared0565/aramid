@@ -43,8 +43,12 @@ def _pid_alive(pid: int) -> bool:
     if sys.platform == "win32":
         # noqa justification (S603/S607): fixed argv querying our own recorded
         # PID via the standard Windows tasklist binary.
+        # errors="replace" only -- tasklist emits the console/ANSI codepage,
+        # NOT UTF-8; the str(pid) containment check below is pure ASCII, which
+        # decodes identically under any locale codec. Forcing UTF-8 here would
+        # trade one mojibake for another; "replace" removes only the crash mode.
         out = subprocess.run(["tasklist", "/FI", f"PID eq {pid}", "/NH"],  # noqa: S603,S607
-                             capture_output=True, text=True)
+                             capture_output=True, text=True, errors="replace")
         return str(pid) in out.stdout
     try:
         os.kill(pid, 0)

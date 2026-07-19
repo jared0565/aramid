@@ -79,13 +79,18 @@ def cmd_schedule(root, action: str) -> int:
                 f.write(xml)
                 xml_path = Path(f.name)
             try:
-                cp = subprocess.run(_create_argv(xml_path), capture_output=True, text=True)
+                # errors="replace" on all schtasks reads -- schtasks emits the
+                # console/ANSI codepage, not UTF-8 (see drain._pid_alive).
+                cp = subprocess.run(_create_argv(xml_path), capture_output=True, text=True,
+                                    errors="replace")
             finally:
                 xml_path.unlink(missing_ok=True)
         elif action == "remove":
-            cp = subprocess.run(_delete_argv(), capture_output=True, text=True)
+            cp = subprocess.run(_delete_argv(), capture_output=True, text=True,
+                                errors="replace")
         elif action == "status":
-            cp = subprocess.run(_query_argv(), capture_output=True, text=True)
+            cp = subprocess.run(_query_argv(), capture_output=True, text=True,
+                                errors="replace")
             print(cp.stdout.strip() or "aramid-drain: not installed")
             return 0 if cp.returncode == 0 else 3
         else:
