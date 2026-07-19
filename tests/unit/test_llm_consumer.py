@@ -54,13 +54,16 @@ def _cfg(**over):
         {"tier": "cheap", "provider": "fake-b", "model": "mb", "effort": "", "min_score": 40},
         {"tier": "frontier", "provider": "fake-a", "model": "ma", "effort": "", "min_score": 80},
     ])
+    # Hermetic-by-default: an autolearn= override MERGES over the base (it
+    # used to replace it, silently reverting audit_every to the code default
+    # 8 -> hash-sampled audits desynced scripted providers). audit_every=0
+    # persists unless a test sets it explicitly (_audit_cfg does).
+    al = {"enabled": True, "armed": False, "audit_every": 0,
+          **over.pop("autolearn", {})}
     llm = {"enabled": True, "max_items_per_drain": 3, "call_timeout_s": 240,
            "packet_max_bytes": 120000, "provider_order": ["fake-a", "fake-b"],
            "ladder": ladder, "llm_block_armed": False,
-           # audit_every=0: hermetic -- hash-sampled shadow audits never fire
-           # unless a test opts in (autolearn= override below wins if a test
-           # passes its own dict, e.g. via _audit_cfg).
-           "autolearn": {"enabled": True, "armed": False, "audit_every": 0},
+           "autolearn": al,
            **over}
     return SimpleNamespace(llm=llm, ignore_paths=[".aramid/", "graph-out/", ".git/"])
 
