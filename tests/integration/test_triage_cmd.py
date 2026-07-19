@@ -1,5 +1,6 @@
 import subprocess
 import sys
+import threading
 import time
 from pathlib import Path
 from types import SimpleNamespace
@@ -85,12 +86,26 @@ def test_watchdog_kills_hung_triage(tmp_path, monkeypatch):
 
 
 def test_watchdog_cancelled_on_fast_run(tmp_path, monkeypatch):
+    # Not-fired-yet is NOT proof of cancellation (a leaked 30s timer simply
+    # hasn't elapsed) -- capture the real Timer and assert its finished flag,
+    # which only cancel() (or an actual fire) sets. Deleting the finally:
+    # timer.cancel() in cmd_triage fails this test.
     exits = []
     monkeypatch.setattr(triage_mod, "os", SimpleNamespace(_exit=lambda c: exits.append(c)))
+    timers = []
+
+    def recording_timer(*a, **kw):
+        t = threading.Timer(*a, **kw)
+        timers.append(t)
+        return t
+
+    monkeypatch.setattr(triage_mod, "threading", SimpleNamespace(Timer=recording_timer))
     r = _repo(tmp_path)
     _commit(r, "docs/note.md", "hello\n", "docs")
     assert cmd_triage(r, "HEAD", budget=30) == 0
     assert exits == []
+    assert len(timers) == 1
+    assert timers[0].finished.is_set(), "finally must cancel the armed timer"
 
 
 def test_no_budget_arms_no_timer(tmp_path, monkeypatch):

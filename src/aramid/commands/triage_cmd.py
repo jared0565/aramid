@@ -29,8 +29,12 @@ def _now() -> str:
 
 
 def _watchdog_kill(budget: float) -> None:
-    print(f"aramid: triage: watchdog: exceeded {budget}s -- killing", file=sys.stderr)
+    # EVERYTHING before os._exit is guarded: if print/flush raised (broken
+    # stderr pipe on a manual run), the exception would escape Timer.run(),
+    # kill only the timer thread, and the one job of this function -- the
+    # exit -- would never happen.
     try:
+        print(f"aramid: triage: watchdog: exceeded {budget}s -- killing", file=sys.stderr)
         sys.stderr.flush()
         sys.stdout.flush()
     except Exception:
