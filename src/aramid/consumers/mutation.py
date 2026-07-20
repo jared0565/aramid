@@ -85,8 +85,9 @@ def consume(item, ctx: DrainContext) -> ConsumerResult:
                               note="mutation giving up: baseline persistently failing")
 
     started = time.monotonic()
-    stats = {"generated": 0, "tested": 0, "killed": 0, "survived": 0,
-             "confirmed": 0, "timeouts": 0, "errors": 0, "truncated": False}
+    stats = {"generated": 0, "tested": 0, "killed_s1": 0, "killed_s2": 0,
+             "survived": 0, "confirmed": 0, "timeouts": 0, "errors": 0,
+             "truncated": False}
     findings: list[RawFinding] = []
     tmp = Path(tempfile.mkdtemp(prefix="aramid-mut-"))
     wt = tmp / "wt"
@@ -133,7 +134,7 @@ def consume(item, ctx: DrainContext) -> ConsumerResult:
                         stats["timeouts"] += 1
                         continue
                     if s1.state is ToolState.OK and s1.returncode not in (0, 5):
-                        stats["killed"] += 1
+                        stats["killed_s1"] += 1
                         continue
                     # putative survivor (pass, or exit 5 = nothing selected)
                     stats["survived"] += 1
@@ -151,7 +152,7 @@ def consume(item, ctx: DrainContext) -> ConsumerResult:
                             file=rel, line=m.line,
                             message=f"mutant survived: {m.description}"))
                     else:
-                        stats["killed"] += 1
+                        stats["killed_s2"] += 1
                 except Exception:
                     stats["errors"] += 1
                 finally:

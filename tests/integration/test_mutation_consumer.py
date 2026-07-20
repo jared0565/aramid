@@ -107,7 +107,7 @@ def test_strong_suite_kills_no_findings(tmp_path, monkeypatch):
     res = _consume(r, base, head, monkeypatch, tmp_path)
     assert res.state == "ok"
     assert res.findings == []
-    assert res.extra["killed"] >= 1
+    assert res.extra["killed_s1"] >= 1   # strong targeted suite kills at stage 1
     assert _no_worktrees(r)
 
 
@@ -125,7 +125,7 @@ def test_stage2_rescue_prevents_false_survivor(tmp_path, monkeypatch):
     res = _consume(r, base, head, monkeypatch, tmp_path)
     assert res.state == "ok"
     assert res.findings == [], "full-suite confirmation must kill what stage 1 missed"
-    assert res.extra["killed"] >= 1
+    assert res.extra["killed_s2"] >= 1   # cross-file test only runs at stage 2
 
 
 def test_no_pytest_stack_skips_ok_with_loud_note(tmp_path, monkeypatch):
@@ -217,6 +217,26 @@ def test_drain_e2e_records_mutation_run(tmp_path, monkeypatch):
             "confirmed survivor must land in the ledger as a finding"
     finally:
         led.close()
+
+
+def test_stage1_narrowing_actually_ran(tmp_path, monkeypatch):
+    # Pin that stage 1 uses the targeted tests/test_<module>.py argv, not the
+    # full suite -- a silent regression to full-suite-always would only show
+    # as slowness. Spy wraps the REAL run_subprocess.
+    r, base, head = _repo(tmp_path, WEAK_TEST)
+    calls = []
+    real = mut_consumer.run_subprocess
+
+    def spy(argv, cwd, timeout, **kw):
+        calls.append([str(a) for a in argv])
+        return real(argv, cwd, timeout, **kw)
+
+    monkeypatch.setattr(mut_consumer, "run_subprocess", spy)
+    _consume(r, base, head, monkeypatch, tmp_path)
+    targeted = [c for c in calls if any(a.endswith("test_calc.py") for a in c)]
+    assert targeted, "stage 1 must have invoked the targeted test file"
+    assert not any("-k" in c for c in calls), \
+        "with tests/test_calc.py present the -k fallback must not fire"
 
 
 def _seed_baseline_failures(r, n):
