@@ -47,16 +47,34 @@ def test_rebaseline_with_yes_writes_a_baseline_snapshot(tmp_path, monkeypatch):
     assert _baseline_snapshot_count(r) == 1
 
 
-def test_rebaseline_with_yes_overwrites_prior_baseline_latest_wins(tmp_path, monkeypatch):
+def test_rebaseline_with_yes_latest_snapshot_supersedes(tmp_path, monkeypatch):
+    # Discriminating latest-wins test: the sandbox gate produces zero findings,
+    # so control run_gate's finding set directly. Run 1 accepts {A, B}; run 2
+    # accepts {B, C}. The baseline must be run 2's set ONLY -- not run 1's
+    # ({A, B} = first-wins bug), not the union ({A, B, C} = appends-to bug).
+    from types import SimpleNamespace
+
+    from aramid.commands import rebaseline as rb
     r = _repo(tmp_path, monkeypatch)
+    seq = [
+        SimpleNamespace(run_id="r1", findings=[SimpleNamespace(id="A"),
+                                               SimpleNamespace(id="B")]),
+        SimpleNamespace(run_id="r2", findings=[SimpleNamespace(id="B"),
+                                               SimpleNamespace(id="C")]),
+    ]
+    calls = {"n": 0}
+
+    def fake_run_gate(root, gate, mode, cfg, ledger):
+        res = seq[calls["n"]]
+        calls["n"] += 1
+        return res
+
+    monkeypatch.setattr(rb, "run_gate", fake_run_gate)
     assert cmd_rebaseline(r, yes=True) == 0
     assert cmd_rebaseline(r, yes=True) == 0
-    # baseline_ids is latest-wins; two snapshots exist but the accepted set is
-    # the newest one (proving re-baseline supersedes, not appends-to).
     led = Ledger(r / ".aramid" / "ledger.db")
     try:
         assert _baseline_snapshot_count(r) == 2
-        snaps = [e for e in led.events() if e.type is EventType.BASELINE_SNAPSHOT]
-        assert led.baseline_ids() == set(snaps[-1].payload.get("ids", []))
+        assert led.baseline_ids() == {"B", "C"}   # latest supersedes, not union
     finally:
         led.close()

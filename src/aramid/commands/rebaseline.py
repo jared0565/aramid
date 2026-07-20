@@ -3,7 +3,15 @@ ratchet baseline. First-release recovery for fingerprint churn -- when an
 aramid upgrade changes rule/path normalization, grandfathered findings
 re-fingerprint and the ratchet re-escalates them as new BLOCKs; rebaseline
 re-accepts the current set. Destructive to grandfathering, so it refuses
-without an explicit --yes (no interactive prompt: safe in hooks/CI)."""
+without an explicit --yes (no interactive prompt: safe in hooks/CI).
+
+--yes runs a full ALL-gate, so it appends the normal RUN_STARTED /
+FINDING_DETECTED / FINDING_RESOLVED / RUN_FINISHED events too, not just the
+BASELINE_SNAPSHOT. One consequence: a finding that merely re-fingerprinted
+(old id vanished, new id appeared) is recorded as "fixed" in the ledger's
+materialized state -- expected, but it means `aramid status` / `ledger list`
+may show a re-fingerprinted finding as resolved after a churn-driven
+rebaseline."""
 import datetime as _dt
 from pathlib import Path
 
