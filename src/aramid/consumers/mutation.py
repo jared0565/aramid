@@ -11,6 +11,7 @@ false test-gap finding. pytest runs as [sys.executable, -m, pytest]: the
 drain must be PATH-independent (deliberate deviation from runners/tests.py's
 bare "pytest" argv). Timeouts are unattributable -- counted, never reported.
 Zero tokens; cost stays 0.0 (CPU only, bounded by [mutation] budgets)."""
+import re
 import shutil
 import sys
 import tempfile
@@ -26,6 +27,8 @@ from aramid.runners.base import ToolState, run_subprocess
 
 NAME = "mutation"
 _BASELINE_GIVE_UP = 3   # mirrors llm_review._MALFORMED_GIVE_UP
+_SAFE_STEM = re.compile(r"^[A-Za-z0-9_]+$")
+_K_KEYWORDS = {"not", "and", "or"}   # pytest -k expression keywords
 
 
 def _is_test_file(rel: str) -> bool:
@@ -44,7 +47,12 @@ def _stage1_argv(wt: Path, rel: str) -> list[str]:
         if hits:
             return [sys.executable, "-m", "pytest", "-q",
                     *(str(p.relative_to(wt)) for p in hits)]
-    return [sys.executable, "-m", "pytest", "-q", "-k", module]
+    if _SAFE_STEM.match(module) and module.lower() not in _K_KEYWORDS:
+        return [sys.executable, "-m", "pytest", "-q", "-k", module]
+    # Unsafe -k token (pytest keyword / expression-breaking chars): pytest
+    # would exit 4 (usage error) and the suite would never run. Full suite
+    # is always correct, just slower.
+    return _full_argv()
 
 
 def _full_argv() -> list[str]:
@@ -133,8 +141,15 @@ def consume(item, ctx: DrainContext) -> ConsumerResult:
                     if s1.state is ToolState.TIMEOUT:
                         stats["timeouts"] += 1
                         continue
-                    if s1.state is ToolState.OK and s1.returncode not in (0, 5):
+                    if s1.state is ToolState.OK and s1.returncode in (1, 2):
+                        # 1 = test failures; 2 = interrupted/collection error
+                        # (an import-breaking mutant genuinely causes 2).
                         stats["killed_s1"] += 1
+                        continue
+                    if s1.state is ToolState.OK and s1.returncode not in (0, 5):
+                        # 3 = internal error, 4 = usage error: argv's fault,
+                        # never the mutant's -- unattributable, like timeouts.
+                        stats["errors"] += 1
                         continue
                     # putative survivor (pass, or exit 5 = nothing selected)
                     stats["survived"] += 1
@@ -151,8 +166,13 @@ def consume(item, ctx: DrainContext) -> ConsumerResult:
                             tool="mutation", rule=m.op, severity_raw="medium",
                             file=rel, line=m.line,
                             message=f"mutant survived: {m.description}"))
-                    else:
+                    elif s2.state is ToolState.OK and s2.returncode in (1, 2):
                         stats["killed_s2"] += 1
+                    else:
+                        # Non-verdict full-suite outcome (internal/usage error,
+                        # crash): the putative survivor is NOT reported -- a
+                        # survivor requires the full suite to PASS on it.
+                        stats["errors"] += 1
                 except Exception:
                     stats["errors"] += 1
                 finally:

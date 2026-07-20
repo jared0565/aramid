@@ -239,6 +239,56 @@ def test_stage1_narrowing_actually_ran(tmp_path, monkeypatch):
         "with tests/test_calc.py present the -k fallback must not fire"
 
 
+def test_stage1_argv_unsafe_stem_falls_back_to_full_suite(tmp_path):
+    # pytest -k chokes on expression keywords and non-word chars (exit 4 =
+    # usage error, which previously scored as a KILL). Unsafe stems must use
+    # the always-correct full-suite argv instead.
+    for fname in ("not.py", "and.py", "or.py", "my-mod.py", "weird mod.py"):
+        argv = mut_consumer._stage1_argv(tmp_path, fname)
+        assert "-k" not in argv, fname
+    safe = mut_consumer._stage1_argv(tmp_path, "calc.py")
+    assert safe[-2:] == ["-k", "calc"]
+
+
+def test_stage1_usage_error_counts_error_not_kill(tmp_path, monkeypatch):
+    from aramid.runners.base import RunnerResult, ToolState
+    r, base, head = _repo(tmp_path, WEAK_TEST)
+    seq = {"n": 0}
+
+    def scripted(argv, cwd, timeout, **kw):
+        seq["n"] += 1
+        if seq["n"] == 1:      # baseline full suite: green
+            return RunnerResult(tool="pytest", state=ToolState.OK, returncode=0)
+        return RunnerResult(tool="pytest", state=ToolState.OK, returncode=4)
+
+    monkeypatch.setattr(mut_consumer, "run_subprocess", scripted)
+    res = _consume(r, base, head, monkeypatch, tmp_path)
+    assert res.extra["errors"] >= 1
+    assert res.extra["killed_s1"] == 0, "usage error is not a kill"
+    assert res.findings == []
+
+
+def test_stage2_usage_error_never_reports_survivor(tmp_path, monkeypatch):
+    from aramid.runners.base import RunnerResult, ToolState
+    r, base, head = _repo(tmp_path, WEAK_TEST)
+    fulls = {"n": 0}
+
+    def scripted(argv, cwd, timeout, **kw):
+        joined = " ".join(str(a) for a in argv)
+        if "test_calc.py" in joined:   # stage-1 targeted: mutant survives
+            return RunnerResult(tool="pytest", state=ToolState.OK, returncode=0)
+        fulls["n"] += 1
+        if fulls["n"] == 1:            # baseline: green
+            return RunnerResult(tool="pytest", state=ToolState.OK, returncode=0)
+        return RunnerResult(tool="pytest", state=ToolState.OK, returncode=4)
+
+    monkeypatch.setattr(mut_consumer, "run_subprocess", scripted)
+    res = _consume(r, base, head, monkeypatch, tmp_path)
+    assert res.findings == [], "survivor is only reported when the full suite PASSES"
+    assert res.extra["confirmed"] == 0
+    assert res.extra["errors"] >= 1
+
+
 def _seed_baseline_failures(r, n):
     from aramid.models import Event, EventType
     led = Ledger(r / ".aramid" / "ledger.db")
