@@ -7,6 +7,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable
 
+from aramid.models import EventType
+
 OK = "ok"
 DEGRADED = "degraded"
 ERROR = "error"
@@ -35,3 +37,18 @@ class ConsumerResult:
 
 
 CONSUMERS: dict[str, object] = {}  # populated by consumer modules (Task 16)
+
+
+def prior_note_count(ledger, consumer: str, item_id: str, prefix: str) -> int:
+    """How many CONSUMER_RUN_FINISHED events this consumer has already
+    recorded for this queue item with a note starting with `prefix`.
+    Give-up counters (llm_review malformed, mutation baseline-failing) key
+    on this -- the note strings involved are load-bearing."""
+    n = 0
+    for e in ledger.events():
+        if (e.type is EventType.CONSUMER_RUN_FINISHED
+                and e.payload.get("consumer") == consumer
+                and e.payload.get("item_id") == item_id
+                and str(e.payload.get("note", "")).startswith(prefix)):
+            n += 1
+    return n

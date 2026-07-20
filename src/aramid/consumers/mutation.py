@@ -25,6 +25,7 @@ from aramid.normalizer import RawFinding
 from aramid.runners.base import ToolState, run_subprocess
 
 NAME = "mutation"
+_BASELINE_GIVE_UP = 3   # mirrors llm_review._MALFORMED_GIVE_UP
 
 
 def _is_test_file(rel: str) -> bool:
@@ -75,6 +76,13 @@ def consume(item, ctx: DrainContext) -> ConsumerResult:
         # Mirrors llm_review's no-providers-installed skip. (2c-1b seam.)
         return ConsumerResult(consumer=NAME, state="ok",
                               note="no python test stack (mutation skipped)")
+    if base.prior_note_count(ctx.ledger, NAME, item.id,
+                             "baseline failing") >= _BASELINE_GIVE_UP:
+        # A permanently-red suite must stop pinning the queue item: after 3
+        # honest DEGRADED retries this becomes a permanent-skip. Keys on the
+        # literal "baseline failing" note below -- both strings load-bearing.
+        return ConsumerResult(consumer=NAME, state="ok",
+                              note="mutation giving up: baseline persistently failing")
 
     started = time.monotonic()
     stats = {"generated": 0, "tested": 0, "killed": 0, "survived": 0,
@@ -90,6 +98,8 @@ def consume(item, ctx: DrainContext) -> ConsumerResult:
 
         base_res = run_subprocess(_full_argv(), wt, mutant_timeout * 4)
         if base_res.state is not ToolState.OK or base_res.returncode != 0:
+            # Note text is load-bearing: the give-up counter above matches
+            # notes starting with "baseline failing".
             return ConsumerResult(consumer=NAME, state="degraded",
                                   note="baseline failing",
                                   duration_s=time.monotonic() - started)

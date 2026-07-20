@@ -18,7 +18,7 @@ from aramid import review
 from aramid import autolearn
 from aramid.consumers import base
 from aramid.consumers.base import ConsumerResult, DrainContext
-from aramid.models import EventType, Source
+from aramid.models import Source
 from aramid.normalizer import RawFinding
 from aramid.providers import base as providers_base
 # Provider modules self-register into base.PROVIDERS at import time
@@ -60,14 +60,7 @@ def _call(module, prompt: str, model: str, cfg, timeout_s: float, *, effort: str
 
 
 def _malformed_attempts(ledger, item_id: str) -> int:
-    n = 0
-    for e in ledger.events():
-        if (e.type is EventType.CONSUMER_RUN_FINISHED
-                and e.payload.get("consumer") == NAME
-                and e.payload.get("item_id") == item_id
-                and str(e.payload.get("note", "")).startswith("malformed response")):
-            n += 1
-    return n
+    return base.prior_note_count(ledger, NAME, item_id, "malformed response")
 
 
 def _any_installed(cfg) -> bool:

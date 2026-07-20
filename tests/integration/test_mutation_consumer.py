@@ -219,6 +219,45 @@ def test_drain_e2e_records_mutation_run(tmp_path, monkeypatch):
         led.close()
 
 
+def _seed_baseline_failures(r, n):
+    from aramid.models import Event, EventType
+    led = Ledger(r / ".aramid" / "ledger.db")
+    try:
+        for i in range(n):
+            led.append(Event(EventType.CONSUMER_RUN_FINISHED, f"seed{i}", "t",
+                             payload={"consumer": "mutation", "item_id": "q1",
+                                      "state": "degraded",
+                                      "note": "baseline failing"}))
+    finally:
+        led.close()
+
+
+def test_baseline_giveup_after_three_failures(tmp_path, monkeypatch):
+    # 3 prior "baseline failing" runs for this item -> OK give-up, and NO
+    # pytest invocation at all (run_subprocess poisoned to prove it): the
+    # give-up check must fire BEFORE the worktree/baseline work.
+    r, base, head = _repo(tmp_path, WEAK_TEST)
+    _seed_baseline_failures(r, 3)
+    monkeypatch.setattr(mut_consumer, "run_subprocess",
+                         lambda *a, **kw: (_ for _ in ()).throw(
+                             AssertionError("give-up path must not run pytest")))
+    res = _consume(r, base, head, monkeypatch, tmp_path)
+    assert res.state == "ok"
+    assert "giving up" in res.note
+    assert res.findings == []
+    assert _no_worktrees(r)
+
+
+def test_baseline_two_failures_still_degrades(tmp_path, monkeypatch):
+    # Below the give-up threshold the transient-retry contract stands.
+    r, base, head = _repo(tmp_path,
+                          "def test_always_fails():\n    assert False\n")
+    _seed_baseline_failures(r, 2)
+    res = _consume(r, base, head, monkeypatch, tmp_path)
+    assert res.state == "degraded"
+    assert "baseline failing" in res.note
+
+
 def test_mutation_findings_classify_warn_never_block(tmp_path, monkeypatch):
     from aramid.models import Gate
     from aramid import policy
