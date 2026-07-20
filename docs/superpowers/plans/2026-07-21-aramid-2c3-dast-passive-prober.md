@@ -75,7 +75,9 @@ class _Handler(BaseHTTPRequestHandler):
     def _respond(self):
         status, headers, body = self.routes.get(
             self.path, (404, [("Content-Type", "text/plain")], b"nope"))
-        self.send_response(status)
+        self.send_response_only(status)   # NOT send_response: that auto-injects
+        # its own Server/Date headers, which would shadow the route's headers and
+        # break the banner checks. send_response_only writes only the status line.
         for k, v in headers:
             self.send_header(k, v)
         self.end_headers()
@@ -1035,7 +1037,9 @@ class _Handler(BaseHTTPRequestHandler):
     def do_GET(self):
         status, headers, body = self.routes.get(self.path,
                                                 (404, [("Content-Type", "text/plain")], b"no"))
-        self.send_response(status)
+        self.send_response_only(status)   # NOT send_response: that auto-injects
+        # its own Server/Date headers, which would shadow the route's headers and
+        # break the banner checks. send_response_only writes only the status line.
         for k, v in headers:
             self.send_header(k, v)
         self.end_headers()
