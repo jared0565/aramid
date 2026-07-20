@@ -42,6 +42,7 @@ class Config:
     pack: dict
     llm: dict
     mutation: dict = field(default_factory=dict)
+    fuzz: dict = field(default_factory=dict)
 
 
 def _user_config_path() -> Path:
@@ -104,6 +105,7 @@ def load_config(root: Path) -> Config:
         pack=merged.get("pack", {}),
         llm=merged.get("llm", {}),
         mutation=merged.get("mutation", {}),
+        fuzz=merged.get("fuzz", {}),
     )
 
 

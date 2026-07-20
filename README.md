@@ -95,6 +95,11 @@ drain-time consumers. 2c-1 (shipped) adds the mutation consumer: diff-touched
 functions are mutated in a throwaway worktree and mutants the full test suite
 cannot kill are recorded as WARN-tier test-gap findings (`[mutation]` config:
 budgets, two-stage targeted/confirm execution; Python repos with pytest).
+2c-2 (shipped) adds the fuzz consumer: diff-touched type-hinted functions are
+called with deterministic seeded inputs in a throwaway worktree, and deep-crash
+exceptions (IndexError, KeyError, …) are recorded as WARN-tier findings — the
+seed is the repro (`[fuzz]` config: budgets, a scary-name skip-list; Python
+repos with type hints, no test suite required).
 
 ### Phase 2b: the LLM reviewer
 
