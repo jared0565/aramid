@@ -109,3 +109,40 @@ def test_no_mutation_after_regex_with_brace_in_interpolation():
     muts = generate_mutants(src, {1})
     assert all("!==" not in m.source for m in muts)
     assert all(m.op != "cmp-flip" for m in muts)
+
+
+def test_logical_swap():
+    src = "function f(a, b) {\n  return a && b;\n}\n"
+    muts = generate_mutants(src, {2})
+    assert any("a || b" in m.source for m in muts)
+    assert any(m.op == "logical-swap" for m in muts)
+
+
+def test_int_bound_increments_integer_literal():
+    src = "function f(a) {\n  return a + 3;\n}\n"
+    muts = generate_mutants(src, {2})
+    assert any("a + 4" in m.source for m in muts)
+    assert any(m.op == "int-bound" and m.description == "3 -> 4" for m in muts)
+
+
+def test_int_bound_skips_float_hex_and_bigint():
+    for lit in ("1.5", "0xff", "10n", "1e3"):
+        src = f"function f() {{\n  return {lit};\n}}\n"
+        muts = generate_mutants(src, {2})
+        assert all(m.op != "int-bound" for m in muts), f"{lit} must not int-bound"
+
+
+def test_not_drop_in_prefix_position():
+    src = "function f(a) {\n  if (!a) return 1;\n}\n"
+    muts = generate_mutants(src, {2})
+    assert any("if (a)" in m.source for m in muts)
+    assert any(m.op == "not-drop" for m in muts)
+
+
+def test_not_drop_leaves_inequality_and_ts_nonnull_alone():
+    # `!=` is cmp-flip's job, not not-drop; TS `x!` (non-null assertion, `!`
+    # after a value) must NOT be dropped.
+    src = "function f(a, b) {\n  const c = a! + b;\n  return a != b;\n}\n"
+    muts = generate_mutants(src, {2, 3})
+    assert all(m.op != "not-drop" for m in muts)
+    assert any(m.op == "cmp-flip" and "a == b" in m.source for m in muts)

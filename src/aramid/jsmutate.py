@@ -18,6 +18,9 @@ _DIGITS = set("0123456789")
 _CMP_FLIP = {"===": "!==", "!==": "===", "==": "!=", "!=": "==",
              "<": "<=", "<=": "<", ">": ">=", ">=": ">"}
 
+# logical-swap: like-for-like short-circuit operator swap.
+_LOGIC_FLIP = {"&&": "||", "||": "&&"}
+
 # Multi-char operator tokens recognized for MAXIMAL MUNCH so a longer operator
 # is never mis-split into a shorter mutable one (e.g. `=>`/`<<`/`>>`/`===` must
 # not be read as `=`/`<`/`>`/`==`). Longest first. Includes non-mutated ops.
@@ -225,6 +228,57 @@ def _skip_region(source: str, i: int, prev: str):
     return None
 
 
+def _consume_number(source: str, i: int):
+    """Return (end_index, is_plain_int, value). Non-decimal-integer forms
+    (hex/bin/oct/float/exponent/bigint) return is_plain_int=False."""
+    n = len(source)
+    if source[i] == "0" and i + 1 < n and source[i + 1] in "xXbBoO":
+        j = i + 2
+        while j < n and source[j] in _ID_CONT:
+            j += 1
+        return j, False, 0
+    j = i
+    is_float = False
+    while j < n and source[j] in _DIGITS:
+        j += 1
+    if j < n and source[j] == ".":
+        is_float = True
+        j += 1
+        while j < n and source[j] in _DIGITS:
+            j += 1
+    if j < n and source[j] in "eE":
+        is_float = True
+        j += 1
+        if j < n and source[j] in "+-":
+            j += 1
+        while j < n and source[j] in _DIGITS:
+            j += 1
+    if j < n and source[j] in "nN":   # bigint suffix
+        return j + 1, False, 0
+    if is_float:
+        return j, False, 0
+    try:
+        return j, True, int(source[i:j])
+    except ValueError:
+        return j, False, 0
+
+
+def _is_prefix(prev: str) -> bool:
+    """True when a `!` at the current position is a UNARY prefix `not` (operand
+    start), so dropping it is meaningful. False after a value (identifier /
+    number / ) / ] / } / string / template / regex) -- there `!` would be a TS
+    non-null assertion. Keywords (prev is identifier-like) are treated as
+    non-prefix: we MISS `return !x` (safe) rather than risk mutating `x!`."""
+    if prev == "":
+        return True
+    if prev in (")", "]", "}", "'str'", "`t`", "/re/"):
+        return False
+    first = prev[:1]
+    if first in _ID_START or first in _DIGITS:
+        return False
+    return True
+
+
 def _candidates(source: str, target_lines: set[int]):
     """Yield (offset, length, op, new_text, description, line) for each mutation
     site in a CODE region on a target line. Single forward pass."""
@@ -258,12 +312,12 @@ def _candidates(source: str, target_lines: set[int]):
             prev = source[i:j]
             i = j
             continue
-        # number (int-bound handled in Task 2; consume whole so it is not
-        # mis-split and `prev` tracking stays correct)
+        # number
         if c in _DIGITS or (c == "." and i + 1 < n and source[i + 1] in _DIGITS):
-            j = i + 1
-            while j < n and (source[j] in _ID_CONT or source[j] == "."):
-                j += 1
+            j, is_int, value = _consume_number(source, i)
+            if line in target_lines and is_int:
+                out.append((i, j - i, "int-bound", str(value + 1),
+                            f"{value} -> {value + 1}", line))
             prev = source[i:j]
             i = j
             continue
@@ -273,6 +327,9 @@ def _candidates(source: str, target_lines: set[int]):
             if line in target_lines and op in _CMP_FLIP:
                 out.append((i, len(op), "cmp-flip", _CMP_FLIP[op],
                             f"{op} -> {_CMP_FLIP[op]}", line))
+            elif line in target_lines and op in _LOGIC_FLIP:
+                out.append((i, len(op), "logical-swap", _LOGIC_FLIP[op],
+                            f"{op} -> {_LOGIC_FLIP[op]}", line))
             prev = op
             i += len(op)
             continue
@@ -282,6 +339,14 @@ def _candidates(source: str, target_lines: set[int]):
                 out.append((i, 1, "cmp-flip", _CMP_FLIP[c],
                             f"{c} -> {_CMP_FLIP[c]}", line))
             prev = c
+            i += 1
+            continue
+        # unary `!` in prefix position -> drop it (not-drop). `!=`/`!==` are
+        # multi-char ops handled above, so a `!` here is a standalone `!`.
+        if c == "!":
+            if line in target_lines and _is_prefix(prev):
+                out.append((i, 1, "not-drop", "", "drop unary !", line))
+            prev = "!"
             i += 1
             continue
         # any other single char
