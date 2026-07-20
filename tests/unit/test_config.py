@@ -259,6 +259,25 @@ def test_autolearn_repo_override_deep_merges(tmp_path, monkeypatch):
     assert cfg.llm["autolearn"]["enabled"] is True   # sibling default survives
 
 
+def test_fuzz_defaults_present(tmp_path, monkeypatch):
+    monkeypatch.setattr(config, "_user_config_path", lambda: _no_user_config(tmp_path))
+    cfg = config.load_config(tmp_path)
+    assert cfg.fuzz["enabled"] is True
+    assert cfg.fuzz["max_functions"] == 10
+    assert cfg.fuzz["cases_per_function"] == 50
+    assert cfg.fuzz["batch_timeout_s"] == 120
+    assert "*deploy*" in cfg.fuzz["skip_name_patterns"]
+
+
+def test_fuzz_repo_override_merges(tmp_path, monkeypatch):
+    monkeypatch.setattr(config, "_user_config_path", lambda: _no_user_config(tmp_path))
+    (tmp_path / "aramid.toml").write_text(
+        "schema_version = 1\n[fuzz]\nmax_functions = 3\n", encoding="utf-8")
+    cfg = config.load_config(tmp_path)
+    assert cfg.fuzz["max_functions"] == 3
+    assert cfg.fuzz["enabled"] is True  # deep-merge keeps defaults
+
+
 def test_mutation_defaults_present(tmp_path, monkeypatch):
     monkeypatch.setattr(config, "_user_config_path", lambda: _no_user_config(tmp_path))
     cfg = config.load_config(tmp_path)

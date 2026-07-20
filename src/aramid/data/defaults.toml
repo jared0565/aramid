@@ -125,3 +125,15 @@ max_mutants = 20        # generated-and-tested per queue item
 wall_budget_s = 600     # whole-item wall clock for the mutant loop
 mutant_timeout_s = 120  # per pytest invocation (stage 1 and stage 2 alike)
 confirm_cap = 3         # full-suite confirmation runs per item
+
+# --- Phase 2c-2 (spec section 5): drain-time fuzz consumer ---
+[fuzz]
+enabled = true
+max_functions = 10        # fuzzed per queue item
+cases_per_function = 50
+wall_budget_s = 300       # whole-item wall clock
+batch_timeout_s = 120     # the single driver subprocess
+skip_name_patterns = [
+  "*deploy*", "*delete*", "*remove*", "*drop*", "*push*", "*send*",
+  "*upload*", "*kill*", "*wipe*", "*publish*", "*destroy*", "*truncate*",
+]
