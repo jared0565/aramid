@@ -1,4 +1,7 @@
+import shutil
 import subprocess
+
+import pytest
 
 from aramid import config as config_mod
 from aramid.consumers import js_mutation as jsc
@@ -33,6 +36,10 @@ def _js_repo(tmp_path, with_node_modules=True):
     (r / "calc.js").write_text("function isAdult(age) {\n  return true;\n}\n"
                                "module.exports = { isAdult };\n", encoding="utf-8")
     (r / "test.js").write_text("process.exit(0);\n", encoding="utf-8")
+    # node_modules must never be a tracked path: `git worktree add` would then
+    # check it out into the worktree, and a real `mklink /J` / os.symlink
+    # cannot land on top of an already-existing (non-empty) directory.
+    (r / ".gitignore").write_text("node_modules/\n", encoding="utf-8")
     if with_node_modules:
         (r / "node_modules").mkdir()
         (r / "node_modules" / ".marker").write_text("real deps", encoding="utf-8")
@@ -180,3 +187,24 @@ def test_give_up_after_three_baseline_failures_head_scoped(tmp_path, monkeypatch
     res = _consume(r, base, head, monkeypatch, tmp_path)
     assert res.state == "ok"
     assert "giving up" in res.note
+
+
+_HAS_NODE = shutil.which("node") is not None and shutil.which("npm") is not None
+
+
+def _no_worktrees(r):
+    cp = subprocess.run(["git", "worktree", "list"], cwd=r, check=True,
+                        capture_output=True, text=True)
+    return len([ln for ln in cp.stdout.splitlines() if ln.strip()]) == 1
+
+
+@pytest.mark.skipif(not _HAS_NODE, reason="node+npm not on PATH (Python-only CI)")
+def test_real_npm_weak_suite_reports_survivor(tmp_path, monkeypatch):
+    # End-to-end with a REAL `npm test`: a weak test (exit 0 regardless) cannot
+    # kill the `>= -> >` mutant on the changed line, so it must be reported.
+    r, base, head = _js_repo(tmp_path)   # test.js is `process.exit(0)` = weak
+    res = _consume(r, base, head, monkeypatch, tmp_path)
+    assert res.state == "ok"
+    assert res.findings, "the weak suite cannot kill the mutant -> survivor"
+    assert res.findings[0].tool == "js-mutation"
+    assert _no_worktrees(r)
