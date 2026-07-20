@@ -159,3 +159,11 @@ def test_run_empty_output_with_error_returncode_is_crashed(tmp_path, monkeypatch
     )
     result = semgrep.run(RunContext(root=tmp_path, files=["a.py"]))
     assert result.state is ToolState.CRASHED
+
+
+def test_canonical_rule_id_uses_rightmost_prefix_occurrence():
+    from aramid.runners.semgrep import _CANONICAL_RULE_PREFIX, _canonical_rule_id
+    # A checkout path that itself embeds the literal prefix must not truncate
+    # the id early -- the REAL canonical id is the rightmost occurrence.
+    cid = f"/src/{_CANONICAL_RULE_PREFIX}junk/config/{_CANONICAL_RULE_PREFIX}sqli"
+    assert _canonical_rule_id(cid) == f"{_CANONICAL_RULE_PREFIX}sqli"

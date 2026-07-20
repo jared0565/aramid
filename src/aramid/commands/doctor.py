@@ -54,8 +54,10 @@ ALL_TOOLS = ("gitleaks", "semgrep", "ruff", "pip-audit")
 # Pinned gitleaks release. Real values sourced from the project's published
 # `gitleaks_<ver>_checksums.txt` (github.com/gitleaks/gitleaks release
 # v8.21.2 assets), not placeholders -- verified via sha256 before a
-# downloaded binary is ever trusted/extracted/executed. `_fix_gitleaks` is
-# intentionally never exercised by the test suite (no network in tests).
+# downloaded binary is ever trusted/extracted/executed. `_fix_gitleaks`'s
+# download/checksum/extract path is covered offline via a synthetic archive +
+# injected checksum (tests/integration/test_doctor_fix_gitleaks.py); the real
+# network fetch itself is never exercised in tests.
 GITLEAKS_VERSION = "8.21.2"
 # NOTE: no "windows_x32" entry -- `_gitleaks_platform_key` below can never
 # return that key (32-bit Windows falls to the `None` branch), so a pinned

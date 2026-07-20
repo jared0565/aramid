@@ -30,6 +30,7 @@ from aramid.commands.ledger_cmd import (
 )
 from aramid.commands.override import cmd_override
 from aramid.commands.pack_cmd import cmd_pack_add, cmd_pack_compile, cmd_pack_list
+from aramid.commands.rebaseline import cmd_rebaseline
 from aramid.commands.schedule import cmd_schedule
 from aramid.commands.status import cmd_status
 from aramid.commands.triage_cmd import cmd_triage
@@ -116,6 +117,12 @@ def build_parser() -> argparse.ArgumentParser:
 
     p_schedule = sub.add_parser("schedule", help="register/remove/query the Windows Task Scheduler drain job")
     p_schedule.add_argument("action", choices=["install", "remove", "status"])
+
+    p_rebaseline = sub.add_parser("rebaseline",
+                                  help="re-snapshot current findings as the ratchet baseline (after a fingerprint-affecting upgrade)")
+    p_rebaseline.add_argument("path", nargs="?", default=".")
+    p_rebaseline.add_argument("--yes", action="store_true",
+                              help="required: confirms discarding current ratchet grandfathering")
 
     return p
 
@@ -212,6 +219,9 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.command == "schedule":
         return cmd_schedule(root, args.action)
+
+    if args.command == "rebaseline":
+        return cmd_rebaseline(Path(args.path), yes=args.yes)
 
     print(f"aramid: unknown command: {args.command}", file=sys.stderr)
     return 3

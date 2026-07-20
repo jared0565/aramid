@@ -66,10 +66,21 @@ under a budget rather than on every commit. Four phases:
 Full design specs and implementation plans: `docs/superpowers/specs/` and
 `docs/superpowers/plans/`.
 
+## Upgrading / re-baselining
+
+A finding's identity is `sha256(tool + rule + normalized-path + sha256(normalized-line) + occurrence-index)`. Rule-id and path normalization feed that hash, so an aramid upgrade that changes them re-fingerprints already-accepted findings — the ratchet then sees them as new and can escalate them to BLOCK. After such an upgrade, run:
+
+    aramid rebaseline --yes
+
+to re-snapshot the current findings as the accepted baseline. This discards prior ratchet grandfathering (that is the point), so review the gate output first. Without `--yes` the command only reports what it would discard and exits non-zero.
+
 ## Phase 2a: watcher chassis
 
-Phase 2 starts with a zero-token chassis — the code has landed and is dogfooded
-here, though it is not yet wired into this repo's own hooks or drain schedule.
+Phase 2 starts with a zero-token chassis — the code has landed, and this repo
+carries its config (`aramid.toml`). The triage hook and scheduled drain are a
+per-clone local step (`.git/hooks` is not version-controlled): run `aramid init .`
+to install the post-commit triage shim and `aramid schedule install` to register
+the drain job.
 Once installed, every commit is scored at zero cost by a post-commit hook
 (security-surface paths, risky content, novelty, graphite blast radius). Commits
 scoring >= 40 join a review queue drained on a schedule (`aramid drain`, Task
@@ -77,10 +88,12 @@ Scheduler task `aramid-drain`).
 The post-commit hook self-kills after 15s (`--budget`), so a wedged triage can
 never hang `git commit`; shims installed before this feature pick it up on the
 next `aramid init` (idempotent shim regeneration).
-The regression attack pack (`.aramid-rules/regression.yml`, committed) replays
-rules compiled from resolved findings — reintroducing a rotated secret or banned
-dependency blocks at pre-push. `aramid status` shows queue depth and drain
-history; `aramid pack list|add|compile` manages rules.
+The regression attack pack (`.aramid-rules/regression.yml`) replays rules
+compiled from resolved findings — `aramid pack compile` writes it, and an
+adopting repo commits it (this repo has none yet: no findings resolved). It
+reintroduces a rotated secret or banned dependency as a pre-push block.
+`aramid status` shows queue depth and drain history; `aramid pack list|add|compile`
+manages rules.
 
 ```bash
 aramid triage HEAD                # score a commit (or range) and enqueue if risky

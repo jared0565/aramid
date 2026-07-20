@@ -34,11 +34,16 @@ def test_parse_skips_non_ok_state():
     assert gitleaks.parse(result, RunContext(root=Path("."))) == []
 
 
-def test_staged_argv_uses_protect_staged(tmp_path):
+def test_staged_argv_uses_git_staged(tmp_path):
+    # protect is deprecated in gitleaks 8.19+ (removed in a future major ->
+    # unknown-command -> CRASHED -> pre-commit fail-open lets secrets pass).
+    # git --staged is the non-deprecated equivalent (verified vs v8.21.2
+    # cmd/git.go), and matches the history path's `gitleaks git`.
     ctx = RunContext(root=tmp_path)
     report_path = tmp_path / "report.json"
     argv = gitleaks._build_argv(ctx, report_path)
-    assert argv[:3] == ["gitleaks", "protect", "--staged"]
+    assert argv[:3] == ["gitleaks", "git", "--staged"]
+    assert "protect" not in argv
     assert "--report-format" in argv and "json" in argv
     assert "--report-path" in argv and str(report_path) in argv
     assert "-" not in argv  # never pass "-" as a report-path sentinel

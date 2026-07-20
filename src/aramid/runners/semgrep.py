@@ -45,7 +45,7 @@ _CANONICAL_RULE_PREFIX = "owasp-top-ten."
 # ids are namespaced "aramid-regression.<block|warn>.<finding-id[:8]>".
 # semgrep prefixes those with the SAME config-path-dot-joined scheme (see
 # _CANONICAL_RULE_PREFIX above), so the LIVE check_id needs the identical
-# leftmost-occurrence strip to recover the canonical id block_rules.toml /
+# rightmost-occurrence strip to recover the canonical id block_rules.toml /
 # policy.classify() match against.
 _PACK_RULE_PREFIX = "aramid-regression."
 
@@ -53,11 +53,12 @@ _PACK_RULE_PREFIX = "aramid-regression."
 def _canonical_rule_id(check_id: str) -> str:
     """Strip semgrep's config-path prefix back to the canonical vendored
     rule id (block_rules.toml, and every override/suppression keyed by
-    `rule`, is written against the canonical form). Finds the LEFTMOST
+    `rule`, is written against the canonical form). Finds the RIGHTMOST
     occurrence of `_CANONICAL_RULE_PREFIX` (or, failing that,
     `_PACK_RULE_PREFIX`) and keeps everything from there onward -- every
     vendored/pack rule id starts with one of these, so this recovers the
-    exact `id:` regardless of how deep the repo checkout path is. Falls
+    exact `id:` even when the repo checkout path itself embeds the literal
+    prefix (leftmost `.find` would truncate the id early). Falls
     back to the raw check_id, unchanged, when neither prefix is present
     (e.g. a future non-vendored/registry rule, like
     "python.lang.security.audit.exec-detected.exec-detected" in
@@ -65,7 +66,7 @@ def _canonical_rule_id(check_id: str) -> str:
     to strip for those, and returning them unchanged preserves today's
     behavior exactly."""
     for prefix in (_CANONICAL_RULE_PREFIX, _PACK_RULE_PREFIX):
-        idx = check_id.find(prefix)
+        idx = check_id.rfind(prefix)
         if idx != -1:
             return check_id[idx:]
     return check_id
