@@ -146,3 +146,47 @@ def test_not_drop_leaves_inequality_and_ts_nonnull_alone():
     muts = generate_mutants(src, {2, 3})
     assert all(m.op != "not-drop" for m in muts)
     assert any(m.op == "cmp-flip" and "a == b" in m.source for m in muts)
+
+
+def test_empty_target_lines_yields_nothing():
+    src = "function f(a, b) {\n  return a === b;\n}\n"
+    assert generate_mutants(src, set()) == []
+
+
+def test_target_line_scoping():
+    src = ("function f(a, b) {\n"
+           "  const x = a === b;\n"    # line 2
+           "  const y = a && b;\n"     # line 3
+           "  return x;\n"
+           "}\n")
+    muts = generate_mutants(src, {3})
+    assert muts, "line 3 has a mutable operator"
+    assert all(m.line == 3 for m in muts)
+    assert all("!==" not in m.source for m in muts)  # line 2 untouched
+
+
+def test_ordering_is_deterministic():
+    src = "function f(a, b) {\n  return a === b && a < 5;\n}\n"
+    a = generate_mutants(src, {2})
+    b = generate_mutants(src, {2})
+    assert [(m.line, m.op, m.description) for m in a] == \
+           [(m.line, m.op, m.description) for m in b]
+    keys = [(m.line, m.op, m.description) for m in a]
+    assert keys == sorted(keys)
+
+
+def test_maximal_munch_does_not_mis_split_operators():
+    # `=>` arrow, `<<`/`>>` shifts, `===` must not yield a `=`/`<`/`>`/`==`
+    # mutation; only the genuine `===` (cmp-flip) and the `<` shift are here.
+    src = "const f = (a, b) => {\n  return (a << 2) === (b >> 1);\n};\n"
+    muts = generate_mutants(src, {2})
+    # the only cmp-flip is on the real `===`
+    assert [m.op for m in muts if m.op == "cmp-flip"] == ["cmp-flip"]
+    assert any("!==" in m.source for m in muts)
+    assert all("<=" not in m.source and ">=" not in m.source for m in muts)
+
+
+def test_unterminated_string_does_not_hang_or_leak():
+    src = "function f() {\n  return 'oops === ;\n}\n"   # unterminated string
+    muts = generate_mutants(src, {2, 3})
+    assert all("!==" not in m.source for m in muts)   # `===` was inside the string
