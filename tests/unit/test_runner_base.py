@@ -53,3 +53,19 @@ def test_timeout_returns_promptly_and_bounded(tmp_path):
     elapsed = time.monotonic() - start
     assert r.state is ToolState.TIMEOUT
     assert elapsed < 10  # well under the 5s sleep + old unbounded-wait failure mode
+
+
+def test_failed_kill_tree_bounds_the_post_kill_wait(tmp_path, monkeypatch):
+    # The safety branch the bounded wait exists for: if _kill_tree fails to
+    # reap the child, the post-kill communicate(timeout=_POST_KILL_DRAIN_S)
+    # must cap the wait -- not hang for the child's full sleep. This is the
+    # failed-kill reproduction test_timeout_returns_promptly_and_bounded lacks.
+    from aramid.runners import base
+    monkeypatch.setattr(base, "_kill_tree", lambda proc: None)   # kill "fails"
+    monkeypatch.setattr(base, "_POST_KILL_DRAIN_S", 1.0)          # shrink the cap
+    start = time.monotonic()
+    result = base.run_subprocess(
+        [sys.executable, "-c", "import time; time.sleep(30)"], tmp_path, 0.5)
+    elapsed = time.monotonic() - start
+    assert result.state is base.ToolState.TIMEOUT
+    assert elapsed < 10, f"post-kill wait was not bounded: {elapsed:.1f}s"

@@ -69,6 +69,7 @@ class RunContext:
     force_refresh: bool = False
 
 _WIN = sys.platform == "win32"
+_POST_KILL_DRAIN_S = 5.0   # cap on the post-_kill_tree reap wait (test seam)
 
 def _kill_tree(proc: subprocess.Popen):
     try:
@@ -106,7 +107,7 @@ def run_subprocess(argv, cwd: Path, timeout_s: float, env=None) -> RunnerResult:
     except subprocess.TimeoutExpired:
         _kill_tree(proc)
         try:
-            proc.communicate(timeout=5)
+            proc.communicate(timeout=_POST_KILL_DRAIN_S)
         except subprocess.TimeoutExpired:
             proc.kill()
         return RunnerResult(tool, ToolState.TIMEOUT, duration_s=time.monotonic()-start)
