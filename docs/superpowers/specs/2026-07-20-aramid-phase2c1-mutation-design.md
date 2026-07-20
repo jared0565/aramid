@@ -111,8 +111,12 @@ def generate_mutants(source: str, target_lines: set[int]) -> list[Mutant]
    - either stage TIMES OUT → the mutant is **unattributable**: excluded from
      findings, counted in `extra["timeouts"]` (a hung mutant is not evidence of
      a test gap);
-   - restore the original file from git (`git checkout -- <file>` in the
-     worktree) after every mutant.
+   - restore the original file after every mutant. AMENDMENT (execution-time):
+     restoration rewrites the pre-captured original source
+     (`src_path.write_text(original)`) instead of the specced
+     `git checkout -- <file>` — the string was read once from the same
+     checkout git would restore from, so the two are equivalent, minus one
+     subprocess per mutant.
 6. **Findings**: confirmed survivor →
    `RawFinding(tool="mutation", rule=<op>, file, line, message="mutant survived: <description>")`
    → the drain's existing normalize/classify partial wiring (same path as
