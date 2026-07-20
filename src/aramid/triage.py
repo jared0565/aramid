@@ -142,13 +142,15 @@ def score(root: Path, base: str | None, head: str, cfg, ledger, *,
     # spec section 8b: git-tracked graphite artifacts (graph-out/,
     # .graphite*, .cache/) must never be triaged as targets -- mirrors
     # every other file-listing path (pipeline.run_gate, regression_pack's
-    # consume) which all filter through config.filter_paths. Known residual:
-    # content_signal below still scans the full diff_text body, so a tracked
-    # graphite artifact's diff body could still nudge the advisory score --
-    # accepted as advisory-only, and the normal case is gitignored graphite
-    # where diff_paths won't list them anyway.
+    # consume) which all filter through config.filter_paths.
     paths = config_mod.filter_paths(paths, cfg)
-    diff = gitutil.diff_text(root, base, head)
+    # Scope the diff to the post-filter paths so a tracked graphite artifact's
+    # body can't feed content_signal (mirrors review.build_packet). EMPTY-PATHS
+    # GUARD: diff_text's pathspec is `["--", *paths] if paths else []`, so
+    # passing an empty `paths` would fall back to the FULL diff -- reintroducing
+    # the bug at its worst on an all-graphite changeset. When everything is
+    # filtered out, use "" so content_signal sees nothing.
+    diff = gitutil.diff_text(root, base, head, paths=paths) if paths else ""
     extra = list(cfg.triage.get("extra_security_paths", []))
 
     total, reasons = 0, []

@@ -142,7 +142,12 @@ def test_blast_radius_corrupt_graph_is_zero(tmp_path):
 def _fake_git(monkeypatch, paths, diff):
     from aramid import triage as t
     monkeypatch.setattr(t.gitutil, "diff_paths", lambda root, base, head: paths)
-    monkeypatch.setattr(t.gitutil, "diff_text", lambda root, base, head, max_bytes=400_000: diff)
+    # score() now scopes the diff to the filtered paths (diff_text(..., paths=)),
+    # so the mock must accept the paths kwarg. It ignores the value and returns
+    # the same body -- the scoping behavior itself is exercised by
+    # test_content_signal_ignores_filtered_graphite_diff_body below.
+    monkeypatch.setattr(t.gitutil, "diff_text",
+                        lambda root, base, head, max_bytes=400_000, paths=None: diff)
 
 
 def test_score_combines_and_clamps(tmp_path, monkeypatch):
@@ -216,6 +221,29 @@ def test_score_filters_graphite_artifacts_from_signals(tmp_path, monkeypatch):
     result = triage.score(repo, "a", "b", cfg, led)
     assert "graph-out/graph.json" not in result.paths
     assert "src/auth.py" in result.paths
+    led.close()
+
+
+def test_content_signal_ignores_filtered_graphite_diff_body(tmp_path, monkeypatch):
+    # A tracked graphite artifact (filtered out of `paths`) must not feed
+    # content_signal. When EVERY changed file is a graphite artifact, the
+    # post-filter path set is empty and the diff must be "" -- NOT a fallback
+    # to the full (risky) diff body. Discriminating mock: an unscoped/empty
+    # pathspec returns a risky body (the bug); a scoped call returns nothing.
+    from aramid import triage as t
+    repo, cfg = _real_cfg(tmp_path, monkeypatch)
+    led = Ledger(tmp_path / "l.db")
+    monkeypatch.setattr(t.gitutil, "diff_paths",
+                        lambda root, base, head: ["graph-out/graph.json"])
+
+    def fake_diff_text(root, base, head, max_bytes=400_000, paths=None):
+        if not paths:
+            return "+exec(payload)\n"   # the dangerous full-diff fallback
+        return ""                        # scoped to a real path set -> nothing
+
+    monkeypatch.setattr(t.gitutil, "diff_text", fake_diff_text)
+    result = triage.score(repo, "a", "b", cfg, led)
+    assert not any("risky-content" in r for r in result.reasons)
     led.close()
 
 
