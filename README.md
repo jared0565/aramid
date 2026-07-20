@@ -17,6 +17,9 @@ pip install -e .
 
 This pulls in `ruff`, `semgrep`, and `pip-audit` as aramid's own dependencies. Secret
 scanning additionally requires a `gitleaks` binary on `PATH` (see `aramid doctor`).
+The vendored OWASP semgrep ruleset ships inside the wheel; `aramid update-rules` reports
+its pinned source and install path (refreshing it is a re-vendor + rebuild, offline by
+design — not a runtime fetch).
 
 ## Quickstart
 

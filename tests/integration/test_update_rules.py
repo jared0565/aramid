@@ -1,10 +1,21 @@
-"""integration: `aramid update-rules` -- refreshes the vendored, offline
-semgrep ruleset. No network is available in this environment, so this is a
-documented stub (brief-permitted); it must never touch the network and
-must always report the pinned source + target path.
+"""integration: `aramid update-rules` -- reports the vendored, offline
+semgrep ruleset. The ruleset is vendored at build time (offline by design);
+this command performs no network fetch and always reports the pinned source
++ target path.
 """
 from aramid.commands.update_rules import cmd_update_rules
 from aramid.runners.semgrep import VENDORED_RULES_PATH
+
+
+def test_update_rules_reports_offline_by_design_not_stub(tmp_path, capsys):
+    # Formal close (spec section 7): the command is offline-by-design, not a
+    # half-finished STUB. Its message must say so and must not call itself a stub.
+    rc = cmd_update_rules(tmp_path)
+    out = capsys.readouterr().out
+
+    assert rc == 0
+    assert "STUB" not in out
+    assert "vendored at build time" in out
 
 
 def test_update_rules_never_touches_network_and_returns_0(tmp_path, capsys):
