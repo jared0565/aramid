@@ -163,3 +163,39 @@ def test_determinism_same_findings_twice(tmp_path, monkeypatch):
     b = _consume(r, base, head, monkeypatch, tmp_path)
     assert [(f.rule, f.file, f.line) for f in a.findings] == \
            [(f.rule, f.file, f.line) for f in b.findings]
+
+
+def test_drain_e2e_records_fuzz_run(tmp_path, monkeypatch):
+    from aramid import registry
+    from aramid.commands import drain as drain_mod
+    from aramid.commands.drain import cmd_drain
+    from aramid.models import EventType
+    from aramid import queue as queue_mod
+
+    r, base, head = _repo(tmp_path, BUGGY)
+    monkeypatch.setattr(registry, "registry_path", lambda: tmp_path / "repos.toml")
+    monkeypatch.setattr(drain_mod, "_lock_path", lambda: tmp_path / "drain.lock")
+    monkeypatch.setattr(config_mod, "_user_config_path",
+                         lambda: tmp_path / "no-user.toml")
+    registry.register(r, "2026-07-20T10:00:00+00:00")
+    led = Ledger(r / ".aramid" / "ledger.db")
+    try:
+        queue_mod.enqueue(led, "2026-07-20T10:00:00+00:00", base, head, 55, ["seed"])
+    finally:
+        led.close()
+
+    rc = cmd_drain([str(r)])
+    assert rc in (0, 2)
+
+    led = Ledger(r / ".aramid" / "ledger.db")
+    try:
+        runs = [e for e in led.events()
+                if e.type is EventType.CONSUMER_RUN_FINISHED
+                and e.payload.get("consumer") == "fuzz"]
+        assert runs, "drain must have run the fuzz consumer"
+        assert "crashes" in runs[-1].payload   # extra payload merged
+        state = led.open_findings()
+        assert any(rec.get("tool") == "fuzz" for rec in state.values()), \
+            "deep-crash finding must land in the ledger"
+    finally:
+        led.close()
