@@ -1,0 +1,4 @@
+# aramid dogfoods itself: this is the config a maintainer's `aramid init .`
+# would write. Kept to schema_version only -- equal to built-in defaults, so
+# aramid's own CI gate (`aramid check --all --strict --json`) is unchanged.
+schema_version = 1
