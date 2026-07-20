@@ -53,6 +53,12 @@ class RunContext:
       NORMAL gates, not just the next drain. Additive field: default `()`
       keeps every existing RunContext(...) construction site (and every
       adapter that never reads it) valid unchanged.
+    force_refresh: bypass the deps audit cache (deps.run_js/run_python read
+      it via getattr). run_gate sets it True for mode=="all" so `check --all`
+      (and CI's `check --all --strict`) re-audits fresh instead of serving a
+      <=24h cache -- a CVE that appeared inside the window is not masked. The
+      interactive gates (pre-commit/pre-push) leave it False and keep the
+      cache. Additive field: default False keeps every construction site valid.
     """
     root: Path
     files: list[str] = field(default_factory=list)
@@ -60,6 +66,7 @@ class RunContext:
     pkg_manager: str | None = None
     stacks: set[str] = field(default_factory=set)
     extra_semgrep_configs: tuple[str, ...] = ()
+    force_refresh: bool = False
 
 _WIN = sys.platform == "win32"
 

@@ -357,3 +357,85 @@ def test_python_result_is_also_cached(tmp_path, monkeypatch):
     deps.run_python(ctx)
     deps.run_python(ctx)
     assert call_count["n"] == 1
+
+
+# ---------------- force_refresh wiring (Task 3) ----------------
+
+def _git(root, *a):
+    import subprocess
+    subprocess.run(["git", "-C", str(root), *a], check=True, capture_output=True, text=True)
+
+
+def test_runcontext_has_force_refresh_default_false():
+    assert RunContext(root=Path(".")).force_refresh is False
+
+
+def test_run_gate_sets_force_refresh_for_all_mode(monkeypatch, tmp_path):
+    # mode=="all" must build a RunContext with force_refresh=True so check --all
+    # re-audits instead of serving a stale deps cache. Intercept at
+    # _select_runners: capture the ctx and return NO runners (hermetic).
+    import subprocess
+
+    import aramid.pipeline as pipeline
+    from aramid import config as config_mod
+    from aramid.ledger import Ledger
+    from aramid.models import Gate
+
+    monkeypatch.setattr(config_mod, "_user_config_path", lambda: tmp_path / "no-user.toml")
+    subprocess.run(["git", "init", "-q", "-b", "main", str(tmp_path)], check=True,
+                   capture_output=True, text=True)
+    _git(tmp_path, "config", "user.email", "t@t")
+    _git(tmp_path, "config", "user.name", "t")
+    (tmp_path / "a.py").write_text("x = 1\n", encoding="utf-8")
+    _git(tmp_path, "add", "-A")
+    _git(tmp_path, "commit", "-q", "-m", "base")
+
+    captured = {}
+
+    def _capture(gate, ctx):
+        captured["ctx"] = ctx
+        return {}
+
+    monkeypatch.setattr(pipeline, "_select_runners", _capture)
+    cfg = config_mod.load_config(tmp_path)
+    led = Ledger(tmp_path / ".aramid" / "ledger.db")
+    try:
+        pipeline.run_gate(tmp_path, Gate.ALL, "all", cfg, led)
+    finally:
+        led.close()
+    assert captured["ctx"].force_refresh is True
+
+
+def test_run_gate_no_force_refresh_for_non_all_mode(monkeypatch, tmp_path):
+    # pre-commit/pre-push (mode != "all") keep force_refresh False so the deps
+    # audit cache is still used in the interactive gates.
+    import subprocess
+
+    import aramid.pipeline as pipeline
+    from aramid import config as config_mod
+    from aramid.ledger import Ledger
+    from aramid.models import Gate
+
+    monkeypatch.setattr(config_mod, "_user_config_path", lambda: tmp_path / "no-user.toml")
+    subprocess.run(["git", "init", "-q", "-b", "main", str(tmp_path)], check=True,
+                   capture_output=True, text=True)
+    _git(tmp_path, "config", "user.email", "t@t")
+    _git(tmp_path, "config", "user.name", "t")
+    (tmp_path / "a.py").write_text("x = 1\n", encoding="utf-8")
+    _git(tmp_path, "add", "-A")
+    _git(tmp_path, "commit", "-q", "-m", "base")
+
+    captured = {}
+
+    def _capture(gate, ctx):
+        captured["ctx"] = ctx
+        return {}
+
+    monkeypatch.setattr(pipeline, "_select_runners", _capture)
+    cfg = config_mod.load_config(tmp_path)
+    led = Ledger(tmp_path / ".aramid" / "ledger.db")
+    try:
+        pipeline.run_gate(tmp_path, Gate.PRE_COMMIT, "staged", cfg, led)
+    finally:
+        led.close()
+    assert captured["ctx"].force_refresh is False

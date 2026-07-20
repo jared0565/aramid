@@ -256,7 +256,8 @@ def run_gate(root: Path, gate: Gate, mode: str, cfg: config_mod.Config, ledger: 
     ctx = RunContext(root=root, files=files, rng=rng,
                       pkg_manager=detect_package_manager(root),
                       stacks=detect_stacks(root, root),
-                      extra_semgrep_configs=extra_configs)
+                      extra_semgrep_configs=extra_configs,
+                      force_refresh=(mode == "all"))
     selected = _select_runners(gate, ctx)
 
     # 3. run concurrently under the gate's wall-clock budget.

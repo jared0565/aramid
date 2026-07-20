@@ -28,16 +28,16 @@ compatible with each other:
 Cache: `.aramid/cache/deps-<sha256(lockfile bytes)>.json`, 24h TTL. "lockfile"
 means the JS lockfile for the JS path, and the concatenated bytes of all
 discovered requirements*.txt files for the Python path (pip has no lockfile
-in the brief's scope). `ctx.force_refresh` (an optional, undeclared
-RunContext attribute -- Task 5.3's pipeline isn't implemented yet) bypasses
-a fresh cache; `check --all` is expected to set it.
+in the brief's scope). `ctx.force_refresh` (a RunContext field, default
+False; `run_gate` sets it True for mode=="all") bypasses a fresh cache, so
+`check --all` re-audits instead of serving a <=24h cache.
 
 Mixed-stack repos (both requirements*.txt AND a JS lockfile -- a common
 full-stack layout): `run()` runs BOTH `run_python()` and `run_js()` rather
 than picking one and silently skipping the other. Since the Runner
 protocol is one `run()` -> one RunnerResult, the two sub-results are
 attached to the combined result via an ad-hoc `.sub_results` attribute
-(same undeclared-attribute convention as `ctx.force_refresh` above) instead
+(not a declared RunnerResult field) instead
 of being serialized/lossily merged into `.raw` -- each sub-result keeps its
 own `.state`/`.tool`/`.returncode` intact. `parse()` checks for
 `.sub_results` first and recurses into each. NOTE for Task 5.3: collapsing
