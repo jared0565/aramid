@@ -86,6 +86,22 @@ def test_unfuzzable_function_skipped(tmp_path):
     assert out["unfuzzable"] >= 1
 
 
+def test_poison_annotation_does_not_abort_batch(tmp_path):
+    # An unhashable annotation makes supported_params' `hint in SUPPORTED_ATOMS`
+    # hash() raise -- it must be swallowed to None, not propagate out of the
+    # batch and discard head's genuine IndexError finding.
+    _module(tmp_path, "mix2", """
+        def head(xs: list[int]) -> int:
+            return xs[0]
+        def poison(a: {1: 2}) -> int:
+            return a
+    """)
+    out = run_spec(_spec(tmp_path, "mix2.py", ["head", "poison"]))
+    assert any(r["func"] == "head" and r["exc"] == "IndexError"
+               for r in out["records"]), "sibling finding must survive a poison peer"
+    assert out["unfuzzable"] >= 1  # poison counted skipped, not crashed
+
+
 def test_systemexit_is_contract_not_crash(tmp_path):
     _module(tmp_path, "cli", """
         import sys

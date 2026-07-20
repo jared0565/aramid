@@ -165,6 +165,39 @@ def test_determinism_same_findings_twice(tmp_path, monkeypatch):
            [(f.rule, f.file, f.line) for f in b.findings]
 
 
+def test_import_failure_not_counted_as_fuzzed(tmp_path, monkeypatch):
+    # A target file that import-fails must NOT inflate functions_fuzzed --
+    # only lib.py's genuinely-run function counts. Two files, both diff-
+    # touched in the feature commit.
+    r = tmp_path / "r"
+    r.mkdir()
+    _git(r, "init", "-q", "-b", "main")
+    _git(r, "config", "user.email", "t@t")
+    _git(r, "config", "user.name", "t")
+    (r / "aramid.toml").write_text(
+        "schema_version = 1\n[fuzz]\nmax_functions = 5\ncases_per_function = 20\n",
+        encoding="utf-8")
+    (r / "lib.py").write_text("def p() -> None:\n    return None\n", encoding="utf-8")
+    (r / "bad.py").write_text("def q() -> None:\n    return None\n", encoding="utf-8")
+    _git(r, "add", "-A")
+    _git(r, "commit", "-q", "-m", "base")
+    base = _sha(r)
+    (r / "lib.py").write_text(BUGGY, encoding="utf-8")
+    (r / "bad.py").write_text(
+        "import totally_nonexistent_xyz\n"
+        "def g(a: int) -> int:\n    return a\n", encoding="utf-8")
+    _git(r, "add", "-A")
+    _git(r, "commit", "-q", "-m", "feature")
+    head = _sha(r)
+
+    res = _consume(r, base, head, monkeypatch, tmp_path)
+    assert res.state == "ok"
+    assert res.extra["import_failures"] == 1
+    # head (lib.py) ran; g (bad.py) was never reached -> fuzzed count is 1, not 2
+    assert res.extra["functions_fuzzed"] == 1
+    assert any(f.file == "lib.py" for f in res.findings)
+
+
 def test_drain_e2e_records_fuzz_run(tmp_path, monkeypatch):
     from aramid import registry
     from aramid.commands import drain as drain_mod

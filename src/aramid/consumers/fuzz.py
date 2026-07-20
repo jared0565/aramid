@@ -128,9 +128,12 @@ def consume(item, ctx: DrainContext) -> ConsumerResult:
         spec_path = tmp / "spec.json"
         spec_path.write_text(json.dumps(spec), encoding="utf-8")
         remaining = max(1.0, min(batch_timeout, wall_budget - (time.monotonic() - started)))
+        # PYTHONHASHSEED=0 pins the driver's hash randomization so set/dict
+        # iteration (and thus a crash's args_repr in the finding message) is
+        # reproducible across drains, not just its fingerprint.
         result = run_subprocess(
             [sys.executable, "-m", "aramid.fuzzdriver", str(spec_path)],
-            wt, remaining)
+            wt, remaining, env={"PYTHONHASHSEED": "0"})
         if result.state is ToolState.TIMEOUT:
             stats["timeouts"] += 1
             return ConsumerResult(consumer=NAME, state="ok",
@@ -155,8 +158,15 @@ def consume(item, ctx: DrainContext) -> ConsumerResult:
         stats["contract_exceptions"] = out.get("contract_exceptions", 0)
         stats["import_failures"] = len(out.get("import_failures", []))
         stats["skipped_unhinted"] = out.get("unfuzzable", 0)
-        stats["functions_fuzzed"] = \
-            sum(len(t["functions"]) for t in targets) - stats["skipped_unhinted"]
+        # A target whose file import-failed never reaches the driver's
+        # per-function loop, so its functions never count as unfuzzable --
+        # subtract them explicitly, else functions_fuzzed silently overcounts
+        # (spec: "skips are never silent").
+        failed_files = set(out.get("import_failures", []))
+        failed_fn_count = sum(len(t["functions"]) for t in targets
+                              if t["file"] in failed_files)
+        stats["functions_fuzzed"] = (sum(len(t["functions"]) for t in targets)
+                                     - stats["skipped_unhinted"] - failed_fn_count)
         for rec in out.get("records", []):
             findings.append(RawFinding(
                 tool="fuzz", rule=f"crash-{rec['exc'].lower()}",

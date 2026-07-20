@@ -47,21 +47,26 @@ def supported_params(fn):
     """Param names when EVERY parameter has a supported hint and there is no
     *args/**kwargs; None otherwise (including when hint resolution raises)."""
     import inspect
+    # The ENTIRE body is guarded: _is_supported does `hint in SUPPORTED_ATOMS`
+    # -> hash(hint), which raises TypeError for an unhashable annotation
+    # (e.g. `def f(a: {1: 2})` -- legal Python). If that escaped, one poison
+    # function would abort the whole driver batch and discard real findings
+    # for its fuzzable siblings. None = "not fuzzable", never a raise.
     try:
         sig = inspect.signature(fn)
         hints = typing.get_type_hints(fn)
+        names = []
+        for name, p in sig.parameters.items():
+            if p.kind in (inspect.Parameter.VAR_POSITIONAL,
+                          inspect.Parameter.VAR_KEYWORD):
+                return None
+            hint = hints.get(name)
+            if hint is None or not _is_supported(hint):
+                return None
+            names.append(name)
+        return names
     except Exception:
         return None
-    names = []
-    for name, p in sig.parameters.items():
-        if p.kind in (inspect.Parameter.VAR_POSITIONAL,
-                      inspect.Parameter.VAR_KEYWORD):
-            return None
-        hint = hints.get(name)
-        if hint is None or not _is_supported(hint):
-            return None
-        names.append(name)
-    return names
 
 
 def gen_value(hint, rng: random.Random, depth: int = 0):
