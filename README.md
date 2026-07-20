@@ -66,6 +66,14 @@ under a budget rather than on every commit. Four phases:
 Full design specs and implementation plans: `docs/superpowers/specs/` and
 `docs/superpowers/plans/`.
 
+## Upgrading / re-baselining
+
+A finding's identity is `sha256(tool + rule + normalized-path + sha256(normalized-line) + occurrence-index)`. Rule-id and path normalization feed that hash, so an aramid upgrade that changes them re-fingerprints already-accepted findings — the ratchet then sees them as new and can escalate them to BLOCK. After such an upgrade, run:
+
+    aramid rebaseline --yes
+
+to re-snapshot the current findings as the accepted baseline. This discards prior ratchet grandfathering (that is the point), so review the gate output first. Without `--yes` the command only reports what it would discard and exits non-zero.
+
 ## Phase 2a: watcher chassis
 
 Phase 2 starts with a zero-token chassis — the code has landed and is dogfooded
