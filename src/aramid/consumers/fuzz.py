@@ -65,6 +65,25 @@ def _candidate_functions(source: str, changed: set[int], skip_patterns):
     return candidates, skipped_name, skipped_async
 
 
+def _any_candidates_remain(wt: Path, rels, changed: dict, skip_patterns) -> bool:
+    """Candidacy-only sweep (AST parse, no fuzzing) over not-yet-visited
+    changed files: keeps the truncated flag honest on exact-fit budget
+    exhaustion. Unreadable/missing files count as no-candidates, matching
+    the main loop's skip."""
+    for rel in rels:
+        src_path = wt / rel
+        if not src_path.exists():
+            continue
+        try:
+            source = src_path.read_text(encoding="utf-8")
+        except OSError:
+            continue
+        cands, _, _ = _candidate_functions(source, changed[rel], skip_patterns)
+        if cands:
+            return True
+    return False
+
+
 def consume(item, ctx: DrainContext) -> ConsumerResult:
     fcfg = getattr(ctx.cfg, "fuzz", None) or {}
     if not fcfg.get("enabled", True):
@@ -99,9 +118,12 @@ def consume(item, ctx: DrainContext) -> ConsumerResult:
                                   note=f"worktree add failed: {(cp.stderr or '').strip()[:200]}")
 
         targets, budget = [], max_functions
-        for rel in files:
+        for i, rel in enumerate(files):
             if budget <= 0:
-                stats["truncated"] = True
+                # Exact fit must not over-report (fuzz M4): only claim
+                # truncation if a remaining file actually has candidates.
+                if _any_candidates_remain(wt, files[i:], changed, skip_patterns):
+                    stats["truncated"] = True
                 break
             src_path = wt / rel
             if not src_path.exists():
