@@ -199,6 +199,17 @@ def run_js(ctx) -> RunnerResult:
     else:
         result = json_or_crashed(pm, result, _OK_RETURNCODES, empty="{}")
     if result.state is ToolState.OK:
+        recognized = (_yarn_shape_recognized(result.raw) if pm == "yarn"
+                      else _pnpm_shape_recognized(result.raw) if pm == "pnpm"
+                      else True)   # npm's shape is authoritative -> not guarded
+        if not recognized:
+            # Present-but-unrecognized audit shape: fail toward VISIBILITY
+            # (CRASHED -> degraded -> manual check) rather than a silent
+            # 0-findings pass that could hide CVEs behind a parser that returns
+            # [] for any shape it doesn't recognize.
+            result = RunnerResult(pm, ToolState.CRASHED, result.raw, result.stderr,
+                                  result.duration_s, result.returncode)
+    if result.state is ToolState.OK:
         _write_cache(cache_path, result.raw)
     return result
 
@@ -288,6 +299,43 @@ def parse_yarn(result: RunnerResult, ctx) -> list[RawFinding]:
             message=children.get("Issue") or obj.get("value", "vulnerable dependency"),
         ))
     return findings
+
+
+def _pnpm_shape_recognized(raw: str) -> bool:
+    """A clean pnpm audit carries an empty-but-PRESENT advisories container
+    (report.advisories or a top-level advisories key); an unrecognized shape
+    (wire-format drift) has NEITHER key. Absent-key on a non-empty payload ->
+    drift (return False). Non-JSON / empty / non-dict is not our concern here
+    (json_or_crashed already handled non-JSON) -> treated as recognized."""
+    try:
+        data = json.loads(raw or "{}")
+    except (ValueError, TypeError):
+        return True
+    if not isinstance(data, dict) or not data:
+        return True
+    report = data.get("report")
+    report = report if isinstance(report, dict) else {}
+    return "advisories" in report or "advisories" in data
+
+
+def _yarn_shape_recognized(raw: str) -> bool:
+    """Yarn Berry audit is NDJSON of advisory objects each carrying a
+    `children` dict. If there are parseable object lines but NONE carry
+    `children`, the wire format drifted (return False). No parseable lines
+    (a clean audit emits nothing) -> recognized."""
+    saw_line = saw_recognized = False
+    for line in (raw or "").splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            obj = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        saw_line = True
+        if isinstance(obj, dict) and isinstance(obj.get("children"), dict):
+            saw_recognized = True
+    return saw_recognized or not saw_line
 
 
 # --------------------------------------------------------------- dispatch ----

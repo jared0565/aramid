@@ -439,3 +439,73 @@ def test_run_gate_no_force_refresh_for_non_all_mode(monkeypatch, tmp_path):
     finally:
         led.close()
     assert captured["ctx"].force_refresh is False
+
+
+# ---------------- pnpm/yarn shape-shift drift guard (Task 7) ----------------
+#
+# Fixture provenance (spec section 8): tests/fixtures/pnpm-audit.json (pnpm
+# {"report":{"advisories":...}} shape) and yarn-audit.json (Yarn Berry >=4.0.1
+# NDJSON, one advisory object with a `children` dict per line) are HAND-AUTHORED
+# from the documented shapes, NOT live captures. A live capture + reconcile is
+# deferred until pnpm v8/9 and Yarn Berry are installable here. The shape guards
+# below surface a drifted/unrecognized-but-present audit shape as CRASHED
+# (degraded -> manual check) rather than a silent [] that could hide CVEs.
+
+def test_pnpm_shape_recognized_good_and_drifted():
+    from aramid.runners.deps import _pnpm_shape_recognized
+    assert _pnpm_shape_recognized('{"report":{"advisories":{}}}') is True   # clean
+    assert _pnpm_shape_recognized('{"advisories":{}}') is True              # clean alt
+    assert _pnpm_shape_recognized("{}") is True                            # no output
+    # degenerate present-but-empty shapes have no advisories container -> drift;
+    # the isinstance guard makes report=null return False cleanly (not crash).
+    assert _pnpm_shape_recognized('{"report":null}') is False
+    assert _pnpm_shape_recognized('{"metadata":{"vulnerabilities":3}}') is False  # drift
+
+
+def test_yarn_shape_recognized_good_and_drifted():
+    from aramid.runners.deps import _yarn_shape_recognized
+    good = '{"value":"pkg@1","children":{"ID":"X","Severity":"high","Issue":"i"}}'
+    assert _yarn_shape_recognized(good) is True
+    assert _yarn_shape_recognized("") is True   # clean (no output)
+    assert _yarn_shape_recognized("   \n\n") is True   # whitespace only = clean
+    assert _yarn_shape_recognized('{"value":"pkg@1","summary":"changed"}') is False  # drift
+
+
+def test_known_good_fixtures_are_shape_recognized():
+    # Regression-lock: the real (hand-authored) fixtures must NOT be false-
+    # flagged as drift -- the guard only fires on genuinely unrecognized shapes.
+    from aramid.runners.deps import _pnpm_shape_recognized, _yarn_shape_recognized
+    assert _pnpm_shape_recognized(PNPM_AUDIT.read_text()) is True
+    assert _yarn_shape_recognized(YARN_AUDIT.read_text()) is True
+
+
+def _drift_ctx(tmp_path, pm):
+    return type("Ctx", (), {"root": tmp_path, "pkg_manager": pm,
+                            "force_refresh": True})()
+
+
+def test_run_js_drifted_pnpm_payload_is_crashed(monkeypatch, tmp_path):
+    # An OK pnpm result whose payload has neither advisories container ->
+    # unrecognized shape -> CRASHED (not a silent 0-findings pass).
+    (tmp_path / "pnpm-lock.yaml").write_text("lockfileVersion: 6.0\n", encoding="utf-8")
+    monkeypatch.setattr(deps, "detect_package_manager", lambda root: "pnpm")
+    monkeypatch.setattr(deps, "run_subprocess",
+                        lambda argv, cwd, t, env=None: RunnerResult(
+                            "pnpm", ToolState.OK,
+                            raw='{"metadata":{"vulnerabilities":3}}', returncode=1))
+    result = deps.run_js(_drift_ctx(tmp_path, "pnpm"))
+    assert result.state is ToolState.CRASHED
+
+
+def test_run_js_drifted_yarn_payload_is_crashed(monkeypatch, tmp_path):
+    # An OK yarn result with parseable lines but NONE carrying a `children`
+    # dict -> the NDJSON advisory shape drifted -> CRASHED.
+    (tmp_path / "yarn.lock").write_text("# yarn lockfile\n", encoding="utf-8")
+    monkeypatch.setattr(deps, "detect_package_manager", lambda root: "yarn")
+    monkeypatch.setattr(deps, "run_subprocess",
+                        lambda argv, cwd, t, env=None: RunnerResult(
+                            "yarn", ToolState.OK,
+                            raw='{"value":"pkg@1","summary":"format changed"}\n',
+                            returncode=1))
+    result = deps.run_js(_drift_ctx(tmp_path, "yarn"))
+    assert result.state is ToolState.CRASHED
