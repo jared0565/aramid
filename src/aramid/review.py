@@ -454,6 +454,17 @@ def auto_resolve_llm(root: Path, ledger, run_id: str, at: str) -> list[str]:
     return resolved
 
 
+def is_confirmed_critical_llm(rec: dict) -> bool:
+    """The raw-rec BLOCK-tier predicate shared by the gate (review), the
+    override refusal, and the status count. Deliberately does NOT include
+    `armed` -- the override refusal is armed-independent (retroactive-arm
+    defense, see override.py) and the gate ANDs `armed` on top of this.
+    Returns a strict bool (each operand is a bool), so callers can use `is`."""
+    return (rec.get("source") == "llm"
+            and bool(rec.get("confirmed"))
+            and rec.get("severity") == "critical")
+
+
 def llm_gate_findings(cfg, ledger, gate: Gate) -> list[Finding]:
     """Materialize still-open LLM findings as gate findings (spec section 5).
     PRE_PUSH only. Verdict computed HERE from [llm].llm_block_armed -- never
@@ -477,7 +488,7 @@ def llm_gate_findings(cfg, ledger, gate: Gate) -> list[Finding]:
                 severity = Severity.MEDIUM
             confirmed = bool(rec.get("confirmed", False))
             verdict = (Verdict.BLOCK
-                       if armed and confirmed and severity is Severity.CRITICAL
+                       if armed and is_confirmed_critical_llm(rec)
                        else Verdict.WARN)
             out.append(Finding(
                 id=fid, tool="llm-review", rule=rec.get("rule", ""),

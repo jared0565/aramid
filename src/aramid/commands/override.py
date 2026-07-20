@@ -32,6 +32,7 @@ import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 
+from aramid import review
 from aramid.ledger import Ledger
 from aramid.models import Event, EventType
 
@@ -55,11 +56,7 @@ def cmd_override(root, finding_id: str, reason: str) -> int:
             print(f"aramid: override: unknown finding id {finding_id}", file=sys.stderr)
             return 3
 
-        is_llm_confirmed_critical = (
-            rec.get("source") == "llm"
-            and rec.get("confirmed")
-            and rec.get("severity") == "critical"
-        )
+        is_llm_confirmed_critical = review.is_confirmed_critical_llm(rec)
         if rec.get("verdict") == "block" or is_llm_confirmed_critical:
             print(f"aramid: override: {finding_id} is a BLOCK-tier finding -- a local "
                   f"override is not permitted; add a reasoned entry to "

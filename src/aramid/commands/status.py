@@ -12,6 +12,7 @@ from datetime import date, datetime, timezone
 from pathlib import Path
 
 from aramid import config as config_mod
+from aramid import review
 from aramid.ledger import Ledger
 from aramid.models import EventType
 
@@ -157,8 +158,7 @@ def _llm_lines(cfg: config_mod.Config, state: dict) -> list[str]:
     and monthly OpenRouter spend (spec section 7, Phase 2b)."""
     recs = [r for r in state.values()
             if r.get("source") == "llm" and r.get("status") == "open"]
-    confirmed = sum(1 for r in recs
-                    if r.get("confirmed") and r.get("severity") == "critical")
+    confirmed = sum(1 for r in recs if review.is_confirmed_critical_llm(r))
     armed = bool(cfg.llm.get("llm_block_armed", False))
     lines = [f"llm: {len(recs)} open ({confirmed} confirmed critical) | "
              f"{'armed' if armed else 'baking'}"]
