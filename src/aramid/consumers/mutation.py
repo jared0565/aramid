@@ -90,10 +90,13 @@ def consume(item, ctx: DrainContext) -> ConsumerResult:
         return ConsumerResult(consumer=NAME, state="ok",
                               note="no python test stack (mutation skipped)")
     if base.prior_note_count(ctx.ledger, NAME, item.id,
-                             "baseline failing") >= _BASELINE_GIVE_UP:
+                             f"baseline failing @ {item.head[:12]}") >= _BASELINE_GIVE_UP:
         # A permanently-red suite must stop pinning the queue item: after 3
-        # honest DEGRADED retries this becomes a permanent-skip. Keys on the
-        # literal "baseline failing" note below -- both strings load-bearing.
+        # honest DEGRADED retries AT THIS HEAD this becomes a permanent-skip.
+        # Head-scoped (review I2): queue coalescing advances item.head under
+        # a stable item.id, and new commits always deserve a fresh baseline
+        # try -- only the same code state failing 3x gives up. Keys on the
+        # literal note below -- both strings load-bearing.
         return ConsumerResult(consumer=NAME, state="ok",
                               note="mutation giving up: baseline persistently failing")
 
@@ -113,9 +116,9 @@ def consume(item, ctx: DrainContext) -> ConsumerResult:
         base_res = run_subprocess(_full_argv(), wt, mutant_timeout * 4)
         if base_res.state is not ToolState.OK or base_res.returncode != 0:
             # Note text is load-bearing: the give-up counter above matches
-            # notes starting with "baseline failing".
+            # notes starting with "baseline failing @ <head12>".
             return ConsumerResult(consumer=NAME, state="degraded",
-                                  note="baseline failing",
+                                  note=f"baseline failing @ {item.head[:12]}",
                                   duration_s=time.monotonic() - started)
 
         confirms_used = 0

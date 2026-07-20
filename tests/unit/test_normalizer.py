@@ -85,7 +85,9 @@ def test_pin_occurrence_collapses_duplicates(tmp_path, monkeypatch):
             RawFinding("mutation", "cmp-flip", "medium", "a.py", 1, "m2")]
     out = normalize(raws, tmp_path, lambda f: "HEAD", b"salt", Gate.ALL,
                     _classify, pin_occurrence=True)
-    assert len({f.id for f in out}) == 1   # one finding per (tool,rule,file,line-content)
+    assert len(out) == 1   # COLLAPSED, not just id-collided (review I1):
+    # a second same-id Finding would double-append FINDING_DETECTED and
+    # _materialize would silently drop the first survivor.
 
 def test_pin_occurrence_makes_ids_subset_stable(tmp_path, monkeypatch):
     # THE M5 drift scenario: budget truncation changes batch membership; the
@@ -98,4 +100,30 @@ def test_pin_occurrence_makes_ids_subset_stable(tmp_path, monkeypatch):
                      _classify, pin_occurrence=True)
     alone = normalize([rb], tmp_path, lambda f: "HEAD", b"salt", Gate.ALL,
                       _classify, pin_occurrence=True)
-    assert full[1].id == alone[0].id
+    assert len(full) == 1 and len(alone) == 1   # duplicates collapse
+    assert full[0].id == alone[0].id
+
+def test_pinned_batch_through_record_run_single_open_finding(tmp_path, monkeypatch):
+    # Review I1 teeth: two distinct mutants at the same (rule, file,
+    # line-content) must land in the ledger as ONE finding with ONE
+    # FINDING_DETECTED event -- pre-fix, both same-id Findings reached
+    # record_run, double-appended, and _materialize kept only the last.
+    from aramid import gitutil
+    from aramid.models import EventType
+    monkeypatch.setattr(gitutil, "read_for_fingerprint",
+                        lambda root, ref, f: "return max(0, min(x, 100))\n")
+    raws = [RawFinding("mutation", "int-bound", "medium", "a.py", 1,
+                       "mutant survived: 0 -> 1"),
+            RawFinding("mutation", "int-bound", "medium", "a.py", 1,
+                       "mutant survived: 100 -> 101")]
+    out = normalize(raws, tmp_path, lambda f: "HEAD", b"salt", Gate.ALL,
+                    _classify, pin_occurrence=True)
+    led = Ledger(tmp_path / "l.db")
+    try:
+        led.record_run("r1", "t", "drain", set(), set(), out)
+        assert len(led.open_findings()) == 1
+        detected = [e for e in led.events()
+                    if e.type is EventType.FINDING_DETECTED]
+        assert len(detected) == 1
+    finally:
+        led.close()

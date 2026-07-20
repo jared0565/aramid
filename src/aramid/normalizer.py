@@ -53,10 +53,16 @@ def normalize(raws: list[RawFinding], root: Path, ref_for: Callable[[str], str],
         occ_key = (raw.tool, raw.rule, raw.file, normalize_line(line_content))
         # pin_occurrence (M5): variable-set drain consumers (mutation, fuzz)
         # have budget-truncated batches, so positional occurrence indices
-        # drift across drains -> ghost never-resolving findings. Pinning to 0
+        # drift across drains -> ghost never-resolving findings. Pinning
         # gives one finding per (tool, rule, file, line-content) -- the
-        # llm_fingerprint precedent (review.py). Gate callers keep the
-        # counter (default False): their batches are complete scans.
+        # llm_fingerprint precedent (review.py). Duplicates are COLLAPSED
+        # here, not just id-collided: two same-id Findings reaching
+        # record_run would double-append FINDING_DETECTED and _materialize
+        # keeps only the last (silent loss -- review I1). Gate callers keep
+        # the counter (default False): their batches are complete scans.
+        if pin_occurrence and occurrence_counts[occ_key]:
+            occurrence_counts[occ_key] += 1
+            continue
         occurrence_index = 0 if pin_occurrence else occurrence_counts[occ_key]
         occurrence_counts[occ_key] += 1
 

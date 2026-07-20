@@ -289,7 +289,7 @@ def test_stage2_usage_error_never_reports_survivor(tmp_path, monkeypatch):
     assert res.extra["errors"] >= 1
 
 
-def _seed_baseline_failures(r, n):
+def _seed_baseline_failures(r, n, head):
     from aramid.models import Event, EventType
     led = Ledger(r / ".aramid" / "ledger.db")
     try:
@@ -297,17 +297,18 @@ def _seed_baseline_failures(r, n):
             led.append(Event(EventType.CONSUMER_RUN_FINISHED, f"seed{i}", "t",
                              payload={"consumer": "mutation", "item_id": "q1",
                                       "state": "degraded",
-                                      "note": "baseline failing"}))
+                                      "note": f"baseline failing @ {head[:12]}"}))
     finally:
         led.close()
 
 
 def test_baseline_giveup_after_three_failures(tmp_path, monkeypatch):
-    # 3 prior "baseline failing" runs for this item -> OK give-up, and NO
-    # pytest invocation at all (run_subprocess poisoned to prove it): the
-    # give-up check must fire BEFORE the worktree/baseline work.
+    # 3 prior "baseline failing" runs for this item AT THIS HEAD -> OK
+    # give-up, and NO pytest invocation at all (run_subprocess poisoned to
+    # prove it): the give-up check must fire BEFORE the worktree/baseline
+    # work.
     r, base, head = _repo(tmp_path, WEAK_TEST)
-    _seed_baseline_failures(r, 3)
+    _seed_baseline_failures(r, 3, head)
     monkeypatch.setattr(mut_consumer, "run_subprocess",
                          lambda *a, **kw: (_ for _ in ()).throw(
                              AssertionError("give-up path must not run pytest")))
@@ -322,9 +323,21 @@ def test_baseline_two_failures_still_degrades(tmp_path, monkeypatch):
     # Below the give-up threshold the transient-retry contract stands.
     r, base, head = _repo(tmp_path,
                           "def test_always_fails():\n    assert False\n")
-    _seed_baseline_failures(r, 2)
+    _seed_baseline_failures(r, 2, head)
     res = _consume(r, base, head, monkeypatch, tmp_path)
     assert res.state == "degraded"
+    assert "baseline failing" in res.note
+
+
+def test_baseline_giveup_is_head_scoped(tmp_path, monkeypatch):
+    # Review I2: queue coalescing advances item.head under a stable item.id.
+    # 3 failures recorded at an OLD head must NOT give up the CURRENT head --
+    # new commits always deserve a fresh baseline attempt.
+    r, base, head = _repo(tmp_path,
+                          "def test_always_fails():\n    assert False\n")
+    _seed_baseline_failures(r, 3, "0" * 40)   # stale head
+    res = _consume(r, base, head, monkeypatch, tmp_path)
+    assert res.state == "degraded", "stale-head failures must not trigger give-up"
     assert "baseline failing" in res.note
 
 
