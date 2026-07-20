@@ -460,6 +460,10 @@ def test_pnpm_shape_recognized_good_and_drifted():
     # the isinstance guard makes report=null return False cleanly (not crash).
     assert _pnpm_shape_recognized('{"report":null}') is False
     assert _pnpm_shape_recognized('{"metadata":{"vulnerabilities":3}}') is False  # drift
+    # present-but-NON-DICT advisories is also drift: _parse_advisories_dict would
+    # call .items() on it and raise uncaught -> route to CRASHED-visibility instead.
+    assert _pnpm_shape_recognized('{"advisories":"not-a-dict"}') is False
+    assert _pnpm_shape_recognized('{"advisories":[1,2]}') is False
 
 
 def test_yarn_shape_recognized_good_and_drifted():
@@ -509,3 +513,20 @@ def test_run_js_drifted_yarn_payload_is_crashed(monkeypatch, tmp_path):
                             returncode=1))
     result = deps.run_js(_drift_ctx(tmp_path, "yarn"))
     assert result.state is ToolState.CRASHED
+
+
+def test_run_js_unrecognized_cache_falls_through_to_fresh_audit(monkeypatch, tmp_path):
+    # A stale cache (from a pre-guard aramid) holding an unrecognized shape must
+    # NOT be served as a silent OK/0-findings cache hit; run_js falls through to
+    # a fresh (shape-checked) audit instead of returning the drifted cache.
+    (tmp_path / "pnpm-lock.yaml").write_text("lockfileVersion: 6.0\n", encoding="utf-8")
+    monkeypatch.setattr(deps, "detect_package_manager", lambda root: "pnpm")
+    cache_path = deps._cache_path(tmp_path, (tmp_path / "pnpm-lock.yaml").read_bytes())
+    deps._write_cache(cache_path, '{"metadata":{"vulnerabilities":3}}')   # drifted cache
+    monkeypatch.setattr(deps, "run_subprocess",
+                        lambda argv, cwd, t, env=None: RunnerResult(
+                            "pnpm", ToolState.OK, raw='{"advisories":{}}', returncode=0))
+    ctx = RunContext(root=tmp_path, pkg_manager="pnpm")   # force_refresh default False
+    result = deps.run_js(ctx)
+    assert result.state is ToolState.OK
+    assert result.raw == '{"advisories":{}}'   # fresh audit used, drifted cache bypassed

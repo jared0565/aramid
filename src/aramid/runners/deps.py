@@ -190,7 +190,12 @@ def run_js(ctx) -> RunnerResult:
     cache_path = _cache_path(ctx.root, lockfile.read_bytes())
     if not getattr(ctx, "force_refresh", False):
         cached = _read_cache(cache_path)
-        if cached is not None:
+        # Only serve a cache hit whose shape we still recognize. Every entry
+        # THIS version writes is pre-validated (below), so this only bites a
+        # cache left by a pre-guard aramid (or a hand-corrupted file): rather
+        # than serve a silent 0-findings result from an unrecognized shape, fall
+        # through to a fresh audit (which is itself shape-checked).
+        if cached is not None and _shape_recognized(pm, cached):
             return RunnerResult(pm, ToolState.OK, raw=cached)
 
     result = run_subprocess(_JS_AUDIT_ARGV[pm], ctx.root, TIMEOUT_S)
@@ -198,17 +203,13 @@ def run_js(ctx) -> RunnerResult:
         result = _ndjson_or_crashed(pm, result, _OK_RETURNCODES)
     else:
         result = json_or_crashed(pm, result, _OK_RETURNCODES, empty="{}")
-    if result.state is ToolState.OK:
-        recognized = (_yarn_shape_recognized(result.raw) if pm == "yarn"
-                      else _pnpm_shape_recognized(result.raw) if pm == "pnpm"
-                      else True)   # npm's shape is authoritative -> not guarded
-        if not recognized:
-            # Present-but-unrecognized audit shape: fail toward VISIBILITY
-            # (CRASHED -> degraded -> manual check) rather than a silent
-            # 0-findings pass that could hide CVEs behind a parser that returns
-            # [] for any shape it doesn't recognize.
-            result = RunnerResult(pm, ToolState.CRASHED, result.raw, result.stderr,
-                                  result.duration_s, result.returncode)
+    if result.state is ToolState.OK and not _shape_recognized(pm, result.raw):
+        # Present-but-unrecognized audit shape: fail toward VISIBILITY
+        # (CRASHED -> degraded -> manual check) rather than a silent 0-findings
+        # pass that could hide CVEs behind a parser that returns [] for any
+        # shape it doesn't recognize.
+        result = RunnerResult(pm, ToolState.CRASHED, result.raw, result.stderr,
+                              result.duration_s, result.returncode)
     if result.state is ToolState.OK:
         _write_cache(cache_path, result.raw)
     return result
@@ -302,11 +303,14 @@ def parse_yarn(result: RunnerResult, ctx) -> list[RawFinding]:
 
 
 def _pnpm_shape_recognized(raw: str) -> bool:
-    """A clean pnpm audit carries an empty-but-PRESENT advisories container
+    """A clean pnpm audit carries an empty-but-PRESENT advisories DICT
     (report.advisories or a top-level advisories key); an unrecognized shape
-    (wire-format drift) has NEITHER key. Absent-key on a non-empty payload ->
-    drift (return False). Non-JSON / empty / non-dict is not our concern here
-    (json_or_crashed already handled non-JSON) -> treated as recognized."""
+    (wire-format drift) has neither. We require the container to be a dict, not
+    merely present: `parse_pnpm` -> _parse_advisories_dict calls `.items()` on
+    it, so a present-but-non-dict advisories (e.g. a string/list) would raise
+    uncaught out of parse -- treating it as unrecognized routes it to the
+    CRASHED-visibility path instead. Non-JSON / empty / non-dict payload is not
+    our concern here (json_or_crashed handled non-JSON) -> recognized."""
     try:
         data = json.loads(raw or "{}")
     except (ValueError, TypeError):
@@ -315,7 +319,17 @@ def _pnpm_shape_recognized(raw: str) -> bool:
         return True
     report = data.get("report")
     report = report if isinstance(report, dict) else {}
-    return "advisories" in report or "advisories" in data
+    return isinstance(report.get("advisories"), dict) or isinstance(data.get("advisories"), dict)
+
+
+def _shape_recognized(pm: str, raw: str) -> bool:
+    """Dispatch the per-manager shape guard. npm's shape is authoritative
+    (npm's own audit JSON is the reference format) -> never guarded."""
+    if pm == "yarn":
+        return _yarn_shape_recognized(raw)
+    if pm == "pnpm":
+        return _pnpm_shape_recognized(raw)
+    return True
 
 
 def _yarn_shape_recognized(raw: str) -> bool:
