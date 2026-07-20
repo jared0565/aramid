@@ -232,3 +232,51 @@ def test_drain_e2e_records_fuzz_run(tmp_path, monkeypatch):
             "deep-crash finding must land in the ledger"
     finally:
         led.close()
+
+OK_FN = ("def ok(a: int) -> int:\n"
+         "    return a\n")
+
+
+def _two_file_repo(tmp_path, second_feature_body):
+    # Two changed .py files; [fuzz] budget of exactly ONE function so the
+    # second file is reached with budget 0. cases kept tiny for speed.
+    r = tmp_path / "r"
+    r.mkdir()
+    _git(r, "init", "-q", "-b", "main")
+    _git(r, "config", "user.email", "t@t")
+    _git(r, "config", "user.name", "t")
+    (r / "aramid.toml").write_text(
+        "schema_version = 1\n[fuzz]\nmax_functions = 1\ncases_per_function = 5\n"
+        "wall_budget_s = 200\nbatch_timeout_s = 90\n", encoding="utf-8")
+    (r / "lib.py").write_text("def placeholder() -> None:\n    return None\n",
+                              encoding="utf-8")
+    (r / "other.py").write_text("Y = 0\n", encoding="utf-8")
+    _git(r, "add", "-A")
+    _git(r, "commit", "-q", "-m", "base")
+    base = _sha(r)
+    (r / "lib.py").write_text(OK_FN, encoding="utf-8")          # 1 candidate
+    (r / "other.py").write_text(second_feature_body, encoding="utf-8")
+    _git(r, "add", "-A")
+    _git(r, "commit", "-q", "-m", "feature")
+    return r, base, _sha(r)
+
+
+def test_exact_fit_budget_not_flagged_truncated(tmp_path, monkeypatch):
+    # Budget exactly consumed and the remaining changed file has NO
+    # candidates: claiming truncation is an over-report (fuzz M4).
+    r, base, head = _two_file_repo(tmp_path, "X = 1\n")
+    res = _consume(r, base, head, monkeypatch, tmp_path)
+    assert res.state == "ok"
+    assert res.extra["truncated"] is False
+    assert "truncated" not in res.note
+
+
+def test_dropped_candidate_flagged_truncated(tmp_path, monkeypatch):
+    # The remaining changed file DOES have a candidate that the budget
+    # dropped: the flag must be set.
+    r, base, head = _two_file_repo(
+        tmp_path, "def also(b: int) -> int:\n    return b\n")
+    res = _consume(r, base, head, monkeypatch, tmp_path)
+    assert res.state == "ok"
+    assert res.extra["truncated"] is True
+    assert "truncated" in res.note

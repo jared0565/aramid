@@ -113,8 +113,10 @@ def _consume_item(root: Path, cfg, ledger, item, clock) -> bool:
         duration = time.monotonic() - started
         findings = []
         if result.findings:
+            pin = getattr(module, "PIN_OCCURRENCE", False)
             findings = normalize(result.findings, root, lambda f: item.head, salt,
-                                 Gate.ALL, functools.partial(policy.classify, cfg=cfg))
+                                 Gate.ALL, functools.partial(policy.classify, cfg=cfg),
+                                 pin_occurrence=pin)
             # The drain runs a narrow ruleset (pack only) -- record detections
             # but resolve NOTHING. Pack and OWASP findings both use
             # tool="semgrep", so a scope of {semgrep}x{scanned files} would

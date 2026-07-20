@@ -99,7 +99,10 @@ budgets, two-stage targeted/confirm execution; Python repos with pytest).
 called with deterministic seeded inputs in a throwaway worktree, and deep-crash
 exceptions (IndexError, KeyError, …) are recorded as WARN-tier findings — the
 seed is the repro (`[fuzz]` config: budgets, a scary-name skip-list; Python
-repos with type hints, no test suite required).
+repos with type hints, no test suite required). Repro caveat: the seed
+reproduces a crash only for targets that are deterministic in their arguments —
+functions depending on external state (files, network, globals, time) may not
+replay from the recorded seed.
 
 ### Phase 2b: the LLM reviewer
 

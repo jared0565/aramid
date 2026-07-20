@@ -107,7 +107,7 @@ def test_strong_suite_kills_no_findings(tmp_path, monkeypatch):
     res = _consume(r, base, head, monkeypatch, tmp_path)
     assert res.state == "ok"
     assert res.findings == []
-    assert res.extra["killed"] >= 1
+    assert res.extra["killed_s1"] >= 1   # strong targeted suite kills at stage 1
     assert _no_worktrees(r)
 
 
@@ -125,7 +125,7 @@ def test_stage2_rescue_prevents_false_survivor(tmp_path, monkeypatch):
     res = _consume(r, base, head, monkeypatch, tmp_path)
     assert res.state == "ok"
     assert res.findings == [], "full-suite confirmation must kill what stage 1 missed"
-    assert res.extra["killed"] >= 1
+    assert res.extra["killed_s2"] >= 1   # cross-file test only runs at stage 2
 
 
 def test_no_pytest_stack_skips_ok_with_loud_note(tmp_path, monkeypatch):
@@ -217,6 +217,171 @@ def test_drain_e2e_records_mutation_run(tmp_path, monkeypatch):
             "confirmed survivor must land in the ledger as a finding"
     finally:
         led.close()
+
+
+def test_stage1_narrowing_actually_ran(tmp_path, monkeypatch):
+    # Pin that stage 1 uses the targeted tests/test_<module>.py argv, not the
+    # full suite -- a silent regression to full-suite-always would only show
+    # as slowness. Spy wraps the REAL run_subprocess.
+    r, base, head = _repo(tmp_path, WEAK_TEST)
+    calls = []
+    real = mut_consumer.run_subprocess
+
+    def spy(argv, cwd, timeout, **kw):
+        calls.append([str(a) for a in argv])
+        return real(argv, cwd, timeout, **kw)
+
+    monkeypatch.setattr(mut_consumer, "run_subprocess", spy)
+    _consume(r, base, head, monkeypatch, tmp_path)
+    targeted = [c for c in calls if any(a.endswith("test_calc.py") for a in c)]
+    assert targeted, "stage 1 must have invoked the targeted test file"
+    assert not any("-k" in c for c in calls), \
+        "with tests/test_calc.py present the -k fallback must not fire"
+
+
+def test_stage1_argv_unsafe_stem_falls_back_to_full_suite(tmp_path):
+    # pytest -k chokes on expression keywords and non-word chars (exit 4 =
+    # usage error, which previously scored as a KILL). Unsafe stems must use
+    # the always-correct full-suite argv instead.
+    for fname in ("not.py", "and.py", "or.py", "my-mod.py", "weird mod.py"):
+        argv = mut_consumer._stage1_argv(tmp_path, fname)
+        assert "-k" not in argv, fname
+    safe = mut_consumer._stage1_argv(tmp_path, "calc.py")
+    assert safe[-2:] == ["-k", "calc"]
+
+
+def test_stage1_usage_error_counts_error_not_kill(tmp_path, monkeypatch):
+    from aramid.runners.base import RunnerResult, ToolState
+    r, base, head = _repo(tmp_path, WEAK_TEST)
+    seq = {"n": 0}
+
+    def scripted(argv, cwd, timeout, **kw):
+        seq["n"] += 1
+        if seq["n"] == 1:      # baseline full suite: green
+            return RunnerResult(tool="pytest", state=ToolState.OK, returncode=0)
+        return RunnerResult(tool="pytest", state=ToolState.OK, returncode=4)
+
+    monkeypatch.setattr(mut_consumer, "run_subprocess", scripted)
+    res = _consume(r, base, head, monkeypatch, tmp_path)
+    assert res.extra["errors"] >= 1
+    assert res.extra["killed_s1"] == 0, "usage error is not a kill"
+    assert res.findings == []
+
+
+def test_stage2_usage_error_never_reports_survivor(tmp_path, monkeypatch):
+    from aramid.runners.base import RunnerResult, ToolState
+    r, base, head = _repo(tmp_path, WEAK_TEST)
+    fulls = {"n": 0}
+
+    def scripted(argv, cwd, timeout, **kw):
+        joined = " ".join(str(a) for a in argv)
+        if "test_calc.py" in joined:   # stage-1 targeted: mutant survives
+            return RunnerResult(tool="pytest", state=ToolState.OK, returncode=0)
+        fulls["n"] += 1
+        if fulls["n"] == 1:            # baseline: green
+            return RunnerResult(tool="pytest", state=ToolState.OK, returncode=0)
+        return RunnerResult(tool="pytest", state=ToolState.OK, returncode=4)
+
+    monkeypatch.setattr(mut_consumer, "run_subprocess", scripted)
+    res = _consume(r, base, head, monkeypatch, tmp_path)
+    assert res.findings == [], "survivor is only reported when the full suite PASSES"
+    assert res.extra["confirmed"] == 0
+    assert res.extra["errors"] >= 1
+
+
+def _seed_baseline_failures(r, n, head):
+    from aramid.models import Event, EventType
+    led = Ledger(r / ".aramid" / "ledger.db")
+    try:
+        for i in range(n):
+            led.append(Event(EventType.CONSUMER_RUN_FINISHED, f"seed{i}", "t",
+                             payload={"consumer": "mutation", "item_id": "q1",
+                                      "state": "degraded",
+                                      "note": f"baseline failing @ {head[:12]}"}))
+    finally:
+        led.close()
+
+
+def test_baseline_giveup_after_three_failures(tmp_path, monkeypatch):
+    # 3 prior "baseline failing" runs for this item AT THIS HEAD -> OK
+    # give-up, and NO pytest invocation at all (run_subprocess poisoned to
+    # prove it): the give-up check must fire BEFORE the worktree/baseline
+    # work.
+    r, base, head = _repo(tmp_path, WEAK_TEST)
+    _seed_baseline_failures(r, 3, head)
+    monkeypatch.setattr(mut_consumer, "run_subprocess",
+                         lambda *a, **kw: (_ for _ in ()).throw(
+                             AssertionError("give-up path must not run pytest")))
+    res = _consume(r, base, head, monkeypatch, tmp_path)
+    assert res.state == "ok"
+    assert "giving up" in res.note
+    assert res.findings == []
+    assert _no_worktrees(r)
+
+
+def test_baseline_two_failures_still_degrades(tmp_path, monkeypatch):
+    # Below the give-up threshold the transient-retry contract stands.
+    r, base, head = _repo(tmp_path,
+                          "def test_always_fails():\n    assert False\n")
+    _seed_baseline_failures(r, 2, head)
+    res = _consume(r, base, head, monkeypatch, tmp_path)
+    assert res.state == "degraded"
+    assert "baseline failing" in res.note
+
+
+def test_baseline_giveup_is_head_scoped(tmp_path, monkeypatch):
+    # Review I2: queue coalescing advances item.head under a stable item.id.
+    # 3 failures recorded at an OLD head must NOT give up the CURRENT head --
+    # new commits always deserve a fresh baseline attempt.
+    r, base, head = _repo(tmp_path,
+                          "def test_always_fails():\n    assert False\n")
+    _seed_baseline_failures(r, 3, "0" * 40)   # stale head
+    res = _consume(r, base, head, monkeypatch, tmp_path)
+    assert res.state == "degraded", "stale-head failures must not trigger give-up"
+    assert "baseline failing" in res.note
+
+
+def test_pin_occurrence_declared_only_on_variable_set_consumers():
+    from aramid.consumers import fuzz as fz
+    import aramid.consumers.regression_pack as rp
+    assert mut_consumer.PIN_OCCURRENCE is True
+    assert fz.PIN_OCCURRENCE is True
+    assert getattr(rp, "PIN_OCCURRENCE", False) is False, \
+        "regression-pack fingerprints must keep exact gate parity"
+
+
+def test_drain_passes_pin_flag_per_consumer(tmp_path, monkeypatch):
+    # Flag-flow teeth: spy on drain's normalize and record the kwarg each
+    # consumer's batch was normalized with.
+    from aramid import registry
+    from aramid.commands import drain as drain_mod
+    from aramid.commands.drain import cmd_drain
+    from aramid import queue as queue_mod
+
+    r, base, head = _repo(tmp_path, WEAK_TEST)
+    monkeypatch.setattr(registry, "registry_path", lambda: tmp_path / "repos.toml")
+    monkeypatch.setattr(drain_mod, "_lock_path", lambda: tmp_path / "drain.lock")
+    monkeypatch.setattr(config_mod, "_user_config_path",
+                         lambda: tmp_path / "no-user.toml")
+    registry.register(r, "2026-07-20T10:00:00+00:00")
+    led = Ledger(r / ".aramid" / "ledger.db")
+    try:
+        queue_mod.enqueue(led, "2026-07-20T10:00:00+00:00", base, head, 55, ["seed"])
+    finally:
+        led.close()
+
+    seen = {}
+    real_norm = drain_mod.normalize
+
+    def spy(raws, root, ref_for, salt, gate, classify, *, pin_occurrence=False):
+        seen[raws[0].tool] = pin_occurrence
+        return real_norm(raws, root, ref_for, salt, gate, classify,
+                         pin_occurrence=pin_occurrence)
+
+    monkeypatch.setattr(drain_mod, "normalize", spy)
+    cmd_drain([str(r)])
+    assert seen.get("mutation") is True, \
+        "mutation batch must normalize with pin_occurrence=True"
 
 
 def test_mutation_findings_classify_warn_never_block(tmp_path, monkeypatch):
