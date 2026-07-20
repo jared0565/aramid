@@ -35,9 +35,9 @@ PIN_OCCURRENCE = True
 def _is_test_file(rel: str) -> bool:
     p = rel.replace("\\", "/")
     name = p.rsplit("/", 1)[-1]
-    if "__tests__/" in p or p.startswith("__tests__/"):
+    if "__tests__/" in p:
         return True
-    stem = name.rsplit(".", 1)[0]
+    stem = name.rsplit(".", 1)[0].lower()
     return stem.endswith(".test") or stem.endswith(".spec")
 
 

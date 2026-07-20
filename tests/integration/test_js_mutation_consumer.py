@@ -208,3 +208,19 @@ def test_real_npm_weak_suite_reports_survivor(tmp_path, monkeypatch):
     assert res.findings, "the weak suite cannot kill the mutant -> survivor"
     assert res.findings[0].tool == "js-mutation"
     assert _no_worktrees(r)
+
+
+def test_is_test_file_case_insensitive():
+    # `.test.`/`.spec.` detection must be case-insensitive so an uppercase
+    # `Foo.TEST.JS` is treated as a test file, not mutated as production code.
+    assert jsc._is_test_file("src/Foo.TEST.JS")
+    assert jsc._is_test_file("src/Bar.Spec.ts")
+    assert jsc._is_test_file("__tests__/x.js")
+    assert not jsc._is_test_file("src/calc.js")
+
+
+def test_consumer_is_registered():
+    # Importing the module must register it in the consumer registry (the drain
+    # loop dispatches via base.CONSUMERS).
+    from aramid.consumers import base
+    assert base.CONSUMERS["js_mutation"] is jsc

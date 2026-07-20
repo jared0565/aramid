@@ -104,8 +104,12 @@ def _consume_template(source: str, i: int) -> int:
     to the top-level scanner) so no comment/regex/string/template content can
     end the template early, and count `{`/`}` for objects and blocks. Minimal
     `prev` tracking feeds _skip_region's regex-vs-division decision.
-    Interpolation expression contents are never mutated (MVP). Any residual now
-    equals the top-level scanner's own regex-vs-division residual."""
+    Interpolation expression contents are never mutated (MVP). Any residual
+    reduces to the top-level scanner's own regex-vs-division ambiguity -- plus,
+    under deeply artificial nested-template code, a rare leak-forward where a
+    mis-parsed `/` inside an interpolation swallows a `}` and mis-affects code
+    after the template close (worst case: one spurious advisory survivor in a
+    throwaway worktree)."""
     i += 1
     n = len(source)
     depth = 0
