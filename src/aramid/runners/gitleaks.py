@@ -44,14 +44,14 @@ def _build_argv(ctx, report_path: Path) -> list[str]:
     # `--log-opts` with an empty options string defaults to walking every
     # commit reachable from HEAD -- exactly that. Only a genuine `None`
     # (staged mode -- `RunContext.rng`'s other documented meaning) falls
-    # back to `protect --staged`.
+    # back to `git --staged`.
     if ctx.rng is not None:
         return [
             "gitleaks", "git", "--log-opts", ctx.rng,
             "--report-format", "json", "--report-path", str(report_path),
         ]
     return [
-        "gitleaks", "protect", "--staged",
+        "gitleaks", "git", "--staged",
         "--report-format", "json", "--report-path", str(report_path),
     ]
 
@@ -85,8 +85,8 @@ def parse(result: RunnerResult, ctx) -> list[RawFinding]:
     # Only the `gitleaks git ...` history path (ctx.rng is not None, per
     # _build_argv above -- matches its is-not-None check, not truthiness, so
     # the FULL_HISTORY_RNG "" sentinel counts as a history scan too) can
-    # attribute a leak to a specific historical commit; the `protect
-    # --staged` path scans the working tree/index, not commits, so it
+    # attribute a leak to a specific historical commit; the `git --staged`
+    # path scans the working tree/index, not commits, so it
     # always leaves RawFinding.commit as None (its Commit field, if present
     # at all, carries no meaningful ref there).
     is_history_scan = ctx.rng is not None
