@@ -224,7 +224,8 @@ def rollup(state: dict, events: list, repo_key: str) -> dict:
     (spec section 8.3). Pure: returns a NEW state dict; the caller saves.
     The cursor is an event COUNT (the ledger is append-only and
     seq-ordered), so replaying the same list twice is a no-op; a shorter
-    list than the cursor (rebuilt/compacted ledger) restarts from 0.
+    list than the cursor (rebuilt/compacted ledger) SKIPS the fold (a
+    correct rebuild is cross-repo -- run `aramid autolearn --rebuild`).
 
     Primary reward: audit outcomes -> misses/clean on the SERVED arm's
     (band, bucket) cell. Secondary counters (halluc/malformed/refuted/
@@ -233,7 +234,14 @@ def rollup(state: dict, events: list, repo_key: str) -> dict:
     out = json.loads(json.dumps(state))     # deep copy; state is JSON-shaped
     cursor = int(out.get("cursors", {}).get(repo_key, 0))
     if cursor > len(events):
-        cursor = 0
+        # Shrunk/compacted ledger: a correct rebuild is CROSS-REPO (posteriors
+        # aggregate across every registered repo, keyed by arm-cell), so a
+        # single per-repo rollup cannot re-fold without double-counting the
+        # surviving events onto posteriors that already include them. Skip the
+        # fold (leave the cursor as-is); correct counts after a compaction
+        # require a global `aramid autolearn --rebuild`. (Was: cursor=0 then
+        # re-fold -> posterior double-count.)
+        return out
 
     # Join maps from the FULL stream (a finding's detect event may precede
     # the cursor): llm finding -> its drain run_id -> the served-arm cell.

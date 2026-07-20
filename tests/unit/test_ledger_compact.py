@@ -83,3 +83,21 @@ def test_compact_drops_terminal_queue_items_keeps_latest_consumer_and_run(tmp_pa
     assert len(consumer) == 1 and consumer[0].payload["finding_count"] == 2
     assert len(finished) == 1 and finished[0].run_id == "run2"
     led.close()
+
+
+def test_compact_preserves_giveup_consumer_rows(tmp_path):
+    # prior_note_count give-up counters read per-(consumer,item) rows; compact
+    # must not collapse them to one (that silently resets the counter).
+    from aramid.consumers import base as consumer_base
+    led = Ledger(tmp_path / "l.db")
+    try:
+        for i in range(3):
+            led.append(Event(EventType.CONSUMER_RUN_FINISHED, f"r{i}", "t",
+                             payload={"consumer": "mutation", "item_id": "q1",
+                                      "state": "degraded",
+                                      "note": "baseline failing @ abc123"}))
+        assert consumer_base.prior_note_count(led, "mutation", "q1", "baseline failing") == 3
+        led.compact()
+        assert consumer_base.prior_note_count(led, "mutation", "q1", "baseline failing") == 3
+    finally:
+        led.close()

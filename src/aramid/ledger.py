@@ -106,22 +106,23 @@ class Ledger:
 
     def compact(self) -> int:
         # LANDMINE -- compact() is currently DEAD CODE (no src/ call sites).
-        # Wiring it into a command must solve two integrations first:
+        # Wiring it into a command must still coordinate one integration:
         # (1) autolearn.rollup cursors are event COUNTS: compacting shrinks
-        #     the list below a stored cursor -> rollup resets to 0 and
-        #     RE-FOLDS the surviving events -> posterior double-count. Any
-        #     wiring must rebuild the autolearn state (`aramid autolearn
-        #     --rebuild`) in the same operation.
-        # (2) only the latest CONSUMER_RUN_FINISHED row survives (below), so
-        #     llm_review._malformed_attempts loses per-item history and the
-        #     malformed-give-up counter silently resets.
+        #     the list below a stored cursor. rollup now SKIPS the fold on a
+        #     shrunk ledger (no double-count) -- but its posteriors are then
+        #     stale, so any wiring must rebuild the autolearn state
+        #     (`aramid autolearn --rebuild`, cross-repo) in the same operation.
+        # (2) give-up history is now preserved: every per-(consumer,item)
+        #     CONSUMER_RUN_FINISHED row is kept (below), so
+        #     consumers.base.prior_note_count (llm malformed / mutation
+        #     baseline-failing counters) survives a compaction intact.
         rows = self._c.execute(
-            "SELECT seq,type,finding_id FROM events ORDER BY seq").fetchall()
+            "SELECT seq,type,finding_id,payload FROM events ORDER BY seq").fetchall()
 
         # Latest FINDING_DETECTED seq per finding — carries the tool/file/payload
         # that _materialize needs to resurrect the finding.
         last_detect: dict[str, int] = {}
-        for seq, type_, finding_id in rows:
+        for seq, type_, finding_id, _payload in rows:
             if type_ == EventType.FINDING_DETECTED.value and finding_id:
                 last_detect[finding_id] = seq
 
@@ -132,14 +133,14 @@ class Ledger:
                            EventType.FINDING_OVERRIDDEN.value,
                            EventType.FINDING_ROTATED.value}
         last_terminal: dict[str, int] = {}
-        for seq, type_, finding_id in rows:
+        for seq, type_, finding_id, _payload in rows:
             if type_ in terminal_types and finding_id and finding_id in last_detect \
                and seq > last_detect[finding_id]:
                 if finding_id not in last_terminal or seq > last_terminal[finding_id]:
                     last_terminal[finding_id] = seq
 
         keep = set(last_detect.values()) | set(last_terminal.values())
-        for seq, type_, finding_id in rows:
+        for seq, type_, finding_id, _payload in rows:
             if type_ == EventType.BASELINE_SNAPSHOT.value:
                 keep.add(seq)
 
@@ -156,16 +157,26 @@ class Ledger:
                        EventType.QUEUE_ITEM_DRAINED.value,
                        EventType.QUEUE_ITEM_EXPIRED.value}
         latest_singleton: dict[str, int] = {}  # type -> newest seq
-        for seq, type_, finding_id in rows:
+        for seq, type_, finding_id, _payload in rows:
             if type_ in queue_types and finding_id in queued_ids:
                 keep.add(seq)
             if type_ in (EventType.TRIAGE_RECORDED.value,
                          EventType.CONSUMER_RUN_FINISHED.value,
                          EventType.RUN_FINISHED.value):
                 latest_singleton[type_] = seq
+            if type_ == EventType.CONSUMER_RUN_FINISHED.value:
+                # Give-up counters (consumers.base.prior_note_count) read every
+                # per-(consumer,item) row, not just the newest -- preserve them
+                # all, else llm/mutation give-up history silently resets.
+                try:
+                    pl = json.loads(_payload)
+                except (ValueError, TypeError):
+                    pl = {}
+                if pl.get("consumer") and pl.get("item_id"):
+                    keep.add(seq)
         keep.update(latest_singleton.values())
 
-        to_delete = [seq for seq, _, _ in rows if seq not in keep]
+        to_delete = [seq for seq, _, _, _ in rows if seq not in keep]
         if to_delete:
             self._c.executemany("DELETE FROM events WHERE seq=?", [(s,) for s in to_delete])
             self._c.commit()

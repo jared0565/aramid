@@ -91,12 +91,16 @@ def test_rollup_cursor_makes_replay_idempotent():
     assert st2["audits"]["performed"] == 1
 
 
-def test_rollup_shrunken_ledger_resets_cursor():
+def test_rollup_shrunken_ledger_skips_fold():
+    # A shrunk/compacted ledger (cursor > len(events)) must SKIP the fold: a
+    # correct rebuild is cross-repo, so re-folding survivors here would double-
+    # count them onto posteriors that already include them. Cursor is left as-is
+    # (await a global `aramid autolearn --rebuild`), not advanced.
     st = autolearn.empty_state()
     st["cursors"]["repo1"] = 99
     got = autolearn.rollup(st, [_run_ev("r1", _sel())], "repo1")
-    assert got["shadow"]["decisions"] == 1      # replayed from 0
-    assert got["cursors"]["repo1"] == 1
+    assert got["shadow"]["decisions"] == 0      # fold skipped, not replayed
+    assert got["cursors"]["repo1"] == 99        # cursor untouched pending --rebuild
 
 
 def test_rollup_ignores_events_without_selection():
@@ -117,3 +121,18 @@ def test_rollup_tolerates_null_served():
     st = autolearn.rollup(autolearn.empty_state(), [_run_ev("r1", sel)], "repo1")
     assert st["posteriors"] == {}
     assert st["shadow"]["decisions"] == 1
+
+
+def test_rollup_skips_fold_on_shrunk_ledger_no_double_count():
+    # A compacted ledger has fewer events than the stored cursor. Re-folding
+    # surviving events onto already-populated posteriors would double-count;
+    # rollup must skip the fold instead (correct counts need --rebuild).
+    sel = {"served": {"provider": "p", "model": "m"}, "target_tier": "A",
+           "bucket": "x", "audit": {"performed": True, "missed_criticals": 3}}
+    ev = Event(EventType.CONSUMER_RUN_FINISHED, "run1", "t",
+               payload={"selection": sel})
+    state = {"cursors": {"repo": 100},   # cursor 100 >> len([ev]) == 1
+             "posteriors": {}, "audits": {"performed": 0, "missed_criticals": 0}}
+    out = autolearn.rollup(state, events=[ev], repo_key="repo")
+    # shrink detected -> fold skipped -> audits NOT incremented
+    assert out["audits"]["performed"] == 0
