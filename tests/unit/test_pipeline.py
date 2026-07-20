@@ -323,6 +323,56 @@ def test_new_warn_finding_escalates_to_block_at_prepush(tmp_path, monkeypatch):
     ledger.close()
 
 
+def test_shape_drift_warn_not_escalated_to_block_at_prepush(tmp_path, monkeypatch):
+    # A pnpm/yarn shape-drift advisory (deps-audit-shape-unrecognized) is a WARN
+    # that must stay WARN even as a NEW finding at pre-push: it is exempt from
+    # the new-warning ratchet's BLOCK escalation, so a possible-false-positive
+    # drift never hard-blocks a push / fails CI (spec section 8 mitigation).
+    from aramid.runners import deps
+    root = _repo(tmp_path)
+    cfg = _cfg(root, tmp_path, monkeypatch)
+    ledger = _ledger(tmp_path)  # fresh ledger -> finding is unconditionally new
+
+    raw = RawFinding(tool="pnpm", rule=deps.DEPS_SHAPE_DRIFT_RULE, severity_raw="medium",
+                      file="pnpm-lock.yaml", line=1, message="shape drift")
+    monkeypatch.setitem(pipeline.RUNNERS, "fake",
+                         _fake(RunnerResult("fake", ToolState.OK), raws=[raw]))
+    monkeypatch.setitem(pipeline.GATE_RUNNER_KEYS, Gate.PRE_PUSH, ["fake"])
+
+    result = pipeline.run_gate(root, Gate.PRE_PUSH, "range", cfg, ledger, run_id="run-drift")
+
+    assert len(result.findings) == 1
+    assert result.findings[0].id in result.new_ids       # it IS a new finding
+    assert result.findings[0].verdict is Verdict.WARN    # but NOT escalated to BLOCK
+    assert result.exit_code != 1                          # -> does not block the push
+    ledger.close()
+
+
+def test_shape_drift_warn_does_not_fail_check_all(tmp_path, monkeypatch):
+    # The mitigation's PRIMARY guarantee: CI's `check --all --strict` stays green
+    # on a drift. CI runs gate=pre-commit (the --gate default) with mode="all",
+    # so the pre-push ratchet never runs here; safety rests on deps NOT being
+    # degraded (run_js stays OK) -> degraded_tools empty -> exit 0. --strict only
+    # remaps exit 2/3, so a 0 stays 0 -> CI green. The WARN is still surfaced.
+    from aramid.runners import deps
+    root = _repo(tmp_path)
+    cfg = _cfg(root, tmp_path, monkeypatch)
+    ledger = _ledger(tmp_path)
+
+    raw = RawFinding(tool="pnpm", rule=deps.DEPS_SHAPE_DRIFT_RULE, severity_raw="medium",
+                      file="pnpm-lock.yaml", line=1, message="shape drift")
+    monkeypatch.setitem(pipeline.RUNNERS, "fake",
+                         _fake(RunnerResult("fake", ToolState.OK), raws=[raw]))
+    monkeypatch.setitem(pipeline.GATE_RUNNER_KEYS, Gate.PRE_COMMIT, ["fake"])
+
+    result = pipeline.run_gate(root, Gate.PRE_COMMIT, "all", cfg, ledger, run_id="run-drift-all")
+
+    assert result.exit_code == 0                          # not 1 (block), not 2 (degraded)
+    assert [f.rule for f in result.findings] == [deps.DEPS_SHAPE_DRIFT_RULE]
+    assert result.findings[0].verdict is Verdict.WARN     # visible, non-blocking
+    ledger.close()
+
+
 # ------------------------------------------------- mode="all" coverage ------
 
 def test_mode_all_uses_tracked_files(tmp_path, monkeypatch):

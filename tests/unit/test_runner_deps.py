@@ -441,15 +441,17 @@ def test_run_gate_no_force_refresh_for_non_all_mode(monkeypatch, tmp_path):
     assert captured["ctx"].force_refresh is False
 
 
-# ---------------- pnpm/yarn shape-shift drift guard (Task 7) ----------------
+# ------------ pnpm/yarn shape-shift drift -> advisory WARN (Task 7) ----------
 #
 # Fixture provenance (spec section 8): tests/fixtures/pnpm-audit.json (pnpm
 # {"report":{"advisories":...}} shape) and yarn-audit.json (Yarn Berry >=4.0.1
 # NDJSON, one advisory object with a `children` dict per line) are HAND-AUTHORED
 # from the documented shapes, NOT live captures. A live capture + reconcile is
-# deferred until pnpm v8/9 and Yarn Berry are installable here. The shape guards
-# below surface a drifted/unrecognized-but-present audit shape as CRASHED
-# (degraded -> manual check) rather than a silent [] that could hide CVEs.
+# deferred until pnpm v8/9 and Yarn Berry are installable here. Because those
+# shapes are unverified, an UNRECOGNIZED-but-present audit shape surfaces as a
+# non-blocking advisory WARN finding (deps-audit-shape-unrecognized) -- visible
+# in the report, never a silent [] and never a hard CI failure on a possible
+# false positive (spec section 8 mitigation).
 
 def test_pnpm_shape_recognized_good_and_drifted():
     from aramid.runners.deps import _pnpm_shape_recognized
@@ -483,50 +485,56 @@ def test_known_good_fixtures_are_shape_recognized():
     assert _yarn_shape_recognized(YARN_AUDIT.read_text()) is True
 
 
-def _drift_ctx(tmp_path, pm):
-    return type("Ctx", (), {"root": tmp_path, "pkg_manager": pm,
-                            "force_refresh": True})()
-
-
-def test_run_js_drifted_pnpm_payload_is_crashed(monkeypatch, tmp_path):
-    # An OK pnpm result whose payload has neither advisories container ->
-    # unrecognized shape -> CRASHED (not a silent 0-findings pass).
+def test_run_js_serves_drifted_pnpm_as_ok_not_crashed(monkeypatch, tmp_path):
+    # run_js no longer downgrades an unrecognized shape to CRASHED (that forced
+    # exit 2 / a hard CI failure on a possible false positive). It serves OK; the
+    # drift is surfaced downstream by parse as a non-blocking advisory WARN.
     (tmp_path / "pnpm-lock.yaml").write_text("lockfileVersion: 6.0\n", encoding="utf-8")
     monkeypatch.setattr(deps, "detect_package_manager", lambda root: "pnpm")
     monkeypatch.setattr(deps, "run_subprocess",
                         lambda argv, cwd, t, env=None: RunnerResult(
                             "pnpm", ToolState.OK,
                             raw='{"metadata":{"vulnerabilities":3}}', returncode=1))
-    result = deps.run_js(_drift_ctx(tmp_path, "pnpm"))
-    assert result.state is ToolState.CRASHED
-
-
-def test_run_js_drifted_yarn_payload_is_crashed(monkeypatch, tmp_path):
-    # An OK yarn result with parseable lines but NONE carrying a `children`
-    # dict -> the NDJSON advisory shape drifted -> CRASHED.
-    (tmp_path / "yarn.lock").write_text("# yarn lockfile\n", encoding="utf-8")
-    monkeypatch.setattr(deps, "detect_package_manager", lambda root: "yarn")
-    monkeypatch.setattr(deps, "run_subprocess",
-                        lambda argv, cwd, t, env=None: RunnerResult(
-                            "yarn", ToolState.OK,
-                            raw='{"value":"pkg@1","summary":"format changed"}\n',
-                            returncode=1))
-    result = deps.run_js(_drift_ctx(tmp_path, "yarn"))
-    assert result.state is ToolState.CRASHED
-
-
-def test_run_js_unrecognized_cache_falls_through_to_fresh_audit(monkeypatch, tmp_path):
-    # A stale cache (from a pre-guard aramid) holding an unrecognized shape must
-    # NOT be served as a silent OK/0-findings cache hit; run_js falls through to
-    # a fresh (shape-checked) audit instead of returning the drifted cache.
-    (tmp_path / "pnpm-lock.yaml").write_text("lockfileVersion: 6.0\n", encoding="utf-8")
-    monkeypatch.setattr(deps, "detect_package_manager", lambda root: "pnpm")
-    cache_path = deps._cache_path(tmp_path, (tmp_path / "pnpm-lock.yaml").read_bytes())
-    deps._write_cache(cache_path, '{"metadata":{"vulnerabilities":3}}')   # drifted cache
-    monkeypatch.setattr(deps, "run_subprocess",
-                        lambda argv, cwd, t, env=None: RunnerResult(
-                            "pnpm", ToolState.OK, raw='{"advisories":{}}', returncode=0))
-    ctx = RunContext(root=tmp_path, pkg_manager="pnpm")   # force_refresh default False
+    ctx = RunContext(root=tmp_path, pkg_manager="pnpm", force_refresh=True)
     result = deps.run_js(ctx)
-    assert result.state is ToolState.OK
-    assert result.raw == '{"advisories":{}}'   # fresh audit used, drifted cache bypassed
+    assert result.state is ToolState.OK   # NOT degraded -> no forced exit 2
+
+
+def test_parse_pnpm_unrecognized_shape_emits_advisory_warn(tmp_path):
+    # A drifted pnpm payload -> exactly one synthetic advisory finding
+    # (deps-audit-shape-unrecognized), medium severity (WARN, below the deps
+    # critical block threshold) -> visible but non-blocking.
+    result = RunnerResult("pnpm", ToolState.OK, raw='{"metadata":{"vulnerabilities":3}}')
+    findings = deps.parse(result, RunContext(root=tmp_path))
+    assert len(findings) == 1
+    assert findings[0].rule == deps.DEPS_SHAPE_DRIFT_RULE
+    assert findings[0].tool == "pnpm"
+    assert findings[0].severity_raw == "medium"
+
+
+def test_parse_pnpm_nondict_advisories_emits_warn_not_crash(tmp_path):
+    # {"advisories":"str"} previously reached _parse_advisories_dict and raised
+    # on .items(); now it is an unrecognized shape -> one advisory WARN, no crash.
+    result = RunnerResult("pnpm", ToolState.OK, raw='{"advisories":"not-a-dict"}')
+    findings = deps.parse(result, RunContext(root=tmp_path))
+    assert len(findings) == 1
+    assert findings[0].rule == deps.DEPS_SHAPE_DRIFT_RULE
+
+
+def test_parse_yarn_unrecognized_shape_emits_advisory_warn(tmp_path):
+    result = RunnerResult("yarn", ToolState.OK,
+                          raw='{"value":"pkg@1","summary":"format changed"}\n')
+    findings = deps.parse(result, RunContext(root=tmp_path))
+    assert len(findings) == 1
+    assert findings[0].rule == deps.DEPS_SHAPE_DRIFT_RULE
+    assert findings[0].tool == "yarn"
+
+
+def test_parse_known_good_fixtures_emit_no_drift_finding(tmp_path):
+    # Regression-lock: the recognized fixtures parse to their real advisories
+    # ONLY -- no spurious deps-audit-shape-unrecognized finding is added.
+    for tool, fixture, n in (("pnpm", PNPM_AUDIT, 1), ("yarn", YARN_AUDIT, 2)):
+        result = RunnerResult(tool, ToolState.OK, raw=fixture.read_text())
+        findings = deps.parse(result, RunContext(root=tmp_path))
+        assert len(findings) == n
+        assert all(f.rule != deps.DEPS_SHAPE_DRIFT_RULE for f in findings)

@@ -190,12 +190,10 @@ def run_js(ctx) -> RunnerResult:
     cache_path = _cache_path(ctx.root, lockfile.read_bytes())
     if not getattr(ctx, "force_refresh", False):
         cached = _read_cache(cache_path)
-        # Only serve a cache hit whose shape we still recognize. Every entry
-        # THIS version writes is pre-validated (below), so this only bites a
-        # cache left by a pre-guard aramid (or a hand-corrupted file): rather
-        # than serve a silent 0-findings result from an unrecognized shape, fall
-        # through to a fresh audit (which is itself shape-checked).
-        if cached is not None and _shape_recognized(pm, cached):
+        if cached is not None:
+            # A cached payload is still shape-checked at parse time (parse runs
+            # on every result, fresh or cached), so an unrecognized shape can't
+            # hide behind the cache -- it surfaces as an advisory WARN either way.
             return RunnerResult(pm, ToolState.OK, raw=cached)
 
     result = run_subprocess(_JS_AUDIT_ARGV[pm], ctx.root, TIMEOUT_S)
@@ -203,13 +201,6 @@ def run_js(ctx) -> RunnerResult:
         result = _ndjson_or_crashed(pm, result, _OK_RETURNCODES)
     else:
         result = json_or_crashed(pm, result, _OK_RETURNCODES, empty="{}")
-    if result.state is ToolState.OK and not _shape_recognized(pm, result.raw):
-        # Present-but-unrecognized audit shape: fail toward VISIBILITY
-        # (CRASHED -> degraded -> manual check) rather than a silent 0-findings
-        # pass that could hide CVEs behind a parser that returns [] for any
-        # shape it doesn't recognize.
-        result = RunnerResult(pm, ToolState.CRASHED, result.raw, result.stderr,
-                              result.duration_s, result.returncode)
     if result.state is ToolState.OK:
         _write_cache(cache_path, result.raw)
     return result
@@ -271,6 +262,10 @@ def _parse_advisories_dict(tool: str, advisories: dict) -> list[RawFinding]:
 def parse_pnpm(result: RunnerResult, ctx) -> list[RawFinding]:
     if result.state is not ToolState.OK:
         return []
+    if not _pnpm_shape_recognized(result.raw):
+        # Unrecognized-but-present shape (incl. a non-dict advisories that would
+        # crash _parse_advisories_dict): surface an advisory WARN instead.
+        return [_shape_drift_finding("pnpm")]
     data = json.loads(result.raw or "{}")
     advisories = data.get("report", {}).get("advisories") or data.get("advisories", {})
     return _parse_advisories_dict("pnpm", advisories)
@@ -279,6 +274,9 @@ def parse_pnpm(result: RunnerResult, ctx) -> list[RawFinding]:
 def parse_yarn(result: RunnerResult, ctx) -> list[RawFinding]:
     if result.state is not ToolState.OK:
         return []
+    if not _yarn_shape_recognized(result.raw):
+        # Parseable NDJSON lines but none carry `children` -> format drift.
+        return [_shape_drift_finding("yarn")]
     findings = []
     for line in (result.raw or "").splitlines():
         line = line.strip()
@@ -308,9 +306,10 @@ def _pnpm_shape_recognized(raw: str) -> bool:
     (wire-format drift) has neither. We require the container to be a dict, not
     merely present: `parse_pnpm` -> _parse_advisories_dict calls `.items()` on
     it, so a present-but-non-dict advisories (e.g. a string/list) would raise
-    uncaught out of parse -- treating it as unrecognized routes it to the
-    CRASHED-visibility path instead. Non-JSON / empty / non-dict payload is not
-    our concern here (json_or_crashed handled non-JSON) -> recognized."""
+    uncaught out of parse -- treating it as unrecognized makes parse_pnpm
+    early-return the advisory-WARN drift finding instead. Non-JSON / empty /
+    non-dict payload is not our concern here (json_or_crashed handled non-JSON)
+    -> recognized."""
     try:
         data = json.loads(raw or "{}")
     except (ValueError, TypeError):
@@ -322,14 +321,26 @@ def _pnpm_shape_recognized(raw: str) -> bool:
     return isinstance(report.get("advisories"), dict) or isinstance(data.get("advisories"), dict)
 
 
-def _shape_recognized(pm: str, raw: str) -> bool:
-    """Dispatch the per-manager shape guard. npm's shape is authoritative
-    (npm's own audit JSON is the reference format) -> never guarded."""
-    if pm == "yarn":
-        return _yarn_shape_recognized(raw)
-    if pm == "pnpm":
-        return _pnpm_shape_recognized(raw)
-    return True
+DEPS_SHAPE_DRIFT_RULE = "deps-audit-shape-unrecognized"
+
+
+def _shape_drift_finding(pm: str) -> RawFinding:
+    """A non-blocking advisory (medium severity -> WARN, below the deps critical
+    block threshold) emitted when a pnpm/yarn audit's shape is unrecognized.
+    Fail toward VISIBILITY without a hard CI failure on a possible false
+    positive: the hand-authored shape fixtures are unverified (see module
+    docstring), so a genuinely clean-but-drifted shape must not exit-2 the gate.
+    The reviewer/operator still sees it and can verify the audit manually."""
+    return RawFinding(
+        tool=pm,
+        rule=DEPS_SHAPE_DRIFT_RULE,
+        severity_raw="medium",
+        file=_LOCKFILES.get(pm, "package.json"),
+        line=1,
+        message=(f"{pm} audit output shape was not recognized (possible tool "
+                 "version drift); findings may be incomplete -- verify the audit "
+                 "manually"),
+    )
 
 
 def _yarn_shape_recognized(raw: str) -> bool:

@@ -299,7 +299,9 @@ def run_gate(root: Path, gate: Gate, mode: str, cfg: config_mod.Config, ledger: 
 
     if gate is Gate.PRE_PUSH:
         findings = [
-            replace(f, verdict=Verdict.BLOCK) if f.id in new_ids and f.verdict is Verdict.WARN
+            replace(f, verdict=Verdict.BLOCK)
+            if (f.id in new_ids and f.verdict is Verdict.WARN
+                and f.rule != deps.DEPS_SHAPE_DRIFT_RULE)
             else f
             for f in findings
         ]

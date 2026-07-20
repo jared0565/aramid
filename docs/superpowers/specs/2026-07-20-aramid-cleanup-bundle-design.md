@@ -186,6 +186,25 @@ Tests: the known-good pnpm/yarn fixtures still parse to their expected findings
 drifted container and a crafted yarn payload with unrecognized-shape lines each
 yield CRASHED (the new teeth).
 
+**Post-review mitigation (whole-branch review, user disposition "add a
+mitigation first").** The initial CRASHED disposition above has a blast-radius
+problem the review surfaced: item 3 makes CI's `check --all --strict` always
+live-audit, so a CRASHED deps runner → `degraded_tools` → exit 2 → `--strict`
+→ exit 1. If the hand-authored (unverified) pnpm/yarn shape ever differs from a
+real clean-audit shape, EVERY clean pnpm/yarn CI run would hard-fail
+permanently. Superseding disposition: an unrecognized-but-present shape now
+surfaces as a **non-blocking advisory WARN finding** (`deps-audit-shape-
+unrecognized`, medium severity — below the deps `critical` block threshold),
+emitted by `parse_pnpm`/`parse_yarn` (which keeps `run_js` shape-agnostic and
+the state OK, so deps is never degraded by drift alone). The finding is exempt
+from the pre-push new-warning→BLOCK ratchet (`pipeline.py`, keyed on the rule
+name) so it never hard-blocks a push either. It is still visible in every
+findings report — never a silent `[]` — but a possible false-positive can no
+longer break CI. The non-dict-`advisories` crash the review found (a present
+but non-dict container reaching `_parse_advisories_dict`) is also closed:
+`_pnpm_shape_recognized` requires a dict container, so that shape routes to the
+advisory WARN instead of an uncaught `.items()` crash.
+
 ## 9. Testing & gates
 
 - TDD per item: failing test → red → minimal impl → green → commit. One commit
@@ -199,8 +218,9 @@ yield CRASHED (the new teeth).
 
 1. **Gate path** changes only via item 2 (behavior-equivalent predicate
    refactor), item 3 (`--all` re-audit — the intended fix, cache still used at
-   pre-commit/pre-push), and item 7 (drift → CRASHED/degraded — fail toward
-   visibility). No other gate behavior moves.
+   pre-commit/pre-push), and item 7 (drift → non-blocking advisory WARN, see
+   the post-review mitigation in §8 — fail toward visibility WITHOUT a hard CI
+   failure on a possible false positive). No other gate behavior moves.
 2. **No BLOCK downgrade**: item 2 keeps the gate's `armed & confirmed & critical`
    BLOCK and the override's armed-independent refusal; the helper is the shared
    subset, never widened with `armed`.
@@ -209,4 +229,6 @@ yield CRASHED (the new teeth).
 4. **Additive RunContext**: item 3's `force_refresh` default `False` keeps every
    existing construction site and adapter valid.
 5. **Fail toward visibility**: item 7 surfaces unrecognized dep-audit shapes as
-   degraded rather than silently clean — never the reverse.
+   a visible non-blocking advisory WARN finding rather than silently clean —
+   never the reverse, and never a hard CI failure on a possible false positive
+   (post-review mitigation, §8).
