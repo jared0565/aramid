@@ -91,9 +91,20 @@ def _consume_string(source: str, i: int) -> int:
 
 def _consume_template(source: str, i: int) -> int:
     """i at a backtick. Return index just past the matching closing backtick.
-    `${...}` interpolations are treated conservatively as string (MVP): brace
-    depth is counted so the real closing backtick is found; expression contents
-    are NOT mutated."""
+
+    `${...}` interpolations hold arbitrary code -- object/array/block braces,
+    nested strings, and nested template literals -- so a naive "count braces"
+    pass is fooled by a literal `}` or backtick living inside a nested string
+    or template. We stay conservative but correct: in the template's static
+    text (brace depth 0) only a backtick closes it and `${` opens an
+    interpolation; inside an interpolation (depth > 0) we recurse through
+    nested templates and skip nested strings so their literal braces/backticks
+    cannot end the template early, and count `{`/`}` for objects/blocks.
+    Expression contents are never mutated (MVP). Residual (rare, documented):
+    a `}` or backtick inside a // or /* */ comment or a regex literal WITHIN an
+    interpolation is not skipped -- full code scanning of interpolations is out
+    of scope for the MVP (failure mode there is a missed mutation region, and
+    such constructs are vanishingly rare in real interpolations)."""
     i += 1
     n = len(source)
     depth = 0
@@ -102,13 +113,25 @@ def _consume_template(source: str, i: int) -> int:
         if c == "\\":
             i += 2
             continue
-        if c == "`" and depth == 0:
-            return i + 1
-        if c == "$" and i + 1 < n and source[i + 1] == "{":
-            depth += 1
-            i += 2
+        if depth == 0:
+            if c == "`":
+                return i + 1
+            if c == "$" and i + 1 < n and source[i + 1] == "{":
+                depth += 1
+                i += 2
+                continue
+            i += 1
             continue
-        if c == "}" and depth > 0:
+        # inside an interpolation (depth > 0)
+        if c == "`":
+            i = _consume_template(source, i)
+            continue
+        if c in "'\"":
+            i = _consume_string(source, i)
+            continue
+        if c == "{":
+            depth += 1
+        elif c == "}":
             depth -= 1
         i += 1
     return i

@@ -1,8 +1,4 @@
-from aramid.jsmutate import Mutant, generate_mutants  # noqa: F401 -- import asserts Mutant is part of the public API
-
-
-def _sources(muts):
-    return sorted(m.source for m in muts)
+from aramid.jsmutate import generate_mutants
 
 
 def test_cmp_flip_strict_equality():
@@ -66,3 +62,30 @@ def test_division_is_not_a_regex_and_not_mutated():
     # the `/` is division (prev token is an identifier), so `=== 2` still parses
     # as code and cmp-flip fires on it
     assert any("a / b !== 2" in m.source for m in muts)
+
+
+def test_no_mutation_inside_template_interpolation_object_braces():
+    # An interpolation containing object/array braces AND a nested template
+    # literal: the nested template's `===` must never be cmp-flipped (the
+    # interpolation's own braces must not confuse the closing-backtick scan).
+    src = "const msg = `x ${ [ {}, `a===b` ][1] } z`;\n"
+    muts = generate_mutants(src, {1})
+    assert all("!==" not in m.source for m in muts)
+    assert all(m.op != "cmp-flip" for m in muts)
+
+
+def test_no_mutation_after_string_with_brace_in_interpolation():
+    # A string literal containing `}` inside an interpolation must be skipped so
+    # the brace count is not thrown off and code after the template stays bounded.
+    src = 'const q = `${ "}" } a===b end`;\n'
+    muts = generate_mutants(src, {1})
+    assert all("!==" not in m.source for m in muts)
+
+
+def test_no_mutation_in_nested_template_static_text_with_brace():
+    # A nested template literal whose STATIC TEXT contains `}` must not end the
+    # outer template early -> the trailing `a===b` (still template static text)
+    # must not be mutated.
+    src = "const w = `outer ${ `a}b` } a===b`;\n"
+    muts = generate_mutants(src, {1})
+    assert all("!==" not in m.source for m in muts)
