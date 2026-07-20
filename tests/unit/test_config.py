@@ -295,3 +295,12 @@ def test_mutation_repo_override_merges(tmp_path, monkeypatch):
     cfg = config.load_config(tmp_path)
     assert cfg.mutation["max_mutants"] == 4
     assert cfg.mutation["enabled"] is True  # deep-merge keeps defaults
+
+
+def test_js_mutation_defaults_present(tmp_path, monkeypatch):
+    monkeypatch.setattr(config, "_user_config_path", lambda: tmp_path / "no-user.toml")
+    cfg = config.load_config(tmp_path)
+    assert cfg.js_mutation.get("enabled") is True
+    assert cfg.js_mutation.get("max_mutants") == 20
+    assert cfg.js_mutation.get("wall_budget_s") == 600
+    assert cfg.js_mutation.get("mutant_timeout_s") == 120
