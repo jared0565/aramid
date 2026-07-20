@@ -26,6 +26,11 @@ from aramid.runners.base import ToolState, run_subprocess
 
 NAME = "fuzz"
 
+# M5: batches are budget-truncated (variable membership across drains), so
+# the drain normalizes them with occurrence_index pinned to 0 -- one finding
+# per (tool, rule, file, line-content), truncation-stable fingerprints.
+PIN_OCCURRENCE = True
+
 
 def _is_test_file(rel: str) -> bool:
     p = rel.replace("\\", "/")

@@ -328,6 +328,49 @@ def test_baseline_two_failures_still_degrades(tmp_path, monkeypatch):
     assert "baseline failing" in res.note
 
 
+def test_pin_occurrence_declared_only_on_variable_set_consumers():
+    from aramid.consumers import fuzz as fz
+    import aramid.consumers.regression_pack as rp
+    assert mut_consumer.PIN_OCCURRENCE is True
+    assert fz.PIN_OCCURRENCE is True
+    assert getattr(rp, "PIN_OCCURRENCE", False) is False, \
+        "regression-pack fingerprints must keep exact gate parity"
+
+
+def test_drain_passes_pin_flag_per_consumer(tmp_path, monkeypatch):
+    # Flag-flow teeth: spy on drain's normalize and record the kwarg each
+    # consumer's batch was normalized with.
+    from aramid import registry
+    from aramid.commands import drain as drain_mod
+    from aramid.commands.drain import cmd_drain
+    from aramid import queue as queue_mod
+
+    r, base, head = _repo(tmp_path, WEAK_TEST)
+    monkeypatch.setattr(registry, "registry_path", lambda: tmp_path / "repos.toml")
+    monkeypatch.setattr(drain_mod, "_lock_path", lambda: tmp_path / "drain.lock")
+    monkeypatch.setattr(config_mod, "_user_config_path",
+                         lambda: tmp_path / "no-user.toml")
+    registry.register(r, "2026-07-20T10:00:00+00:00")
+    led = Ledger(r / ".aramid" / "ledger.db")
+    try:
+        queue_mod.enqueue(led, "2026-07-20T10:00:00+00:00", base, head, 55, ["seed"])
+    finally:
+        led.close()
+
+    seen = {}
+    real_norm = drain_mod.normalize
+
+    def spy(raws, root, ref_for, salt, gate, classify, *, pin_occurrence=False):
+        seen[raws[0].tool] = pin_occurrence
+        return real_norm(raws, root, ref_for, salt, gate, classify,
+                         pin_occurrence=pin_occurrence)
+
+    monkeypatch.setattr(drain_mod, "normalize", spy)
+    cmd_drain([str(r)])
+    assert seen.get("mutation") is True, \
+        "mutation batch must normalize with pin_occurrence=True"
+
+
 def test_mutation_findings_classify_warn_never_block(tmp_path, monkeypatch):
     from aramid.models import Gate
     from aramid import policy

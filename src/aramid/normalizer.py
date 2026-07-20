@@ -39,7 +39,8 @@ class RawFinding:
 
 
 def normalize(raws: list[RawFinding], root: Path, ref_for: Callable[[str], str],
-              salt: bytes, gate: Gate, classify) -> list[Finding]:
+              salt: bytes, gate: Gate, classify, *,
+              pin_occurrence: bool = False) -> list[Finding]:
     occurrence_counts: Counter = Counter()
     findings: list[Finding] = []
 
@@ -50,7 +51,13 @@ def normalize(raws: list[RawFinding], root: Path, ref_for: Callable[[str], str],
         line_content = lines[idx] if 0 <= idx < len(lines) else ""
 
         occ_key = (raw.tool, raw.rule, raw.file, normalize_line(line_content))
-        occurrence_index = occurrence_counts[occ_key]
+        # pin_occurrence (M5): variable-set drain consumers (mutation, fuzz)
+        # have budget-truncated batches, so positional occurrence indices
+        # drift across drains -> ghost never-resolving findings. Pinning to 0
+        # gives one finding per (tool, rule, file, line-content) -- the
+        # llm_fingerprint precedent (review.py). Gate callers keep the
+        # counter (default False): their batches are complete scans.
+        occurrence_index = 0 if pin_occurrence else occurrence_counts[occ_key]
         occurrence_counts[occ_key] += 1
 
         finding_id = compute_fingerprint(raw.tool, raw.rule, raw.file, line_content,

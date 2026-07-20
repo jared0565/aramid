@@ -77,3 +77,25 @@ def test_detect_payload_carries_source_and_confirmed(tmp_path):
         assert rec["evidence"] == "eval(x)"
     finally:
         led.close()
+
+def test_pin_occurrence_collapses_duplicates(tmp_path, monkeypatch):
+    from aramid import gitutil
+    monkeypatch.setattr(gitutil, "read_for_fingerprint", lambda root, ref, f: "x = y[0]\n")
+    raws = [RawFinding("mutation", "cmp-flip", "medium", "a.py", 1, "m1"),
+            RawFinding("mutation", "cmp-flip", "medium", "a.py", 1, "m2")]
+    out = normalize(raws, tmp_path, lambda f: "HEAD", b"salt", Gate.ALL,
+                    _classify, pin_occurrence=True)
+    assert len({f.id for f in out}) == 1   # one finding per (tool,rule,file,line-content)
+
+def test_pin_occurrence_makes_ids_subset_stable(tmp_path, monkeypatch):
+    # THE M5 drift scenario: budget truncation changes batch membership; the
+    # nth duplicate's id must not depend on who else is in the batch.
+    from aramid import gitutil
+    monkeypatch.setattr(gitutil, "read_for_fingerprint", lambda root, ref, f: "x = y[0]\n")
+    ra = RawFinding("fuzz", "crash-indexerror", "medium", "a.py", 1, "c1")
+    rb = RawFinding("fuzz", "crash-indexerror", "medium", "a.py", 1, "c2")
+    full = normalize([ra, rb], tmp_path, lambda f: "HEAD", b"salt", Gate.ALL,
+                     _classify, pin_occurrence=True)
+    alone = normalize([rb], tmp_path, lambda f: "HEAD", b"salt", Gate.ALL,
+                      _classify, pin_occurrence=True)
+    assert full[1].id == alone[0].id
