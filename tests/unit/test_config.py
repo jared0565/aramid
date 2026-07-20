@@ -257,3 +257,22 @@ def test_autolearn_repo_override_deep_merges(tmp_path, monkeypatch):
     cfg = config.load_config(tmp_path)
     assert cfg.llm["autolearn"]["armed"] is True
     assert cfg.llm["autolearn"]["enabled"] is True   # sibling default survives
+
+
+def test_mutation_defaults_present(tmp_path, monkeypatch):
+    monkeypatch.setattr(config, "_user_config_path", lambda: _no_user_config(tmp_path))
+    cfg = config.load_config(tmp_path)
+    assert cfg.mutation["enabled"] is True
+    assert cfg.mutation["max_mutants"] == 20
+    assert cfg.mutation["wall_budget_s"] == 600
+    assert cfg.mutation["mutant_timeout_s"] == 120
+    assert cfg.mutation["confirm_cap"] == 3
+
+
+def test_mutation_repo_override_merges(tmp_path, monkeypatch):
+    monkeypatch.setattr(config, "_user_config_path", lambda: _no_user_config(tmp_path))
+    (tmp_path / "aramid.toml").write_text(
+        "schema_version = 1\n[mutation]\nmax_mutants = 4\n", encoding="utf-8")
+    cfg = config.load_config(tmp_path)
+    assert cfg.mutation["max_mutants"] == 4
+    assert cfg.mutation["enabled"] is True  # deep-merge keeps defaults

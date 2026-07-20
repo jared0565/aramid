@@ -28,6 +28,7 @@ from aramid.normalizer import normalize
 
 import aramid.consumers.regression_pack  # noqa: F401  -- registers the consumer
 from aramid.consumers import llm_review as _llm_review  # noqa: F401  (registers itself)
+from aramid.consumers import mutation as _mutation  # noqa: F401  (registers itself)
 
 
 def _now() -> str:

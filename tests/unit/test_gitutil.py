@@ -120,3 +120,26 @@ def test_diff_text_paths_scoping(tmp_path):
     scoped = gitutil.diff_text(r, h1, h2, paths=["a.py"])
     assert "a.py" in scoped
     assert "b.py" not in scoped
+
+def test_diff_new_lines_maps_changed_lines(tmp_path):
+    r = _repo(tmp_path)
+    _commit(r, "a.py", "x = 1\ny = 2\nz = 3\n", "c1")
+    base = gitutil.rev_sha(r, "HEAD")
+    _commit(r, "a.py", "x = 1\ny = 99\nz = 3\nw = 4\n", "c2")
+    head = gitutil.rev_sha(r, "HEAD")
+    assert gitutil.diff_new_lines(r, base, head) == {"a.py": {2, 4}}
+
+def test_diff_new_lines_root_commit_and_deletion(tmp_path):
+    r = _repo(tmp_path)
+    _commit(r, "a.py", "x = 1\n", "c1")
+    head = gitutil.rev_sha(r, "HEAD")
+    # base=None (root/bootstrap): whole file counts as new
+    assert gitutil.diff_new_lines(r, None, head) == {"a.py": {1}}
+    # pure deletion contributes nothing on the new side
+    base = head
+    _commit(r, "b.py", "q = 1\n", "c2")
+    (r / "a.py").unlink()
+    _git(r, "add", "-A")
+    _git(r, "commit", "-m", "c3")
+    head2 = gitutil.rev_sha(r, "HEAD")
+    assert "a.py" not in gitutil.diff_new_lines(r, base, head2)

@@ -81,9 +81,16 @@ def generate_mutants(source: str, target_lines: set[int]) -> list[Mutant]
    graphite-artifact exclusion (`config.filter_paths`) — hard requirement.
    Drop test files (rule above). No eligible files → `OK`, note
    `"no python files in range"`, zero findings.
-2. **Stack check**: no Python stack or no pytest detected (existing `detectors`)
-   → `DEGRADED`, note `"no python test stack"` (JS-only repos land here — the
-   2c-1b seam).
+2. **Stack check**: no pytest detected (existing `detectors`) → `OK` with the
+   loud note `"no python test stack (mutation skipped)"` (JS-only repos land
+   here — the 2c-1b seam). AMENDMENT (execution-time, caught by the
+   no-providers drain e2e): this was specced DEGRADED, but the drain refuses
+   to mark an item drained while ANY consumer is degraded (2a whole-branch
+   fix), so a degraded permanent-absence state would pin queue items forever
+   on non-Python repos and re-run every consumer each drain. Permanent
+   structural absence = OK skip (mirrors llm_review's no-providers skip);
+   DEGRADED is reserved for transient states (baseline failing, worktree
+   trouble) where retry-next-drain is the desired semantic.
 3. **Worktree**: `git worktree add <tmp> <item.head>` under the scratch temp
    dir; ALL subsequent steps run inside it; `git worktree remove --force` +
    `prune` in a `finally`. The user's working tree is never written. A worktree
@@ -104,8 +111,12 @@ def generate_mutants(source: str, target_lines: set[int]) -> list[Mutant]
    - either stage TIMES OUT → the mutant is **unattributable**: excluded from
      findings, counted in `extra["timeouts"]` (a hung mutant is not evidence of
      a test gap);
-   - restore the original file from git (`git checkout -- <file>` in the
-     worktree) after every mutant.
+   - restore the original file after every mutant. AMENDMENT (execution-time):
+     restoration rewrites the pre-captured original source
+     (`src_path.write_text(original)`) instead of the specced
+     `git checkout -- <file>` — the string was read once from the same
+     checkout git would restore from, so the two are equivalent, minus one
+     subprocess per mutant.
 6. **Findings**: confirmed survivor →
    `RawFinding(tool="mutation", rule=<op>, file, line, message="mutant survived: <description>")`
    → the drain's existing normalize/classify partial wiring (same path as

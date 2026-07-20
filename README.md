@@ -90,8 +90,11 @@ aramid pack list                  # show compiled regression rules
 ```
 
 Still deterministic, still zero LLM calls — 2a is the chassis (triage → queue →
-drain) that Phase 2b (LLM adversarial review) and Phase 2c (mutation/fuzz/DAST)
-will ride as new drain-time consumers.
+drain) that Phase 2b (LLM adversarial review, shipped) and Phase 2c ride as
+drain-time consumers. 2c-1 (shipped) adds the mutation consumer: diff-touched
+functions are mutated in a throwaway worktree and mutants the full test suite
+cannot kill are recorded as WARN-tier test-gap findings (`[mutation]` config:
+budgets, two-stage targeted/confirm execution; Python repos with pytest).
 
 ### Phase 2b: the LLM reviewer
 

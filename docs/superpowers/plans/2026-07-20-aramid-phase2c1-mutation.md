@@ -728,6 +728,11 @@ def consume(item, ctx: DrainContext) -> ConsumerResult:
     if not files:
         return ConsumerResult(consumer=NAME, state="ok",
                               note="no python files in range")
+    # PLAN AMENDMENT (execution-time; spec section 3.2 amended in the same
+    # commit): the block below shipped as an OK skip with a loud note, NOT
+    # degraded -- the drain refuses to mark items drained while any consumer
+    # is degraded, so degraded-on-permanent-absence pins queue items forever
+    # on non-Python repos (caught live by the llm_review no-providers e2e).
     if "pytest" not in detectors.detect_tests(ctx.root):
         return ConsumerResult(consumer=NAME, state="degraded",
                               note="no python test stack")
