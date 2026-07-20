@@ -89,3 +89,23 @@ def test_no_mutation_in_nested_template_static_text_with_brace():
     src = "const w = `outer ${ `a}b` } a===b`;\n"
     muts = generate_mutants(src, {1})
     assert all("!==" not in m.source for m in muts)
+
+
+def test_no_mutation_after_comment_with_brace_in_interpolation():
+    # A /* } */ comment inside an interpolation must be skipped so the brace
+    # count is not thrown off; a nested template that follows must not be
+    # misread as the outer template's close and mutated.
+    src = "const x = `${ /* } */ `a===b` } tail`;\n"
+    muts = generate_mutants(src, {1})
+    assert all("!==" not in m.source for m in muts)
+    assert all(m.op != "cmp-flip" for m in muts)
+
+
+def test_no_mutation_after_regex_with_brace_in_interpolation():
+    # A regex literal containing `}` inside an interpolation must be skipped
+    # (regex-vs-division via prev tracking); a nested template that follows must
+    # not be misread and mutated.
+    src = "const x = `${ a.match(/}/) ; `c===d` } tail`;\n"
+    muts = generate_mutants(src, {1})
+    assert all("!==" not in m.source for m in muts)
+    assert all(m.op != "cmp-flip" for m in muts)

@@ -93,46 +93,75 @@ def _consume_template(source: str, i: int) -> int:
     """i at a backtick. Return index just past the matching closing backtick.
 
     `${...}` interpolations hold arbitrary code -- object/array/block braces,
-    nested strings, and nested template literals -- so a naive "count braces"
-    pass is fooled by a literal `}` or backtick living inside a nested string
-    or template. We stay conservative but correct: in the template's static
-    text (brace depth 0) only a backtick closes it and `${` opens an
-    interpolation; inside an interpolation (depth > 0) we recurse through
-    nested templates and skip nested strings so their literal braces/backticks
-    cannot end the template early, and count `{`/`}` for objects/blocks.
-    Expression contents are never mutated (MVP). Residual (rare, documented):
-    a `}` or backtick inside a // or /* */ comment or a regex literal WITHIN an
-    interpolation is not skipped -- full code scanning of interpolations is out
-    of scope for the MVP (failure mode there is a missed mutation region, and
-    such constructs are vanishingly rare in real interpolations)."""
+    nested strings/templates, comments, and regex literals -- so a naive
+    brace-count is fooled by a literal `}` or backtick inside any of those. In
+    the template's static text (brace depth 0) only a backtick closes it and
+    `${` opens an interpolation; inside an interpolation (depth > 0) we route
+    every non-code region through the shared _skip_region classifier (identical
+    to the top-level scanner) so no comment/regex/string/template content can
+    end the template early, and count `{`/`}` for objects and blocks. Minimal
+    `prev` tracking feeds _skip_region's regex-vs-division decision.
+    Interpolation expression contents are never mutated (MVP). Any residual now
+    equals the top-level scanner's own regex-vs-division residual."""
     i += 1
     n = len(source)
     depth = 0
+    prev = ""   # last significant token in the current interpolation
     while i < n:
         c = source[i]
-        if c == "\\":
-            i += 2
-            continue
         if depth == 0:
+            # template static text: `\` escapes (e.g. \` or \${), a backtick
+            # closes, `${` opens an interpolation
+            if c == "\\":
+                i += 2
+                continue
             if c == "`":
                 return i + 1
             if c == "$" and i + 1 < n and source[i + 1] == "{":
                 depth += 1
+                prev = ""
                 i += 2
                 continue
             i += 1
             continue
-        # inside an interpolation (depth > 0)
-        if c == "`":
-            i = _consume_template(source, i)
+        # inside an interpolation (depth > 0): classify like real code
+        if c in " \t\r\n":
+            i += 1
             continue
-        if c in "'\"":
-            i = _consume_string(source, i)
+        region = _skip_region(source, i, prev)
+        if region is not None:
+            i, prev = region
             continue
         if c == "{":
             depth += 1
-        elif c == "}":
+            prev = "{"
+            i += 1
+            continue
+        if c == "}":
             depth -= 1
+            prev = "}"
+            i += 1
+            continue
+        if c in _ID_START:
+            j = i + 1
+            while j < n and source[j] in _ID_CONT:
+                j += 1
+            prev = source[i:j]
+            i = j
+            continue
+        if c in _DIGITS or (c == "." and i + 1 < n and source[i + 1] in _DIGITS):
+            j = i + 1
+            while j < n and (source[j] in _ID_CONT or source[j] == "."):
+                j += 1
+            prev = source[i:j]
+            i = j
+            continue
+        op = _match_multichar_op(source, i)
+        if op:
+            prev = op
+            i += len(op)
+            continue
+        prev = c
         i += 1
     return i
 
@@ -164,6 +193,38 @@ def _consume_regex(source: str, i: int) -> int:
     return i
 
 
+def _skip_region(source: str, i: int, prev: str):
+    """If source[i] opens a non-code region -- a line/block comment, a regex
+    literal, a string, or a template literal -- consume it and return
+    (end_index, new_prev). Otherwise return None so the caller handles code.
+
+    This is the SINGLE region classifier shared by the top-level scanner and
+    the template-interpolation scanner, so both skip the same regions by the
+    same rules (no divergent second classifier -- the root cause of earlier
+    region-safety bugs). Comments are tested before regex (`//`/`/*` is never a
+    regex); the regex-vs-division call uses _prev_is_value, so a `/` after a
+    value is left to the caller as division."""
+    c = source[i]
+    n = len(source)
+    if c == "/" and source.startswith("//", i):
+        j = i + 2
+        while j < n and source[j] != "\n":
+            j += 1
+        return j, prev
+    if c == "/" and source.startswith("/*", i):
+        j = i + 2
+        while j < n and not source.startswith("*/", j):
+            j += 1
+        return min(j + 2, n), prev
+    if c == "/" and not _prev_is_value(prev):
+        return _consume_regex(source, i), "/re/"
+    if c in "'\"":
+        return _consume_string(source, i), "'str'"
+    if c == "`":
+        return _consume_template(source, i), "`t`"
+    return None
+
+
 def _candidates(source: str, target_lines: set[int]):
     """Yield (offset, length, op, new_text, description, line) for each mutation
     site in a CODE region on a target line. Single forward pass."""
@@ -181,41 +242,13 @@ def _candidates(source: str, target_lines: set[int]):
         if c in " \t\r":
             i += 1
             continue
-        # comments
-        if c == "/" and source.startswith("//", i):
-            i += 2
-            while i < n and source[i] != "\n":
-                i += 1
-            continue
-        if c == "/" and source.startswith("/*", i):
-            j = i + 2
-            while j < n and not source.startswith("*/", j):
-                j += 1
-            j = min(j + 2, n)
+        # non-code regions (comment / regex / string / template) via the shared
+        # single classifier -- same rules the interpolation scanner uses.
+        region = _skip_region(source, i, prev)
+        if region is not None:
+            j, prev = region
             line += source.count("\n", i, j)
             i = j
-            continue
-        # regex literal: a `/` that is not dividing a value opens a regex whose
-        # interior is never mutated (invariant #3). This catches a `/` after a
-        # multi-char operator (`&&`/`=>`/`==`/...), which a punct allow-set misses.
-        if c == "/" and not _prev_is_value(prev):
-            j = _consume_regex(source, i)
-            line += source.count("\n", i, j)
-            i = j
-            prev = "/re/"
-            continue
-        # strings + template
-        if c in "'\"":
-            j = _consume_string(source, i)
-            line += source.count("\n", i, j)
-            i = j
-            prev = "'str'"
-            continue
-        if c == "`":
-            j = _consume_template(source, i)
-            line += source.count("\n", i, j)
-            i = j
-            prev = "`t`"
             continue
         # identifier / keyword
         if c in _ID_START:
