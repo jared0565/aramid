@@ -31,6 +31,7 @@ from aramid.consumers import llm_review as _llm_review  # noqa: F401  (registers
 from aramid.consumers import mutation as _mutation  # noqa: F401  (registers itself)
 from aramid.consumers import fuzz as _fuzz  # noqa: F401  (registers itself)
 from aramid.consumers import js_mutation as _js_mutation  # noqa: F401  (registers itself)
+from aramid.consumers import dast as _dast  # noqa: F401  (registers itself)
 
 
 def _now() -> str:
