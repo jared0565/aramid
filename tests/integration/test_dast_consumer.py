@@ -8,8 +8,13 @@ from aramid.ledger import Ledger
 from aramid.queue import QueueItem
 
 
+# A distinct-char head (not "h"*40) so a wrong head[:12] slice length would break
+# the give-up test's seeded-note prefix. 40 hex-ish chars, all distinct in [:12].
+_HEAD = "0123456789abcdef0123456789abcdef01234567"
+
+
 def _item():
-    return QueueItem(id="q1", base="b" * 40, head="h" * 40, score=55,
+    return QueueItem(id="q1", base="b" * 40, head=_HEAD, score=55,
                      reasons=("t",), state="queued", created_at="t", updated_at="t")
 
 
@@ -106,7 +111,7 @@ def test_give_up_after_three_unreachable(tmp_path, monkeypatch):
     r, cfg = _cfg(tmp_path, monkeypatch,
                   "schema_version = 1\n[dast]\nbase_url = \"http://127.0.0.1:1/\"\ntimeout_s = 1\n")
     led = Ledger(r / ".aramid" / "ledger.db")
-    head12 = ("h" * 40)[:12]
+    head12 = _HEAD[:12]
     try:
         for i in range(3):
             led.append(Event(EventType.CONSUMER_RUN_FINISHED, f"r{i}", "t",
