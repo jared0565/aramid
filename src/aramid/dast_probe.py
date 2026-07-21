@@ -156,7 +156,12 @@ def _check_cookies(resp: _Response, is_https: bool) -> list:
     for raw in _all_headers(resp, "set-cookie"):
         # cookie NAME is safe to show; the VALUE is never emitted
         name = raw.split("=", 1)[0].strip()
-        attrs = raw.lower()
+        # Match flags as delimited ATTRIBUTES (everything after the first ';'), NOT
+        # as substrings of the whole line -- else a cookie whose VALUE contains
+        # "secure"/"httponly"/"samesite" would falsely look flagged (M-c false
+        # negative). A cookie with no ';' yields attrs {""} -> all flags reported.
+        _, _, attr_str = raw.partition(";")
+        attrs = {tok.split("=", 1)[0].strip().lower() for tok in attr_str.split(";")}
         if is_https and "secure" not in attrs:
             out.append(DastFinding("dast-cookie-secure", "GET", "/", "medium",
                                    f"cookie {name!r} set without Secure",

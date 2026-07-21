@@ -4,7 +4,8 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 import pytest
 
 from aramid.dast_probe import (DastUnreachable, _Response, _all_headers,
-                               _check_transport, _fetch, _header, _same_host, probe)
+                               _check_cookies, _check_transport, _fetch, _header,
+                               _same_host, probe)
 
 
 class _Handler(BaseHTTPRequestHandler):
@@ -185,6 +186,40 @@ def test_cookie_all_flags_present_not_flagged(harness):
                             ("Set-Cookie", "sid=x; HttpOnly; SameSite=Lax")], b"x")})
     fs = probe(base, [], 5.0)
     assert not any(c.startswith("dast-cookie-") for c in _checks(fs))
+
+
+def _cookie_resp(*set_cookie_values):
+    return _Response(200, [("Set-Cookie", v) for v in set_cookie_values], "", "http://h/")
+
+
+def test_cookie_value_containing_httponly_still_flagged():
+    # M-c: a VALUE that merely contains "httponly" must not suppress the finding.
+    findings = _check_cookies(_cookie_resp("token=httponly-abc123; Path=/"), is_https=True)
+    checks = {f.check for f in findings}
+    assert "dast-cookie-httponly" in checks
+    assert "dast-cookie-secure" in checks
+    assert "dast-cookie-samesite" in checks
+
+
+def test_cookie_value_containing_secure_still_flagged():
+    findings = _check_cookies(_cookie_resp("sid=secure-value-1; HttpOnly; SameSite=Lax"),
+                              is_https=True)
+    checks = {f.check for f in findings}
+    assert "dast-cookie-secure" in checks          # value contains "secure", no real Secure attr
+    assert "dast-cookie-httponly" not in checks     # real HttpOnly attr present
+    assert "dast-cookie-samesite" not in checks     # real SameSite attr present
+
+
+def test_cookie_no_attributes_flags_all():
+    findings = _check_cookies(_cookie_resp("sid=abc123"), is_https=True)
+    assert {f.check for f in findings} == {
+        "dast-cookie-secure", "dast-cookie-httponly", "dast-cookie-samesite"}
+
+
+def test_cookie_all_flags_present_not_flagged_regression():
+    findings = _check_cookies(_cookie_resp("sid=x; Secure; HttpOnly; SameSite=Lax"),
+                              is_https=True)
+    assert findings == []
 
 
 def test_transport_plaintext_flagged(harness):
