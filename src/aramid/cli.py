@@ -106,10 +106,11 @@ def build_parser() -> argparse.ArgumentParser:
                                  help="learned model-selection report (--rebuild: replay registry ledgers)")
     p_autolearn.add_argument("--rebuild", action="store_true")
 
-    p_arm = sub.add_parser("arm", help="end a WARN-only bake (semgrep default, --llm for the LLM reviewer, --autolearn for learned uplift)")
+    p_arm = sub.add_parser("arm", help="end a WARN-only bake (semgrep default, --llm for the LLM reviewer, --autolearn for learned uplift, --tdd for code-without-test findings)")
     arm_which = p_arm.add_mutually_exclusive_group()
     arm_which.add_argument("--llm", action="store_true")
     arm_which.add_argument("--autolearn", action="store_true")
+    arm_which.add_argument("--tdd", action="store_true")
     sub.add_parser("update-rules", help="refresh the vendored semgrep ruleset")
 
     p_uninstall = sub.add_parser("uninstall", help="reverse init")
@@ -209,7 +210,7 @@ def main(argv: list[str] | None = None) -> int:
         return cmd_autolearn(root, rebuild=args.rebuild)
 
     if args.command == "arm":
-        return cmd_arm(root, llm=args.llm, autolearn=args.autolearn)
+        return cmd_arm(root, llm=args.llm, autolearn=args.autolearn, tdd=args.tdd)
 
     if args.command == "update-rules":
         return cmd_update_rules(root)

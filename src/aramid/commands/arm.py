@@ -25,6 +25,8 @@ from pathlib import Path
 # swallowed -- safe because these keys only ever hold true/false.
 _KEY_RE = re.compile(
     r"(?m)^semgrep_block_armed[^\S\n]*=[^\S\n]*[^\s#]+(?P<c>[^\S\n]*#[^\n]*)?[^\S\n]*$")
+_TDD_KEY_RE = re.compile(
+    r"(?m)^tdd_block_armed[^\S\n]*=[^\S\n]*[^\s#]+(?P<c>[^\S\n]*#[^\n]*)?[^\S\n]*$")
 _LLM_KEY_RE = re.compile(
     r"(?m)^llm_block_armed[^\S\n]*=[^\S\n]*[^\s#]+(?P<c>[^\S\n]*#[^\n]*)?[^\S\n]*$")
 _LLM_SECTION_RE = re.compile(r"(?m)^\[llm\]\s*$")
@@ -73,7 +75,7 @@ def _arm_autolearn_text(text: str) -> str:
     return text + prefix + "[llm.autolearn]\narmed = true\n"
 
 
-def cmd_arm(root, llm: bool = False, autolearn: bool = False) -> int:
+def cmd_arm(root, llm: bool = False, autolearn: bool = False, tdd: bool = False) -> int:
     root = Path(root)
     toml_path = root / "aramid.toml"
     if not toml_path.exists():
@@ -104,6 +106,21 @@ def cmd_arm(root, llm: bool = False, autolearn: bool = False) -> int:
         print(f"aramid: arm: llm_block_armed=true written to {toml_path}")
         print("aramid: arm: LLM bake ended -- confirmed-CRITICAL llm-review "
               "findings now BLOCK at pre-push.")
+        return 0
+
+    if tdd:
+        if _TDD_KEY_RE.search(text):
+            new_text = _armed_sub(_TDD_KEY_RE, "tdd_block_armed = true", text)
+        else:
+            m = _NEXT_SECTION_RE.search(text)
+            if m:
+                new_text = (text[:m.start()] + "tdd_block_armed = true\n" + text[m.start():])
+            else:
+                prefix = "" if not text or text.endswith("\n") else "\n"
+                new_text = text + prefix + "tdd_block_armed = true\n"
+        toml_path.write_text(new_text, encoding="utf-8")
+        print(f"aramid: arm: tdd_block_armed=true written to {toml_path}")
+        print("aramid: arm: TDD bake ended -- code-without-test findings now BLOCK at pre-push.")
         return 0
 
     if _KEY_RE.search(text):
