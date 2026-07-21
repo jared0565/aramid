@@ -114,6 +114,16 @@ def diff_text(root: Path, base: str | None, head: str, max_bytes: int = 400_000,
     return text.encode("utf-8", "replace")[:max_bytes].decode("utf-8", "ignore")
 
 
+def is_test_file(rel: str) -> bool:
+    """True for pytest-style test files (canonical helper; the mutation/fuzz/
+    js_mutation consumers keep their own local copies, left untouched)."""
+    p = rel.replace("\\", "/")
+    name = p.rsplit("/", 1)[-1]
+    if p.startswith("tests/") or "/tests/" in p:
+        return True
+    return name.endswith(".py") and (name.startswith("test_") or name.endswith("_test.py"))
+
+
 _HUNK_RE = re.compile(r"@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@")
 
 
