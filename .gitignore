@@ -6,3 +6,8 @@ __pycache__/
 *.pyc
 .superpowers/
 *.egg-info/
+
+# Graphite
+**/.cache/graphite/
+**/.graphite/
+.graphite-daemon/
