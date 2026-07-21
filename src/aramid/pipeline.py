@@ -26,7 +26,7 @@ from pathlib import Path
 from typing import Callable
 
 from aramid import config as config_mod
-from aramid import gitutil, policy, redact
+from aramid import gitutil, policy, redact, tdd
 from aramid import review as review_mod
 from aramid.detectors import detect_package_manager, detect_stacks, detect_tests
 from aramid.fingerprint import normalize_path
@@ -271,6 +271,12 @@ def run_gate(root: Path, gate: Gate, mode: str, cfg: config_mod.Config, ledger: 
     for key, result in results.items():
         all_raws.extend(selected[key].parse(result, ctx))
 
+    # TDD gate (1a): synchronous git-fact code-without-test producer. PRE_PUSH
+    # only; joins the raw stream so classify/fingerprint/ratchet/overrides all
+    # apply. Fail-open inside tdd.scan -- never raises here.
+    if gate is Gate.PRE_PUSH:
+        all_raws.extend(tdd.scan(ctx, cfg))
+
     # secrets never land in logs, raw -- collected before writing them out.
     raw_secrets = [r.secret for r in all_raws if r.secret]
     _write_logs(root, run_id, flat_results, raw_secrets)
@@ -301,7 +307,8 @@ def run_gate(root: Path, gate: Gate, mode: str, cfg: config_mod.Config, ledger: 
         findings = [
             replace(f, verdict=Verdict.BLOCK)
             if (f.id in new_ids and f.verdict is Verdict.WARN
-                and f.rule != deps.DEPS_SHAPE_DRIFT_RULE)
+                and f.rule != deps.DEPS_SHAPE_DRIFT_RULE
+                and f.tool != "tdd")
             else f
             for f in findings
         ]

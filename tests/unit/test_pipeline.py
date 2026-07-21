@@ -313,6 +313,9 @@ def test_new_warn_finding_escalates_to_block_at_prepush(tmp_path, monkeypatch):
     monkeypatch.setitem(pipeline.RUNNERS, "fake",
                          _fake(RunnerResult("fake", ToolState.OK), raws=[raw]))
     monkeypatch.setitem(pipeline.GATE_RUNNER_KEYS, Gate.PRE_PUSH, ["fake"])
+    # isolate from the real tdd producer (this repo's a.py has no test) so
+    # this test only exercises the eslint ratchet-escalation path.
+    monkeypatch.setattr(pipeline.tdd, "scan", lambda ctx, cfg: [])
 
     result = pipeline.run_gate(root, Gate.PRE_PUSH, "range", cfg, ledger, run_id="run-f")
 
@@ -338,6 +341,9 @@ def test_shape_drift_warn_not_escalated_to_block_at_prepush(tmp_path, monkeypatc
     monkeypatch.setitem(pipeline.RUNNERS, "fake",
                          _fake(RunnerResult("fake", ToolState.OK), raws=[raw]))
     monkeypatch.setitem(pipeline.GATE_RUNNER_KEYS, Gate.PRE_PUSH, ["fake"])
+    # isolate from the real tdd producer (this repo's a.py has no test) so
+    # this test only exercises the deps-shape-drift ratchet-exemption path.
+    monkeypatch.setattr(pipeline.tdd, "scan", lambda ctx, cfg: [])
 
     result = pipeline.run_gate(root, Gate.PRE_PUSH, "range", cfg, ledger, run_id="run-drift")
 
@@ -487,3 +493,43 @@ def test_overrides_from_ledger_carries_reason(tmp_path):
     assert len(records) == 1
     assert records[0].id == "id1"
     assert records[0].reason == "audit trail"
+
+
+# ------------------------------------------------------- (tdd) pre-push ----
+
+def test_tdd_disarmed_warns_and_is_ratchet_exempt(tmp_path, monkeypatch):
+    root = _repo(tmp_path)
+    cfg = _cfg(root, tmp_path, monkeypatch)
+    ledger = _ledger(tmp_path)
+
+    raw = RawFinding(tool="tdd", rule="code-without-test", severity_raw="medium",
+                     file="a.py", line=0, message="code changed with no new test in this range")
+    monkeypatch.setattr(pipeline.tdd, "scan", lambda ctx, cfg: [raw])
+    monkeypatch.setitem(pipeline.GATE_RUNNER_KEYS, Gate.PRE_PUSH, [])
+
+    result = pipeline.run_gate(root, Gate.PRE_PUSH, "range", cfg, ledger, run_id="run-tdd-w")
+
+    tdd_findings = [f for f in result.findings if f.tool == "tdd"]
+    assert len(tdd_findings) == 1
+    assert tdd_findings[0].verdict is Verdict.WARN          # not escalated
+    assert result.exit_code == 0                            # ratchet-exempt: does NOT block
+    ledger.close()
+
+
+def test_tdd_armed_blocks(tmp_path, monkeypatch):
+    root = _repo(tmp_path)
+    cfg = _cfg(root, tmp_path, monkeypatch)
+    cfg.tdd_block_armed = True
+    ledger = _ledger(tmp_path)
+
+    raw = RawFinding(tool="tdd", rule="code-without-test", severity_raw="medium",
+                     file="a.py", line=0, message="code changed with no new test in this range")
+    monkeypatch.setattr(pipeline.tdd, "scan", lambda ctx, cfg: [raw])
+    monkeypatch.setitem(pipeline.GATE_RUNNER_KEYS, Gate.PRE_PUSH, [])
+
+    result = pipeline.run_gate(root, Gate.PRE_PUSH, "range", cfg, ledger, run_id="run-tdd-a")
+
+    tdd_findings = [f for f in result.findings if f.tool == "tdd"]
+    assert tdd_findings[0].verdict is Verdict.BLOCK
+    assert result.exit_code == 1
+    ledger.close()
