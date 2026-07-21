@@ -105,3 +105,92 @@ def test_gate_skips_malformed_rec_but_surfaces_wellformed(tmp_path):
         led.close()
     assert [f.id for f in got] == ["m" * 64]
     assert got[0].verdict is Verdict.BLOCK
+
+
+def test_resolve_when_source_touched(tmp_path):
+    led = Ledger(tmp_path / "l.db")
+    try:
+        _seed(led, _mut_finding())                      # on src/pkg/x.py
+        resolved = mutation_gate.auto_resolve_mutation(
+            led, "r1", NOW, {"src/pkg/x.py"})
+        state = led.open_findings()
+    finally:
+        led.close()
+    assert resolved == ["m" * 64]
+    assert state["m" * 64]["status"] == "fixed"
+
+
+def test_resolve_when_mapped_test_added(tmp_path):
+    led = Ledger(tmp_path / "l.db")
+    try:
+        _seed(led, _mut_finding())                      # module stem "x"
+        resolved = mutation_gate.auto_resolve_mutation(
+            led, "r1", NOW, {"tests/test_x.py"})        # test_<module>.py
+    finally:
+        led.close()
+    assert resolved == ["m" * 64]
+
+
+def test_resolve_when_underscore_test_added(tmp_path):
+    led = Ledger(tmp_path / "l.db")
+    try:
+        _seed(led, _mut_finding())
+        resolved = mutation_gate.auto_resolve_mutation(
+            led, "r1", NOW, {"src/pkg/x_test.py"})      # <module>_test.py
+    finally:
+        led.close()
+    assert resolved == ["m" * 64]
+
+
+def test_no_resolve_for_unrelated_test(tmp_path):
+    led = Ledger(tmp_path / "l.db")
+    try:
+        _seed(led, _mut_finding())                      # module "x"
+        resolved = mutation_gate.auto_resolve_mutation(
+            led, "r1", NOW, {"tests/test_y.py"})        # different module
+        state = led.open_findings()
+    finally:
+        led.close()
+    assert resolved == []
+    assert state["m" * 64]["status"] == "open"
+
+
+def test_no_resolve_for_unrelated_nontest(tmp_path):
+    led = Ledger(tmp_path / "l.db")
+    try:
+        _seed(led, _mut_finding())
+        resolved = mutation_gate.auto_resolve_mutation(
+            led, "r1", NOW, {"README.md", "src/pkg/other.py"})
+    finally:
+        led.close()
+    assert resolved == []
+
+
+def test_resolve_skips_malformed_rec_without_raising(tmp_path):
+    """A rec with file stored as null must be SKIPPED -- stays open, never
+    crashes."""
+    led = Ledger(tmp_path / "l.db")
+    try:
+        _seed_raw(led, "d" * 64, {"tool": "mutation", "file": None,
+                                  "line": 1, "severity": "medium"})
+        resolved = mutation_gate.auto_resolve_mutation(
+            led, "r1", NOW, {"src/pkg/x.py"})
+        state = led.open_findings()
+    finally:
+        led.close()
+    assert resolved == []
+    assert state["d" * 64]["status"] == "open"
+
+
+def test_resolution_before_materialize_no_double_surface(tmp_path):
+    """After auto_resolve_mutation fires, mutation_gate_findings must not
+    re-surface the resolved finding (the run_gate ordering: resolve, then
+    materialize)."""
+    led = Ledger(tmp_path / "l.db")
+    try:
+        _seed(led, _mut_finding())
+        mutation_gate.auto_resolve_mutation(led, "r1", NOW, {"tests/test_x.py"})
+        got = mutation_gate.mutation_gate_findings(_cfg(True), led, Gate.PRE_PUSH)
+    finally:
+        led.close()
+    assert got == []
