@@ -889,30 +889,45 @@ Expected: PASS (9 passed).
 
 - [ ] **Step 6: Write the failing cli dispatch/mutual-exclusion tests**
 
-Append to `tests/integration/test_cli_dispatch.py` (mirror the existing `arm --tdd` dispatch tests; the file already imports `cli`/`main` and monkeypatches `cmd_arm`). Add:
+Append to `tests/integration/test_cli_dispatch.py` (the file already imports `cli`, `Path`, `subprocess`, `sys` and monkeypatches `cli.cmd_arm`). Mirror the existing `test_arm_dispatch_with_tdd_flag` / `test_arm_dispatch_tdd_and_llm_mutually_exclusive` shapes exactly:
 
 ```python
-def test_arm_mutation_dispatches(monkeypatch):
-    seen = {}
-    monkeypatch.setattr("aramid.cli.cmd_arm",
-                        lambda root, llm=False, autolearn=False, tdd=False,
-                        mutation=False: seen.update(
-                            llm=llm, autolearn=autolearn, tdd=tdd, mutation=mutation) or 0)
+def test_arm_dispatch_with_mutation_flag(monkeypatch):
+    captured = {}
+    monkeypatch.setattr(cli, "cmd_arm",
+                        lambda root, llm=False, autolearn=False, tdd=False, mutation=False:
+                        captured.update(llm=llm, autolearn=autolearn, tdd=tdd,
+                                        mutation=mutation) or 0)
+
     assert cli.main(["arm", "--mutation"]) == 0
-    assert seen == {"llm": False, "autolearn": False, "tdd": False, "mutation": True}
+    assert captured["mutation"] is True
+    assert captured["llm"] is False
+    assert captured["autolearn"] is False
+    assert captured["tdd"] is False
 
 
-def test_arm_mutation_and_llm_mutually_exclusive():
-    # argparse mutually-exclusive group -> SystemExit(2) -> cli remaps to 3.
-    assert cli.main(["arm", "--mutation", "--llm"]) == 3
+def test_arm_dispatch_mutation_and_llm_mutually_exclusive():
+    rc = subprocess.run([sys.executable, "-m", "aramid", "arm", "--mutation", "--llm"],
+                        capture_output=True, text=True)
+    assert rc.returncode == 3
 ```
 
-> **Implementer note:** match the existing dispatch tests in this file for the exact monkeypatch target and lambda shape — if the existing `arm --tdd` dispatch test patches `cmd_arm` with a different signature, widen it to accept `mutation=False` too (a strengthening, not a rewrite), the same way Task 5 of 1a widened the tdd dispatch lambdas.
+- [ ] **Step 7: Widen the FOUR existing dispatch-test lambdas (else they break)**
 
-- [ ] **Step 7: Run to verify failure, then wire the cli flag**
+The existing `test_arm_dispatch`, `test_arm_dispatch_with_llm_flag`, `test_arm_dispatch_with_autolearn_flag`, and `test_arm_dispatch_with_tdd_flag` monkeypatch `cmd_arm` with a lambda whose signature is `lambda root, llm=False, autolearn=False, tdd=False:`. Once Step 8 makes the cli dispatch call `cmd_arm(..., mutation=args.mutation)`, that keyword hits these lambdas and raises `TypeError`. In **each** of the four, add `, mutation=False` to the lambda's parameter list — a non-weakening widening; **leave every existing assertion and captured tuple/dict unchanged** (these tests do not assert on `mutation`; only the new Step-6 test does). Example (test_arm_dispatch):
 
-Run: `python -m pytest tests/integration/test_cli_dispatch.py -k mutation -v`
-Expected: FAIL (`--mutation` is not a recognized arm flag → exit 3 for the dispatch test).
+```python
+    monkeypatch.setattr(cli, "cmd_arm",
+                        lambda root, llm=False, autolearn=False, tdd=False, mutation=False:
+                        calls.append((root, llm, autolearn, tdd)) or 0)
+```
+
+Apply the identical `, mutation=False` insertion to the other three (their capture bodies stay exactly as they are).
+
+- [ ] **Step 8: Run to verify failure, then wire the cli flag**
+
+Run: `python -m pytest tests/integration/test_cli_dispatch.py -k "mutation" -v`
+Expected: FAIL — `--mutation` is an unrecognized arm flag (the dispatch test's `cli.main(["arm","--mutation"])` currently returns 3, and the subprocess test likewise won't yet return 3 for the right reason).
 
 In `src/aramid/cli.py`, add `--mutation` to the mutually-exclusive arm group (after cli.py:113):
 
@@ -930,12 +945,12 @@ Change the dispatch (cli.py:213) to:
                        tdd=args.tdd, mutation=args.mutation)
 ```
 
-- [ ] **Step 8: Run the cli tests to verify they pass**
+- [ ] **Step 9: Run the whole cli-dispatch file to verify all pass**
 
-Run: `python -m pytest tests/integration/test_cli_dispatch.py -k mutation -v`
-Expected: PASS (2 passed).
+Run: `python -m pytest tests/integration/test_cli_dispatch.py -v`
+Expected: PASS — the four widened arm tests, both new mutation tests, and every other dispatch test all green (confirms the widening didn't break the existing four).
 
-- [ ] **Step 9: Commit**
+- [ ] **Step 10: Commit**
 
 ```bash
 git add src/aramid/commands/arm.py src/aramid/cli.py tests/unit/test_arm_mutation.py tests/integration/test_cli_dispatch.py
