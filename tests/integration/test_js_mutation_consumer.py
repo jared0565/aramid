@@ -22,7 +22,7 @@ def _sha(root):
 
 # A JS repo whose test SCRIPT exists (so detect_tests -> "npm"); the calc source
 # has a mutable `>=` on the changed line.
-def _js_repo(tmp_path, with_node_modules=True):
+def _js_repo(tmp_path, with_node_modules=True, wire_pkg=False):
     r = tmp_path / "r"
     r.mkdir()
     _git(r, "init", "-q", "-b", "main")
@@ -33,9 +33,20 @@ def _js_repo(tmp_path, with_node_modules=True):
     (r / "aramid.toml").write_text(
         "schema_version = 1\n[js_mutation]\nmax_mutants = 3\n"
         "wall_budget_s = 300\nmutant_timeout_s = 60\n", encoding="utf-8")
-    (r / "calc.js").write_text("function isAdult(age) {\n  return true;\n}\n"
-                               "module.exports = { isAdult };\n", encoding="utf-8")
-    (r / "test.js").write_text("process.exit(0);\n", encoding="utf-8")
+
+    # calc.js has a mutable `>=` on the changed line. When wire_pkg is set, calc.js
+    # also require()s a hand-written package that ONLY resolves through the
+    # node_modules junction, and test.js require()s calc.js -- so if the junction is
+    # not wired, `node test.js` throws MODULE_NOT_FOUND and the baseline fails
+    # (never a survivor). The require line is in BOTH commits so the diff stays the
+    # `return` line and the mutant target is unchanged. (D4)
+    req = "const { bump } = require('isadult-helper');\n" if wire_pkg else ""
+    calc_base = f"{req}function isAdult(age) {{\n  return true;\n}}\nmodule.exports = {{ isAdult }};\n"
+    calc_feat = f"{req}function isAdult(age) {{\n  return age >= 18;\n}}\nmodule.exports = {{ isAdult }};\n"
+    test_js = ("const { isAdult } = require('./calc.js');\nprocess.exit(0);\n"
+               if wire_pkg else "process.exit(0);\n")
+    (r / "calc.js").write_text(calc_base, encoding="utf-8")
+    (r / "test.js").write_text(test_js, encoding="utf-8")
     # node_modules must never be a tracked path: `git worktree add` would then
     # check it out into the worktree, and a real `mklink /J` / os.symlink
     # cannot land on top of an already-existing (non-empty) directory.
@@ -43,11 +54,17 @@ def _js_repo(tmp_path, with_node_modules=True):
     if with_node_modules:
         (r / "node_modules").mkdir()
         (r / "node_modules" / ".marker").write_text("real deps", encoding="utf-8")
+        if wire_pkg:
+            pkg = r / "node_modules" / "isadult-helper"
+            pkg.mkdir()
+            (pkg / "package.json").write_text(
+                '{"name":"isadult-helper","main":"index.js"}\n', encoding="utf-8")
+            (pkg / "index.js").write_text(
+                "module.exports = { bump: (n) => n + 1 };\n", encoding="utf-8")
     _git(r, "add", "-A")
     _git(r, "commit", "-q", "-m", "base")
     base = _sha(r)
-    (r / "calc.js").write_text("function isAdult(age) {\n  return age >= 18;\n}\n"
-                               "module.exports = { isAdult };\n", encoding="utf-8")
+    (r / "calc.js").write_text(calc_feat, encoding="utf-8")
     _git(r, "add", "-A")
     _git(r, "commit", "-q", "-m", "feature")
     return r, base, _sha(r)
@@ -233,13 +250,19 @@ def _no_worktrees(r):
 
 @pytest.mark.skipif(not _HAS_NODE, reason="node+npm not on PATH (Python-only CI)")
 def test_real_npm_weak_suite_reports_survivor(tmp_path, monkeypatch):
-    # End-to-end with a REAL `npm test`: a weak test (exit 0 regardless) cannot
-    # kill the `>= -> >` mutant on the changed line, so it must be reported.
-    r, base, head = _js_repo(tmp_path)   # test.js is `process.exit(0)` = weak
+    # End-to-end with a REAL `npm test`. wire_pkg=True makes test.js -> calc.js ->
+    # require('isadult-helper'), which ONLY resolves through the node_modules
+    # junction. So the baseline passing (and the weak suite then reporting the
+    # `>= -> >` survivor) PROVES resolution went through the junction (D4).
+    # DoD sanity check (manual, not committed): stub jsc._link_node_modules to a
+    # no-op returning True and this test goes red (MODULE_NOT_FOUND -> baseline
+    # fails -> no findings).
+    r, base, head = _js_repo(tmp_path, wire_pkg=True)
     res = _consume(r, base, head, monkeypatch, tmp_path)
     assert res.state == "ok"
     assert res.findings, "the weak suite cannot kill the mutant -> survivor"
     assert res.findings[0].tool == "js-mutation"
+    assert res.extra["survived"] >= 1
     assert _no_worktrees(r)
 
 
