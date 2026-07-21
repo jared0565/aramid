@@ -254,3 +254,25 @@ def test_tdd_armed_is_block():
     _sev, verdict = policy.classify("tdd", "code-without-test", "medium",
                                     Gate.PRE_PUSH, _tdd_cfg(armed=True))
     assert verdict is Verdict.BLOCK
+
+
+# --- classify: mutation (sub-project 1b) ------------------------------------
+
+def _mut_cfg(armed: bool):
+    # classify reads cfg.block_rules early, then the tool branch; a minimal
+    # namespace with the attributes classify touches is enough.
+    return SimpleNamespace(block_rules={}, mutation={"mutation_block_armed": armed})
+
+
+def test_mutation_disarmed_is_warn():
+    sev, verdict = policy.classify("mutation", "flip_comparison", "medium",
+                                   Gate.PRE_PUSH, _mut_cfg(armed=False))
+    assert sev is Severity.MEDIUM
+    assert verdict is Verdict.WARN
+
+
+def test_mutation_armed_is_block():
+    sev, verdict = policy.classify("mutation", "flip_comparison", "medium",
+                                   Gate.PRE_PUSH, _mut_cfg(armed=True))
+    assert sev is Severity.MEDIUM       # assert severity in BOTH (1a T2a lesson)
+    assert verdict is Verdict.BLOCK

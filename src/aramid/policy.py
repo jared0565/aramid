@@ -102,6 +102,17 @@ def classify(tool: str, rule: str, severity_raw: str, gate: Gate, cfg) -> tuple[
         armed = getattr(cfg, "tdd_block_armed", False)
         return severity, Verdict.BLOCK if armed else Verdict.WARN
 
+    # Mutation gate (1b): the drain's surviving-mutant findings. WARN during
+    # the bake; BLOCK once the repo opts in via [mutation].mutation_block_armed.
+    # Same shape as the tdd branch -- routing the verdict through classify (not
+    # only the gate seam) makes _has_genuine_block treat an armed mutation BLOCK
+    # as genuine with no check.py change, so it survives the fresh-clone
+    # downgrade. mutation_gate.mutation_gate_findings computes this SAME rule
+    # inline (mirroring llm_gate_findings); the two must agree.
+    if tool == "mutation":
+        armed = cfg.mutation.get("mutation_block_armed", False)
+        return severity, Verdict.BLOCK if armed else Verdict.WARN
+
     ruff_block = block_rules.get("ruff", {}).get("block", [])
     if tool == "ruff" and rule in ruff_block:
         return severity, Verdict.BLOCK

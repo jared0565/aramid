@@ -126,6 +126,7 @@ max_mutants = 20        # generated-and-tested per queue item
 wall_budget_s = 600     # whole-item wall clock for the mutant loop
 mutant_timeout_s = 120  # per pytest invocation (stage 1 and stage 2 alike)
 confirm_cap = 3         # full-suite confirmation runs per item
+mutation_block_armed = false   # NEW (1b) -- arms surviving-mutant findings; see policy.classify
 
 [tdd]
 enabled = true
