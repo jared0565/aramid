@@ -26,6 +26,7 @@ from aramid.runners.base import ToolState, run_subprocess
 
 NAME = "js_mutation"
 _BASELINE_GIVE_UP = 3
+_LINK_GIVE_UP = 3
 _JS_SUFFIXES = (".js", ".jsx", ".mjs", ".cjs", ".ts", ".tsx", ".mts", ".cts")
 
 # See consumers/mutation.py: budget-truncated batches -> pin occurrence_index 0.
@@ -125,6 +126,11 @@ def consume(item, ctx: DrainContext) -> ConsumerResult:
         return ConsumerResult(consumer=NAME, state="ok",
                               note="js mutation giving up: baseline persistently failing")
 
+    if base.prior_note_count(ctx.ledger, NAME, item.id,
+                             f"node_modules link failing @ {item.head[:12]}") >= _LINK_GIVE_UP:
+        return ConsumerResult(consumer=NAME, state="ok",
+                              note="js mutation giving up: node_modules link persistently failing")
+
     started = time.monotonic()
     stats = {"generated": 0, "tested": 0, "killed": 0, "survived": 0,
              "timeouts": 0, "errors": 0, "truncated": False}
@@ -140,8 +146,9 @@ def consume(item, ctx: DrainContext) -> ConsumerResult:
         try:
             linked = _link_node_modules(ctx.root, wt)
         except OSError as exc:
+            # Load-bearing prefix: the give-up counter matches note.startswith(prefix).
             return ConsumerResult(consumer=NAME, state="degraded",
-                                  note=f"could not link node_modules: {str(exc)[:150]}",
+                                  note=f"node_modules link failing @ {item.head[:12]}: {str(exc)[:150]}",
                                   duration_s=time.monotonic() - started)
 
         base_res = run_subprocess(test_argv, wt, mutant_timeout * 4)

@@ -189,6 +189,39 @@ def test_give_up_after_three_baseline_failures_head_scoped(tmp_path, monkeypatch
     assert "giving up" in res.note
 
 
+def _link_raises(src, wt):
+    raise OSError("mklink /J failed: simulated persistent link failure")
+
+
+def test_node_modules_link_failure_degrades_with_head_scoped_prefix(tmp_path, monkeypatch):
+    r, base, head = _js_repo(tmp_path)
+    _scripted(monkeypatch, [(ToolState.OK, 0)])          # pm gate + stubs
+    monkeypatch.setattr(jsc, "_link_node_modules", _link_raises)   # link fails
+    res = _consume(r, base, head, monkeypatch, tmp_path)
+    assert res.state == "degraded"
+    # note must START with the head-scoped prefix so prior_note_count can match it
+    assert res.note.startswith(f"node_modules link failing @ {head[:12]}")
+
+
+def test_give_up_after_three_node_modules_link_failures_head_scoped(tmp_path, monkeypatch):
+    r, base, head = _js_repo(tmp_path)
+    from aramid.ledger import Ledger
+    from aramid.models import Event, EventType
+    led = Ledger(r / ".aramid" / "ledger.db")
+    try:
+        for i in range(3):
+            led.append(Event(EventType.CONSUMER_RUN_FINISHED, f"r{i}", "t",
+                             payload={"consumer": "js_mutation", "item_id": "q1",
+                                      "note": f"node_modules link failing @ {head[:12]}"}))
+    finally:
+        led.close()
+    _scripted(monkeypatch, [(ToolState.OK, 0)])
+    monkeypatch.setattr(jsc, "_link_node_modules", _link_raises)   # would fail, but give-up first
+    res = _consume(r, base, head, monkeypatch, tmp_path)
+    assert res.state == "ok"
+    assert "giving up" in res.note
+
+
 _HAS_NODE = shutil.which("node") is not None and shutil.which("npm") is not None
 
 
