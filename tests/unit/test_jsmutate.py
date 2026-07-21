@@ -126,7 +126,7 @@ def test_int_bound_increments_integer_literal():
 
 
 def test_int_bound_skips_float_hex_and_bigint():
-    for lit in ("1.5", "0xff", "10n", "1e3"):
+    for lit in ("1.5", "0xff", "0b101", "0o17", "10n", "1e3"):
         src = f"function f() {{\n  return {lit};\n}}\n"
         muts = generate_mutants(src, {2})
         assert all(m.op != "int-bound" for m in muts), f"{lit} must not int-bound"
