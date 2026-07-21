@@ -190,3 +190,11 @@ def test_unterminated_string_does_not_hang_or_leak():
     src = "function f() {\n  return 'oops === ;\n}\n"   # unterminated string
     muts = generate_mutants(src, {2, 3})
     assert all("!==" not in m.source for m in muts)   # `===` was inside the string
+
+
+def test_consume_number_has_return_annotation():
+    import typing
+
+    from aramid.jsmutate import _consume_number
+    hints = typing.get_type_hints(_consume_number)
+    assert hints["return"] == tuple[int, bool, int]

@@ -232,7 +232,7 @@ def _skip_region(source: str, i: int, prev: str):
     return None
 
 
-def _consume_number(source: str, i: int):
+def _consume_number(source: str, i: int) -> tuple[int, bool, int]:
     """Return (end_index, is_plain_int, value). Non-decimal-integer forms
     (hex/bin/oct/float/exponent/bigint) return is_plain_int=False."""
     n = len(source)
