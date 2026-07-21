@@ -44,6 +44,7 @@ class Config:
     mutation: dict = field(default_factory=dict)
     fuzz: dict = field(default_factory=dict)
     js_mutation: dict = field(default_factory=dict)
+    dast: dict = field(default_factory=dict)
 
 
 def _user_config_path() -> Path:
@@ -108,6 +109,7 @@ def load_config(root: Path) -> Config:
         mutation=merged.get("mutation", {}),
         fuzz=merged.get("fuzz", {}),
         js_mutation=merged.get("js_mutation", {}),
+        dast=merged.get("dast", {}),
     )
 
 

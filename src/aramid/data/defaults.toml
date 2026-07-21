@@ -144,3 +144,12 @@ skip_name_patterns = [
   "*deploy*", "*delete*", "*remove*", "*drop*", "*push*", "*send*",
   "*upload*", "*kill*", "*wipe*", "*publish*", "*destroy*", "*truncate*",
 ]
+
+# --- Phase 2c-3 (spec section 8): drain-time DAST passive web-hygiene prober ---
+[dast]
+enabled = true
+base_url = ""            # e.g. "https://staging.example.com" -- empty => OK-skip
+paths = []               # extra paths to probe on top of the curated exposed set
+timeout_s = 10           # per-request timeout
+block_armed = false      # RESERVED: inert in 2c-3 (WARN-only); unit-4 wires the BLOCK branch
+# start_command = ""     # RESERVED for 2c-3b explicit-config auto-start; ignored here

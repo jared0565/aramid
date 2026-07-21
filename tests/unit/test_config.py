@@ -304,3 +304,14 @@ def test_js_mutation_defaults_present(tmp_path, monkeypatch):
     assert cfg.js_mutation.get("max_mutants") == 20
     assert cfg.js_mutation.get("wall_budget_s") == 600
     assert cfg.js_mutation.get("mutant_timeout_s") == 120
+
+
+def test_dast_defaults_present(tmp_path, monkeypatch):
+    from aramid import config as config_mod
+    monkeypatch.setattr(config_mod, "_user_config_path", lambda: tmp_path / "no-user.toml")
+    cfg = config_mod.load_config(tmp_path)
+    assert cfg.dast.get("enabled") is True
+    assert cfg.dast.get("base_url") == ""
+    assert cfg.dast.get("paths") == []
+    assert cfg.dast.get("timeout_s") == 10
+    assert cfg.dast.get("block_armed") is False
