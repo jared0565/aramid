@@ -17,6 +17,16 @@ _MAX_REDIRECTS = 2
 _USER_AGENT = "aramid-dast/1"
 _REDIRECT_STATUSES = (301, 302, 303, 307, 308)
 
+# (header canonical name, rule slug, severity, https_only)
+_HEADER_CHECKS = (
+    ("Strict-Transport-Security", "dast-header-hsts", "medium", True),
+    ("Content-Security-Policy", "dast-header-csp", "medium", False),
+    ("X-Frame-Options", "dast-header-xfo", "medium", False),
+    ("X-Content-Type-Options", "dast-header-xcto", "low", False),
+    ("Referrer-Policy", "dast-header-referrer", "low", False),
+    ("Permissions-Policy", "dast-header-permissions", "low", False),
+)
+
 
 class DastUnreachable(Exception):
     """base_url could not be contacted at all (connection refused / DNS /
@@ -108,3 +118,35 @@ def _fetch(url: str, method: str, timeout: float) -> _Response:
             continue
         return last
     return last                      # redirect budget exhausted -> last hop
+
+
+def _present_header_names(resp: _Response) -> str:
+    return ", ".join(sorted({k for k, _ in resp.headers})) or "(none)"
+
+
+def _check_headers(resp: _Response, is_https: bool) -> list:
+    out = []
+    present = _present_header_names(resp)
+    for name, rule, sev, https_only in _HEADER_CHECKS:
+        if https_only and not is_https:
+            continue
+        val = _header(resp, name)
+        if val is None or not val.strip():
+            out.append(DastFinding(
+                check=rule, method="GET", path="/", severity=sev,
+                message=f"{name} response header is missing",
+                evidence=f"present headers: {present}"))
+    return out
+
+
+def probe(base_url: str, paths: list, timeout_s: float) -> list:
+    """Run all v1 check families against base_url. Raises DastUnreachable if the
+    base_url itself cannot be contacted (the consumer degrades). Findings are
+    returned sorted by (path, check) for stable truncation/fingerprints."""
+    is_https = urlsplit(base_url).scheme == "https"
+    resp = _fetch(base_url, "GET", timeout_s)          # may raise DastUnreachable
+    findings: list = []
+    if resp.tls_error is None and resp.status > 0:
+        findings += _check_headers(resp, is_https)
+    findings.sort(key=lambda f: (f.path, f.check))
+    return findings

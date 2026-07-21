@@ -4,7 +4,7 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 import pytest
 
 from aramid.dast_probe import (DastUnreachable, _all_headers, _fetch, _header,
-                               _same_host)
+                               _same_host, probe)
 
 
 class _Handler(BaseHTTPRequestHandler):
@@ -113,3 +113,54 @@ def test_same_host():
     assert _same_host("http://h:80/a", "http://h:80/b")
     assert not _same_host("http://h/a", "http://other/a")
     assert not _same_host("http://h/a", "https://h/a")   # scheme differs
+
+
+_HTML = [("Content-Type", "text/html")]
+
+
+def _checks(findings):
+    return sorted(f.check for f in findings)
+
+
+def test_headers_all_missing_flagged(harness):
+    base, set_routes = harness
+    set_routes({"/": (200, list(_HTML), b"<html></html>")})
+    found = _checks(probe(base, [], 5.0))
+    # http target -> no HSTS check; the other five header checks all fire
+    assert "dast-header-csp" in found
+    assert "dast-header-xfo" in found
+    assert "dast-header-xcto" in found
+    assert "dast-header-referrer" in found
+    assert "dast-header-permissions" in found
+    assert "dast-header-hsts" not in found        # HSTS is https-only
+
+
+def test_headers_present_not_flagged(harness):
+    base, set_routes = harness
+    set_routes({"/": (200, _HTML + [
+        ("Content-Security-Policy", "default-src 'self'"),
+        ("X-Frame-Options", "DENY"),
+        ("X-Content-Type-Options", "nosniff"),
+        ("Referrer-Policy", "no-referrer"),
+        ("Permissions-Policy", "geolocation=()"),
+    ], b"<html></html>")})
+    found = _checks(probe(base, [], 5.0))
+    assert not any(c.startswith("dast-header-") for c in found)
+
+
+def test_header_finding_shape(harness):
+    base, set_routes = harness
+    set_routes({"/": (200, list(_HTML), b"x")})
+    f = next(f for f in probe(base, [], 5.0) if f.check == "dast-header-csp")
+    assert f.method == "GET" and f.path == "/" and f.severity in ("medium", "low")
+    assert "Content-Security-Policy" in f.message
+    # evidence is metadata, never the body
+    assert "x" != f.evidence and f.evidence
+
+
+def test_probe_findings_sorted(harness):
+    base, set_routes = harness
+    set_routes({"/": (200, list(_HTML), b"x")})
+    fs = probe(base, [], 5.0)
+    keys = [(f.path, f.check) for f in fs]
+    assert keys == sorted(keys)
