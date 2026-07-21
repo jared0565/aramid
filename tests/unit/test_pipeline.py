@@ -5,7 +5,7 @@ from types import SimpleNamespace
 
 from aramid import config, gitutil, pipeline
 from aramid.ledger import Ledger
-from aramid.models import EventType, Gate, Verdict
+from aramid.models import EventType, Finding, Gate, Severity, Source, Verdict
 from aramid.normalizer import RawFinding
 from aramid.runners.base import RunnerResult, ToolState
 
@@ -533,3 +533,66 @@ def test_tdd_armed_blocks(tmp_path, monkeypatch):
     assert tdd_findings[0].verdict is Verdict.BLOCK
     assert result.exit_code == 1
     ledger.close()
+
+
+_MUT_NOW = "2026-07-21T12:00:00+00:00"
+
+
+def _mut_repo(tmp_path):
+    r = tmp_path / "repo"
+    r.mkdir()
+    subprocess.run(["git", "init", "-q", "-b", "main"], cwd=r, check=True)
+    subprocess.run(["git", "config", "user.email", "t@t"], cwd=r, check=True)
+    subprocess.run(["git", "config", "user.name", "t"], cwd=r, check=True)
+    (r / "src").mkdir()
+    (r / "src" / "real.py").write_text("x = 1\n", encoding="utf-8")
+    subprocess.run(["git", "add", "."], cwd=r, check=True)
+    subprocess.run(["git", "commit", "-q", "-m", "c1"], cwd=r, check=True)
+    return r
+
+
+def _seed_mut(led, fid="g" * 64, file="src/pkg/ghost.py"):
+    # ghost.py is NOT in the repo -> auto_resolve_mutation never resolves it.
+    f = Finding(id=fid, tool="mutation", rule="flip_comparison",
+                severity_raw="medium", severity=Severity.MEDIUM,
+                verdict=Verdict.WARN, file=file, line=7,
+                message="mutant survived: flip_comparison", evidence="",
+                gate=Gate.ALL, source=Source.DETERMINISTIC)
+    led.record_run("r0", _MUT_NOW, "drain", set(), set(), [f])
+
+
+def test_pre_push_surfaces_mutation_finding(tmp_path, monkeypatch):
+    r = _mut_repo(tmp_path)
+    monkeypatch.setattr(pipeline, "GATE_RUNNER_KEYS",
+                        {**pipeline.GATE_RUNNER_KEYS, Gate.PRE_PUSH: []})
+    cfg = config.load_config(r)
+    led = Ledger(r / ".aramid" / "ledger.db")
+    try:
+        _seed_mut(led)
+        got = pipeline.run_gate(r, Gate.PRE_PUSH, "all", cfg, led)
+        assert got.exit_code == 0                       # disarmed WARN, ratchet-exempt
+        assert any(f.tool == "mutation" and f.verdict is Verdict.WARN
+                   for f in got.findings)
+
+        cfg.mutation["mutation_block_armed"] = True
+        got = pipeline.run_gate(r, Gate.PRE_PUSH, "all", cfg, led)
+        assert got.exit_code == 1                       # armed -> BLOCK
+        assert any(f.tool == "mutation" and f.verdict is Verdict.BLOCK
+                   for f in got.findings)
+    finally:
+        led.close()
+
+
+def test_mutation_findings_absent_at_pre_commit(tmp_path, monkeypatch):
+    r = _mut_repo(tmp_path)
+    monkeypatch.setattr(pipeline, "GATE_RUNNER_KEYS",
+                        {**pipeline.GATE_RUNNER_KEYS, Gate.PRE_COMMIT: []})
+    cfg = config.load_config(r)
+    cfg.mutation["mutation_block_armed"] = True
+    led = Ledger(r / ".aramid" / "ledger.db")
+    try:
+        _seed_mut(led)
+        got = pipeline.run_gate(r, Gate.PRE_COMMIT, "staged", cfg, led)
+        assert not any(f.tool == "mutation" for f in got.findings)
+    finally:
+        led.close()
