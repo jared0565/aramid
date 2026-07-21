@@ -34,6 +34,12 @@ Once installed, `git commit` and `git push` trigger the gate automatically via t
 installed hooks. Local hooks are convenience, not enforcement — `--no-verify` exists.
 The authoritative backstop is re-running `aramid check --all --strict --json` in CI.
 
+## Documentation
+
+- **[User Guide](docs/user-guide.md)** — task-oriented walkthrough: install, onboarding, the gate, running checks, the red-team drain, and each consumer.
+- **[Knowledge Base](docs/knowledge-base.md)** — reference: concepts glossary, full configuration reference, consumer reference, CLI commands, and exit codes.
+- **Design specs & implementation plans** — `docs/superpowers/specs/` and `docs/superpowers/plans/`.
+
 ## Exit-code contract
 
 | Code | Meaning |
@@ -61,8 +67,11 @@ under a budget rather than on every commit. Four phases:
      queue → budgeted scheduled drain → pluggable consumers, plus the regression attack pack.
    - **2b — done:** the LLM reviewer — evidence-bound adversarial review over a provider
      chain, cross-provider refute (self-refute fallback on single-provider installs), bake-then-arm blocking (detailed below).
-   - **2c — next:** the heavy adversarial tier — mutation testing, fuzz/property harness,
-     DAST — each a new drain consumer.
+   - **2c — in progress:** the heavy adversarial tier, each a new drain consumer —
+     mutation (2c-1), JS/TS mutation (2c-1b), fuzz/property harness (2c-2), and
+     DAST passive web-hygiene probing (2c-3) are all shipped. Remaining within 2c:
+     an explicit-config app auto-start runtime, nuclei enrichment, and armed-BLOCK
+     wiring for DAST.
 3. **Phase 3:** harness advisory layer — non-blocking, mid-development early warning.
 4. **Phase 4:** metering & governance — token budgets, ledger-derived regression tests.
 
@@ -111,6 +120,11 @@ drain-time consumers. 2c-1 (shipped) adds the mutation consumer: diff-touched
 functions are mutated in a throwaway worktree and mutants the full test suite
 cannot kill are recorded as WARN-tier test-gap findings (`[mutation]` config:
 budgets, two-stage targeted/confirm execution; Python repos with pytest).
+2c-1b (shipped) extends mutation to JavaScript/TypeScript: an owned token-level
+mutator (no AST) mutates the diff-touched lines inside a throwaway worktree with
+the repo's own `node_modules` junctioned in, running the project's `<pm> test`
+once per mutant; survivors the suite cannot kill are WARN-tier test-gap findings
+(`[js_mutation]` config: budgets; JS/TS repos with an npm/pnpm/yarn test script).
 2c-2 (shipped) adds the fuzz consumer: diff-touched type-hinted functions are
 called with deterministic seeded inputs in a throwaway worktree, and deep-crash
 exceptions (IndexError, KeyError, …) are recorded as WARN-tier findings — the
@@ -119,6 +133,15 @@ repos with type hints, no test suite required). Repro caveat: the seed
 reproduces a crash only for targets that are deterministic in their arguments —
 functions depending on external state (files, network, globals, time) may not
 replay from the recorded seed.
+2c-3 (shipped) adds the DAST consumer: an owned stdlib passive web-hygiene prober
+scans a user-declared `base_url` (never auto-started) with bounded one-shot HTTP
+requests, reporting missing security headers, insecure cookie flags, plaintext
+transport, exposed sensitive paths (`.git/config`, `.env`, …), and server version
+banners as WARN-tier findings. Evidence is metadata only — never response bodies
+or secret values. It OK-skips when no target is configured (a non-web repo never
+pins the queue) and gives up after repeated unreachable/erroring drains
+(`[dast]` config: `base_url`, `paths`, `timeout_s`; off by default until a target
+is set).
 
 ### Phase 2b: the LLM reviewer
 
