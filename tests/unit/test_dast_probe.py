@@ -97,6 +97,24 @@ def test_fetch_does_not_chase_cross_host_redirect(harness):
     assert "example.com" not in resp.final_url
 
 
+def test_fetch_stops_at_redirect_budget(harness):
+    base, set_routes = harness
+    # a same-host chain LONGER than _MAX_REDIRECTS (2): /a -> /b -> /c -> /d.
+    # The loop runs _MAX_REDIRECTS + 1 = 3 times (fetching /a, /b, /c); /c still
+    # redirects to /d but the budget is exhausted -> return the last hop attempted
+    # (a 302), never fetching /d.
+    set_routes({
+        "/a": (302, [("Location", "/b")], b""),
+        "/b": (302, [("Location", "/c")], b""),
+        "/c": (302, [("Location", "/d")], b""),
+        "/d": (200, [("Content-Type", "text/html")], b"too-far"),
+    })
+    resp = _fetch(base + "/a", "GET", 5.0)
+    assert resp.status == 302
+    assert resp.final_url.endswith("/c")
+    assert resp.body != "too-far"
+
+
 def test_fetch_bounds_body_read(harness):
     base, set_routes = harness
     set_routes({"/big": (200, [("Content-Type", "text/plain")], b"x" * (200 * 1024))})
