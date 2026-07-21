@@ -116,6 +116,25 @@ def test_same_host():
     assert not _same_host("http://h/a", "https://h/a")   # scheme differs
 
 
+def test_fetch_rejects_non_get_head_method(harness):
+    base, _ = harness
+    with pytest.raises(ValueError):
+        _fetch(base + "/", "POST", 5.0)
+
+
+def test_same_host_fails_closed_on_bad_port():
+    # an out-of-range port must not raise; treat as cross-host (don't chase)
+    assert _same_host("http://h:1/a", "http://h:99999/b") is False
+
+
+def test_fetch_does_not_chase_bad_port_redirect(harness):
+    base, set_routes = harness
+    set_routes({"/a": (302, [("Location", "http://127.0.0.1:99999/b")], b"")})
+    resp = _fetch(base + "/a", "GET", 5.0)
+    # bad-port redirect Location -> _same_host False -> not chased -> return the 302
+    assert resp.status == 302
+
+
 _HTML = [("Content-Type", "text/html")]
 
 

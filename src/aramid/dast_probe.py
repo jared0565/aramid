@@ -80,8 +80,14 @@ def _all_headers(resp: _Response, name: str) -> list:
 
 
 def _same_host(u1: str, u2: str) -> bool:
-    a, b = urlsplit(u1), urlsplit(u2)
-    return (a.scheme, a.hostname, a.port) == (b.scheme, b.hostname, b.port)
+    # A malformed port in a redirect Location is UNTRUSTED wire input -> fail CLOSED
+    # (treat as cross-host, never chase). Contrast _fetch's method guard, which
+    # RAISES because a bad method is a programmer error, not wire input.
+    try:
+        a, b = urlsplit(u1), urlsplit(u2)
+        return (a.scheme, a.hostname, a.port) == (b.scheme, b.hostname, b.port)
+    except ValueError:
+        return False
 
 
 def _fetch(url: str, method: str, timeout: float) -> _Response:
@@ -89,6 +95,11 @@ def _fetch(url: str, method: str, timeout: float) -> _Response:
     <= _MAX_BODY bytes. Returns _Response. A TLS validation failure returns a
     _Response with tls_error set (status 0). A connection-level failure (refused/
     DNS/timeout) raises DastUnreachable."""
+    # GET/HEAD only: this is a read-only passive prober. A non-GET/HEAD method is a
+    # PROGRAMMER error (never arrives from the wire) -> RAISE. Contrast _same_host,
+    # which fails CLOSED on untrusted redirect input rather than raising.
+    if method not in ("GET", "HEAD"):
+        raise ValueError(f"unsupported dast method: {method!r}")
     cur = url
     last = None
     for _ in range(_MAX_REDIRECTS + 1):
