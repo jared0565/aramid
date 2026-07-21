@@ -232,3 +232,25 @@ def test_llm_review_warns_even_when_semgrep_armed():
     sev, verdict = policy.classify("llm-review", "llm/logic", "high", Gate.PRE_PUSH, _cfg(armed=True))
     assert sev is Severity.HIGH
     assert verdict is Verdict.WARN
+
+
+# --- classify: tdd (sub-project 1a) ------------------------------------------
+
+def _tdd_cfg(armed: bool):
+    # classify reads cfg.block_rules early, then the tool branch; a minimal
+    # namespace with the attributes classify touches is enough.
+    return SimpleNamespace(block_rules={}, semgrep_block_armed=False,
+                           pack={}, tdd_block_armed=armed)
+
+
+def test_tdd_disarmed_is_warn():
+    sev, verdict = policy.classify("tdd", "code-without-test", "medium",
+                                   Gate.PRE_PUSH, _tdd_cfg(armed=False))
+    assert sev is Severity.MEDIUM
+    assert verdict is Verdict.WARN
+
+
+def test_tdd_armed_is_block():
+    _sev, verdict = policy.classify("tdd", "code-without-test", "medium",
+                                    Gate.PRE_PUSH, _tdd_cfg(armed=True))
+    assert verdict is Verdict.BLOCK

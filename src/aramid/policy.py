@@ -93,6 +93,15 @@ def classify(tool: str, rule: str, severity_raw: str, gate: Gate, cfg) -> tuple[
     if tool == "llm-review":
         return severity, Verdict.WARN
 
+    # TDD gate (1a): the git-fact code-without-test signal. WARN during the
+    # bake; BLOCK once the repo opts in via `tdd_block_armed` -- routing the
+    # verdict through classify (not a gate-only computation like llm-review)
+    # means _has_genuine_block treats an armed tdd BLOCK as genuine with no
+    # check.py change, and it survives the fresh-clone downgrade.
+    if tool == "tdd":
+        armed = getattr(cfg, "tdd_block_armed", False)
+        return severity, Verdict.BLOCK if armed else Verdict.WARN
+
     ruff_block = block_rules.get("ruff", {}).get("block", [])
     if tool == "ruff" and rule in ruff_block:
         return severity, Verdict.BLOCK
