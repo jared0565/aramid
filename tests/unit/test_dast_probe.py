@@ -380,3 +380,24 @@ def test_probe_ordering_deterministic(harness):
     a = [(f.path, f.check) for f in probe(base, [], 5.0)]
     b = [(f.path, f.check) for f in probe(base, [], 5.0)]
     assert a == b == sorted(a)
+
+
+def test_fetch_maps_tls_cert_error_to_tls_error(monkeypatch):
+    import http.client
+    import ssl
+
+    from aramid import dast_probe
+
+    def _raise_cert_error(self, *a, **k):
+        raise ssl.SSLCertVerificationError("self signed certificate")
+
+    # Exercise _fetch's real `except ssl.SSLCertVerificationError` branch: the
+    # request into the HTTPS connection fails validation -> _Response(status 0,
+    # tls_error set), never a raise. Because SSLCertVerificationError subclasses
+    # OSError, this ALSO locks the except ORDER (cert-error before the generic
+    # OSError -> DastUnreachable): swap those two clauses and this goes red.
+    monkeypatch.setattr(http.client.HTTPSConnection, "request", _raise_cert_error)
+    resp = dast_probe._fetch("https://127.0.0.1:1/", "GET", 1.0)
+    assert resp.status == 0
+    assert resp.tls_error is not None
+    assert "self signed" in resp.tls_error
