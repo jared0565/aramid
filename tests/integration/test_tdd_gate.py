@@ -32,6 +32,12 @@ def _repo_with_upstream(tmp_path) -> Path:
 def _scan(r):
     rng = gitutil.resolve_range(r)
     files = gitutil.changed_files(r, rng)
+    # Guard against a vacuous pass: if real-git range resolution regressed,
+    # `files` would be empty and tdd.scan would early-return [] for the wrong
+    # reason. Assert the plumbing actually engaged before trusting the result.
+    assert rng, "resolve_range returned no upstream range -- real-git plumbing degenerated"
+    assert any(f.endswith(".py") and not gitutil.is_test_file(f) for f in files), \
+        "no production file in the real diff -- plumbing degenerated, result would be vacuous"
     ctx = RunContext(root=r, files=files, rng=rng)
     return tdd.scan(ctx, SimpleNamespace(tdd={"enabled": True}))
 
