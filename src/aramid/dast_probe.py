@@ -7,6 +7,7 @@ exposed-paths/banner). Every finding's `evidence` is synthetic metadata -- never
 raw response body or a cookie/secret value -- so no secret is ever persisted
 (spec invariant #2). Mirrors the owned-tool precedent (jsmutate/fuzzgen)."""
 import http.client
+import re
 import socket
 import ssl
 from dataclasses import dataclass
@@ -26,6 +27,17 @@ _HEADER_CHECKS = (
     ("Referrer-Policy", "dast-header-referrer", "low", False),
     ("Permissions-Policy", "dast-header-permissions", "low", False),
 )
+
+# curated exposed-path probes: (path, rule slug, severity, body-signature regex).
+# A finding requires status 200 AND a signature match, so an SPA catch-all 200
+# (an HTML index) is never a false positive.
+_EXPOSED_CHECKS = (
+    ("/.git/config", "dast-exposed-git-config", "high", r"\[core\]"),
+    ("/.git/HEAD", "dast-exposed-git-head", "high", r"^ref:\s|^[0-9a-f]{40}"),
+    ("/.env", "dast-exposed-dotenv", "high", r"(?m)^[A-Za-z_][A-Za-z0-9_]*="),
+    ("/server-status", "dast-exposed-server-status", "medium", r"Apache Server Status"),
+)
+_BANNER_VERSION = re.compile(r"\d+\.\d+")
 
 
 class DastUnreachable(Exception):
@@ -177,6 +189,49 @@ def _check_transport(base_url: str, resp: _Response) -> list:
     return out
 
 
+def _looks_like_html(resp: _Response) -> bool:
+    ct = (_header(resp, "content-type") or "").lower()
+    if "text/html" in ct:
+        return True
+    head = resp.body.lstrip()[:64].lower()
+    return head.startswith("<!doctype html") or head.startswith("<html")
+
+
+def _check_exposed(base_url: str, paths: list, timeout_s: float) -> list:
+    out = []
+    for path, rule, sev, sig in _EXPOSED_CHECKS:
+        try:
+            r = _fetch(urljoin(base_url, path), "GET", timeout_s)
+        except DastUnreachable:
+            continue                       # a closed/blocked path is not a finding
+        if r.status == 200 and re.search(sig, r.body):
+            out.append(DastFinding(rule, "GET", path, sev,
+                                   f"sensitive path {path} is exposed",
+                                   evidence=f"200, body matched /{sig}/"))
+    for path in paths:                     # user-declared extra probes (generic gate)
+        try:
+            r = _fetch(urljoin(base_url, path), "GET", timeout_s)
+        except DastUnreachable:
+            continue
+        if r.status == 200 and not _looks_like_html(r):
+            out.append(DastFinding("dast-exposed-custom", "GET", path, "medium",
+                                   f"configured path {path} returns non-HTML 200",
+                                   evidence="200, content is not an HTML document"))
+    return out
+
+
+def _check_banner(resp: _Response) -> list:
+    out = []
+    for name, rule in (("Server", "dast-banner-server"),
+                       ("X-Powered-By", "dast-banner-powered-by")):
+        val = _header(resp, name)
+        if val and _BANNER_VERSION.search(val):
+            out.append(DastFinding(rule, "GET", "/", "low",
+                                   f"{name} header leaks a version",
+                                   evidence=f"{name}: {val[:80]}"))
+    return out
+
+
 def probe(base_url: str, paths: list, timeout_s: float) -> list:
     """Run all v1 check families against base_url. Raises DastUnreachable if the
     base_url itself cannot be contacted (the consumer degrades). Findings are
@@ -188,5 +243,7 @@ def probe(base_url: str, paths: list, timeout_s: float) -> list:
     if resp.tls_error is None and resp.status > 0:
         findings += _check_headers(resp, is_https)
         findings += _check_cookies(resp, is_https)
+        findings += _check_banner(resp)
+    findings += _check_exposed(base_url, list(paths), timeout_s)
     findings.sort(key=lambda f: (f.path, f.check))
     return findings

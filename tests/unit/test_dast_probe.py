@@ -203,3 +203,49 @@ def test_transport_cert_invalid_from_tls_error():
     resp = _Response(0, [], "", "https://h/", tls_error="self signed certificate")
     checks = [f.check for f in _check_transport("https://h/", resp)]
     assert "dast-transport-cert-invalid" in checks
+
+
+def test_exposed_git_config_flagged(harness):
+    base, set_routes = harness
+    set_routes({
+        "/": (200, [("Content-Type", "text/html")], b"<html></html>"),
+        "/.git/config": (200, [("Content-Type", "text/plain")],
+                         b"[core]\n\trepositoryformatversion = 0\n"),
+    })
+    fs = probe(base, [], 5.0)
+    hit = next(f for f in fs if f.check == "dast-exposed-git-config")
+    assert hit.path == "/.git/config" and hit.severity == "high"
+
+
+def test_exposed_signature_gated_no_false_positive_on_spa(harness):
+    # an SPA that returns 200 + index.html for EVERY path must NOT trip exposed checks
+    base, set_routes = harness
+    _spa = (200, [("Content-Type", "text/html")], b"<!doctype html><html>app</html>")
+    set_routes({"/": _spa, "/.git/config": _spa, "/.env": _spa})
+    assert not any(c.startswith("dast-exposed-") for c in _checks(probe(base, [], 5.0)))
+
+
+def test_exposed_custom_path_non_html_flagged(harness):
+    base, set_routes = harness
+    set_routes({
+        "/": (200, [("Content-Type", "text/html")], b"<html></html>"),
+        "/backup.sql": (200, [("Content-Type", "application/sql")], b"INSERT INTO users"),
+    })
+    fs = probe(base, ["/backup.sql"], 5.0)
+    assert any(f.check == "dast-exposed-custom" and f.path == "/backup.sql" for f in fs)
+
+
+def test_banner_version_leak_flagged(harness):
+    base, set_routes = harness
+    set_routes({"/": (200, [("Content-Type", "text/html"),
+                            ("Server", "nginx/1.25.3"),
+                            ("X-Powered-By", "PHP/8.1.2")], b"x")})
+    checks = _checks(probe(base, [], 5.0))
+    assert "dast-banner-server" in checks
+    assert "dast-banner-powered-by" in checks
+
+
+def test_banner_no_version_not_flagged(harness):
+    base, set_routes = harness
+    set_routes({"/": (200, [("Content-Type", "text/html"), ("Server", "nginx")], b"x")})
+    assert "dast-banner-server" not in _checks(probe(base, [], 5.0))
