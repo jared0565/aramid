@@ -97,8 +97,12 @@ fresh-clone / CI downgrade by construction. The materialized finding keeps its s
 
 **"Seam AND classify branch, not one instead of the other."** The seam
 (`mutation_gate_findings`) *materializes* the ledger-resident finding into the gate (it is never in
-`all_raws`); the `classify` branch *owns the verdict*. The seam stamps each finding's verdict by
-calling `policy.classify`, so the seam and `_has_genuine_block` read a single source of truth.
+`all_raws`); the `classify` branch encodes the armed→BLOCK verdict rule so `_has_genuine_block`'s
+`classify(...)` call sees an armed mutation BLOCK as genuine. The seam computes the surfaced verdict
+**inline** from `mutation_block_armed` — mirroring `llm_gate_findings`, which likewise computes its
+verdict inline rather than calling `classify` (this avoids coupling the seam to a full `cfg`, since
+`classify` reads `cfg.block_rules` unconditionally at policy.py:82). The seam's one-line rule and the
+`classify` branch's one-line rule are identical and must stay in agreement.
 
 ## 3. What "still-open mutation finding" means at the gate
 
@@ -147,7 +151,9 @@ New/changed surface, in total:
 1. **`src/aramid/mutation_gate.py`** (new) — the gate-time twin of the LLM helpers, holding two pure,
    **never-raises** functions:
    - `mutation_gate_findings(cfg, ledger, gate: Gate) -> list[Finding]`: PRE_PUSH only; materialize
-     open `tool=="mutation"` findings; verdict via `policy.classify` (single source of truth);
+     open `tool=="mutation"` findings; verdict computed **inline** from
+     `cfg.mutation.get("mutation_block_armed", False)` (mirroring `llm_gate_findings`; the identical
+     rule the `classify` branch encodes for `_has_genuine_block`);
      per-record fail-safe guard (a malformed rec is **skipped**, never crashes the gate — staying
      `open` forces manual triage, the safe outcome for a block gate). Structural mirror of
      `review.llm_gate_findings`.
@@ -231,8 +237,9 @@ git push → check.cmd_check(PRE_PUSH) → pipeline.run_gate
   │    auto_resolve_llm(…)                                   [existing]
   │    auto_resolve_mutation(ledger, run_id, at, scope_files) [NEW]  ── §4 module-mapped resolve
   │    findings += llm_gate_findings(…)                       [existing]
-  │    findings += mutation_gate_findings(cfg, ledger, gate)  [NEW]  ── verdict via classify:
-  │                                                                     tool=="mutation": armed? BLOCK : WARN
+  │    findings += mutation_gate_findings(cfg, ledger, gate)  [NEW]  ── verdict inline: armed? BLOCK : WARN
+  │                                                                     (same rule the classify branch encodes,
+  │                                                                      so _has_genuine_block sees armed BLOCK)
   └─ exit code  →  check.py fresh-clone downgrade unless _has_genuine_block
                     (armed mutation ⇒ classify BLOCK ⇒ genuine ⇒ survives; unchanged check.py)
 ```
