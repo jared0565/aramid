@@ -249,3 +249,62 @@ def test_banner_no_version_not_flagged(harness):
     base, set_routes = harness
     set_routes({"/": (200, [("Content-Type", "text/html"), ("Server", "nginx")], b"x")})
     assert "dast-banner-server" not in _checks(probe(base, [], 5.0))
+
+
+def test_hardened_response_yields_nothing(harness):
+    base, set_routes = harness
+    # a fully-hardened http response (no cookies, all headers present, no banner)
+    set_routes({"/": (200, [
+        ("Content-Type", "text/html"),
+        ("Content-Security-Policy", "default-src 'self'"),
+        ("X-Frame-Options", "DENY"),
+        ("X-Content-Type-Options", "nosniff"),
+        ("Referrer-Policy", "no-referrer"),
+        ("Permissions-Policy", "geolocation=()"),
+    ], b"<html></html>")}
+    )
+    # only the plaintext-transport finding may remain (base is http)
+    checks = _checks(probe(base, [], 5.0))
+    assert checks == ["dast-transport-plaintext"]
+
+
+def test_probe_never_mutates_only_get_head(harness):
+    base, set_routes = harness
+    seen = {"methods": set()}
+
+    class _Record(_Handler):
+        def _respond(self):
+            seen["methods"].add(self.command)
+            super()._respond()
+
+    # swap the harness handler to record methods
+    import http.server
+    srv = http.server.HTTPServer(("127.0.0.1", 0), _Record)
+    port = srv.server_address[1]
+    t = threading.Thread(target=srv.serve_forever, daemon=True)
+    t.start()
+    _Record.routes = {"/": (200, [("Content-Type", "text/html")], b"x")}
+    try:
+        probe(f"http://127.0.0.1:{port}", [], 5.0)
+    finally:
+        srv.shutdown()
+        srv.server_close()
+    assert seen["methods"] <= {"GET", "HEAD"}   # never POST/PUT/DELETE/etc
+
+
+def test_evidence_never_contains_cookie_value(harness):
+    base, set_routes = harness
+    set_routes({"/": (200, [("Content-Type", "text/html"),
+                            ("Set-Cookie", "session=SUPERSECRETVALUE")], b"x")})
+    fs = probe(base, [], 5.0)
+    assert all("SUPERSECRETVALUE" not in f.evidence
+               and "SUPERSECRETVALUE" not in f.message for f in fs)
+
+
+def test_probe_ordering_deterministic(harness):
+    base, set_routes = harness
+    set_routes({"/": (200, [("Content-Type", "text/html"),
+                            ("Set-Cookie", "a=1"), ("Server", "nginx/1.2")], b"x")})
+    a = [(f.path, f.check) for f in probe(base, [], 5.0)]
+    b = [(f.path, f.check) for f in probe(base, [], 5.0)]
+    assert a == b == sorted(a)
