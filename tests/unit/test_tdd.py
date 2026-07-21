@@ -65,3 +65,18 @@ def test_scan_is_fail_open(monkeypatch):
 def test_graph_advisory_note_is_inert(tmp_path):
     # No-op stub: no graph -> empty note, never raises.
     assert tdd._graph_advisory_note(tmp_path, "src/foo.py") == ""
+
+
+def test_first_push_repo_with_test_is_clean(monkeypatch):
+    # rng="" (FULL_HISTORY_RNG): tested iff ctx.files has any test file.
+    # diff_new_lines returns {} here; if the code wrongly consulted it instead
+    # of ctx.files, tests/test_foo.py would be missed and src/foo.py would flag.
+    monkeypatch.setattr(gitutil, "diff_new_lines", lambda *a: {})
+    findings = tdd.scan(_ctx(["src/foo.py", "tests/test_foo.py"], rng=""), _cfg())
+    assert findings == []
+
+
+def test_first_push_repo_without_test_flags(monkeypatch):
+    monkeypatch.setattr(gitutil, "diff_new_lines", lambda *a: {"src/foo.py": {1}})
+    findings = tdd.scan(_ctx(["src/foo.py"], rng=""), _cfg())
+    assert [f.file for f in findings] == ["src/foo.py"]

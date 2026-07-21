@@ -221,9 +221,10 @@ Graphite work.
 - `tdd.scan` **never raises** into `run_gate`. Any exception (git failure, decode error) is caught
   and yields **zero findings** (fail-open — a broken producer must never block a push or crash the
   gate). Mirrors Aramid's whole-file fail-open discipline.
-- Range edge cases: `FULL_HISTORY_RNG` (new-repo first push) treats the diff endpoints consistently
-  with `changed_files`/`diff_new_lines`' `base=None` path; a first push with no tests surfaces
-  advisory WARNs (never blocks while disarmed).
+- Range edge cases: on the `FULL_HISTORY_RNG` first-push case (no upstream yet), `ctx.files` is the
+  whole tracked tree, so the producer treats the change as tested iff any tracked file is a test
+  file — a diff over all history is not a meaningful "new test lines" notion. A first push of a
+  genuinely untested repo surfaces advisory WARNs (never blocks while disarmed).
 - No secrets are produced (no `RawFinding.secret`), so nothing is added to the redaction path.
 
 ## 11. Testing strategy (TDD, red→green)

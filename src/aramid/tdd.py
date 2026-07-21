@@ -16,11 +16,9 @@ _MESSAGE = "code changed with no new test in this range"
 
 def _split_range(rng):
     """Derive (base, head) for gitutil.diff_new_lines from run_gate's `rng`.
-    `rng` is a git range string like '@{u}..HEAD'; the FULL_HISTORY_RNG
-    sentinel (empty string / None, new-repo first push) maps to (None, 'HEAD'),
-    which diff_new_lines reads via its base=None `git show` path."""
-    if not rng:
-        return None, "HEAD"
+    `rng` is a truthy git range string like '@{u}..HEAD'; callers must handle
+    the FULL_HISTORY_RNG sentinel (empty string / None, new-repo first push)
+    themselves before calling this (see scan())."""
     base, sep, head = rng.partition("..")
     if not sep:
         return None, "HEAD"
@@ -46,11 +44,18 @@ def scan(ctx, cfg) -> list[RawFinding]:
                 if f.endswith(".py") and not gitutil.is_test_file(f)]
         if not prod:
             return []
-        base, head = _split_range(ctx.rng)
-        new_lines = gitutil.diff_new_lines(ctx.root, base, head)
-        has_new_test_lines = any(
-            lines and gitutil.is_test_file(path)
-            for path, lines in new_lines.items())
+        if not ctx.rng:
+            # First push (FULL_HISTORY_RNG / no upstream): ctx.files is the whole
+            # tracked tree, so "the change" is the entire repo. It is tested iff
+            # any tracked file is a test file -- a diff over "all history" is not
+            # a meaningful notion of "new test lines" (every line is an addition).
+            has_new_test_lines = any(gitutil.is_test_file(f) for f in ctx.files)
+        else:
+            base, head = _split_range(ctx.rng)
+            new_lines = gitutil.diff_new_lines(ctx.root, base, head)
+            has_new_test_lines = any(
+                lines and gitutil.is_test_file(path)
+                for path, lines in new_lines.items())
         if has_new_test_lines:
             return []
         out = []
