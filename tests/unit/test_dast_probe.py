@@ -3,8 +3,8 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 
 import pytest
 
-from aramid.dast_probe import (DastUnreachable, _all_headers, _fetch, _header,
-                               _same_host, probe)
+from aramid.dast_probe import (DastUnreachable, _Response, _all_headers,
+                               _check_transport, _fetch, _header, _same_host, probe)
 
 
 class _Handler(BaseHTTPRequestHandler):
@@ -164,3 +164,42 @@ def test_probe_findings_sorted(harness):
     fs = probe(base, [], 5.0)
     keys = [(f.path, f.check) for f in fs]
     assert keys == sorted(keys)
+
+
+def test_cookie_missing_flags_flagged(harness):
+    base, set_routes = harness
+    set_routes({"/": (200, [("Content-Type", "text/html"),
+                            ("Set-Cookie", "sid=abc123; Path=/")], b"x")})
+    fs = probe(base, [], 5.0)
+    checks = _checks(fs)
+    assert "dast-cookie-httponly" in checks
+    assert "dast-cookie-samesite" in checks
+    # http target -> Secure is not required (can't set Secure over http meaningfully)
+    # the cookie VALUE must never appear in any finding
+    assert all("abc123" not in f.evidence and "abc123" not in f.message for f in fs)
+
+
+def test_cookie_all_flags_present_not_flagged(harness):
+    base, set_routes = harness
+    set_routes({"/": (200, [("Content-Type", "text/html"),
+                            ("Set-Cookie", "sid=x; HttpOnly; SameSite=Lax")], b"x")})
+    fs = probe(base, [], 5.0)
+    assert not any(c.startswith("dast-cookie-") for c in _checks(fs))
+
+
+def test_transport_plaintext_flagged(harness):
+    base, set_routes = harness   # base is http://
+    set_routes({"/": (200, [("Content-Type", "text/html")], b"x")})
+    assert "dast-transport-plaintext" in _checks(probe(base, [], 5.0))
+
+
+def test_transport_cert_expired_from_tls_error():
+    resp = _Response(0, [], "", "https://h/", tls_error="certificate has expired (_ssl.c:1)")
+    checks = [f.check for f in _check_transport("https://h/", resp)]
+    assert "dast-transport-cert-expired" in checks
+
+
+def test_transport_cert_invalid_from_tls_error():
+    resp = _Response(0, [], "", "https://h/", tls_error="self signed certificate")
+    checks = [f.check for f in _check_transport("https://h/", resp)]
+    assert "dast-transport-cert-invalid" in checks

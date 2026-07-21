@@ -139,6 +139,44 @@ def _check_headers(resp: _Response, is_https: bool) -> list:
     return out
 
 
+def _check_cookies(resp: _Response, is_https: bool) -> list:
+    out = []
+    for raw in _all_headers(resp, "set-cookie"):
+        # cookie NAME is safe to show; the VALUE is never emitted
+        name = raw.split("=", 1)[0].strip()
+        attrs = raw.lower()
+        if is_https and "secure" not in attrs:
+            out.append(DastFinding("dast-cookie-secure", "GET", "/", "medium",
+                                   f"cookie {name!r} set without Secure",
+                                   evidence="Set-Cookie missing Secure"))
+        if "httponly" not in attrs:
+            out.append(DastFinding("dast-cookie-httponly", "GET", "/", "medium",
+                                   f"cookie {name!r} set without HttpOnly",
+                                   evidence="Set-Cookie missing HttpOnly"))
+        if "samesite" not in attrs:
+            out.append(DastFinding("dast-cookie-samesite", "GET", "/", "low",
+                                   f"cookie {name!r} set without SameSite",
+                                   evidence="Set-Cookie missing SameSite"))
+    return out
+
+
+def _check_transport(base_url: str, resp: _Response) -> list:
+    out = []
+    if urlsplit(base_url).scheme != "https":
+        out.append(DastFinding("dast-transport-plaintext", "GET", "/", "medium",
+                               "target served over plaintext http (no TLS)",
+                               evidence="scheme=http"))
+    if resp.tls_error:
+        low = resp.tls_error.lower()
+        if "expired" in low:
+            rule, msg = "dast-transport-cert-expired", "TLS certificate has expired"
+        else:
+            rule, msg = "dast-transport-cert-invalid", "TLS certificate failed validation"
+        out.append(DastFinding(rule, "GET", "/", "medium", msg,
+                               evidence=f"tls: {resp.tls_error[:120]}"))
+    return out
+
+
 def probe(base_url: str, paths: list, timeout_s: float) -> list:
     """Run all v1 check families against base_url. Raises DastUnreachable if the
     base_url itself cannot be contacted (the consumer degrades). Findings are
@@ -146,7 +184,9 @@ def probe(base_url: str, paths: list, timeout_s: float) -> list:
     is_https = urlsplit(base_url).scheme == "https"
     resp = _fetch(base_url, "GET", timeout_s)          # may raise DastUnreachable
     findings: list = []
+    findings += _check_transport(base_url, resp)
     if resp.tls_error is None and resp.status > 0:
         findings += _check_headers(resp, is_https)
+        findings += _check_cookies(resp, is_https)
     findings.sort(key=lambda f: (f.path, f.check))
     return findings
