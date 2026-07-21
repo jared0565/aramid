@@ -5,6 +5,7 @@
 # for any key missing after the full merge.
 schema_version = 1
 semgrep_block_armed = false
+tdd_block_armed = false
 
 # Prefix/fnmatch entries dropped before any runner sees a file (spec section 8b).
 # aramid.config.load_config ALWAYS unions these back in after merging repo/user
@@ -125,6 +126,9 @@ max_mutants = 20        # generated-and-tested per queue item
 wall_budget_s = 600     # whole-item wall clock for the mutant loop
 mutant_timeout_s = 120  # per pytest invocation (stage 1 and stage 2 alike)
 confirm_cap = 3         # full-suite confirmation runs per item
+
+[tdd]
+enabled = true
 
 # --- Phase 2c-1b: drain-time JS/TS mutation consumer ---
 [js_mutation]

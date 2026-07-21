@@ -315,3 +315,17 @@ def test_dast_defaults_present(tmp_path, monkeypatch):
     assert cfg.dast.get("paths") == []
     assert cfg.dast.get("timeout_s") == 10
     assert cfg.dast.get("block_armed") is False
+
+
+def test_tdd_defaults(tmp_path, monkeypatch):
+    monkeypatch.setattr(config, "_user_config_path", lambda: tmp_path / "no-user.toml")
+    cfg = config.load_config(tmp_path)
+    assert cfg.tdd_block_armed is False
+    assert cfg.tdd.get("enabled") is True
+
+
+def test_tdd_block_armed_from_repo_toml(tmp_path, monkeypatch):
+    monkeypatch.setattr(config, "_user_config_path", lambda: tmp_path / "no-user.toml")
+    (tmp_path / "aramid.toml").write_text("tdd_block_armed = true\n", encoding="utf-8")
+    cfg = config.load_config(tmp_path)
+    assert cfg.tdd_block_armed is True

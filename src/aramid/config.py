@@ -45,6 +45,8 @@ class Config:
     fuzz: dict = field(default_factory=dict)
     js_mutation: dict = field(default_factory=dict)
     dast: dict = field(default_factory=dict)
+    tdd_block_armed: bool = False
+    tdd: dict = field(default_factory=dict)
 
 
 def _user_config_path() -> Path:
@@ -110,6 +112,8 @@ def load_config(root: Path) -> Config:
         fuzz=merged.get("fuzz", {}),
         js_mutation=merged.get("js_mutation", {}),
         dast=merged.get("dast", {}),
+        tdd_block_armed=merged.get("tdd_block_armed", False),
+        tdd=merged.get("tdd", {}),
     )
 
 
