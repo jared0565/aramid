@@ -117,3 +117,53 @@ def test_give_up_after_three_unreachable(tmp_path, monkeypatch):
     res = _consume(r, cfg)
     assert res.state == "ok"
     assert "giving up" in res.note
+
+
+def test_bad_port_base_url_ok_skip(tmp_path, monkeypatch):
+    # a port typo is a CONFIG mistake -> OK-skip, NOT degraded (degraded would pin
+    # the queue item forever). Regression lock for the whole-branch Important fix.
+    r, cfg = _cfg(tmp_path, monkeypatch,
+                  "schema_version = 1\n[dast]\nbase_url = \"http://127.0.0.1:99999/\"\n")
+    res = _consume(r, cfg)
+    assert res.state == "ok"
+    assert "invalid dast base_url" in res.note
+
+
+def test_probe_crash_degrades_with_headscoped_note(tmp_path, monkeypatch):
+    # a non-DastUnreachable crash degrades with a HEAD-SCOPED give-up prefix, so a
+    # persistent crash can eventually give up (never pins forever).
+    def _boom(*a, **k):
+        raise RuntimeError("synthetic prober crash")
+    monkeypatch.setattr("aramid.dast_probe.probe", _boom)
+    r, cfg = _cfg(tmp_path, monkeypatch,
+                  "schema_version = 1\n[dast]\nbase_url = \"http://127.0.0.1:1/\"\ntimeout_s = 1\n")
+    res = _consume(r, cfg)
+    assert res.state == "degraded"
+    assert res.note.startswith("dast probe error @ ")
+
+
+def test_dast_finding_fingerprint_stable_through_normalize(tmp_path, monkeypatch):
+    # dast is the first PIN_OCCURRENCE consumer emitting a SYNTHETIC file="GET /path"
+    # with line=0. Drive a dast RawFinding through the SAME normalize() call the drain
+    # uses (see commands/drain.py) and assert: line=0 is safe (no IndexError), the
+    # finding is WARN-tier, and the fingerprint is STABLE across two drains (no ghost
+    # never-resolving re-detection).
+    import functools
+    import subprocess
+    from aramid import policy
+    from aramid.models import Gate
+    from aramid.normalizer import RawFinding, normalize
+    r, cfg = _cfg(tmp_path, monkeypatch, "schema_version = 1\n[dast]\nbase_url = \"http://x/\"\n")
+    subprocess.run(["git", "init", "-q"], cwd=r, check=True, capture_output=True)
+    raw = RawFinding(tool="dast", rule="dast-header-csp", severity_raw="medium",
+                     file="GET /", line=0,
+                     message="Content-Security-Policy response header is missing",
+                     evidence="present headers: Content-Type")
+    args = (r, lambda f: "deadbeefcafe", b"salt-fixed-16byt", Gate.ALL,
+            functools.partial(policy.classify, cfg=cfg))
+    a = normalize([raw], *args, pin_occurrence=True)
+    b = normalize([raw], *args, pin_occurrence=True)
+    assert len(a) == 1
+    assert a[0].tool == "dast" and a[0].file == "GET /" and a[0].line == 0
+    assert a[0].verdict.name == "WARN"          # dast rides the classify catch-all
+    assert a[0].id == b[0].id                    # stable fingerprint -> no ghost re-detect
