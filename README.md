@@ -143,6 +143,42 @@ pins the queue) and gives up after repeated unreachable/erroring drains
 (`[dast]` config: `base_url`, `paths`, `timeout_s`; off by default until a target
 is set).
 
+### `aramid mutation-score`: advisory drift report
+
+`aramid mutation-score` (add `--json` for machine-readable output) is a
+**read-only, advisory** report over the mutation consumer's ledger history —
+it surfaces per-function mutation-score drift and flags regressions, but it
+is not a gate: it never blocks, never arms, and never writes to the ledger
+(exit 0 on a readable ledger, 3 on engine error). Two signals, both computed
+from the mutation consumer's existing per-run taxonomy: a per-mutant
+**transition** (a mutant killed in the most-recent-prior fully-mutated run
+now confirmed-surviving on a line whose content hasn't changed — precise,
+truncation-proof) and a per-function **rate-delta** (stage-1 kill-rate
+dropped against that same baseline — richer but noisier, compared only
+between `fully_mutated` runs).
+
+```bash
+aramid mutation-score          # human-readable per-function scores + regressions
+aramid mutation-score --json   # machine-readable
+```
+
+Four documented limitations (it measures drift, it doesn't enforce anything
+— read the numbers, don't trust the silence):
+1. **Code-change-triggered:** only re-mutated (diff-touched) functions are
+   measured, so test-weakening against unchanged code is invisible to this
+   metric.
+2. **Rate-delta is a narrow-oracle self-delta:** it is silent on any
+   function whose mutants were budget-dropped, timed out, or errored
+   (`fully_mutated == False`) — such a function never gets a fresh rate to
+   compare against its baseline.
+3. **Function-key baseline is lost on rename:** the baseline key is
+   `"<rel>::<func>"`; renaming a function or its file drops the prior
+   baseline, missing one signal at the rename boundary (normal again on the
+   next drain).
+4. **Transition recall is bounded by `confirm_cap`:** an unconfirmed
+   (cap-truncated) stage-1 survivor isn't counted yet, so a regression it
+   represents fires on a later drain once it's confirmed — not the first.
+
 ### Phase 2b: the LLM reviewer
 
 The `llm-review` drain-time consumer covers exactly the OWASP slice 2a's
