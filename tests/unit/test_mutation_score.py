@@ -50,13 +50,16 @@ def test_transition_fires_when_killed_mutant_now_survives():
     FP = "deadbeef"
     events = [
         _crf(0, "calc.py::is_adult", 2, 0, True, killed_fps=[FP, "other"]),
-        _crf(1, "calc.py::is_adult", 1, 1, True, killed_fps=["other"],
-             survivor_fps=[FP]),
+        _crf(1, "calc.py::is_adult", 1, 2, True, killed_fps=["other"],
+             survivor_fps=[FP, "fresh"]),   # "fresh" was never killed in baseline
     ]
     regs = mutation_score.latest_regressions(events)
     trans = [r for r in regs if r.kind == "transition"]
     assert len(trans) == 1
-    assert FP in trans[0].transition_fps
+    # Exact intersection pins the extra x extra JOIN, not a single operand:
+    # FP was killed-then-survives; "other" was killed in BOTH runs (not a
+    # current survivor); "fresh" survives now but was never killed. Only FP.
+    assert trans[0].transition_fps == frozenset({FP})
     assert trans[0].baseline_index == 0 and trans[0].current_index == 1
 
 
