@@ -61,3 +61,22 @@ def test_deterministic_order():
 
 def test_syntax_error_source_yields_no_mutants():
     assert generate_mutants("def broken(:\n", {1}) == []
+
+
+def test_generated_mutants_carry_enclosing_function():
+    src = ("def outer(x):\n"
+           "    if x == 1:\n"
+           "        return True\n"
+           "    return False\n")
+    muts = generate_mutants(src, {2})
+    assert muts
+    assert all(m.func == "outer" for m in muts)
+
+
+def test_mutants_attribute_to_their_own_function():
+    src = ("def a(x):\n"
+           "    return x == 1\n"
+           "def b(y):\n"
+           "    return y == 2\n")
+    muts = generate_mutants(src, {2, 4})
+    assert {m.func for m in muts} == {"a", "b"}

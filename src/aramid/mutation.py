@@ -23,6 +23,7 @@ class Mutant:
     op: str
     description: str
     source: str
+    func: str = ""     # enclosing eligible function name (enc[2])
 
 
 def _eligible_spans(tree: ast.Module, target_lines: set[int]) -> list[tuple[int, int, str]]:
@@ -94,6 +95,6 @@ def generate_mutants(source: str, target_lines: set[int]) -> list[Mutant]:
             except Exception:
                 continue
             mutants.append(Mutant(file="", line=lineno, op=op,
-                                  description=desc, source=mutated))
+                                  description=desc, source=mutated, func=enc[2]))
     mutants.sort(key=lambda m: (m.line, m.op, m.description))
     return mutants
