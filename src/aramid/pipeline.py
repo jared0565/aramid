@@ -319,7 +319,14 @@ def run_gate(root: Path, gate: Gate, mode: str, cfg: config_mod.Config, ledger: 
     # a disarmed (WARN) finding is ratchet-exempt and never auto-escalates.
     if gate is Gate.PRE_PUSH:
         review_mod.auto_resolve_llm(root, ledger, run_id, at)
-        mutation_gate.auto_resolve_mutation(ledger, run_id, at, scope_files)
+        # Resolution is meaningful only for a genuine push range: under
+        # mode "all"/"staged", scope_files is the whole tracked tree / the
+        # staged set, not "what the push changed" -- resolving on that would
+        # durably clear every open mutation finding on tracked source
+        # (persisted FINDING_RESOLVED). Surfacing below still runs in all
+        # modes so a full audit shows open findings.
+        if mode == "range":
+            mutation_gate.auto_resolve_mutation(ledger, run_id, at, scope_files)
         findings = [*findings,
                     *review_mod.llm_gate_findings(cfg, ledger, gate),
                     *mutation_gate.mutation_gate_findings(cfg, ledger, gate)]

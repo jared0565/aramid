@@ -3,10 +3,12 @@ rule list, override/suppression application, and the pre-push degraded-tool
 escalation rule.
 
 `classify` is deliberately pure and only reads `tool`, `rule`, `severity_raw`,
-and (from `cfg`) `cfg.semgrep_block_armed` / `cfg.block_rules` -- `gate` is
-accepted to match the brief's fixed 5-arg signature (and because a future
-gate-specific policy tweak is plausible) but no current rule keys off it;
-runner selection per gate is aramid.pipeline's job (Task 5.3), not policy's.
+and (from `cfg`) `cfg.block_rules` plus the per-tool arming flags
+`cfg.semgrep_block_armed`, `cfg.tdd_block_armed`, `cfg.pack`, `cfg.mutation`
+(and deps' `block_severity` threshold) -- `gate` is accepted to match the
+brief's fixed 5-arg signature (and because a future gate-specific policy
+tweak is plausible) but no current rule keys off it; runner selection per
+gate is aramid.pipeline's job (Task 5.3), not policy's.
 """
 import fnmatch
 from dataclasses import dataclass, replace

@@ -58,7 +58,8 @@ def mutation_gate_findings(cfg, ledger, gate: Gate) -> list[Finding]:
 
 def _module_tests(module: str) -> set[str]:
     """Mapped-test basenames for a source module stem, per the
-    consumers/mutation.py::_stage1_argv convention (test_<module>.py)."""
+    consumers/mutation.py::_stage1_argv convention (test_<module>.py and
+    <module>_test.py)."""
     return {f"test_{module}", f"{module}_test"}
 
 

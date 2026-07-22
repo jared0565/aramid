@@ -596,3 +596,22 @@ def test_mutation_findings_absent_at_pre_commit(tmp_path, monkeypatch):
         assert not any(f.tool == "mutation" for f in got.findings)
     finally:
         led.close()
+
+
+def test_all_mode_does_not_resolve_tracked_mutation(tmp_path, monkeypatch):
+    # Guard (whole-branch review): mode=="all" must NOT resolve mutation
+    # findings. scope_files under --all is the whole tracked tree, not a push
+    # range, so resolving on it would durably clear every open mutation finding
+    # on tracked source. The finding is seeded on a TRACKED file (src/real.py,
+    # which _mut_repo creates) that IS in the all-mode scope_files.
+    r = _mut_repo(tmp_path)
+    monkeypatch.setattr(pipeline, "GATE_RUNNER_KEYS",
+                        {**pipeline.GATE_RUNNER_KEYS, Gate.PRE_PUSH: []})
+    cfg = config.load_config(r)
+    led = Ledger(r / ".aramid" / "ledger.db")
+    try:
+        _seed_mut(led, fid="t" * 64, file="src/real.py")   # TRACKED source
+        pipeline.run_gate(r, Gate.PRE_PUSH, "all", cfg, led)
+        assert led.open_findings()["t" * 64]["status"] == "open"  # NOT resolved
+    finally:
+        led.close()
