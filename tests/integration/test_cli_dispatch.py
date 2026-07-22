@@ -139,6 +139,15 @@ def test_status_dispatch(monkeypatch):
     assert len(calls) == 1
 
 
+def test_mutation_score_dispatch(monkeypatch):
+    captured = {}
+    monkeypatch.setattr(cli, "cmd_mutation_score",
+                        lambda root, as_json=False: captured.update(root=root, as_json=as_json) or 0)
+    assert cli.main(["mutation-score", "--json"]) == 0
+    assert captured["as_json"] is True
+    assert captured["root"] == Path.cwd()
+
+
 def test_ledger_list_dispatch(monkeypatch):
     calls = []
     monkeypatch.setattr(cli, "cmd_ledger_list", lambda root: calls.append(root) or 0)

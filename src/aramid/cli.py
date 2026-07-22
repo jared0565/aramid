@@ -28,6 +28,7 @@ from aramid.commands.ledger_cmd import (
     cmd_ledger_mark_rotated,
     cmd_ledger_show,
 )
+from aramid.commands.mutation_score import cmd_mutation_score
 from aramid.commands.override import cmd_override
 from aramid.commands.pack_cmd import cmd_pack_add, cmd_pack_compile, cmd_pack_list
 from aramid.commands.rebaseline import cmd_rebaseline
@@ -63,6 +64,10 @@ def build_parser() -> argparse.ArgumentParser:
     p_doctor.add_argument("--fix", action="store_true")
 
     sub.add_parser("status", help="report ledger/config state")
+
+    p_ms = sub.add_parser("mutation-score",
+                          help="advisory per-function mutation-score + regression report")
+    p_ms.add_argument("--json", action="store_true")
 
     p_triage = sub.add_parser("triage", help="score a commit (or range) and enqueue if risky")
     p_triage.add_argument("rev", nargs="?", default="HEAD")
@@ -171,6 +176,9 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.command == "status":
         return cmd_status(root)
+
+    if args.command == "mutation-score":
+        return cmd_mutation_score(root, as_json=args.json)
 
     if args.command == "triage":
         return cmd_triage(root, args.rev, budget=args.budget)
