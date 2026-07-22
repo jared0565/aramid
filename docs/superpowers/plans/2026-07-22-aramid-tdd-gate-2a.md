@@ -716,7 +716,7 @@ def _seed(led, idx, target, killed_s1, survived_s1, fully):
         "mutation_scores": {"schema": 1, "targets": {target: {
             "generated": killed_s1 + survived_s1, "killed_s1": killed_s1,
             "survived_s1": survived_s1, "timeouts": 0, "errors": 0,
-            "fully_mutated": fully, "killed_fps": [], "survivor_fps": []}}}))
+            "fully_mutated": fully, "killed_fps": [], "survivor_fps": []}}}}))
 
 
 def test_cmd_reports_scores_and_rate_regression(tmp_path, capsys):
