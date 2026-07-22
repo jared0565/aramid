@@ -212,11 +212,51 @@ def test_mutation_scores_records_confirmed_survivor_fps(tmp_path, monkeypatch):
     assert t["survived_s1"] >= 1
     assert t["survivor_fps"]         # confirmed survivor fingerprints present
     assert t["fully_mutated"] is True
+
+
+def test_mutation_scores_partial_run_not_fully_mutated(tmp_path, monkeypatch):
+    # Budget truncation (max_mutants=1) leaves is_adult's >=2 mutants partly
+    # untested -> generated > killed_s1 + survived_s1 -> fully_mutated False.
+    # Guards spec §11 + the Step 7b "count generated for ALL muts up front"
+    # requirement: a mis-wire that counted only tested muts would falsely
+    # report fully_mutated True and corrupt baseline selection.
+    r, base, head = _repo(tmp_path, WEAK_TEST)
+    (r / "aramid.toml").write_text(
+        "schema_version = 1\n[mutation]\nmax_mutants = 1\nconfirm_cap = 1\n",
+        encoding="utf-8")
+    res = _consume(r, base, head, monkeypatch, tmp_path)
+    t = res.extra["mutation_scores"]["targets"]["calc.py::is_adult"]
+    assert t["fully_mutated"] is False
+    assert t["generated"] > t["killed_s1"] + t["survived_s1"]
+
+
+def test_mutation_scores_stage1_error_attributed_and_excluded(tmp_path, monkeypatch):
+    # A stage-1 usage error (returncode 4) must land in the function's errors
+    # bucket, never killed_s1/survived_s1 -> excluded from the rate and
+    # fully_mutated False. Guards the 7e/7i error-attribution wiring.
+    from aramid.runners.base import RunnerResult, ToolState
+    r, base, head = _repo(tmp_path, WEAK_TEST)
+    seq = {"n": 0}
+
+    def scripted(argv, cwd, timeout, **kw):
+        seq["n"] += 1
+        if seq["n"] == 1:      # baseline full suite: green
+            return RunnerResult(tool="pytest", state=ToolState.OK, returncode=0)
+        return RunnerResult(tool="pytest", state=ToolState.OK, returncode=4)
+
+    monkeypatch.setattr(mut_consumer, "run_subprocess", scripted)
+    res = _consume(r, base, head, monkeypatch, tmp_path)
+    t = res.extra["mutation_scores"]["targets"]["calc.py::is_adult"]
+    assert t["errors"] >= 1
+    assert t["killed_s1"] == 0 and t["survived_s1"] == 0
+    assert t["fully_mutated"] is False
 ```
+
+*(Both reuse the `mut_consumer` import and `RunnerResult`/`ToolState` pattern already established in this file by `test_stage1_usage_error_counts_error_not_kill`.)*
 
 - [ ] **Step 6: Run to verify they fail**
 
-Run: `python -m pytest tests/integration/test_mutation_consumer.py -k "mutation_scores_recorded_for_strong or records_confirmed_survivor" -v`
+Run: `python -m pytest tests/integration/test_mutation_consumer.py -k "mutation_scores_recorded_for_strong or records_confirmed_survivor or partial_run_not_fully_mutated or stage1_error_attributed" -v`
 Expected: FAIL (`KeyError: 'mutation_scores'`).
 
 - [ ] **Step 7: Wire the accumulation into `consume`**
@@ -301,7 +341,7 @@ All edits are inside `consume` (`src/aramid/consumers/mutation.py`). Anchor each
 
 - [ ] **Step 8: Run to verify the integration tests pass**
 
-Run: `python -m pytest tests/integration/test_mutation_consumer.py -k "mutation_scores_recorded_for_strong or records_confirmed_survivor" -v`
+Run: `python -m pytest tests/integration/test_mutation_consumer.py -k "mutation_scores_recorded_for_strong or records_confirmed_survivor or partial_run_not_fully_mutated or stage1_error_attributed" -v`
 Expected: PASS.
 
 - [ ] **Step 9: Run the full mutation-consumer + unit-mutation files (regression guard)**
@@ -400,7 +440,7 @@ ledger writes; fail-open on malformed/absent/wrong-schema history.
 
 Run ordering is the position of the event in Ledger.events() (which exposes
 no seq attribute); it is monotonic in true seq order and compaction-safe."""
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 from aramid.models import EventType
 
@@ -450,7 +490,7 @@ def iter_target_scores(events) -> list[TargetScore]:
     return out
 ```
 
-*(The `field` import is used by Task 4; add it now to avoid a second import edit.)*
+*(Task 4 adds the `field` import when it introduces `Regression`.)*
 
 - [ ] **Step 4: Run to verify they pass**
 
@@ -549,6 +589,15 @@ def test_rate_improvement_is_not_a_regression():
     ]
     assert [r for r in mutation_score.latest_regressions(events)
             if r.kind == "rate"] == []
+
+
+def test_latest_by_target_picks_highest_run_index():
+    events = [_crf(0, "a::f", 1, 0, True), _crf(1, "a::f", 0, 1, True),
+              _crf(2, "b::g", 1, 0, True)]
+    latest = mutation_score.latest_by_target(
+        mutation_score.iter_target_scores(events))
+    assert latest["a::f"].run_index == 1   # stream position, not the run_id label
+    assert latest["b::g"].run_index == 2
 ```
 
 - [ ] **Step 2: Run to verify they fail**
@@ -558,7 +607,13 @@ Expected: FAIL (`AttributeError: module ... has no attribute 'latest_regressions
 
 - [ ] **Step 3: Add the detection layer**
 
-Append to `src/aramid/mutation_score.py`:
+First update the import at the top of `src/aramid/mutation_score.py` (add `field`):
+
+```python
+from dataclasses import dataclass, field
+```
+
+Then append:
 
 ```python
 @dataclass(frozen=True)
@@ -578,6 +633,15 @@ def baseline_for(scores, target, before_index):
             if best is None or s.run_index > best.run_index:
                 best = s
     return best
+
+
+def latest_by_target(scores):
+    latest: dict[str, TargetScore] = {}
+    for s in scores:
+        cur = latest.get(s.target)
+        if cur is None or s.run_index > cur.run_index:
+            latest[s.target] = s
+    return latest
 
 
 def detect(current, baseline):
@@ -603,13 +667,8 @@ def detect(current, baseline):
 
 def latest_regressions(events):
     scores = iter_target_scores(events)
-    latest: dict[str, TargetScore] = {}
-    for s in scores:
-        cur = latest.get(s.target)
-        if cur is None or s.run_index > cur.run_index:
-            latest[s.target] = s
     out = []
-    for target, cur in latest.items():
+    for target, cur in latest_by_target(scores).items():
         out.extend(detect(cur, baseline_for(scores, target, cur.run_index)))
     return out
 ```
@@ -678,7 +737,7 @@ def test_cmd_empty_history(tmp_path, capsys):
     assert "no mutation scores recorded" in capsys.readouterr().out
 
 
-def test_cmd_json_shape(tmp_path, capsys):
+def test_cmd_json_is_latest_per_target(tmp_path, capsys):
     led = Ledger(tmp_path / ".aramid" / "ledger.db")
     _seed(led, 0, "m.py::f", 3, 0, True)
     _seed(led, 1, "m.py::f", 1, 2, True)
@@ -686,7 +745,9 @@ def test_cmd_json_shape(tmp_path, capsys):
     rc = cmd_mutation_score(tmp_path, as_json=True)
     doc = json.loads(capsys.readouterr().out)
     assert rc == 0
-    assert any(t["target"] == "m.py::f" for t in doc["targets"])
+    ms = [t for t in doc["targets"] if t["target"] == "m.py::f"]
+    assert len(ms) == 1, "JSON emits latest-per-target (spec §6), not full history"
+    assert ms[0]["killed_s1"] == 1   # the latest run's values, not the first
     assert any(r["kind"] == "rate" for r in doc["regressions"])
 ```
 
@@ -711,15 +772,6 @@ from aramid import mutation_score as analyzer
 from aramid.ledger import Ledger
 
 
-def _latest(scores):
-    latest = {}
-    for s in scores:
-        cur = latest.get(s.target)
-        if cur is None or s.run_index > cur.run_index:
-            latest[s.target] = s
-    return latest
-
-
 def cmd_mutation_score(root, *, as_json: bool = False) -> int:
     root = Path(root)
     try:
@@ -730,6 +782,7 @@ def cmd_mutation_score(root, *, as_json: bool = False) -> int:
     try:
         events = ledger.events()
         scores = analyzer.iter_target_scores(events)
+        latest = analyzer.latest_by_target(scores)   # current per-target (spec §6)
         regressions = analyzer.latest_regressions(events)
         if as_json:
             print(json.dumps({
@@ -737,19 +790,19 @@ def cmd_mutation_score(root, *, as_json: bool = False) -> int:
                     {"target": s.target, "run_index": s.run_index,
                      "killed_s1": s.killed_s1, "survived_s1": s.survived_s1,
                      "rate": s.rate, "fully_mutated": s.fully_mutated}
-                    for s in scores],
+                    for s in (latest[k] for k in sorted(latest))],
                 "regressions": [
                     {"target": r.target, "kind": r.kind, "detail": r.detail,
                      "baseline_index": r.baseline_index,
                      "current_index": r.current_index}
                     for r in regressions]}, indent=2))
             return 0
-        if not scores:
+        if not latest:
             print("aramid mutation-score: no mutation scores recorded")
             return 0
         lines = ["aramid mutation-score:"]
-        for target in sorted(_latest(scores)):
-            s = _latest(scores)[target]
+        for target in sorted(latest):
+            s = latest[target]
             rate = f"{s.rate:.2f}" if s.rate is not None else "n/a"
             fm = "" if s.fully_mutated else " (partial)"
             lines.append(f"  {target}: kill-rate {rate} "
@@ -863,7 +916,7 @@ git commit -m "chore(mutation-score): 2a complete — full suite green, ruff cle
 
 ## Self-Review
 
-**1. Spec coverage:** §2 code-change-triggered → documented in Task 6 + Global Constraints. §3.1 transition → Task 4 `detect`. §3.2 stage-1 rate-delta → Task 4 + Global Constraints denominator. §4 extra×extra invariant → Task 2 (both fp sides in-consumer via `_mutant_fp`) + Task 3/4 (analyzer reads only `extra`). §5.1 `Mutant.func` → Task 1. §5.2 schema → Task 2 `_finalize_scores`. §5.3 `fully_mutated` → Task 2 helper + unit tests. §5.4 shared helper → Task 2 `_mutant_fp`. §6 file structure → Tasks 1-5. §7 analyzer API → Tasks 3-4. §8 flow → Task 5 command. §9 fail-open → Task 3 (`iter_target_scores` skips) + Task 5 (try/except → 3). §10 limitations → Task 6. §11 testing (synthetic seeded history, red-first transition) → Tasks 3-5. §12 reuse caveat → out of scope for 2a (no findings emitted); no task, correct. §13 non-goals → Global Constraints "additive only".
+**1. Spec coverage:** §2 code-change-triggered → documented in Task 6 + Global Constraints. §3.1 transition → Task 4 `detect`. §3.2 stage-1 rate-delta → Task 4 + Global Constraints denominator. §4 extra×extra invariant → Task 2 (both fp sides in-consumer via `_mutant_fp`) + Task 3/4 (analyzer reads only `extra`). §5.1 `Mutant.func` → Task 1. §5.2 schema → Task 2 `_finalize_scores`. §5.3 `fully_mutated` → Task 2 `_finalize_scores` unit tests **plus** the Task 2 integration truncation + stage-1-error tests that drive `fully_mutated == False` and the timeout/error bucket attribution through the real consumer (per spec §11). §5.4 shared helper → Task 2 `_mutant_fp`. §6 file structure → Tasks 1-5. §7 analyzer API → Tasks 3-4 (`latest_by_target` shared by `latest_regressions` and the command). §8 flow → Task 5 command (text and `--json` both latest-per-target, spec §6). §9 fail-open → Task 3 (`iter_target_scores` skips) + Task 5 (try/except → 3). §10 limitations → Task 6. §11 testing (synthetic seeded history, red-first transition, consumer-side partial-run coverage) → Tasks 2-5. §12 reuse caveat → out of scope for 2a (no findings emitted); no task, correct. §13 non-goals → Global Constraints "additive only".
 
 **2. Placeholder scan:** none — every step carries complete code or an exact command. The only prose-only step is Task 6 Step 1 (README), which is documentation with an exact `grep` locator and the four bullet contents spelled out.
 
