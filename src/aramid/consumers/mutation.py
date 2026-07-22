@@ -22,6 +22,7 @@ from aramid import config as config_mod
 from aramid import detectors, gitutil, mutation
 from aramid.consumers import base
 from aramid.consumers.base import ConsumerResult, DrainContext
+from aramid.fingerprint import compute_fingerprint
 from aramid.normalizer import RawFinding
 from aramid.runners.base import ToolState, run_subprocess
 
@@ -34,6 +35,31 @@ _K_KEYWORDS = {"not", "and", "or"}   # pytest -k expression keywords
 # the drain normalizes them with occurrence_index pinned to 0 -- one finding
 # per (tool, rule, file, line-content), truncation-stable fingerprints.
 PIN_OCCURRENCE = True
+
+
+def _mutant_fp(rel: str, op: str, line: int, lines: list[str]) -> str:
+    lc = lines[line - 1] if 0 <= line - 1 < len(lines) else ""
+    return compute_fingerprint("mutation", op, rel, lc, 0)
+
+
+def _new_target() -> dict:
+    return {"generated": 0, "killed_s1": 0, "survived_s1": 0,
+            "timeouts": 0, "errors": 0, "killed_fps": [], "survivor_fps": []}
+
+
+def _tgt(scores: dict, rel: str, func: str) -> dict:
+    key = f"{rel}::{func}"
+    t = scores.get(key)
+    if t is None:
+        t = _new_target()
+        scores[key] = t
+    return t
+
+
+def _finalize_scores(scores: dict) -> dict:
+    for t in scores.values():
+        t["fully_mutated"] = (t["killed_s1"] + t["survived_s1"] == t["generated"])
+    return {"schema": 1, "targets": scores}
 
 
 def _is_test_file(rel: str) -> bool:
@@ -104,6 +130,7 @@ def consume(item, ctx: DrainContext) -> ConsumerResult:
     stats = {"generated": 0, "tested": 0, "killed_s1": 0, "killed_s2": 0,
              "survived": 0, "confirmed": 0, "timeouts": 0, "errors": 0,
              "truncated": False}
+    scores: dict[str, dict] = {}
     findings: list[RawFinding] = []
     tmp = Path(tempfile.mkdtemp(prefix="aramid-mut-"))
     wt = tmp / "wt"
@@ -136,6 +163,9 @@ def consume(item, ctx: DrainContext) -> ConsumerResult:
                 continue
             muts = mutation.generate_mutants(original, changed[rel])
             stats["generated"] += len(muts)
+            lines = original.splitlines()
+            for m in muts:
+                _tgt(scores, rel, m.func)["generated"] += 1
             for m in muts:
                 if stats["tested"] >= max_mutants \
                         or time.monotonic() - started > wall_budget:
@@ -148,19 +178,25 @@ def consume(item, ctx: DrainContext) -> ConsumerResult:
                     s1 = run_subprocess(_stage1_argv(wt, rel), wt, mutant_timeout)
                     if s1.state is ToolState.TIMEOUT:
                         stats["timeouts"] += 1
+                        _tgt(scores, rel, m.func)["timeouts"] += 1
                         continue
                     if s1.state is ToolState.OK and s1.returncode in (1, 2):
                         # 1 = test failures; 2 = interrupted/collection error
                         # (an import-breaking mutant genuinely causes 2).
                         stats["killed_s1"] += 1
+                        t = _tgt(scores, rel, m.func)
+                        t["killed_s1"] += 1
+                        t["killed_fps"].append(_mutant_fp(rel, m.op, m.line, lines))
                         continue
                     if s1.state is ToolState.OK and s1.returncode not in (0, 5):
                         # 3 = internal error, 4 = usage error: argv's fault,
                         # never the mutant's -- unattributable, like timeouts.
                         stats["errors"] += 1
+                        _tgt(scores, rel, m.func)["errors"] += 1
                         continue
                     # putative survivor (pass, or exit 5 = nothing selected)
                     stats["survived"] += 1
+                    _tgt(scores, rel, m.func)["survived_s1"] += 1
                     if confirms_used >= confirm_cap:
                         stats["truncated"] = True
                         continue
@@ -170,17 +206,22 @@ def consume(item, ctx: DrainContext) -> ConsumerResult:
                         stats["timeouts"] += 1
                     elif s2.state is ToolState.OK and s2.returncode == 0:
                         stats["confirmed"] += 1
+                        _tgt(scores, rel, m.func)["survivor_fps"].append(
+                            _mutant_fp(rel, m.op, m.line, lines))
                         findings.append(RawFinding(
                             tool="mutation", rule=m.op, severity_raw="medium",
                             file=rel, line=m.line,
                             message=f"mutant survived: {m.description}"))
                     elif s2.state is ToolState.OK and s2.returncode in (1, 2):
                         stats["killed_s2"] += 1
+                        _tgt(scores, rel, m.func)["killed_fps"].append(
+                            _mutant_fp(rel, m.op, m.line, lines))
                     else:
                         # Non-verdict full-suite outcome (internal/usage error,
                         # crash): the putative survivor is NOT reported -- a
                         # survivor requires the full suite to PASS on it.
                         stats["errors"] += 1
+                        _tgt(scores, rel, m.func)["errors"] += 1
                 except Exception:
                     stats["errors"] += 1
                 finally:
@@ -191,6 +232,7 @@ def consume(item, ctx: DrainContext) -> ConsumerResult:
                         src_path.write_text(original, encoding="utf-8")
                     except OSError:
                         stats["errors"] += 1
+                        _tgt(scores, rel, m.func)["errors"] += 1
     finally:
         try:
             gitutil._run(ctx.root, "worktree", "remove", "--force", str(wt))
@@ -204,9 +246,11 @@ def consume(item, ctx: DrainContext) -> ConsumerResult:
             f"{stats['tested']} mutant(s) tested")
     if stats["truncated"]:
         note += " (truncated: budget/cap hit, remainder dropped)"
+    extra = dict(stats)
+    extra["mutation_scores"] = _finalize_scores(scores)
     return ConsumerResult(consumer=NAME, state="ok", findings=findings,
                           duration_s=time.monotonic() - started, cost=0.0,
-                          note=note, extra=dict(stats))
+                          note=note, extra=extra)
 
 
 base.CONSUMERS[NAME] = sys.modules[__name__]

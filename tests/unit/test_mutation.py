@@ -1,5 +1,6 @@
 import ast
 
+from aramid.consumers import mutation as mut_consumer
 from aramid.mutation import generate_mutants
 
 SRC = """\
@@ -80,3 +81,30 @@ def test_mutants_attribute_to_their_own_function():
            "    return y == 2\n")
     muts = generate_mutants(src, {2, 4})
     assert {m.func for m in muts} == {"a", "b"}
+
+
+def test_mutant_fp_is_stable_and_matches_recipe():
+    from aramid.fingerprint import compute_fingerprint
+    lines = ["def f(x):", "    return x == 1"]
+    fp = mut_consumer._mutant_fp("m.py", "cmp-flip", 2, lines)
+    assert fp == compute_fingerprint("mutation", "cmp-flip", "m.py", "    return x == 1", 0)
+
+
+def test_mutant_fp_out_of_range_line_is_safe():
+    # never raises; hashes "" for a line past EOF
+    assert isinstance(mut_consumer._mutant_fp("m.py", "cmp-flip", 99, ["a"]), str)
+
+
+def test_finalize_scores_marks_fully_mutated():
+    scores = {"m.py::f": mut_consumer._new_target()}
+    scores["m.py::f"].update(generated=3, killed_s1=2, survived_s1=1)
+    out = mut_consumer._finalize_scores(scores)
+    assert out["schema"] == 1
+    assert out["targets"]["m.py::f"]["fully_mutated"] is True
+
+
+def test_finalize_scores_partial_not_fully_mutated():
+    scores = {"m.py::f": mut_consumer._new_target()}
+    scores["m.py::f"].update(generated=3, killed_s1=1, survived_s1=1, timeouts=1)
+    out = mut_consumer._finalize_scores(scores)
+    assert out["targets"]["m.py::f"]["fully_mutated"] is False

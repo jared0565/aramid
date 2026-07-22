@@ -384,6 +384,66 @@ def test_drain_passes_pin_flag_per_consumer(tmp_path, monkeypatch):
         "mutation batch must normalize with pin_occurrence=True"
 
 
+def test_mutation_scores_recorded_for_strong_suite(tmp_path, monkeypatch):
+    r, base, head = _repo(tmp_path, STRONG_TEST)
+    res = _consume(r, base, head, monkeypatch, tmp_path)
+    ms = res.extra["mutation_scores"]
+    assert ms["schema"] == 1
+    t = ms["targets"]["calc.py::is_adult"]
+    assert t["killed_s1"] >= 1
+    assert t["survived_s1"] == 0
+    assert t["fully_mutated"] is True
+    assert t["killed_fps"]           # non-empty
+    assert t["survivor_fps"] == []
+
+
+def test_mutation_scores_records_confirmed_survivor_fps(tmp_path, monkeypatch):
+    r, base, head = _repo(tmp_path, WEAK_TEST)
+    res = _consume(r, base, head, monkeypatch, tmp_path)
+    t = res.extra["mutation_scores"]["targets"]["calc.py::is_adult"]
+    assert t["survived_s1"] >= 1
+    assert t["survivor_fps"]         # confirmed survivor fingerprints present
+    assert t["fully_mutated"] is True
+
+
+def test_mutation_scores_partial_run_not_fully_mutated(tmp_path, monkeypatch):
+    # Budget truncation (max_mutants=1) leaves is_adult's >=2 mutants partly
+    # untested -> generated > killed_s1 + survived_s1 -> fully_mutated False.
+    # Guards spec §11 + the Step 7b "count generated for ALL muts up front"
+    # requirement: a mis-wire that counted only tested muts would falsely
+    # report fully_mutated True and corrupt baseline selection.
+    r, base, head = _repo(tmp_path, WEAK_TEST)
+    (r / "aramid.toml").write_text(
+        "schema_version = 1\n[mutation]\nmax_mutants = 1\nconfirm_cap = 1\n",
+        encoding="utf-8")
+    res = _consume(r, base, head, monkeypatch, tmp_path)
+    t = res.extra["mutation_scores"]["targets"]["calc.py::is_adult"]
+    assert t["fully_mutated"] is False
+    assert t["generated"] > t["killed_s1"] + t["survived_s1"]
+
+
+def test_mutation_scores_stage1_error_attributed_and_excluded(tmp_path, monkeypatch):
+    # A stage-1 usage error (returncode 4) must land in the function's errors
+    # bucket, never killed_s1/survived_s1 -> excluded from the rate and
+    # fully_mutated False. Guards the 7e/7i error-attribution wiring.
+    from aramid.runners.base import RunnerResult, ToolState
+    r, base, head = _repo(tmp_path, WEAK_TEST)
+    seq = {"n": 0}
+
+    def scripted(argv, cwd, timeout, **kw):
+        seq["n"] += 1
+        if seq["n"] == 1:      # baseline full suite: green
+            return RunnerResult(tool="pytest", state=ToolState.OK, returncode=0)
+        return RunnerResult(tool="pytest", state=ToolState.OK, returncode=4)
+
+    monkeypatch.setattr(mut_consumer, "run_subprocess", scripted)
+    res = _consume(r, base, head, monkeypatch, tmp_path)
+    t = res.extra["mutation_scores"]["targets"]["calc.py::is_adult"]
+    assert t["errors"] >= 1
+    assert t["killed_s1"] == 0 and t["survived_s1"] == 0
+    assert t["fully_mutated"] is False
+
+
 def test_mutation_findings_classify_warn_never_block(tmp_path, monkeypatch):
     from aramid.models import Gate
     from aramid import policy
