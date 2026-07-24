@@ -33,6 +33,8 @@ _LLM_SECTION_RE = re.compile(r"(?m)^\[llm\]\s*$")
 _MUT_KEY_RE = re.compile(
     r"(?m)^mutation_block_armed[^\S\n]*=[^\S\n]*[^\s#]+(?P<c>[^\S\n]*#[^\n]*)?[^\S\n]*$")
 _MUT_SECTION_RE = re.compile(r"(?m)^\[mutation\]\s*$")
+_SCORE_KEY_RE = re.compile(
+    r"(?m)^score_block_armed[^\S\n]*=[^\S\n]*[^\s#]+(?P<c>[^\S\n]*#[^\n]*)?[^\S\n]*$")
 _AL_SECTION_RE = re.compile(r"(?m)^\[llm\.autolearn\]\s*$")
 _AL_KEY_RE = re.compile(
     r"(?m)^armed[^\S\n]*=[^\S\n]*[^\s#]+(?P<c>[^\S\n]*#[^\n]*)?[^\S\n]*$")
@@ -75,6 +77,23 @@ def _arm_mutation_text(text: str) -> str:
     return text + prefix + "[mutation]\nmutation_block_armed = true\n"
 
 
+def _arm_mutation_score_text(text: str) -> str:
+    """Comment-preserving single-key rewrite into the [mutation] table
+    (mirrors _arm_mutation_text): key exists -> substitute; [mutation]
+    section exists -> insert the key under the header; neither -> append a
+    fresh [mutation] section. score_block_armed is a globally unique key
+    name, so no section scoping is needed; _MUT_KEY_RE (literal
+    mutation_block_armed) can never match it and vice versa."""
+    if _SCORE_KEY_RE.search(text):
+        return _armed_sub(_SCORE_KEY_RE, "score_block_armed = true", text)
+    m = _MUT_SECTION_RE.search(text)
+    if m:
+        insert_at = m.end()
+        return text[:insert_at] + "\nscore_block_armed = true" + text[insert_at:]
+    prefix = "" if not text or text.endswith("\n") else "\n"
+    return text + prefix + "[mutation]\nscore_block_armed = true\n"
+
+
 def _arm_autolearn_text(text: str) -> str:
     """Comment-preserving single-key rewrite, mirroring _arm_llm_text -- but
     `armed` is a generic key name, so the substitution is SCOPED to the
@@ -94,7 +113,7 @@ def _arm_autolearn_text(text: str) -> str:
 
 
 def cmd_arm(root, llm: bool = False, autolearn: bool = False, tdd: bool = False,
-            mutation: bool = False) -> int:
+            mutation: bool = False, mutation_score: bool = False) -> int:
     root = Path(root)
     toml_path = root / "aramid.toml"
     if not toml_path.exists():
@@ -132,6 +151,13 @@ def cmd_arm(root, llm: bool = False, autolearn: bool = False, tdd: bool = False,
         print(f"aramid: arm: mutation_block_armed=true written to {toml_path}")
         print("aramid: arm: mutation bake ended -- surviving-mutant findings "
               "now BLOCK at pre-push.")
+        return 0
+
+    if mutation_score:
+        toml_path.write_text(_arm_mutation_score_text(text), encoding="utf-8")
+        print(f"aramid: arm: score_block_armed=true written to {toml_path}")
+        print("aramid: arm: mutation-score bake ended -- transition "
+              "regressions now BLOCK at pre-push.")
         return 0
 
     if tdd:
