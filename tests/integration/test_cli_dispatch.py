@@ -261,7 +261,7 @@ def test_pack_no_subcommand_returns_3(capsys):
 def test_arm_dispatch(monkeypatch):
     calls = []
     monkeypatch.setattr(cli, "cmd_arm",
-                        lambda root, llm=False, autolearn=False, tdd=False, mutation=False, mutation_score=False: calls.append((root, llm, autolearn, tdd)) or 0)
+                        lambda root, llm=False, autolearn=False, tdd=False, mutation=False, mutation_score=False, red_proof=False: calls.append((root, llm, autolearn, tdd)) or 0)
 
     assert cli.main(["arm"]) == 0
     assert len(calls) == 1
@@ -271,7 +271,7 @@ def test_arm_dispatch(monkeypatch):
 def test_arm_dispatch_with_llm_flag(monkeypatch):
     calls = []
     monkeypatch.setattr(cli, "cmd_arm",
-                        lambda root, llm=False, autolearn=False, tdd=False, mutation=False, mutation_score=False: calls.append((root, llm, autolearn, tdd)) or 0)
+                        lambda root, llm=False, autolearn=False, tdd=False, mutation=False, mutation_score=False, red_proof=False: calls.append((root, llm, autolearn, tdd)) or 0)
 
     assert cli.main(["arm", "--llm"]) == 0
     assert len(calls) == 1
@@ -281,7 +281,7 @@ def test_arm_dispatch_with_llm_flag(monkeypatch):
 def test_arm_dispatch_with_autolearn_flag(monkeypatch):
     captured = {}
     monkeypatch.setattr(cli, "cmd_arm",
-                        lambda root, llm=False, autolearn=False, tdd=False, mutation=False, mutation_score=False: captured.update(llm=llm, autolearn=autolearn, tdd=tdd) or 0)
+                        lambda root, llm=False, autolearn=False, tdd=False, mutation=False, mutation_score=False, red_proof=False: captured.update(llm=llm, autolearn=autolearn, tdd=tdd) or 0)
 
     assert cli.main(["arm", "--autolearn"]) == 0
     assert captured["autolearn"] is True
@@ -292,7 +292,7 @@ def test_arm_dispatch_with_autolearn_flag(monkeypatch):
 def test_arm_dispatch_with_tdd_flag(monkeypatch):
     captured = {}
     monkeypatch.setattr(cli, "cmd_arm",
-                        lambda root, llm=False, autolearn=False, tdd=False, mutation=False, mutation_score=False: captured.update(llm=llm, autolearn=autolearn, tdd=tdd) or 0)
+                        lambda root, llm=False, autolearn=False, tdd=False, mutation=False, mutation_score=False, red_proof=False: captured.update(llm=llm, autolearn=autolearn, tdd=tdd) or 0)
 
     assert cli.main(["arm", "--tdd"]) == 0
     assert captured["tdd"] is True
@@ -315,7 +315,7 @@ def test_arm_dispatch_tdd_and_llm_mutually_exclusive():
 def test_arm_dispatch_with_mutation_flag(monkeypatch):
     captured = {}
     monkeypatch.setattr(cli, "cmd_arm",
-                        lambda root, llm=False, autolearn=False, tdd=False, mutation=False, mutation_score=False:
+                        lambda root, llm=False, autolearn=False, tdd=False, mutation=False, mutation_score=False, red_proof=False:
                         captured.update(llm=llm, autolearn=autolearn, tdd=tdd,
                                         mutation=mutation) or 0)
 
@@ -336,7 +336,7 @@ def test_arm_dispatch_with_mutation_score_flag(monkeypatch):
     captured = {}
     monkeypatch.setattr(cli, "cmd_arm",
                         lambda root, llm=False, autolearn=False, tdd=False,
-                        mutation=False, mutation_score=False:
+                        mutation=False, mutation_score=False, red_proof=False:
                         captured.update(llm=llm, autolearn=autolearn,
                                         tdd=tdd, mutation=mutation,
                                         mutation_score=mutation_score) or 0)
@@ -352,6 +352,32 @@ def test_arm_dispatch_with_mutation_score_flag(monkeypatch):
 def test_arm_dispatch_mutation_score_and_mutation_mutually_exclusive():
     rc = subprocess.run([sys.executable, "-m", "aramid", "arm",
                          "--mutation-score", "--mutation"],
+                        capture_output=True, text=True)
+    assert rc.returncode == 3
+
+
+def test_arm_dispatch_with_red_proof_flag(monkeypatch):
+    captured = {}
+    monkeypatch.setattr(cli, "cmd_arm",
+                        lambda root, llm=False, autolearn=False, tdd=False,
+                        mutation=False, mutation_score=False, red_proof=False:
+                        captured.update(llm=llm, autolearn=autolearn,
+                                        tdd=tdd, mutation=mutation,
+                                        mutation_score=mutation_score,
+                                        red_proof=red_proof) or 0)
+
+    assert cli.main(["arm", "--red-proof"]) == 0
+    assert captured["red_proof"] is True
+    assert captured["mutation_score"] is False
+    assert captured["mutation"] is False
+    assert captured["llm"] is False
+    assert captured["autolearn"] is False
+    assert captured["tdd"] is False
+
+
+def test_arm_dispatch_red_proof_and_tdd_mutually_exclusive():
+    rc = subprocess.run([sys.executable, "-m", "aramid", "arm",
+                         "--red-proof", "--tdd"],
                         capture_output=True, text=True)
     assert rc.returncode == 3
 
