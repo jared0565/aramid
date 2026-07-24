@@ -207,7 +207,9 @@ def test_missing_red_proof_config_defaults_on(monkeypatch, tmp_path):
 Append to `tests/unit/test_config.py` (follow that file's existing test style; it already imports the config module):
 
 ```python
-def test_red_proof_defaults_present(tmp_path):
+def test_red_proof_defaults_present(tmp_path, monkeypatch):
+    monkeypatch.setattr(config, "_user_config_path",
+                        lambda: tmp_path / "no-user.toml")
     cfg = config.load_config(tmp_path)
     assert cfg.red_proof.get("enabled") is True
     assert cfg.red_proof.get("red_proof_block_armed") is False
@@ -215,7 +217,7 @@ def test_red_proof_defaults_present(tmp_path):
     assert cfg.red_proof.get("test_timeout_s") == 60
 ```
 
-(If `test_config.py` imports the module under a different name — e.g. `from aramid import config as config_mod` — match its existing import name; the assertions stay identical. If its loader tests monkeypatch `_user_config_path`, mirror that in this test too.)
+(The file already imports the module as `config` and its sibling defaults tests — e.g. `test_tdd_defaults` at line ~320 — use exactly this `_user_config_path` monkeypatch form; the block is final as printed.)
 
 - [ ] **Step 2: Run to verify the tests fail**
 
@@ -432,6 +434,20 @@ In `src/aramid/policy.py`, insert directly AFTER the `tool == "mutation-score"` 
         return severity, Verdict.BLOCK if armed else Verdict.WARN
 ```
 
+Also extend the module docstring's enumerated arming-flag list (the repo kept it current for 1a's `cfg.tdd_block_armed` and 1b's `cfg.mutation`). In `src/aramid/policy.py`'s module docstring, change the lines
+
+```
+`cfg.semgrep_block_armed`, `cfg.tdd_block_armed`, `cfg.pack`, `cfg.mutation`
+(and deps' `block_severity` threshold)
+```
+
+to
+
+```
+`cfg.semgrep_block_armed`, `cfg.tdd_block_armed`, `cfg.pack`, `cfg.mutation`,
+`cfg.red_proof` (and deps' `block_severity` threshold)
+```
+
 - [ ] **Step 4: Run to verify all pass**
 
 Run: `python -m pytest tests/unit/test_policy.py -q`
@@ -462,19 +478,22 @@ Create `tests/integration/test_red_proof_gate.py`:
 
 ```python
 """Real-git integration for red_proof (sub-project 3): producer-level tests
-on real repos (mirrors tests/integration/test_tdd_gate.py) plus cmd_check
-e2e for arming/ratchet/fresh-clone (mirrors the 1b/2b e2e pattern:
-GATE_RUNNER_KEYS emptied so the exit code reflects only the gate
-producers). The DISARMED e2e is also the ratchet-exemption red-proof:
-without the "red-proof" ratchet exemption the new WARN would escalate to
-BLOCK and rc would be 1."""
+on real repos (mirrors tests/integration/test_tdd_gate.py), a run_gate-level
+ratchet-exemption test (mirrors test_pipeline.py's tdd exemption test -- the
+only layer where a missing exemption genuinely flips the exit code; the
+fresh-clone downgrade masks it at cmd_check level), and cmd_check e2e for
+arming/fresh-clone (1b/2b pattern: GATE_RUNNER_KEYS emptied so the exit
+code reflects only the gate producers)."""
 import subprocess
 from pathlib import Path
 from types import SimpleNamespace
 
+from aramid import config as config_mod
 from aramid import gitutil, pipeline, red_proof
 from aramid.commands.check import cmd_check
-from aramid.models import Gate
+from aramid.ledger import Ledger
+from aramid.models import Gate, Verdict
+from aramid.normalizer import RawFinding
 from aramid.runners.base import RunContext
 
 
@@ -584,13 +603,25 @@ def test_new_test_importing_new_module_is_red(tmp_path):
 
 
 def test_fingerprint_stable_across_pushes(tmp_path):
-    """Same never-red file -> same tool/rule/file/line inputs (id is derived
-    from exactly these at normalize time; line=0 pins content-independence)."""
+    """Spec s11: same never-red file across two pushes -> same finding id.
+    line=0 reads no content, so the id normalize() mints is a function of
+    tool+rule+path only -- derive it exactly as normalize() does and compare
+    across two real pushes with entirely different file content."""
+    from aramid.fingerprint import compute_fingerprint
+
     r = _repo_with_upstream(tmp_path)
     _commit_change_and_test(r, test_body=NEVER_RED)
     first = _scan(r)[0]
-    assert (first.tool, first.rule, first.file, first.line) == \
-        ("red-proof", "test-not-red", "tests/test_foo.py", 0)
+    _git(r, "push", "origin", "main")   # push 1 lands; the base advances
+    # Second push: assert the now-landed behavior (foo() == 2) -- it passes
+    # on the NEW base, so it is never-red again with different content.
+    (r / "tests" / "test_foo.py").write_text(GENUINELY_RED, encoding="utf-8")
+    _git(r, "add", "-A")
+    _git(r, "commit", "-m", "still never red")
+    second = _scan(r)[0]
+    ids = {compute_fingerprint(f.tool, f.rule, f.file, "", 0)
+           for f in (first, second)}
+    assert len(ids) == 1
 
 
 def _arm(r):
@@ -599,9 +630,40 @@ def _arm(r):
         encoding="utf-8")
 
 
+def test_run_gate_disarmed_red_proof_is_ratchet_exempt(tmp_path, monkeypatch):
+    """The exemption's REAL red-proof (mirrors tests/unit/test_pipeline.py::
+    test_tdd_disarmed_warns_and_is_ratchet_exempt): at the run_gate layer no
+    fresh-clone downgrade exists, so omitting "red-proof" from the ratchet
+    exclusion genuinely escalates the WARN to BLOCK and flips exit_code to 1.
+    (cmd_check-level disarmed e2e CANNOT pin this -- on a fresh ledger the
+    downgrade masks a missing exemption.)"""
+    _no_runners(monkeypatch)
+    r = _repo_with_upstream(tmp_path)
+    _commit_change_and_test(r, test_body=NEVER_RED)
+    monkeypatch.setattr(config_mod, "_user_config_path",
+                        lambda: tmp_path / "no-user-config.toml")
+    raw = RawFinding(tool="red-proof", rule="test-not-red",
+                     severity_raw="medium", file="tests/test_foo.py",
+                     line=0, message="m")
+    monkeypatch.setattr(red_proof, "scan", lambda ctx, cfg: [raw])
+    monkeypatch.setattr(pipeline.tdd, "scan", lambda ctx, cfg: [])
+    cfg = config_mod.load_config(r)
+    ledger = Ledger(r / ".aramid" / "ledger.db")
+    try:
+        result = pipeline.run_gate(r, Gate.PRE_PUSH, "range", cfg, ledger)
+    finally:
+        ledger.close()
+    rp = [f for f in result.findings if f.tool == "red-proof"]
+    assert len(rp) == 1
+    assert rp[0].verdict is Verdict.WARN     # ratchet-exempt, not escalated
+    assert result.exit_code == 0
+
+
 def test_e2e_disarmed_warns_never_blocks(tmp_path, monkeypatch):
-    """ALSO the ratchet-exemption red-proof: a new disarmed red-proof WARN
-    must not auto-escalate at pre-push (without the exemption rc would be 1)."""
+    """End-to-end disarmed behavior through cmd_check. NOTE: this does NOT
+    pin the ratchet exemption -- on a fresh ledger the fresh-clone downgrade
+    would mask a missing exemption; test_run_gate_disarmed_red_proof_is_
+    ratchet_exempt above is the exemption's red-proof."""
     _no_runners(monkeypatch)
     r = _repo_with_upstream(tmp_path)
     _commit_change_and_test(r, test_body=NEVER_RED)
@@ -610,10 +672,16 @@ def test_e2e_disarmed_warns_never_blocks(tmp_path, monkeypatch):
 
 
 def test_e2e_armed_never_red_blocks(tmp_path, monkeypatch):
+    """Armed block on a BASELINED (non-fresh) ledger -- the disarmed first
+    run writes the baseline (1b/2b two-run precedent), so the downgrade
+    logic never runs on the armed assertion. The fresh single-run case is
+    test_e2e_armed_block_survives_fresh_baseline."""
     _no_runners(monkeypatch)
     r = _repo_with_upstream(tmp_path)
-    _arm(r)
     _commit_change_and_test(r, test_body=NEVER_RED)
+    rc = cmd_check(r, Gate.PRE_PUSH, "range")
+    assert rc != 1          # disarmed baking run writes the baseline
+    _arm(r)
     rc = cmd_check(r, Gate.PRE_PUSH, "range")
     assert rc == 1
 
@@ -642,7 +710,7 @@ def test_e2e_armed_block_survives_fresh_baseline(tmp_path, monkeypatch):
 - [ ] **Step 2: Run to verify the red state**
 
 Run: `python -m pytest tests/integration/test_red_proof_gate.py -q`
-Expected: the four producer-level tests PASS (Task 1 shipped the producer — they exercise it directly, not the wiring). The four e2e tests are the red teeth: `test_e2e_armed_never_red_blocks` and `test_e2e_armed_block_survives_fresh_baseline` FAIL (`rc != 1` — nothing calls the producer inside `run_gate` yet); the disarmed and genuinely-red e2e tests pass vacuously (they assert `rc != 1`, true while unwired — their post-green teeth come from the armed tests proving the wiring exists, leaving verdict and ratchet behavior as what they pin).
+Expected: the four producer-level tests PASS (Task 1 shipped the producer — they exercise it directly, not the wiring). The red teeth: `test_run_gate_disarmed_red_proof_is_ratchet_exempt` FAILS (`run_gate` never calls `red_proof.scan` yet, so no red-proof finding exists — `len(rp) == 1` fails), and `test_e2e_armed_never_red_blocks` and `test_e2e_armed_block_survives_fresh_baseline` FAIL (their final `assert rc == 1` gets a non-1 exit while unwired). The disarmed and genuinely-red e2e tests pass vacuously (they assert `rc != 1`, true while unwired — annotated in their docstrings; their post-green value is pinning end-to-end verdict behavior once the armed tests prove the wiring exists).
 
 - [ ] **Step 3: Wire the pipeline**
 
@@ -669,16 +737,24 @@ from aramid import gitutil, mutation_gate, mutation_score_gate, policy, red_proo
         all_raws.extend(red_proof.scan(ctx, cfg))
 ```
 
-(c) extend the ratchet exclusion (currently `and f.tool != "tdd"`):
+(c) extend the ratchet exclusion. The trailing `)` on the current line closes the comprehension's `if (` condition — replace the WHOLE comprehension (currently at pipeline.py:306-314) with:
 
 ```python
-                and f.tool not in ("tdd", "red-proof")
+    if gate is Gate.PRE_PUSH:
+        findings = [
+            replace(f, verdict=Verdict.BLOCK)
+            if (f.id in new_ids and f.verdict is Verdict.WARN
+                and f.rule != deps.DEPS_SHAPE_DRIFT_RULE
+                and f.tool not in ("tdd", "red-proof"))
+            else f
+            for f in findings
+        ]
 ```
 
 - [ ] **Step 4: Run to verify all pass**
 
-Run: `python -m pytest tests/integration/test_red_proof_gate.py tests/integration/test_tdd_gate.py tests/unit/test_pipeline.py -q`
-Expected: all pass (8 new + neighbors untouched-green).
+Run: `python -m pytest tests/integration/test_red_proof_gate.py tests/integration/test_tdd_gate.py tests/unit/test_pipeline.py tests/integration/test_mutation_gate_e2e.py tests/integration/test_mutation_score_gate_e2e.py -q`
+Expected: all pass (9 new + neighbors green). The two mutation e2e files now execute the REAL red-proof producer in their mapped-test phases (their fixtures commit test files in range) — their `rc != 1` assertions are task-time proof of clean interplay, instead of a misattributed failure at the controller's ~14-min full suite.
 
 - [ ] **Step 5: Commit**
 
@@ -937,7 +1013,7 @@ git commit -m "feat(cli): aramid arm --red-proof ends the red-first bake (3 Task
 
 - [ ] **Step 1: Extend the README**
 
-Locate the TDD-gate documentation in `README.md` (search for "code-without-test" — the 1a subsection). Append this block after the existing TDD-gate material, heading level matching its siblings:
+README.md has no 1a TDD-gate section (1a shipped code only, no README docs). Locate the `#### 2b: regression teeth at pre-push` subsection (search for "regression teeth"; it ends with a numbered limitations list) and insert the block below immediately AFTER that subsection — i.e. directly before the `### Phase 2b: the LLM reviewer` heading. The block's `###` heading is already the correct level there (sibling of the `aramid mutation-score` section):
 
 ```markdown
 ### Red-first proof (TDD gate, sub-project 3)
@@ -991,7 +1067,8 @@ The task subagent STOPS here and reports back. The controller runs the full suit
 
 ## Self-Review (performed at authoring, 2026-07-24)
 
-- **Spec coverage:** §3 detection rule → T1 (producer + zero-cost guard + verdict table + budgets); §4 arming/ratchet/fresh-clone → T2 (classify) + T3 (wiring, exemption, e2e); §5 file list → T1-T5 exactly; §6 config → T1; §7 flow → T3; §8 fail-open → T1 (tests: fail-open, worktree-add failure, timeout, cleanup); §9 CLI → T4; §10 limitations → T1 docstring + T5 README (all 6; #6 push-time cost is the budget para); §11 testing → every named case has a test (genuinely-red, never-red, no-added-test-lines zero-cost, new-module import, rc 5, budget, fail-open, cleanup, fingerprint stability, classify both + severity, ratchet exemption via the disarmed e2e, arm round-trip + non-interference + dispatch + mutex, defaults parse, e2e armed/disarmed/red/fresh); §12 non-goals — no task exceeds them.
+- **Spec coverage:** §3 detection rule → T1 (producer + zero-cost guard + verdict table + budgets); §4 arming/ratchet/fresh-clone → T2 (classify) + T3 (wiring, exemption, e2e); §5 file list → T1-T5 exactly; §6 config → T1; §7 flow → T3; §8 fail-open → T1 (tests: fail-open, worktree-add failure, timeout, cleanup); §9 CLI → T4; §10 limitations → T1 docstring + T5 README (all 6; #6 push-time cost is the budget para); §11 testing → every named case has a test (genuinely-red, never-red, no-added-test-lines zero-cost, new-module import, rc 5, budget, fail-open, cleanup, two-push fingerprint stability, classify both + severity, ratchet exemption via the run_gate-level test — the cmd_check disarmed e2e cannot pin it because the fresh-clone downgrade masks a missing exemption, arm round-trip + non-interference + dispatch + mutex, defaults parse, e2e armed-on-baselined-ledger/disarmed/red/fresh); §12 non-goals — no task exceeds them.
 - **Type consistency:** `scan(ctx, cfg)` identical in T1 def, T3 pipeline call, T3 integration `_scan`. `cmd_arm(..., red_proof=False)` identical in T4 impl and dispatch lambda. `RunnerResult(tool, state, returncode=...)` matches `runners/base.py:17-24` (positional `tool, state`; `returncode` keyword). `_split_range` import target verified at `tdd.py:17-25`.
 - **Red-phase honesty:** T1 collection-error red; T2 armed-test-only red (disarmed passes coincidentally — annotated); T3 armed e2e red, disarmed/genuinely-red vacuous (annotated); T4 "8 failed, 1 passed" with the vacuous mutex pass annotated (2b precedent).
 - **Known intentional deviations:** none.
+- **Adversarial plan-review round (wf_025a3ba0-5b5, 2026-07-24):** 22 raised → 18 confirmed → 8 distinct fixes applied: (1) run_gate-level ratchet-exemption test replaces the vacuous e2e claim (a verifier empirically proved the fresh-clone downgrade masks a missing exemption at cmd_check level); (2) ratchet-exclusion edit now shows the whole comprehension (the fragment dropped the `if (`-closing paren — SyntaxError if copied as a full line); (3) T5 README anchor corrected (no 1a section exists; insert before the Phase 2b LLM heading); (4) config test gets the `_user_config_path` monkeypatch inline; (5) armed e2e made two-run (baselined ledger) so it differs from the fresh-baseline test; (6) fingerprint test made a real two-push id comparison; (7) T3 Step 4 neighbor run gains the two mutation e2e files (they newly execute the real producer); (8) policy module docstring's arming-flag enumeration gains `cfg.red_proof`.
