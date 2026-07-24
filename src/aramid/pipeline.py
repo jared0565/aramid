@@ -26,7 +26,7 @@ from pathlib import Path
 from typing import Callable
 
 from aramid import config as config_mod
-from aramid import gitutil, mutation_gate, policy, redact, tdd
+from aramid import gitutil, mutation_gate, mutation_score_gate, policy, redact, tdd
 from aramid import review as review_mod
 from aramid.detectors import detect_package_manager, detect_stacks, detect_tests
 from aramid.fingerprint import normalize_path
@@ -329,7 +329,16 @@ def run_gate(root: Path, gate: Gate, mode: str, cfg: config_mod.Config, ledger: 
             mutation_gate.auto_resolve_mutation(ledger, run_id, at, scope_files)
         findings = [*findings,
                     *review_mod.llm_gate_findings(cfg, ledger, gate),
-                    *mutation_gate.mutation_gate_findings(cfg, ledger, gate)]
+                    *mutation_gate.mutation_gate_findings(cfg, ledger, gate),
+                    # 2b: derived mutation-score regressions. changed_files
+                    # only under mode "range" (same rationale as the
+                    # auto_resolve guard above): under "all"/"staged",
+                    # scope_files is the whole tree / staged set, and
+                    # test-mapped suppression against that would suppress
+                    # everything. Ephemeral only -- no ledger write.
+                    *mutation_score_gate.mutation_score_gate_findings(
+                        cfg, ledger, gate,
+                        scope_files if mode == "range" else None)]
 
     # 8. exit code.
     degraded_tools = sorted({r.tool for r in flat_results if r.state in _BAD_STATES})
