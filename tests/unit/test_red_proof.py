@@ -6,6 +6,8 @@ from pathlib import Path
 from types import SimpleNamespace
 
 from aramid import gitutil, red_proof
+from aramid.ledger import Ledger
+from aramid.models import Finding, Gate, Severity, Source, Verdict
 from aramid.runners.base import RunContext, RunnerResult, ToolState
 
 
@@ -155,3 +157,97 @@ def test_missing_red_proof_config_defaults_on(monkeypatch, tmp_path):
     findings = red_proof.scan(
         _ctx(["tests/test_foo.py"], root=tmp_path), SimpleNamespace())
     assert [f.file for f in findings] == ["tests/test_foo.py"]
+
+
+# ---------------------------------------- scan_scoped / auto_resolve (1a-F2) -
+# STATUS assertions only -- never membership (see test_tdd.py's identical
+# banner; open_findings() returns every materialized record and never
+# deletes a key).
+
+NOW = "2026-07-21T12:00:00+00:00"
+
+
+def _rp_finding(fid="e" * 64, file="tests/test_foo.py"):
+    return Finding(id=fid, tool="red-proof", rule="test-not-red", severity_raw="medium",
+                   severity=Severity.MEDIUM, verdict=Verdict.WARN, file=file,
+                   line=0, message="new test lines pass against the pre-change tree (never red)",
+                   evidence="", gate=Gate.PRE_PUSH, source=Source.DETERMINISTIC)
+
+
+def _seed(led, finding):
+    led.record_run("r0", NOW, "drain", set(), set(), [finding])
+
+
+def test_auto_resolve_red_proof_resolves_proven_red(tmp_path):
+    led = Ledger(tmp_path / "l.db")
+    try:
+        _seed(led, _rp_finding())
+        resolved = red_proof.auto_resolve_red_proof(
+            led, "r1", NOW, {"tests/test_foo.py"}, present_ids=set())
+        state = led.open_findings()
+    finally:
+        led.close()
+    assert resolved == ["e" * 64]
+    assert state["e" * 64]["status"] == "fixed"
+
+
+def test_auto_resolve_red_proof_ignores_unproven(tmp_path):
+    """proven_red=set() is the budget-break / rc-5 / timeout case -- none of
+    them prove anything about the file, so nothing may resolve. Must fail if
+    the definitive-verdict rule (scan_scoped's rc 1/2 only) is loosened to
+    "changed but no finding emitted"."""
+    led = Ledger(tmp_path / "l.db")
+    try:
+        _seed(led, _rp_finding())
+        resolved = red_proof.auto_resolve_red_proof(
+            led, "r1", NOW, set(), present_ids=set())
+        state = led.open_findings()
+    finally:
+        led.close()
+    assert resolved == []
+    assert state["e" * 64]["status"] == "open"
+
+
+def test_auto_resolve_red_proof_skips_refired_finding(tmp_path):
+    led = Ledger(tmp_path / "l.db")
+    try:
+        _seed(led, _rp_finding())
+        resolved = red_proof.auto_resolve_red_proof(
+            led, "r1", NOW, {"tests/test_foo.py"}, present_ids={"e" * 64})
+        state = led.open_findings()
+    finally:
+        led.close()
+    assert resolved == []
+    assert state["e" * 64]["status"] == "open"
+
+
+def test_scan_scoped_collects_proven_red(monkeypatch, tmp_path):
+    # subjects = sorted(...) -> test_a, test_b, test_c, test_d; _plumb's `_run`
+    # fake consumes rcs in that order via rcs.pop(0) per subject run: 0 ->
+    # never-red finding, 1 -> proven red, 5 -> nothing collected, "timeout" ->
+    # unattributable. rc 5 / TIMEOUT must land in NEITHER out nor proven_red.
+    new_lines = {
+        "tests/test_a.py": {1},
+        "tests/test_b.py": {1},
+        "tests/test_c.py": {1},
+        "tests/test_d.py": {1},
+    }
+    _plumb(monkeypatch, new_lines, [0, 1, 5, "timeout"])
+    out, proven_red = red_proof.scan_scoped(
+        _ctx(list(new_lines), root=tmp_path), _cfg())
+    assert [f.file for f in out] == ["tests/test_a.py"]
+    assert proven_red == {"tests/test_b.py"}
+    assert "tests/test_c.py" not in proven_red
+    assert "tests/test_d.py" not in proven_red
+
+
+def test_scan_is_thin_wrapper(monkeypatch, tmp_path):
+    # _plumb's `_run` fake is single-use and stateful: rcs.pop(0) per subject
+    # run, so one _plumb(..., [0]) serves exactly ONE producer invocation --
+    # pass two rcs so `scan` and `scan_scoped` each get their own real run
+    # instead of the second's pop(0) raising IndexError (swallowed by the
+    # outer fail-open into [], turning this into a vacuous [] == [] compare).
+    _plumb(monkeypatch, {"tests/test_foo.py": {5}}, [0, 0])
+    a = red_proof.scan(_ctx(["tests/test_foo.py"], root=tmp_path), _cfg())
+    b = red_proof.scan_scoped(_ctx(["tests/test_foo.py"], root=tmp_path), _cfg())[0]
+    assert a and a == b

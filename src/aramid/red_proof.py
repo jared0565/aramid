@@ -38,6 +38,8 @@ import time
 from pathlib import Path
 
 from aramid import gitutil
+from aramid.fingerprint import normalize_path
+from aramid.models import Event, EventType
 from aramid.normalizer import RawFinding
 from aramid.runners.base import ToolState, run_subprocess
 from aramid.tdd import _split_range
@@ -47,37 +49,47 @@ _TOOL = "red-proof"
 _MESSAGE = "new test lines pass against the pre-change tree (never red)"
 
 
-def scan(ctx, cfg) -> list[RawFinding]:
+def scan_scoped(ctx, cfg) -> tuple[list[RawFinding], set[str]]:
     """Red-first proof for the pre-push range (PRE_PUSH caller-gated, like
-    tdd.scan). Fail-open: any error yields no findings -- a broken producer
-    must never block a push or crash the gate."""
+    tdd.scan), scoped: returns (findings, proven_red) so callers can
+    auto-resolve open red-proof findings on definitively-red files without
+    re-running the scan. Fail-open: any error yields no findings -- a broken
+    producer must never block a push or crash the gate.
+
+    proven_red contains ONLY files whose base-tree pytest run gave a
+    DEFINITIVE red verdict (rc 1/2 -- see the loop below). rc 5 (nothing
+    collected), a wall-budget break, and a per-file timeout are all
+    deliberately excluded: none of them prove anything about the file, they
+    mean "we couldn't tell", not "it's red" -- resolving an open finding on
+    an inconclusive verdict would silently clear a real gap."""
     try:
         rcfg = getattr(cfg, "red_proof", None) or {}
         if not rcfg.get("enabled", True):
-            return []
+            return [], set()
         if not ctx.rng:
-            return []       # no meaningful base: first push / staged / all
+            return [], set()       # no meaningful base: first push / staged / all
         wall_budget = float(rcfg.get("wall_budget_s", 120))
         test_timeout = float(rcfg.get("test_timeout_s", 60))
         base, head = _split_range(ctx.rng)
         if base is None:
-            return []       # rangeless rng: no base tree to prove against
+            return [], set()       # rangeless rng: no base tree to prove against
         in_scope = set(ctx.files)
         new_lines = gitutil.diff_new_lines(ctx.root, base, head)
         subjects = sorted(
             path for path, lines in new_lines.items()
             if lines and gitutil.is_test_file(path) and path in in_scope)
         if not subjects:
-            return []       # zero-cost guard: no worktree, no subprocess
+            return [], set()       # zero-cost guard: no worktree, no subprocess
         started = time.monotonic()
         out: list[RawFinding] = []
+        proven_red: set[str] = set()
         tmp = Path(tempfile.mkdtemp(prefix="aramid-red-"))
         wt = tmp / "wt"
         try:
             cp = gitutil._run(ctx.root, "worktree", "add", "--detach",
                               str(wt), base)
             if cp.returncode != 0:
-                return []
+                return [], set()
             for rel in subjects:
                 if time.monotonic() - started > wall_budget:
                     break   # budget exhausted: skip remainder silently
@@ -94,8 +106,10 @@ def scan(ctx, cfg) -> list[RawFinding]:
                     out.append(RawFinding(
                         tool=_TOOL, rule=RULE, severity_raw="medium",
                         file=rel, line=0, message=_MESSAGE))
-                # rc 1/2: red proven. rc 5: nothing collected. timeout /
-                # other rc: unattributable. All -> nothing (spec s3.6).
+                elif res.state is ToolState.OK and res.returncode in (1, 2):
+                    proven_red.add(rel)
+                # rc 5: nothing collected. timeout / other rc: unattributable.
+                # Neither -> out nor proven_red for those (spec s3.6).
         finally:
             try:
                 gitutil._run(ctx.root, "worktree", "remove", "--force", str(wt))
@@ -104,6 +118,43 @@ def scan(ctx, cfg) -> list[RawFinding]:
             except Exception:
                 print(f"aramid: red-proof: worktree cleanup leaked at {wt}",
                       file=sys.stderr)
-        return out
+        return out, proven_red
     except Exception:
-        return []
+        return [], set()
+
+
+def scan(ctx, cfg) -> list[RawFinding]:
+    """Findings-only view of scan_scoped, preserving the original entry point
+    (unit tests and any caller that does not need the resolution scope)."""
+    return scan_scoped(ctx, cfg)[0]
+
+
+def auto_resolve_red_proof(ledger, run_id: str, at: str, proven_red, present_ids) -> list[str]:
+    """Resolve open red-proof findings whose file the push definitively
+    proved red (mirrors mutation_gate.auto_resolve_mutation and
+    tdd.auto_resolve_tdd). proven_red (from scan_scoped) contains ONLY files
+    with a definitive rc 1/2 base-tree verdict -- budget-break, rc 5, and
+    timeout are deliberately excluded there (an inconclusive verdict must
+    never silently clear a real gap), so nothing here needs to re-check that;
+    a file's mere presence in proven_red already means "definitively red".
+
+    present_ids skips anything this run's producer re-fired -- same
+    requirement and reason as tdd.auto_resolve_tdd (auto_resolve runs AFTER
+    record_run, so a still-never-red file is already re-detected/open by now
+    and must not be resolved out from under itself). Never raises into
+    run_gate."""
+    proven_norm = {normalize_path(p) for p in proven_red}
+    resolved = []
+    for fid, rec in ledger.open_findings().items():
+        if rec.get("tool") != _TOOL or rec.get("status") != "open" \
+           or fid in present_ids:
+            continue
+        try:
+            if normalize_path(rec.get("file", "")) in proven_norm:
+                ledger.append(Event(EventType.FINDING_RESOLVED, run_id, at,
+                                    finding_id=fid,
+                                    payload={"auto_resolved": "red_proven"}))
+                resolved.append(fid)
+        except Exception:
+            continue
+    return resolved

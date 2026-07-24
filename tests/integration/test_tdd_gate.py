@@ -2,8 +2,16 @@ import subprocess
 from pathlib import Path
 from types import SimpleNamespace
 
-from aramid import gitutil, tdd
+from aramid import config as config_mod
+from aramid import gitutil, pipeline, red_proof, tdd
+from aramid.ledger import Ledger
+from aramid.models import Gate
 from aramid.runners.base import RunContext
+
+
+def _no_runners(monkeypatch):
+    monkeypatch.setattr(pipeline, "GATE_RUNNER_KEYS",
+                        {**pipeline.GATE_RUNNER_KEYS, Gate.PRE_PUSH: []})
 
 
 def _git(root, *a):
@@ -60,3 +68,56 @@ def test_real_prod_change_with_test_is_clean(tmp_path):
     _git(r, "commit", "-m", "change foo with a new test")
     findings = _scan(r)
     assert findings == []
+
+
+# ------------------------------------------------ auto_resolve_tdd (1a-F2) ---
+
+def test_fire_then_resolve_two_push(tmp_path, monkeypatch):
+    """spec section 5's discriminating end-to-end test -- the only evidence
+    that the adopted module-mapped mechanism does what the rejected
+    scope_tools mechanism provably cannot (spec section 2.2(1)).
+
+    Push 1 commits a.py alone (untested) -> tdd finding recorded open. Push 1
+    MUST land before push 2 (mirrors test_red_proof_gate.py:136): without it,
+    @{u} stays at the pre-push-1 commit, push 2's range spans BOTH commits,
+    a.py is still in changed_files, and the finding would resolve through the
+    source_touched branch -- passing even with the module-stem mapping
+    deleted entirely, and passing equally under the REJECTED scope_tools
+    mechanism. Push 2 commits ONLY tests/test_a.py (the mapped test, source
+    untouched). red_proof.scan_scoped is faked to a no-op here -- red-proof
+    is not what this test is about, and left real it would spin up a real
+    worktree + pytest subprocess for tests/test_a.py on every run."""
+    _no_runners(monkeypatch)
+    monkeypatch.setattr(red_proof, "scan_scoped", lambda ctx, cfg: ([], set()))
+    r = _repo_with_upstream(tmp_path)
+    monkeypatch.setattr(config_mod, "_user_config_path",
+                        lambda: tmp_path / "no-user-config.toml")
+    cfg = config_mod.load_config(r)
+    ledger = Ledger(r / ".aramid" / "ledger.db")
+    try:
+        (r / "a.py").write_text("def foo():\n    return 1\n", encoding="utf-8")
+        _git(r, "add", "-A")
+        _git(r, "commit", "-m", "add a.py, no test")
+        result1 = pipeline.run_gate(r, Gate.PRE_PUSH, "range", cfg, ledger)
+        tdd_findings = [f for f in result1.findings
+                        if f.tool == "tdd" and f.file == "a.py"]
+        assert len(tdd_findings) == 1
+        fid = tdd_findings[0].id
+        assert ledger.open_findings()[fid]["status"] == "open"
+
+        _git(r, "push", "origin", "main")   # push 1 lands; the range base advances
+
+        (r / "tests" / "test_a.py").write_text(
+            "def test_a():\n    assert True\n", encoding="utf-8")
+        _git(r, "add", "-A")
+        _git(r, "commit", "-m", "add mapped test for a.py")
+
+        rng = gitutil.resolve_range(r)
+        assert rng, "resolve_range returned no upstream range -- real-git plumbing degenerated"
+        assert "a.py" not in gitutil.changed_files(r, rng), \
+            "source file still in range -- resolve would come from source_touched, not the mapped test"
+
+        pipeline.run_gate(r, Gate.PRE_PUSH, "range", cfg, ledger)
+        assert ledger.open_findings()[fid]["status"] == "fixed"
+    finally:
+        ledger.close()

@@ -615,3 +615,46 @@ def test_all_mode_does_not_resolve_tracked_mutation(tmp_path, monkeypatch):
         assert led.open_findings()["t" * 64]["status"] == "open"  # NOT resolved
     finally:
         led.close()
+
+
+# ------------------------------------------------ auto_resolve_tdd (1a-F2) ---
+
+def _seed_tdd(led, fid, file):
+    # mirrors _seed_mut above, for tdd instead of mutation.
+    f = Finding(id=fid, tool="tdd", rule="code-without-test", severity_raw="medium",
+                severity=Severity.MEDIUM, verdict=Verdict.WARN, file=file, line=0,
+                message="code changed with no new test in this range", evidence="",
+                gate=Gate.ALL, source=Source.DETERMINISTIC)
+    led.record_run("r0", _MUT_NOW, "drain", set(), set(), [f])
+
+
+def test_range_mode_without_upstream_does_not_resolve_tdd(tmp_path, monkeypatch):
+    """The SHARP proof of guard 1 (pipeline.py's `if rng:` nest inside
+    `if mode == "range":`). A brand-new repo with no upstream/origin resolves
+    rng=None -> FULL_HISTORY_RNG (""), so scope_files is the WHOLE tracked
+    tree, not the push's delta (mirrors
+    test_mode_range_no_upstream_scans_full_tracked_set_not_empty_diff above)
+    -- mode == "range" alone is not enough. Committing tests/test_a.py makes
+    the real tdd producer return [] (a tracked test file is present, per
+    tdd.py:47-52's has_new_test_lines), so no real tdd id enters present_ids
+    and the present_ids guard cannot be why the seeded finding stays open --
+    only guard 1 can be. Must FAIL if the `if rng:` nest is dropped."""
+    root = _repo(tmp_path)
+    assert gitutil.resolve_range(root) is None  # sanity: genuinely no upstream
+
+    (root / "tests").mkdir()
+    (root / "tests" / "test_a.py").write_text(
+        "def test_a():\n    assert True\n", encoding="utf-8")
+    _git(root, "add", "-A")
+    _git(root, "commit", "-m", "add test_a")
+
+    cfg = _cfg(root, tmp_path, monkeypatch)
+    led = _ledger(tmp_path)
+    monkeypatch.setitem(pipeline.GATE_RUNNER_KEYS, Gate.PRE_PUSH, [])
+    fid = "t" * 64
+    try:
+        _seed_tdd(led, fid, "a.py")
+        pipeline.run_gate(root, Gate.PRE_PUSH, "range", cfg, led)
+        assert led.open_findings()[fid]["status"] == "open"
+    finally:
+        led.close()

@@ -2,6 +2,8 @@ from pathlib import Path
 from types import SimpleNamespace
 
 from aramid import gitutil, tdd
+from aramid.ledger import Ledger
+from aramid.models import Event, EventType, Finding, Gate, Severity, Source, Verdict
 from aramid.runners.base import RunContext
 
 
@@ -80,3 +82,122 @@ def test_first_push_repo_without_test_flags(monkeypatch):
     monkeypatch.setattr(gitutil, "diff_new_lines", lambda *a: {"src/foo.py": {1}})
     findings = tdd.scan(_ctx(["src/foo.py"], rng=""), _cfg())
     assert [f.file for f in findings] == ["src/foo.py"]
+
+
+# ------------------------------------------------- auto_resolve_tdd (1a-F2) --
+# Build a real Ledger on tmp_path (mirrors tests/unit/test_mutation_gate.py:19),
+# seed via record_run, and assert on STATUS -- never on membership.
+# open_findings() returns EVERY materialized record keyed by id (never
+# deletes a key), so `fid not in open_findings()` can never pass and
+# `fid in open_findings()` passes unconditionally -- either would make a
+# "stays open" assertion vacuous.
+
+NOW = "2026-07-21T12:00:00+00:00"
+
+
+def _tdd_finding(fid="f" * 64, file="a.py", rule="code-without-test"):
+    return Finding(id=fid, tool="tdd", rule=rule, severity_raw="medium",
+                   severity=Severity.MEDIUM, verdict=Verdict.WARN, file=file,
+                   line=0, message="code changed with no new test in this range",
+                   evidence="", gate=Gate.PRE_PUSH, source=Source.DETERMINISTIC)
+
+
+def _seed(led, finding):
+    led.record_run("r0", NOW, "drain", set(), set(), [finding])
+
+
+def _seed_raw(led, fid, payload):
+    led.append(Event(EventType.FINDING_DETECTED, "r0", NOW,
+                     finding_id=fid, payload=payload))
+
+
+def test_auto_resolve_tdd_resolves_when_mapped_test_added(tmp_path):
+    # a.py NOT touched -- the canonical case the rejected scope_tools
+    # mechanism provably cannot resolve (spec 2.2(1)); the discriminating
+    # test of the whole task.
+    led = Ledger(tmp_path / "l.db")
+    try:
+        _seed(led, _tdd_finding())
+        resolved = tdd.auto_resolve_tdd(
+            led, "r1", NOW, {"tests/test_a.py"}, present_ids=set())
+        state = led.open_findings()
+    finally:
+        led.close()
+    assert resolved == ["f" * 64]
+    assert state["f" * 64]["status"] == "fixed"
+
+
+def test_auto_resolve_tdd_resolves_when_source_touched_and_gap_addressed(tmp_path):
+    led = Ledger(tmp_path / "l.db")
+    try:
+        _seed(led, _tdd_finding())
+        resolved = tdd.auto_resolve_tdd(
+            led, "r1", NOW, {"a.py"}, present_ids=set())
+        state = led.open_findings()
+    finally:
+        led.close()
+    assert resolved == ["f" * 64]
+    assert state["f" * 64]["status"] == "fixed"
+
+
+def test_auto_resolve_tdd_skips_refired_finding(tmp_path):
+    """spec 2.4 invariant: same as the source_touched case above, but the id
+    IS in present_ids -- auto_resolve runs AFTER record_run, so a still-open
+    finding re-fired THIS run must not be resolved out from under itself.
+    Must fail if the present_ids guard is dropped."""
+    led = Ledger(tmp_path / "l.db")
+    try:
+        _seed(led, _tdd_finding())
+        resolved = tdd.auto_resolve_tdd(
+            led, "r1", NOW, {"a.py"}, present_ids={"f" * 64})
+        state = led.open_findings()
+    finally:
+        led.close()
+    assert resolved == []
+    assert state["f" * 64]["status"] == "open"
+
+
+def test_auto_resolve_tdd_ignores_unrelated_files(tmp_path):
+    led = Ledger(tmp_path / "l.db")
+    try:
+        _seed(led, _tdd_finding())
+        resolved = tdd.auto_resolve_tdd(
+            led, "r1", NOW, {"b.py"}, present_ids=set())
+        state = led.open_findings()
+    finally:
+        led.close()
+    assert resolved == []
+    assert state["f" * 64]["status"] == "open"
+
+
+def test_auto_resolve_tdd_ignores_other_tools(tmp_path):
+    led = Ledger(tmp_path / "l.db")
+    try:
+        other = Finding(id="r" * 64, tool="ruff", rule="S102", severity_raw="high",
+                        severity=Severity.HIGH, verdict=Verdict.WARN, file="a.py",
+                        line=1, message="m", evidence="e", gate=Gate.PRE_PUSH)
+        _seed(led, other)
+        resolved = tdd.auto_resolve_tdd(
+            led, "r1", NOW, {"a.py"}, present_ids=set())
+        state = led.open_findings()
+    finally:
+        led.close()
+    assert resolved == []
+    assert state["r" * 64]["status"] == "open"
+
+
+def test_auto_resolve_tdd_skips_malformed_record(tmp_path):
+    """A rec with file stored as null must be SKIPPED -- stays open, never
+    crashes."""
+    led = Ledger(tmp_path / "l.db")
+    try:
+        _seed_raw(led, "d" * 64, {"tool": "tdd", "file": None, "line": 0,
+                                  "severity": "medium", "rule": "code-without-test",
+                                  "message": "m"})
+        resolved = tdd.auto_resolve_tdd(
+            led, "r1", NOW, {"a.py"}, present_ids=set())
+        state = led.open_findings()
+    finally:
+        led.close()
+    assert resolved == []
+    assert state["d" * 64]["status"] == "open"

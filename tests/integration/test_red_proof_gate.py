@@ -13,7 +13,7 @@ from aramid import config as config_mod
 from aramid import gitutil, pipeline, red_proof
 from aramid.commands.check import cmd_check
 from aramid.ledger import Ledger
-from aramid.models import Gate, Verdict
+from aramid.models import Finding, Gate, Severity, Source, Verdict
 from aramid.normalizer import RawFinding
 from aramid.runners.base import RunContext
 
@@ -166,7 +166,7 @@ def test_run_gate_disarmed_red_proof_is_ratchet_exempt(tmp_path, monkeypatch):
     raw = RawFinding(tool="red-proof", rule="test-not-red",
                      severity_raw="medium", file="tests/test_foo.py",
                      line=0, message="m")
-    monkeypatch.setattr(red_proof, "scan", lambda ctx, cfg: [raw])
+    monkeypatch.setattr(red_proof, "scan_scoped", lambda ctx, cfg: ([raw], set()))
     monkeypatch.setattr(pipeline.tdd, "scan", lambda ctx, cfg: [])
     cfg = config_mod.load_config(r)
     ledger = Ledger(r / ".aramid" / "ledger.db")
@@ -226,3 +226,79 @@ def test_e2e_armed_block_survives_fresh_baseline(tmp_path, monkeypatch):
     _commit_change_and_test(r, test_body=NEVER_RED)
     rc = cmd_check(r, Gate.PRE_PUSH, "range")
     assert rc == 1
+
+
+# ------------------------------------------ auto_resolve_red_proof (1a-F2) ---
+
+def _seed_tdd(led, fid, file):
+    """Seed an open tdd finding directly (mirrors test_pipeline.py's
+    _seed_mut) -- used only by test_auto_resolve_skipped_outside_range_mode,
+    where a red-proof seed cannot discriminate at all (red_proof.py:58-59
+    empties proven_red whenever ctx.rng is falsy, on both sides of every
+    counterfactual here)."""
+    f = Finding(id=fid, tool="tdd", rule="code-without-test", severity_raw="medium",
+                severity=Severity.MEDIUM, verdict=Verdict.WARN, file=file, line=0,
+                message="code changed with no new test in this range", evidence="",
+                gate=Gate.ALL, source=Source.DETERMINISTIC)
+    led.record_run("r0", "2026-07-21T12:00:00+00:00", "drain", set(), set(), [f])
+
+
+def test_fire_then_resolve_two_push(tmp_path, monkeypatch):
+    """spec section 5 e2e: push 1's never-red finding resolves once a LATER
+    push proves the SAME file genuinely red. This is also the scoped-seam
+    consumption proof (Step 2) -- nothing here is monkeypatched at the
+    producer seam.
+
+    Deliberately does NOT land push 1 (contrast test_tdd_gate.py's analogous
+    test, which must land it): red-proof's verdict is base-relative, not
+    source-touched-relative, and GENUINELY_RED asserts foo() == 2 -- if push
+    1 landed, push 2's base would be push 1's tree where foo() ALREADY
+    returns 2 (_commit_change_and_test always sets it), so GENUINELY_RED
+    would pass there too (never-red again, exactly what
+    test_fingerprint_stable_across_pushes above exploits on purpose) and
+    nothing would resolve. Leaving push 1 unlanded keeps both scans' base at
+    the original foo() == 1 commit, where GENUINELY_RED is actually red."""
+    _no_runners(monkeypatch)
+    r = _repo_with_upstream(tmp_path)
+    monkeypatch.setattr(config_mod, "_user_config_path",
+                        lambda: tmp_path / "no-user-config.toml")
+    cfg = config_mod.load_config(r)
+    ledger = Ledger(r / ".aramid" / "ledger.db")
+    try:
+        _commit_change_and_test(r, test_body=NEVER_RED)
+        result1 = pipeline.run_gate(r, Gate.PRE_PUSH, "range", cfg, ledger)
+        rp = [f for f in result1.findings if f.tool == "red-proof"]
+        assert len(rp) == 1
+        fid = rp[0].id
+        assert ledger.open_findings()[fid]["status"] == "open"
+
+        _commit_change_and_test(r, test_body=GENUINELY_RED)
+        pipeline.run_gate(r, Gate.PRE_PUSH, "range", cfg, ledger)
+        assert ledger.open_findings()[fid]["status"] == "fixed"
+    finally:
+        ledger.close()
+
+
+def test_auto_resolve_skipped_outside_range_mode(tmp_path, monkeypatch):
+    """Guard 1's COARSE backstop: under mode == "all", scope_files is the
+    whole tracked tree (pipeline.py:130, :308), not a push's delta --
+    resolving on it would durably clear every open tdd finding on tracked
+    source. Seeds a TDD finding (not red-proof: a red-proof seed cannot
+    discriminate here at all, since ctx.rng is falsy under "all" on both
+    sides of every counterfactual). _repo_with_upstream ships tests/test_foo.py
+    tracked, which is load-bearing: with a tracked test file present,
+    tdd.scan returns [] (tdd.py:47-52), so no real tdd id enters present_ids
+    and the present_ids guard cannot mask the result."""
+    _no_runners(monkeypatch)
+    r = _repo_with_upstream(tmp_path)
+    monkeypatch.setattr(config_mod, "_user_config_path",
+                        lambda: tmp_path / "no-user-config.toml")
+    cfg = config_mod.load_config(r)
+    ledger = Ledger(r / ".aramid" / "ledger.db")
+    fid = "t" * 64
+    try:
+        _seed_tdd(ledger, fid, "src/foo.py")
+        pipeline.run_gate(r, Gate.PRE_PUSH, "all", cfg, ledger)
+        assert ledger.open_findings()[fid]["status"] == "open"
+    finally:
+        ledger.close()

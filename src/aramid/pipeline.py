@@ -274,13 +274,15 @@ def run_gate(root: Path, gate: Gate, mode: str, cfg: config_mod.Config, ledger: 
     # TDD gate (1a): synchronous git-fact code-without-test producer. PRE_PUSH
     # only; joins the raw stream so classify/fingerprint/ratchet/overrides all
     # apply. Fail-open inside tdd.scan -- never raises here.
+    rp_proven_red: set[str] = set()
     if gate is Gate.PRE_PUSH:
         all_raws.extend(tdd.scan(ctx, cfg))
         # Red-first proof (sub-project 3): the range's changed test files run
         # against the range base -- rc 0 there means the test was never red.
         # Same pre-normalize seam as tdd.scan; fail-open inside red_proof.scan.
         # ctx.rng falsy (first push / staged / all) makes it a silent no-op.
-        all_raws.extend(red_proof.scan(ctx, cfg))
+        rp_raws, rp_proven_red = red_proof.scan_scoped(ctx, cfg)
+        all_raws.extend(rp_raws)
 
     # secrets never land in logs, raw -- collected before writing them out.
     raw_secrets = [r.secret for r in all_raws if r.secret]
@@ -332,6 +334,20 @@ def run_gate(root: Path, gate: Gate, mode: str, cfg: config_mod.Config, ledger: 
         # modes so a full audit shows open findings.
         if mode == "range":
             mutation_gate.auto_resolve_mutation(ledger, run_id, at, scope_files)
+            # 1a-F2: the two synchronous producers resolve too. present_ids
+            # skips anything re-fired THIS run (these producers, unlike the
+            # drain's, fire in the run being resolved).
+            if rng:
+                # mode == "range" is NOT enough: with no upstream and no
+                # origin/HEAD, _discover_files returns the whole tracked tree
+                # with rng == FULL_HISTORY_RNG (""), so scope_files is the
+                # repo, not the push's delta -- resolving on that durably
+                # clears every open tdd finding. Truthy rng == genuine range.
+                present_ids = {f.id for f in findings}
+                if getattr(cfg, "tdd", {}).get("enabled", True):
+                    tdd.auto_resolve_tdd(ledger, run_id, at, scope_files, present_ids)
+                red_proof.auto_resolve_red_proof(ledger, run_id, at,
+                                                 rp_proven_red, present_ids)
         findings = [*findings,
                     *review_mod.llm_gate_findings(cfg, ledger, gate),
                     *mutation_gate.mutation_gate_findings(cfg, ledger, gate),

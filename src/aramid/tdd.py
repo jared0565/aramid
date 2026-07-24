@@ -7,6 +7,8 @@ is decision-grade."""
 from pathlib import Path
 
 from aramid import gitutil
+from aramid.fingerprint import normalize_path
+from aramid.models import Event, EventType
 from aramid.normalizer import RawFinding
 
 RULE = "code-without-test"
@@ -67,3 +69,44 @@ def scan(ctx, cfg) -> list[RawFinding]:
         return out
     except Exception:
         return []
+
+
+def auto_resolve_tdd(ledger, run_id: str, at: str, changed_files, present_ids) -> list[str]:
+    """Resolve open code-without-test findings the push addresses (mirrors
+    mutation_gate.auto_resolve_mutation, which mirrors review.auto_resolve_llm).
+    Module-mapped: resolve a finding on x.py iff the range changed x.py OR
+    added/modified a test whose basename stem is test_<x>/<x>_test -- the
+    common fix is adding tests/test_x.py WITHOUT touching x.py, which is
+    exactly what the ledger's own tool/file scope cannot express.
+
+    present_ids (NOT needed by the two precedents, which resolve only
+    drain-produced findings) skips anything this run's producer re-fired:
+    auto_resolve runs AFTER record_run, so a still-broken file is already
+    re-detected/open by now and must not be resolved out from under itself.
+
+    Liberal by design and self-healing: the fingerprint is tool+rule+path
+    (line=0), so a wrong resolve re-fires identically on the next push that
+    touches the file without a test. Never raises into run_gate."""
+    changed_norm = {normalize_path(c) for c in changed_files}
+    changed_test_stems = {Path(c).stem for c in changed_files
+                          if gitutil.is_test_file(c)}
+    resolved = []
+    for fid, rec in ledger.open_findings().items():
+        if rec.get("tool") != _TOOL or rec.get("status") != "open" \
+           or fid in present_ids:
+            continue
+        try:
+            path = rec.get("file", "")
+            if not path:
+                continue                            # malformed: no file -> skip
+            module = Path(path).stem
+            source_touched = normalize_path(path) in changed_norm
+            test_added = bool({f"test_{module}", f"{module}_test"} & changed_test_stems)
+            if source_touched or test_added:
+                ledger.append(Event(EventType.FINDING_RESOLVED, run_id, at,
+                                    finding_id=fid,
+                                    payload={"auto_resolved": "test_added"}))
+                resolved.append(fid)
+        except Exception:
+            continue
+    return resolved
