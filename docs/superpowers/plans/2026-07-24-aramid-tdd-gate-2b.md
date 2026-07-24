@@ -255,6 +255,9 @@ apply_overrides -- escape = mapped test or disarm); a function rewritten
 without its mapped test blocks until a re-drain re-measures, which is why
 [mutation].enabled = false disables the seam entirely (engine off = no
 re-drain backstop = an armed stale regression could never clear).
+Detection reads only killed_s1/survived_s1/fully_mutated/fps -- never the
+under-counted, write-only errors/timeouts buckets (spec s10 NEW-1, honored
+by construction).
 """
 from pathlib import Path
 
@@ -667,7 +670,7 @@ git commit -m "feat(pipeline): wire mutation-score gate producer at pre-push (2b
 - Modify: `src/aramid/commands/arm.py`
 - Modify: `src/aramid/cli.py` (arm subparser, currently lines 114–119; dispatch, currently lines 221–223)
 - Create: `tests/unit/test_arm_mutation_score.py`
-- Modify: `tests/integration/test_cli_dispatch.py` (append)
+- Modify: `tests/integration/test_cli_dispatch.py` (append two tests + widen the five existing cmd_arm lambdas)
 
 **Interfaces:**
 - Consumes: `_armed_sub(key_re, new_line, text, count=0)`, `_MUT_SECTION_RE`, and the existing `cmd_arm` structure in `arm.py`.
@@ -814,10 +817,24 @@ def test_arm_dispatch_mutation_score_and_mutation_mutually_exclusive():
     assert rc.returncode == 3
 ```
 
+Also in `tests/integration/test_cli_dispatch.py`, widen the five EXISTING `cmd_arm` monkeypatch lambdas so they accept the kwarg the dispatch will pass after Step 3(f) — mirrors the 1b edit that added `mutation=False` to these same lambdas (commit 7298886). In `test_arm_dispatch`, `test_arm_dispatch_with_llm_flag`, `test_arm_dispatch_with_autolearn_flag`, `test_arm_dispatch_with_tdd_flag`, and `test_arm_dispatch_with_mutation_flag`, change each lambda parameter list from
+
+```python
+lambda root, llm=False, autolearn=False, tdd=False, mutation=False:
+```
+
+to
+
+```python
+lambda root, llm=False, autolearn=False, tdd=False, mutation=False, mutation_score=False:
+```
+
+(bodies unchanged). Doing this in the red phase is harmless — the extra defaulted kwarg is unused until Step 3(f) wires the dispatch, so these five tests stay green in Step 2.
+
 - [ ] **Step 2: Run to verify the new tests fail**
 
 Run: `python -m pytest tests/unit/test_arm_mutation_score.py "tests/integration/test_cli_dispatch.py::test_arm_dispatch_with_mutation_score_flag" "tests/integration/test_cli_dispatch.py::test_arm_dispatch_mutation_score_and_mutation_mutually_exclusive" -q`
-Expected: FAIL — `cmd_arm() got an unexpected keyword argument 'mutation_score'` and the CLI rejects the unknown `--mutation-score` flag.
+Expected: 9 failed, 1 passed — the 8 unit tests fail with `cmd_arm() got an unexpected keyword argument 'mutation_score'`; `test_arm_dispatch_with_mutation_score_flag` fails (`cli.main` returns 3, not 0, because argparse rejects the unknown `--mutation-score` flag). `test_arm_dispatch_mutation_score_and_mutation_mutually_exclusive` passes VACUOUSLY at this step — an unknown flag already exits 3 via cli.main's argparse-to-3 remap, the same code the implemented mutually-exclusive group produces; its teeth are post-green (the companion flag test pins that `--mutation-score` parses with rc 0, leaving the exclusion conflict as the only remaining exit-3 cause). Mirrors the 1b plan's note for the analogous `--mutation` red run.
 
 - [ ] **Step 3: Implement arm + CLI**
 
@@ -894,7 +911,7 @@ In `src/aramid/cli.py`:
 - [ ] **Step 4: Run to verify all pass, including neighbors**
 
 Run: `python -m pytest tests/unit/test_arm_mutation_score.py tests/unit/test_arm_mutation.py tests/unit/test_arm_llm.py tests/integration/test_cli_dispatch.py -q`
-Expected: all pass (new 8 + 2 dispatch; every pre-existing arm/dispatch test untouched-green).
+Expected: all pass (new 8 + 2 dispatch; the five widened lambdas keep every pre-existing arm/dispatch test green; no other test in those files is touched).
 
 - [ ] **Step 5: Commit**
 
@@ -910,7 +927,7 @@ git commit -m "feat(cli): aramid arm --mutation-score ends the score bake (2b Ta
 **Files:**
 - Modify: `src/aramid/data/defaults.toml` (the `[mutation]` table, currently lines 123–129)
 - Modify: `src/aramid/commands/mutation_score.py`
-- Modify: `tests/integration/test_mutation_score_cmd.py` (append)
+- Modify: `tests/integration/test_mutation_score_cmd.py` (append + module-level autouse user-config isolation)
 
 **Interfaces:**
 - Consumes: `config_mod.load_config(root)` (returns a Config whose `.mutation` is a dict); the existing `cmd_mutation_score(root, *, as_json=False) -> int`.
@@ -918,16 +935,27 @@ git commit -m "feat(cli): aramid arm --mutation-score ends the score bake (2b Ta
 
 - [ ] **Step 1: Write the failing tests**
 
-Append to `tests/integration/test_mutation_score_cmd.py`, and add this import at the top of the file:
+In `tests/integration/test_mutation_score_cmd.py`, add these two imports at the top of the file (alongside the existing `import json`):
 
 ```python
+import pytest
+
 from aramid import config as config_mod
 ```
 
+then append the following. The autouse fixture isolates EVERY test in the module — including the two pre-existing text-path tests, which after Step 3 will newly traverse `load_config` and must not read the machine's real `~/.aramid/config.toml` (the `config._user_config_path` seam convention; precedent: `tests/unit/test_arm_mutation.py`).
+
 ```python
-def test_cmd_text_shows_baking_state(tmp_path, capsys, monkeypatch):
+@pytest.fixture(autouse=True)
+def _no_user_config(tmp_path, monkeypatch):
+    """cmd_mutation_score reads config on the text path (armed-state line);
+    keep every test in this module hermetic against a real
+    ~/.aramid/config.toml."""
     monkeypatch.setattr(config_mod, "_user_config_path",
                         lambda: tmp_path / "no-user-config.toml")
+
+
+def test_cmd_text_shows_baking_state(tmp_path, capsys):
     led = Ledger(tmp_path / ".aramid" / "ledger.db")
     _seed(led, 0, "m.py::f", 3, 0, True)
     led.close()
@@ -937,9 +965,7 @@ def test_cmd_text_shows_baking_state(tmp_path, capsys, monkeypatch):
     assert "transition regressions: WARN (baking)" in out
 
 
-def test_cmd_text_shows_armed_state(tmp_path, capsys, monkeypatch):
-    monkeypatch.setattr(config_mod, "_user_config_path",
-                        lambda: tmp_path / "no-user-config.toml")
+def test_cmd_text_shows_armed_state(tmp_path, capsys):
     (tmp_path / "aramid.toml").write_text(
         "schema_version = 1\n\n[mutation]\nscore_block_armed = true\n",
         encoding="utf-8")
@@ -952,9 +978,7 @@ def test_cmd_text_shows_armed_state(tmp_path, capsys, monkeypatch):
     assert "transition regressions: BLOCK (armed)" in out
 
 
-def test_cmd_empty_history_still_shows_arm_state(tmp_path, capsys, monkeypatch):
-    monkeypatch.setattr(config_mod, "_user_config_path",
-                        lambda: tmp_path / "no-user-config.toml")
+def test_cmd_empty_history_still_shows_arm_state(tmp_path, capsys):
     rc = cmd_mutation_score(tmp_path)
     out = capsys.readouterr().out
     assert rc == 0
@@ -975,7 +999,7 @@ def test_cmd_json_output_shape_unchanged(tmp_path, capsys):
 - [ ] **Step 2: Run to verify the new tests fail**
 
 Run: `python -m pytest tests/integration/test_mutation_score_cmd.py -q`
-Expected: the three new text tests FAIL (no armed-state line printed yet); `test_cmd_json_output_shape_unchanged` and all pre-existing tests pass.
+Expected: the three new text tests FAIL (no armed-state line printed yet); `test_cmd_json_output_shape_unchanged` and the two pre-existing tests pass — the autouse fixture is inert until Step 3 adds the config read, and after it keeps the whole module hermetic.
 
 - [ ] **Step 3: Implement config default + command line**
 
@@ -1046,7 +1070,9 @@ only a re-drain that re-measures the function truly clears a regression.
   They WARN during the bake and BLOCK once the repo opts in with
   `aramid arm --mutation-score` (sets `[mutation].score_block_armed = true`).
 - **Rate regressions** (stage-1 kill-rate dropped between fully-measured
-  runs) are permanent WARN, rule `rate`, severity low. They never block.
+  runs) are permanent WARN, rule `rate`, severity low. They never block;
+  arming rate is out of scope for 2b and gets revisited only with
+  real-drain evidence.
 - **The only escape valve is ephemeral:** a push whose range adds or
   modifies the module-mapped test (`test_<module>.py` / `<module>_test.py`)
   suppresses the transition for that gate run only. Touching the source
@@ -1065,6 +1091,10 @@ Additional limitations beyond the advisory ones above:
    measurement until a re-drain re-measures it. Because a disabled engine
    could then never clear it, `[mutation].enabled = false` disables this
    gate entirely; use `score_block_armed = false` to drop only the teeth.
+4. Detection reads only the stage-1 killed/survived counts, the
+   fully-mutated flag, and mutant fingerprints — never the under-counted
+   errors/timeouts buckets, so noisy timeout/error runs cannot fake a
+   regression.
 ```
 
 - [ ] **Step 2: Ruff over every file the branch touched**
@@ -1090,3 +1120,4 @@ The task subagent STOPS here and reports back. The controller runs the full suit
 - **Spec coverage:** §3 seam → T1; §4 suppression → T1 (unit) + T3 (mode guard e2e); §5 finding shape → T1; §6 file list → T1–T5 exactly, no extra files; §7 classify twin → T2; §8 flow → T3; §9 fail-open (incl. enabled=false) → T1; §10 limitations → module docstring (T1) + README (T6); §11 tests → T1–T5 map 1:1, full suite → T6/controller; §12 → architecture (no task needed); §13 non-goals — no task violates them.
 - **Type consistency:** `mutation_score_gate_findings(cfg, ledger, gate, changed_files=None)` identical in T1 (def), T2 (twin test), T3 (pipeline call). `cmd_arm(..., mutation_score=False)` identical in T4 impl, T4 dispatch lambda. Severity/raw pairs consistent T1↔T2 tests.
 - **Known intentional deviations:** none. `Regression.baseline_index`/`current_index` are unused by the seam (display uses message text only) — deliberate, matches spec §5 finding shape.
+- **Adversarial plan-review round (wf_1d63d4ce-66b, 2026-07-24):** 16 raised → 12 confirmed → 4 distinct fixes applied: (1) T4 widens the five pre-existing cmd_arm dispatch lambdas (`mutation_score=False`), (2) T4 Step 2 red expectation corrected (mutual-exclusion test passes vacuously pre-implementation), (3) T5 module-level autouse `_no_user_config` fixture keeps the two pre-existing text-path tests hermetic, (4) NEW-1 limitation added to T1 docstring + T6 README (+ rate revisit clause). Spec §8 diagram exit-code erratum fixed in the same commit.

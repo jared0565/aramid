@@ -100,7 +100,7 @@ drain history: CONSUMER_RUN_FINISHED.payload["mutation_scores"]  (2a, unchanged)
        └─ mutation_score.latest_regressions(ledger.events())     (2a analyzer, unchanged)
             └─ transition findings minus test-mapped ephemeral suppression (range mode only)
             └─ rate findings (always WARN, never suppressed)
-                 └─ appended after ratchet → exit code   (BLOCK ⇢ 2 when armed)
+                 └─ appended after ratchet → exit code   (BLOCK ⇢ exit 1 when armed)
 aramid mutation-score: same analyzer + arming-state header line  (advisory, unchanged core)
 ```
 
