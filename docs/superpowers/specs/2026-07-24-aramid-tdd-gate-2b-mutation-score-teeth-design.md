@@ -40,7 +40,7 @@ def mutation_score_gate_findings(cfg, ledger, gate, changed_files) -> list[Findi
 - Returns `[]` at any gate other than PRE_PUSH, and — like the consumer itself — returns `[]` when `[mutation].enabled` is false: with the measuring engine off there is no re-drain backstop, so stale regressions would block inescapably (§9).
 - Regressions are recomputed fresh every gate from the ledger's measurement history — each target's latest measurement vs its most-recent-prior `fully_mutated` baseline. **"Only a re-drain truly clears it" is automatic:** no durable per-finding state exists to wrongly resolve.
 - Verdict inline: transition → `BLOCK` if `cfg.mutation.get("score_block_armed", False)` else `WARN`; rate → always `WARN`.
-- Appended in `pipeline.py`'s PRE_PUSH block alongside the llm and mutation producers — after the ratchet, so a baking WARN is ratchet-exempt and never auto-escalates; before the exit-code computation, so an armed BLOCK sets exit code 2.
+- Appended in `pipeline.py`'s PRE_PUSH block alongside the llm and mutation producers — after the ratchet, so a baking WARN is ratchet-exempt and never auto-escalates; before the exit-code computation, so an armed BLOCK drives the block exit code (exit 1 from `cmd_check`, per `pipeline.py`'s step-8 rule and the 1b e2e contract).
 
 ## 4. Ephemeral test-mapped suppression
 
