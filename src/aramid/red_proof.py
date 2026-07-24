@@ -25,7 +25,12 @@ fallback. Limitations (spec s10): whole-file verdict -- an old test in a
 changed file failing on base masks a never-red new test (recall loss only,
 never a false positive); only subject files are materialized at head, so a
 new test depending on head changes to non-test files it imports usually
-collection-errors -> counts as red; single run, no flake retries."""
+collection-errors -> counts as red; single run, no flake retries.
+The base run inherits the repo's own pytest config -- an addopts gate
+(coverage thresholds, warnings-as-errors) can force a single-file base run
+non-zero regardless of test outcomes, reading as red: fail-safe (never a
+false alarm) but red-proof can then be armed-and-inert; observable during
+the bake."""
 import shutil
 import sys
 import tempfile

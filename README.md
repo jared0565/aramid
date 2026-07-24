@@ -230,8 +230,10 @@ Findings WARN during the bake and BLOCK once the repo opts in with
 Disarmed WARNs never auto-escalate, `aramid override` works as the standard
 escape hatch, and only files changed in the push are ever examined, so
 arming can never wall-block pre-existing repo state. `[red_proof]` also
-carries `wall_budget_s` / `test_timeout_s` caps; when the budget runs out,
-remaining files are skipped silently.
+carries `wall_budget_s` / `test_timeout_s` caps for the per-file test runs
+(the one-time worktree setup and git reads sit outside the budget, like
+every other git call in the gate); when the budget runs out, remaining
+files are skipped silently.
 
 Limitations:
 
@@ -245,6 +247,10 @@ Limitations:
    counts as red.
 4. Range mode only: first pushes and `--all`/`--staged` runs skip silently.
 5. Tests run once, no flake retries — bake before arming.
+6. The base run inherits the repo's own pytest config: an `addopts` gate
+   (coverage threshold, warnings-as-errors) can force any single-file base
+   run non-zero — read as red, so the check goes silently inert rather than
+   ever raising a false alarm. Watch for this during the bake.
 
 ### Phase 2b: the LLM reviewer
 

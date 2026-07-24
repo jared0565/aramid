@@ -123,7 +123,7 @@ git push → check.cmd_check(PRE_PUSH) → pipeline.run_gate
 3. **Only subject files are materialized at head:** a new test that depends on head changes to non-test files it imports (e.g. a root-level `conftest.py`, a new fixture module) sees the base versions and usually collection-errors → counts as red (folds into #2).
 4. **Range-mode only:** first-push `FULL_HISTORY` and modes `all`/`staged` skip silently — no base, no proof.
 5. **Single run, no flake retries:** an order-dependent or flaky test may pass or fail on base spuriously; bake-then-arm absorbs this before teeth.
-6. **Push-time cost:** seconds per changed test file (worktree add + focused pytest), bounded by `wall_budget_s`; over budget the remainder is skipped silently, so a huge test-file push degrades to partial coverage, never to a block or a hang.
+6. **Push-time cost:** seconds per changed test file (worktree add + focused pytest); the pytest loop is bounded by `wall_budget_s` (the one-time worktree add and git reads sit outside it); over budget the remainder is skipped silently, so a huge test-file push degrades to partial coverage, never to a block or a hang.
 
 ## 11. Testing strategy (git fixtures, 1a style — real repos, no mocks)
 
