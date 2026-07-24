@@ -4,8 +4,8 @@ escalation rule.
 
 `classify` is deliberately pure and only reads `tool`, `rule`, `severity_raw`,
 and (from `cfg`) `cfg.block_rules` plus the per-tool arming flags
-`cfg.semgrep_block_armed`, `cfg.tdd_block_armed`, `cfg.pack`, `cfg.mutation`
-(and deps' `block_severity` threshold) -- `gate` is accepted to match the
+`cfg.semgrep_block_armed`, `cfg.tdd_block_armed`, `cfg.pack`, `cfg.mutation`,
+`cfg.red_proof` (and deps' `block_severity` threshold) -- `gate` is accepted to match the
 brief's fixed 5-arg signature (and because a future gate-specific policy
 tweak is plausible) but no current rule keys off it; runner selection per
 gate is aramid.pipeline's job (Task 5.3), not policy's.
@@ -129,6 +129,18 @@ def classify(tool: str, rule: str, severity_raw: str, gate: Gate, cfg) -> tuple[
         if armed and rule == "transition":
             return severity, Verdict.BLOCK
         return severity, Verdict.WARN
+
+    # Red-first proof (TDD gate sub-project 3): the pre-push producer that
+    # runs the range's changed test files against the range base -- a file
+    # whose tests all pass there was never red. Findings join the raw stream
+    # pre-normalize (the 1a path), so this branch is the SINGLE verdict
+    # authority -- there is no seam computing an inline twin. WARN during the
+    # bake; BLOCK once the repo opts in via [red_proof].red_proof_block_armed.
+    # Routing through classify makes _has_genuine_block treat an armed BLOCK
+    # as genuine, so it survives the fresh-clone downgrade (1a s2.2).
+    if tool == "red-proof":
+        armed = cfg.red_proof.get("red_proof_block_armed", False)
+        return severity, Verdict.BLOCK if armed else Verdict.WARN
 
     ruff_block = block_rules.get("ruff", {}).get("block", [])
     if tool == "ruff" and rule in ruff_block:

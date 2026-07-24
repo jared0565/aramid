@@ -306,3 +306,26 @@ def test_mutation_score_rate_is_warn_even_armed():
                                    Gate.PRE_PUSH, _msc_cfg(armed=True))
     assert sev is Severity.LOW
     assert verdict is Verdict.WARN
+
+
+# --- classify: red-proof (sub-project 3) ------------------------------------
+
+def _rp_cfg(armed: bool):
+    # classify reads cfg.block_rules early, then the tool branch; a minimal
+    # namespace with the attributes classify touches is enough.
+    return SimpleNamespace(block_rules={},
+                           red_proof={"red_proof_block_armed": armed})
+
+
+def test_red_proof_disarmed_is_warn():
+    sev, verdict = policy.classify("red-proof", "test-not-red", "medium",
+                                   Gate.PRE_PUSH, _rp_cfg(armed=False))
+    assert sev is Severity.MEDIUM
+    assert verdict is Verdict.WARN
+
+
+def test_red_proof_armed_is_block():
+    sev, verdict = policy.classify("red-proof", "test-not-red", "medium",
+                                   Gate.PRE_PUSH, _rp_cfg(armed=True))
+    assert sev is Severity.MEDIUM       # assert severity in BOTH (1a T2a lesson)
+    assert verdict is Verdict.BLOCK
