@@ -216,6 +216,36 @@ Additional limitations beyond the advisory ones above:
    errors/timeouts buckets, so noisy timeout/error runs cannot fake a
    regression.
 
+### Red-first proof (TDD gate, sub-project 3)
+
+At every `pre-push`, the test files your range changed are run — head
+version — against a throwaway worktree at the range's *base*. A file whose
+tests all pass on the pre-change tree was never red, so it proves nothing
+about the change: one finding per such file (tool `red-proof`, rule
+`test-not-red`, severity medium). Collection errors count as red — a test
+importing a brand-new module *is* red on the base tree.
+
+Findings WARN during the bake and BLOCK once the repo opts in with
+`aramid arm --red-proof` (sets `[red_proof].red_proof_block_armed = true`).
+Disarmed WARNs never auto-escalate, `aramid override` works as the standard
+escape hatch, and only files changed in the push are ever examined, so
+arming can never wall-block pre-existing repo state. `[red_proof]` also
+carries `wall_budget_s` / `test_timeout_s` caps; when the budget runs out,
+remaining files are skipped silently.
+
+Limitations:
+
+1. The verdict is per test *file*: an old test in a changed file failing on
+   base masks a never-red new test — a missed signal, never a false alarm.
+2. Any import failure on base counts as red, including files trivially
+   broken on base for unrelated reasons.
+3. Only the changed test files themselves are materialized at head — a new
+   test depending on head changes to non-test files it imports (a root
+   `conftest.py`, a new fixture module) usually collection-errors, which
+   counts as red.
+4. Range mode only: first pushes and `--all`/`--staged` runs skip silently.
+5. Tests run once, no flake retries — bake before arming.
+
 ### Phase 2b: the LLM reviewer
 
 The `llm-review` drain-time consumer covers exactly the OWASP slice 2a's
