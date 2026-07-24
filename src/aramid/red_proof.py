@@ -7,8 +7,10 @@ nothing about the change -- one WARN-tier RawFinding per such file (tool
 tool+rule+path, the 1a trick).
 
 Per-file verdict (pytest rc on the base tree): 0 -> never-red FINDING;
-1/2 -> red proven, nothing (a collection error IS red -- a test importing
-a brand-new module fails on base; documented lenient, spec s10.2-3);
+1/2 -> red proven, feeds proven_red for auto-resolution of any open
+red-proof finding on that file (a collection error IS red -- a test
+importing a brand-new module fails on base; documented lenient, spec
+s10.2-3);
 5 -> nothing collected, nothing to prove; timeout/other -> unattributable,
 nothing. The whole scan is bounded by [red_proof].wall_budget_s and each
 file by test_timeout_s; budget exhaustion skips the remainder silently.
@@ -28,9 +30,15 @@ new test depending on head changes to non-test files it imports usually
 collection-errors -> counts as red; single run, no flake retries.
 The base run inherits the repo's own pytest config -- an addopts gate
 (coverage thresholds, warnings-as-errors) can force a single-file base run
-non-zero regardless of test outcomes, reading as red: fail-safe (never a
-false alarm) but red-proof can then be armed-and-inert; observable during
-the bake."""
+non-zero regardless of test outcomes, reading as red. As a detector this
+stays harmless -- still never a false never-red FINDING -- but as a
+resolver it is not: rc 1/2 feeds proven_red, so auto_resolve_red_proof
+durably resolves any open red-proof finding on the file (FINDING_RESOLVED),
+already true during the disarmed/WARN-only bake, not only once armed.
+Unlike tdd's liberal-resolve (self-heals: ledger.py:76 re-detects once a
+finding's status is 'fixed'), this does NOT self-heal -- rc 0 is
+unreachable under such a gate, so the producer can never re-fire the
+fingerprint to reopen the finding."""
 import shutil
 import sys
 import tempfile

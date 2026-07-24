@@ -256,8 +256,11 @@ Limitations:
 5. Tests run once, no flake retries — bake before arming.
 6. The base run inherits the repo's own pytest config: an `addopts` gate
    (coverage threshold, warnings-as-errors) can force any single-file base
-   run non-zero — read as red, so the check goes silently inert rather than
-   ever raising a false alarm. Watch for this during the bake.
+   run non-zero — read as red. As a detector it still never raises a false
+   alarm, but as a resolver it is not harmless: it durably resolves any
+   existing open red-proof finding on the file and cannot self-correct,
+   since a gated base run can never come back green to re-open it. This
+   already happens during the bake, not only once armed.
 
 ### Phase 2b: the LLM reviewer
 
