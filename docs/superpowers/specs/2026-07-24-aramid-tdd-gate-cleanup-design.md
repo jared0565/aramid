@@ -112,7 +112,7 @@ All are additive test/doc/annotation hygiene. None changes behavior.
 |---|---|---|
 | 1a-F3 | Composed e2e driving a **real** (non-monkeypatched) `tdd.scan` → `run_gate` → exit code; 1a spec §11.9 asked for it and no test does it. Mirror sub-project 3's `test_red_proof_gate.py` real-git e2e pattern. | `tests/integration/test_tdd_gate.py` |
 | 1a-F4 | Assert `Severity.MEDIUM`, not just the verdict — `_sev` is currently discarded. | `tests/unit/test_policy.py:253` |
-| 1a-F5 | Negative test: `tdd.scan` produces nothing at `PRE_COMMIT` / mode `all`. Code-guaranteed (`pipeline.py:277`), untested. | `tests/unit/test_pipeline.py` |
+| 1a-F5 | Negative test: the tdd producer is called at `Gate.PRE_PUSH` **only** — no `tdd` finding at `Gate.PRE_COMMIT` or `Gate.ALL`, with the `PRE_PUSH` positive asserted in the same test. Code-guaranteed by `pipeline.py:277` (gate only — mode `all` does **not** suppress it), untested. | `tests/unit/test_pipeline.py` |
 | 2a-b | Feed `iter_target_scores` a target dict missing a required key, exercising the real `except (KeyError, …): continue` at `mutation_score.py:47-56`. | `tests/unit/test_mutation_score.py` |
 | 2a-c | Make `run_index` discriminate **stream position** from the `run_id` label — today `_crf(idx)` sets both to the same value, so the test cannot tell them apart. | `tests/unit/test_mutation_score.py:28` |
 | 2a-e | Return-type annotations on `baseline_for`, `latest_by_target`, `detect`, `latest_regressions` (siblings in the same file already have them). | `src/aramid/mutation_score.py:70,79,88,109` |
@@ -132,7 +132,7 @@ Full per-item rationale: `.superpowers/sdd/deferred-inventory.md`.
 - **Fire-then-resolve, two-push, for each producer** — the tests that would have caught 1a-F2. Push 1 fires the finding; push 2 addresses it; assert the ledger row is `resolved`. For `tdd`, push 2 **adds only the test file** (the §2.2(1) case `scope_tools` provably cannot resolve — this is the discriminating test). For `red-proof`, push 2 makes the test genuinely red on base.
 - **Re-fire is not resolved** — the §2.4 invariant: a still-broken file that re-fires stays open. Must fail if `present_ids` is dropped.
 - **Non-definitive verdicts do not resolve** — rc 5 / timeout / budget-exhausted leave an open `red-proof` finding open.
-- **`mode != "range"` resolves nothing** — the §2.2(2) guard.
+- **Resolution is range-scoped** — the two new calls run only under `mode == "range"` **AND a truthy `rng`**. Two tests: (a) `mode == "all"` resolves nothing (the §2.2(2) guard); (b) `mode == "range"` on a repo with NO upstream and no `origin/HEAD`, where `_discover_files` returns the whole tracked tree with the falsy `FULL_HISTORY_RNG` sentinel (pipeline.py:118-128, :112), resolves nothing. (b) must fail if the truthy-`rng` guard is dropped.
 - **Monkeypatch inertness proof** (§2.6) — a test that fails if pipeline stops consuming the scoped seam.
 - **Full suite by the controller** (~17 min): baseline 1035 passed / 3 skipped / 0 failed. Expected delta is the new tests plus zero regressions; any change to the 1035 that is not a new test is a defect in this bundle.
 - **ruff clean** over every touched file.
@@ -143,6 +143,6 @@ Pushing the 9 unpushed commits to origin (separate, needs explicit authorization
 
 ## 7. Risks
 
-1. **Resolution is a durable ledger write.** A wrong `FINDING_RESOLVED` cannot be un-appended. Mitigated by: the `mode == "range"` guard (§2.2(2)), the `present_ids` guard (§2.4), red-proof's definitive-verdict-only rule (§2.5), and self-healing fingerprints — but this is the one place in the bundle where a mistake is persistent, and it deserves the plan review's sharpest attention.
+1. **Resolution is a durable ledger write.** A wrong `FINDING_RESOLVED` cannot be un-appended. Mitigated by: the range-scope guard — `mode == "range"` AND a truthy `rng` (§2.2(2), §5) — the `present_ids` guard (§2.4), red-proof's definitive-verdict-only rule (§2.5), and self-healing fingerprints — but this is the one place in the bundle where a mistake is persistent, and it deserves the plan review's sharpest attention.
 2. **Silent test inertness** (§2.6) — the failure mode that hides itself.
 3. **Scope creep from item 1** eating the ten trivials. They stay in their own tasks; the bundle is not done if only 1a-F2 lands.
