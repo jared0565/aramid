@@ -67,7 +67,7 @@ class Regression:
     transition_fps: frozenset = field(default_factory=frozenset)
 
 
-def baseline_for(scores, target, before_index):
+def baseline_for(scores, target, before_index) -> TargetScore | None:
     best = None
     for s in scores:
         if s.target == target and s.fully_mutated and s.run_index < before_index:
@@ -76,7 +76,7 @@ def baseline_for(scores, target, before_index):
     return best
 
 
-def latest_by_target(scores):
+def latest_by_target(scores) -> dict[str, TargetScore]:
     latest: dict[str, TargetScore] = {}
     for s in scores:
         cur = latest.get(s.target)
@@ -85,7 +85,7 @@ def latest_by_target(scores):
     return latest
 
 
-def detect(current, baseline):
+def detect(current, baseline) -> list[Regression]:
     if baseline is None:
         return []
     out = []
@@ -106,7 +106,7 @@ def detect(current, baseline):
     return out
 
 
-def latest_regressions(events):
+def latest_regressions(events) -> list[Regression]:
     scores = iter_target_scores(events)
     out = []
     for target, cur in latest_by_target(scores).items():

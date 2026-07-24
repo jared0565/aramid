@@ -191,13 +191,20 @@ only a re-drain that re-measures the function truly clears a regression.
   `aramid arm --mutation-score` (sets `[mutation].score_block_armed = true`).
 - **Rate regressions** (stage-1 kill-rate dropped between fully-measured
   runs) are permanent WARN, rule `rate`, severity low. They never block;
-  arming rate is out of scope for 2b and gets revisited only with
-  real-drain evidence.
-- **The only escape valve is ephemeral:** a push whose range adds or
-  modifies the module-mapped test (`test_<module>.py` / `<module>_test.py`)
-  suppresses the transition for that gate run only. Touching the source
-  file does not suppress — that is exactly the optimistic-resolution hole
-  the surviving-mutant gate has and this gate closes.
+  arming rate needs real-drain evidence: today's trigger is a bare
+  `current.rate < baseline.rate` with no minimum sample size or delta
+  threshold, over mutant batches regenerated from the function's current
+  source each drain — not a fixed population between the runs being
+  compared. Arming on that alone risks blocking on sampling noise instead
+  of proven test-weakening; a calibrated threshold is what real-drain
+  history would provide.
+- **The only escape valve is ephemeral, and it's transition-only:** rate
+  regressions are permanent WARN and never block (above), so there is
+  nothing for them to escape. A push whose range adds or modifies the
+  module-mapped test (`test_<module>.py` / `<module>_test.py`) suppresses
+  the transition for that gate run only. Touching the source file does
+  not suppress — that is exactly the optimistic-resolution hole the
+  surviving-mutant gate has and this gate closes.
 
 Additional limitations beyond the advisory ones above:
 
