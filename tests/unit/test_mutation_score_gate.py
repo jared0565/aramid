@@ -3,7 +3,7 @@ analyzer. Seeded-ledger tests mirror test_mutation_score.py's _crf pattern;
 cfg fakes mirror test_mutation_gate.py's SimpleNamespace pattern."""
 from types import SimpleNamespace
 
-from aramid import mutation_score_gate
+from aramid import mutation_score_gate, policy
 from aramid.fingerprint import compute_fingerprint
 from aramid.ledger import Ledger
 from aramid.models import Event, EventType, Gate, Severity, Source, Verdict
@@ -166,3 +166,25 @@ def test_id_deterministic_and_never_finding_id_shaped(tmp_path):
     assert t1.id == t2.id
     assert t1.id == compute_fingerprint("mutation-score", "transition",
                                         "src/calc.py", "is_adult", 0)
+
+
+def test_twin_rule_seam_and_classify_agree(tmp_path):
+    """The seam's inline verdict and policy.classify's tool=="mutation-score"
+    branch encode the SAME rule (the 1b dual-rule discipline). Red-first:
+    fails while classify lacks the branch (it falls through to the default
+    WARN while the armed seam says BLOCK)."""
+    for armed in (True, False):
+        cfg = SimpleNamespace(
+            block_rules={},
+            mutation={"enabled": True, "score_block_armed": armed})
+        led = _transition_ledger(tmp_path / ("armed" if armed else "baking"))
+        try:
+            got = mutation_score_gate.mutation_score_gate_findings(
+                cfg, led, Gate.PRE_PUSH)
+        finally:
+            led.close()
+        assert got, "fixture must yield findings for the twin comparison"
+        for f in got:
+            _sev, verdict = policy.classify(f.tool, f.rule, f.severity_raw,
+                                            Gate.PRE_PUSH, cfg)
+            assert f.verdict is verdict, (f.rule, armed)

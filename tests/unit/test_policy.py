@@ -276,3 +276,33 @@ def test_mutation_armed_is_block():
                                    Gate.PRE_PUSH, _mut_cfg(armed=True))
     assert sev is Severity.MEDIUM       # assert severity in BOTH (1a T2a lesson)
     assert verdict is Verdict.BLOCK
+
+
+# --- classify: mutation-score (sub-project 2b) -------------------------------
+
+def _msc_cfg(armed: bool):
+    # classify reads cfg.block_rules early, then the tool branch; a minimal
+    # namespace with the attributes classify touches is enough.
+    return SimpleNamespace(block_rules={},
+                           mutation={"score_block_armed": armed})
+
+
+def test_mutation_score_transition_armed_is_block():
+    sev, verdict = policy.classify("mutation-score", "transition", "high",
+                                   Gate.PRE_PUSH, _msc_cfg(armed=True))
+    assert sev is Severity.HIGH         # assert severity in BOTH (1a T2a lesson)
+    assert verdict is Verdict.BLOCK
+
+
+def test_mutation_score_transition_disarmed_is_warn():
+    sev, verdict = policy.classify("mutation-score", "transition", "high",
+                                   Gate.PRE_PUSH, _msc_cfg(armed=False))
+    assert sev is Severity.HIGH
+    assert verdict is Verdict.WARN
+
+
+def test_mutation_score_rate_is_warn_even_armed():
+    sev, verdict = policy.classify("mutation-score", "rate", "low",
+                                   Gate.PRE_PUSH, _msc_cfg(armed=True))
+    assert sev is Severity.LOW
+    assert verdict is Verdict.WARN

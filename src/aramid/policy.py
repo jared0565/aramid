@@ -115,6 +115,21 @@ def classify(tool: str, rule: str, severity_raw: str, gate: Gate, cfg) -> tuple[
         armed = cfg.mutation.get("mutation_block_armed", False)
         return severity, Verdict.BLOCK if armed else Verdict.WARN
 
+    # Mutation-score gate (2b): DERIVED regression findings materialized at
+    # PRE_PUSH by mutation_score_gate -- zero persistence, never stored, so
+    # never subject to auto_resolve_mutation. Transitions BLOCK once the repo
+    # opts in via [mutation].score_block_armed; rate-deltas are permanent
+    # WARN. Same routing rationale as the tdd/mutation branches: through
+    # classify so _has_genuine_block treats an armed transition BLOCK as
+    # genuine and it survives the fresh-clone downgrade.
+    # mutation_score_gate.mutation_score_gate_findings computes this SAME
+    # rule inline; the two must agree (pinned by the twin-rule test).
+    if tool == "mutation-score":
+        armed = cfg.mutation.get("score_block_armed", False)
+        if armed and rule == "transition":
+            return severity, Verdict.BLOCK
+        return severity, Verdict.WARN
+
     ruff_block = block_rules.get("ruff", {}).get("block", [])
     if tool == "ruff" and rule in ruff_block:
         return severity, Verdict.BLOCK
