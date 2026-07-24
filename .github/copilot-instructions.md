@@ -1,4 +1,4 @@
-# Claude Code Project Instructions
+# Visual Studio / GitHub Copilot Project Instructions
 
 <!-- graphite:managed version=5 -->
 ## Shared Graphite Instructions

@@ -11,3 +11,7 @@ __pycache__/
 **/.cache/graphite/
 **/.graphite/
 .graphite-daemon/
+
+# Claude Code: shared settings.json is tracked (graphite-first hook wiring);
+# settings.local.json is personal machine state.
+.claude/settings.local.json

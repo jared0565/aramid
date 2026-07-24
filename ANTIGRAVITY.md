@@ -1,4 +1,4 @@
-# Claude Code Project Instructions
+# Antigravity IDE Project Instructions
 
 <!-- graphite:managed version=5 -->
 ## Shared Graphite Instructions
