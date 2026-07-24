@@ -26,7 +26,7 @@ from pathlib import Path
 from typing import Callable
 
 from aramid import config as config_mod
-from aramid import gitutil, mutation_gate, mutation_score_gate, policy, redact, tdd
+from aramid import gitutil, mutation_gate, mutation_score_gate, policy, red_proof, redact, tdd
 from aramid import review as review_mod
 from aramid.detectors import detect_package_manager, detect_stacks, detect_tests
 from aramid.fingerprint import normalize_path
@@ -276,6 +276,11 @@ def run_gate(root: Path, gate: Gate, mode: str, cfg: config_mod.Config, ledger: 
     # apply. Fail-open inside tdd.scan -- never raises here.
     if gate is Gate.PRE_PUSH:
         all_raws.extend(tdd.scan(ctx, cfg))
+        # Red-first proof (sub-project 3): the range's changed test files run
+        # against the range base -- rc 0 there means the test was never red.
+        # Same pre-normalize seam as tdd.scan; fail-open inside red_proof.scan.
+        # ctx.rng falsy (first push / staged / all) makes it a silent no-op.
+        all_raws.extend(red_proof.scan(ctx, cfg))
 
     # secrets never land in logs, raw -- collected before writing them out.
     raw_secrets = [r.secret for r in all_raws if r.secret]
@@ -308,7 +313,7 @@ def run_gate(root: Path, gate: Gate, mode: str, cfg: config_mod.Config, ledger: 
             replace(f, verdict=Verdict.BLOCK)
             if (f.id in new_ids and f.verdict is Verdict.WARN
                 and f.rule != deps.DEPS_SHAPE_DRIFT_RULE
-                and f.tool != "tdd")
+                and f.tool not in ("tdd", "red-proof"))
             else f
             for f in findings
         ]
