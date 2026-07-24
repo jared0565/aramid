@@ -179,6 +179,43 @@ Four documented limitations (it measures drift, it doesn't enforce anything
    (cap-truncated) stage-1 survivor isn't counted yet, so a regression it
    represents fires on a later drain once it's confirmed — not the first.
 
+#### 2b: regression teeth at pre-push
+
+Every `pre-push` gate recomputes the regressions above straight from drain
+history — nothing is stored, so no stale record can be wrongly resolved and
+only a re-drain that re-measures the function truly clears a regression.
+
+- **Transition regressions** (a previously-killed mutant now survives) are
+  findings under tool `mutation-score`, rule `transition`, severity high.
+  They WARN during the bake and BLOCK once the repo opts in with
+  `aramid arm --mutation-score` (sets `[mutation].score_block_armed = true`).
+- **Rate regressions** (stage-1 kill-rate dropped between fully-measured
+  runs) are permanent WARN, rule `rate`, severity low. They never block;
+  arming rate is out of scope for 2b and gets revisited only with
+  real-drain evidence.
+- **The only escape valve is ephemeral:** a push whose range adds or
+  modifies the module-mapped test (`test_<module>.py` / `<module>_test.py`)
+  suppresses the transition for that gate run only. Touching the source
+  file does not suppress — that is exactly the optimistic-resolution hole
+  the surviving-mutant gate has and this gate closes.
+
+Additional limitations beyond the advisory ones above:
+
+1. Two same-operator mutants on one identical line share a fingerprint, so
+   an armed transition may conflate them (the killing test for one kills
+   the class).
+2. Regression findings are derived per-gate and never persisted: they do
+   not appear in `aramid status` and cannot be overridden via
+   `aramid override` — the escape hatches are the mapped test or disarming.
+3. A function rewritten without its mapped test keeps blocking on the old
+   measurement until a re-drain re-measures it. Because a disabled engine
+   could then never clear it, `[mutation].enabled = false` disables this
+   gate entirely; use `score_block_armed = false` to drop only the teeth.
+4. Detection reads only the stage-1 killed/survived counts, the
+   fully-mutated flag, and mutant fingerprints — never the under-counted
+   errors/timeouts buckets, so noisy timeout/error runs cannot fake a
+   regression.
+
 ### Phase 2b: the LLM reviewer
 
 The `llm-review` drain-time consumer covers exactly the OWASP slice 2a's
