@@ -189,7 +189,7 @@ Resolution call (~line 333, inside the existing `if mode == "range":`, immediate
 
 Report in `task-1-report.md`: the RED output shape per new test; the Step-2 counterfactual results; and confirmation that no pre-existing test in those five files changed outcome.
 
-Also record, **per durability-guard test, the OBSERVED counterfactual flip** (not merely the assertion text): test 3 with the `present_ids` clause deleted; test 8 with the definitive-verdict rule loosened to "changed but no finding emitted"; test 15 with the `if rng:` nest dropped; test 14 with the two new calls hoisted out of both guards.
+Also record, **per durability-guard test, the OBSERVED counterfactual flip** (not merely the assertion text): test 3 with the `present_ids` clause deleted; **test 10** with the definitive-verdict rule loosened (e.g. a catch-all `else: proven_red.add(rel)`) — NOT test 8, which calls `auto_resolve_red_proof` directly and never drives `scan_scoped`, so no change to the rc classification can reach it; test 15 with the `if rng:` nest dropped; test 14 with the two new calls hoisted out of both guards.
 
 Commit: `fix(ledger): tdd and red-proof findings auto-resolve when the push addresses them (1a-F2)`
 
@@ -261,7 +261,7 @@ Commit: `docs: clarify 2b rate-regression escape valve + annotate mutation_score
 
 - [ ] All 11 FIX items landed; all 13 WONTFIX items untouched.
 - [ ] Scoped-seam consumption proved: **test 13** fails when `pipeline.py:283` reverts to `red_proof.scan` (spec §5's inertness proof), AND the re-pointed ratchet-exemption test fails when `scan_scoped` returns empty (liveness). Both recorded.
-- [ ] The three durability guards each have a DISCRIMINATING test, and each flip was observed and recorded: **range-scope** (`mode == "range"` AND truthy `rng`) — test 15, which fails if the `if rng:` nest is dropped, with test 14 as the coarser outer-block backstop; **`present_ids`** — test 3; **definitive-red-only** — test 8.
+- [ ] The three durability guards each have a DISCRIMINATING test, and each flip was observed and recorded: **range-scope** (`mode == "range"` AND truthy `rng`) — test 15, which fails if the `if rng:` nest is dropped, with test 14 as the coarser outer-block backstop; **`present_ids`** — test 3; **definitive-red-only** — test 10 (test 8 pins only that an empty `proven_red` resolves nothing; it bypasses `scan_scoped`, so it cannot discriminate the rc rule).
 - [ ] Pre-existing defect reported, NOT fixed: `mutation_gate.auto_resolve_mutation` has the same FULL_HISTORY_RNG hole (out of scope; `mutation_gate.py` is Do-NOT-modify).
 - [ ] Full suite run by the CONTROLLER in background: 1035 baseline + exactly the new tests, 0 failures, 0 new skips.
 - [ ] Ledger appended at every milestone.
