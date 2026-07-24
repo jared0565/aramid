@@ -70,7 +70,7 @@ def mutation_score_gate_findings(cfg, ledger, gate: Gate,
     for r in regressions:
         try:
             rel, sep, func = r.target.partition("::")
-            if not sep or not func:
+            if not rel or not sep or not func:
                 continue                    # malformed target key: skip
             if r.kind == "transition":
                 if _module_tests(Path(rel).stem) & changed_test_stems:

@@ -149,6 +149,14 @@ def test_malformed_target_key_skipped_wellformed_surfaces(tmp_path):
     assert {f.file for f in got} == {"src/ok.py"}
 
 
+def test_empty_rel_target_key_skipped(tmp_path):
+    led = Ledger(tmp_path / "l.db")
+    led.append(_crf(0, "::func", 2, 0, True, killed_fps=[FP]))
+    led.append(_crf(1, "::func", 0, 1, True, survivor_fps=[FP]))
+    got = _findings(led, _cfg(armed=True))
+    assert got == []
+
+
 def test_fail_open_broken_ledger():
     class Boom:
         def events(self):

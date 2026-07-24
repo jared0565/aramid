@@ -315,7 +315,7 @@ def run_gate(root: Path, gate: Gate, mode: str, cfg: config_mod.Config, ledger: 
 
     # Phase 2b (spec section 5) + 1b: the pre-push LLM and mutation ledger
     # gates -- zero tokens, DB reads. Auto-resolve runs FIRST so fixed findings
-    # never block. Both gate producers are appended AFTER the ratchet above, so
+    # never block. The gate producers are appended AFTER the ratchet above, so
     # a disarmed (WARN) finding is ratchet-exempt and never auto-escalates.
     if gate is Gate.PRE_PUSH:
         review_mod.auto_resolve_llm(root, ledger, run_id, at)
