@@ -1,5 +1,8 @@
 import json
 
+import pytest
+
+from aramid import config as config_mod
 from aramid.commands.mutation_score import cmd_mutation_score
 from aramid.ledger import Ledger
 from aramid.models import Event, EventType
@@ -44,3 +47,53 @@ def test_cmd_json_is_latest_per_target(tmp_path, capsys):
     assert len(ms) == 1, "JSON emits latest-per-target (spec §6), not full history"
     assert ms[0]["killed_s1"] == 1   # the latest run's values, not the first
     assert any(r["kind"] == "rate" for r in doc["regressions"])
+
+
+@pytest.fixture(autouse=True)
+def _no_user_config(tmp_path, monkeypatch):
+    """cmd_mutation_score reads config on the text path (armed-state line);
+    keep every test in this module hermetic against a real
+    ~/.aramid/config.toml."""
+    monkeypatch.setattr(config_mod, "_user_config_path",
+                        lambda: tmp_path / "no-user-config.toml")
+
+
+def test_cmd_text_shows_baking_state(tmp_path, capsys):
+    led = Ledger(tmp_path / ".aramid" / "ledger.db")
+    _seed(led, 0, "m.py::f", 3, 0, True)
+    led.close()
+    rc = cmd_mutation_score(tmp_path)
+    out = capsys.readouterr().out
+    assert rc == 0
+    assert "transition regressions: WARN (baking)" in out
+
+
+def test_cmd_text_shows_armed_state(tmp_path, capsys):
+    (tmp_path / "aramid.toml").write_text(
+        "schema_version = 1\n\n[mutation]\nscore_block_armed = true\n",
+        encoding="utf-8")
+    led = Ledger(tmp_path / ".aramid" / "ledger.db")
+    _seed(led, 0, "m.py::f", 3, 0, True)
+    led.close()
+    rc = cmd_mutation_score(tmp_path)
+    out = capsys.readouterr().out
+    assert rc == 0
+    assert "transition regressions: BLOCK (armed)" in out
+
+
+def test_cmd_empty_history_still_shows_arm_state(tmp_path, capsys):
+    rc = cmd_mutation_score(tmp_path)
+    out = capsys.readouterr().out
+    assert rc == 0
+    assert "no mutation scores recorded" in out
+    assert "transition regressions: WARN (baking)" in out
+
+
+def test_cmd_json_output_shape_unchanged(tmp_path, capsys):
+    led = Ledger(tmp_path / ".aramid" / "ledger.db")
+    _seed(led, 0, "m.py::f", 3, 0, True)
+    led.close()
+    rc = cmd_mutation_score(tmp_path, as_json=True)
+    doc = json.loads(capsys.readouterr().out)
+    assert rc == 0
+    assert set(doc) == {"targets", "regressions"}   # no armed key added

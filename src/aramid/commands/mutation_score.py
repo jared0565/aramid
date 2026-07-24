@@ -5,6 +5,7 @@ import json
 import sys
 from pathlib import Path
 
+from aramid import config as config_mod
 from aramid import mutation_score as analyzer
 from aramid.ledger import Ledger
 
@@ -34,10 +35,15 @@ def cmd_mutation_score(root, *, as_json: bool = False) -> int:
                      "current_index": r.current_index}
                     for r in regressions]}, indent=2))
             return 0
+        armed = bool(config_mod.load_config(root)
+                     .mutation.get("score_block_armed", False))
+        arm_line = ("  transition regressions: BLOCK (armed)" if armed
+                    else "  transition regressions: WARN (baking)")
         if not latest:
             print("aramid mutation-score: no mutation scores recorded")
+            print(arm_line)
             return 0
-        lines = ["aramid mutation-score:"]
+        lines = ["aramid mutation-score:", arm_line]
         for target in sorted(latest):
             s = latest[target]
             rate = f"{s.rate:.2f}" if s.rate is not None else "n/a"
