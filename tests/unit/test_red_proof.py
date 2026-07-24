@@ -2,6 +2,7 @@
 producer. Monkeypatch style mirrors tests/unit/test_tdd.py -- the plumbing
 (diff_new_lines/read_blob/_run/run_subprocess) is faked; real-git coverage
 lives in tests/integration/test_red_proof_gate.py (Task 3)."""
+import sys
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -37,7 +38,7 @@ def _plumb(monkeypatch, new_lines, pytest_rcs, worktree_rc=0,
     rcs = list(pytest_rcs)
 
     def fake_run(argv, cwd, timeout_s):
-        runs.append(argv)
+        runs.append((argv, cwd))
         rc = rcs.pop(0)
         if rc == "timeout":
             return RunnerResult("pytest", ToolState.TIMEOUT)
@@ -48,7 +49,7 @@ def _plumb(monkeypatch, new_lines, pytest_rcs, worktree_rc=0,
 
 
 def test_never_red_file_yields_finding(monkeypatch, tmp_path):
-    _plumb(monkeypatch, {"tests/test_foo.py": {5}}, [0])
+    runs = _plumb(monkeypatch, {"tests/test_foo.py": {5}}, [0])
     findings = red_proof.scan(
         _ctx(["tests/test_foo.py"], root=tmp_path), _cfg())
     assert len(findings) == 1
@@ -56,6 +57,17 @@ def test_never_red_file_yields_finding(monkeypatch, tmp_path):
     assert (f.tool, f.rule, f.severity_raw, f.file, f.line) == \
         ("red-proof", "test-not-red", "medium", "tests/test_foo.py", 0)
     assert "never red" in f.message
+    # SP3-M1: assert the actual pytest invocation, not just its outcome --
+    # `_plumb`'s docstring always claimed `runs` was captured "for
+    # assertions" but no call site ever read it. argv must be the exact
+    # in-worktree pytest invocation; the cwd check is STRUCTURAL (not a
+    # literal path) because the worktree lives under
+    # tempfile.mkdtemp(prefix="aramid-red-")/"wt" (red_proof.py), not under
+    # tmp_path, so no literal path is available to assert against.
+    assert len(runs) == 1
+    argv, cwd = runs[0]
+    assert argv == [sys.executable, "-m", "pytest", "-q", "tests/test_foo.py"]
+    assert Path(cwd).name == "wt" and Path(cwd).parent.name.startswith("aramid-red-")
 
 
 def test_red_on_base_yields_nothing(monkeypatch, tmp_path):

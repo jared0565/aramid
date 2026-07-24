@@ -251,8 +251,9 @@ def test_tdd_disarmed_is_warn():
 
 
 def test_tdd_armed_is_block():
-    _sev, verdict = policy.classify("tdd", "code-without-test", "medium",
-                                    Gate.PRE_PUSH, _tdd_cfg(armed=True))
+    sev, verdict = policy.classify("tdd", "code-without-test", "medium",
+                                   Gate.PRE_PUSH, _tdd_cfg(armed=True))
+    assert sev is Severity.MEDIUM
     assert verdict is Verdict.BLOCK
 
 

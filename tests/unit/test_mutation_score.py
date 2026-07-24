@@ -26,10 +26,37 @@ def test_iter_target_scores_parses_and_indexes():
 
 
 def test_run_index_is_event_stream_position():
+    """2a-c: the run-id label ("r7") and the CRF's own ordinal count (this is
+    the only CRF in the stream) are BOTH deliberately made to disagree with
+    the true stream position (1, since `other` occupies position 0) -- a
+    single assertion now discriminates against two wrong implementations at
+    once: run_index derived from int(run_id label) (would read 7) and
+    run_index derived from counting CONSUMER_RUN_FINISHED events seen so far
+    (would read 0). Only enumerate()'s stream-position idx (mutation_score.py
+    :35,49) gives 1. The prior version (_crf(1, ...) at actual position 1)
+    could not distinguish stream-position from run-id-label, since both gave
+    the same answer."""
     other = Event(EventType.RUN_FINISHED, "r", "t", payload={})
-    events = [other, _crf(1, "f.py::g", 1, 0, True)]
+    events = [other, _crf(7, "f.py::g", 1, 0, True)]
     scores = mutation_score.iter_target_scores(events)
-    assert scores[0].run_index == 1   # position in the stream, not the CRF count
+    assert scores[0].run_index == 1   # stream position wins, not "r7"'s int(7)
+
+
+def test_iter_skips_target_missing_subscripted_key():
+    """2a-b: killed_s1/survived_s1/fully_mutated are read via subscript at
+    mutation_score.py:50-52 -- missing any one of the three raises inside the
+    try, caught by the except (KeyError, TypeError, ValueError) at :55-56.
+    killed_fps/survivor_fps are .get(..., [])-defaulted at :53-54 and CANNOT
+    trigger it: dropping either of those instead yields a fully-constructed
+    TargetScore with an empty frozenset, covering nothing (that gap is
+    exactly why this test targets killed_s1 specifically, not one of the fps
+    lists). test_iter_skips_malformed_and_wrong_schema above covers
+    wrong-schema / no-scores / non-dict-target but never a missing
+    subscripted key on an otherwise well-formed target dict."""
+    e = Event(EventType.CONSUMER_RUN_FINISHED, "r", "t", payload={
+        "mutation_scores": {"schema": 1, "targets": {"f.py::g": {
+            "survived_s1": 1, "fully_mutated": True}}}})   # killed_s1 missing
+    assert mutation_score.iter_target_scores([e]) == []
 
 
 def test_rate_none_when_no_verdicts():

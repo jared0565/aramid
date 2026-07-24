@@ -50,6 +50,55 @@ def _scan(r):
     return tdd.scan(ctx, SimpleNamespace(tdd={"enabled": True}))
 
 
+def test_real_tdd_scan_through_run_gate_prod_change_no_test(tmp_path, monkeypatch):
+    """1a spec s11.9: the composed tdd.scan -> run_gate -> exit code path,
+    with a REAL, non-monkeypatched producer -- test_pipeline.py's tdd tests
+    all monkeypatch pipeline.tdd.scan, and this file's own `_scan` helper
+    (above) calls tdd.scan directly, bypassing run_gate's classify/
+    fingerprint/ratchet/exit-code machinery entirely. Nothing about tdd.scan
+    is faked here.
+
+    Runner isolation is mandatory: PRE_PUSH otherwise selects gitleaks/
+    semgrep/eslint/typecheck/deps/tests -- gitleaks/semgrep/tests are all
+    BLOCK_TIER_KEYS (pipeline.py:65), and one missing binary sets
+    degraded_block_tier, so policy.escalate_degraded returns 1
+    (policy.py:210-213, pipeline.py:379) regardless of the tdd finding -- the
+    exit code would measure binary availability, not tdd (verified: returns 1
+    locally without isolation, 0 in CI where .github/workflows/aramid.yml
+    installs gitleaks). With _no_runners applied, tdd is disarmed by default
+    (defaults.toml:8 `tdd_block_armed = false`), so classify() returns WARN,
+    and pipeline.py's ratchet explicitly excludes tool "tdd" from its
+    WARN->BLOCK escalation -- the finding stays a ratchet-exempt WARN, so
+    **result.exit_code == 0** is the deterministic expectation. The weight of
+    this item is carried by the positive assertion that a tdd finding on the
+    changed production file IS present in result.findings.
+
+    red_proof.scan_scoped is real too (not mocked) but is a zero-cost no-op
+    here: only src/foo.py changes, no test file changes, so its own
+    `subjects` list (changed TEST files in the range) is empty and it
+    returns ([], set()) before any worktree/subprocess -- same zero-cost
+    guard proven by test_red_proof.py's test_no_new_test_lines_skips_all_
+    plumbing."""
+    _no_runners(monkeypatch)
+    monkeypatch.setattr(config_mod, "_user_config_path",
+                        lambda: tmp_path / "no-user-config.toml")
+    r = _repo_with_upstream(tmp_path)
+    rng = gitutil.resolve_range(r)
+    assert rng, "resolve_range returned no upstream range -- real-git plumbing degenerated"
+    (r / "src" / "foo.py").write_text("def foo():\n    return 2\n", encoding="utf-8")
+    _git(r, "add", "-A")
+    _git(r, "commit", "-m", "change foo, no test")
+    cfg = config_mod.load_config(r)
+    ledger = Ledger(r / ".aramid" / "ledger.db")
+    try:
+        result = pipeline.run_gate(r, Gate.PRE_PUSH, "range", cfg, ledger)
+    finally:
+        ledger.close()
+    assert result.exit_code == 0
+    tdd_findings = [f for f in result.findings if f.tool == "tdd"]
+    assert [f.file for f in tdd_findings] == ["src/foo.py"]
+
+
 def test_real_prod_change_without_test_flags(tmp_path):
     r = _repo_with_upstream(tmp_path)
     (r / "src" / "foo.py").write_text("def foo():\n    return 2\n", encoding="utf-8")

@@ -535,6 +535,51 @@ def test_tdd_armed_blocks(tmp_path, monkeypatch):
     ledger.close()
 
 
+def test_tdd_producer_fires_only_at_pre_push(tmp_path, monkeypatch):
+    """1a-F5: pipeline.py's `if gate is Gate.PRE_PUSH:` guard (currently
+    line 278, immediately before `tdd.scan(ctx, cfg)`) is the ONLY thing that
+    suppresses the real tdd producer -- mode is NOT a gate on it. Gate is the
+    sole varying input across the three run_gate calls below; mode is fixed
+    to "all" throughout, and GATE_RUNNER_KEYS is emptied for all three gates
+    so no runner-selection difference leaks in. The real tdd.scan is
+    reachable (unpatched) the whole time.
+
+    _repo(tmp_path) ships only a.py, tracked, with NO test file, so the real
+    producer genuinely fires whenever it is called at all -- ctx.rng is
+    falsy under mode="all" (pipeline.py's `_discover_files` returns rng=None
+    for "all"), which routes tdd.scan into its own "is any tracked file a
+    test file" branch (tdd.py:47-52); with none tracked, that's always False,
+    so a real invocation always yields a finding for a.py.
+
+    PRE_PUSH + mode="all" is the positive control that makes the PRE_COMMIT/
+    ALL negatives discriminating: it proves the producer WOULD fire in this
+    fixture if called, so its absence at the other two gates is evidence of
+    the gate guard, not of the fixture happening to be clean. Do NOT rewrite
+    this as a mode-based test: mode="all" does not suppress the producer at
+    PRE_PUSH (tdd.scan runs and fires here), so a mode-only variant on this
+    fixture has no legal fix within Task 2's tests-only scope if it were
+    ever green for the wrong reason.
+
+    RED counterfactual: relaxing pipeline.py's `if gate is Gate.PRE_PUSH:` to
+    `if gate is not Gate.ALL:` (or removing the guard) must make this fail --
+    PRE_COMMIT would then also fire tdd.scan and gain a tdd finding."""
+    root = _repo(tmp_path)  # tracked a.py, no test file -> real producer fires
+    cfg = _cfg(root, tmp_path, monkeypatch)
+    ledger = _ledger(tmp_path)
+    monkeypatch.setattr(pipeline, "GATE_RUNNER_KEYS", {
+        **pipeline.GATE_RUNNER_KEYS,
+        Gate.PRE_PUSH: [], Gate.PRE_COMMIT: [], Gate.ALL: []})
+
+    push = pipeline.run_gate(root, Gate.PRE_PUSH, "all", cfg, ledger, run_id="run-tdd-push")
+    commit = pipeline.run_gate(root, Gate.PRE_COMMIT, "all", cfg, ledger, run_id="run-tdd-commit")
+    allg = pipeline.run_gate(root, Gate.ALL, "all", cfg, ledger, run_id="run-tdd-all")
+
+    assert [f.file for f in push.findings if f.tool == "tdd"] == ["a.py"]
+    assert not any(f.tool == "tdd" for f in commit.findings)
+    assert not any(f.tool == "tdd" for f in allg.findings)
+    ledger.close()
+
+
 _MUT_NOW = "2026-07-21T12:00:00+00:00"
 
 

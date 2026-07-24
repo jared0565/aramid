@@ -208,6 +208,13 @@ def test_e2e_armed_never_red_blocks(tmp_path, monkeypatch):
 
 
 def test_e2e_armed_genuinely_red_passes(tmp_path, monkeypatch):
+    """Armed does not mean "always blocks": GENUINELY_RED is red on the base
+    tree, so scan_scoped proves it red and emits no red-proof finding at all
+    -- arming has nothing to escalate. test_e2e_armed_block_survives_fresh_
+    baseline above already proves an armed BLOCK survives this exact fresh
+    ledger / fresh-clone-downgrade path, so rc != 1 here can only mean no
+    finding was produced, not that arming failed to take or that the
+    downgrade silently masked a block."""
     _no_runners(monkeypatch)
     r = _repo_with_upstream(tmp_path)
     _arm(r)
