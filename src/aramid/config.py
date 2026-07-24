@@ -47,6 +47,7 @@ class Config:
     dast: dict = field(default_factory=dict)
     tdd_block_armed: bool = False
     tdd: dict = field(default_factory=dict)
+    red_proof: dict = field(default_factory=dict)
 
 
 def _user_config_path() -> Path:
@@ -114,6 +115,7 @@ def load_config(root: Path) -> Config:
         dast=merged.get("dast", {}),
         tdd_block_armed=merged.get("tdd_block_armed", False),
         tdd=merged.get("tdd", {}),
+        red_proof=merged.get("red_proof", {}),
     )
 
 

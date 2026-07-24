@@ -329,3 +329,13 @@ def test_tdd_block_armed_from_repo_toml(tmp_path, monkeypatch):
     (tmp_path / "aramid.toml").write_text("tdd_block_armed = true\n", encoding="utf-8")
     cfg = config.load_config(tmp_path)
     assert cfg.tdd_block_armed is True
+
+
+def test_red_proof_defaults_present(tmp_path, monkeypatch):
+    monkeypatch.setattr(config, "_user_config_path",
+                        lambda: tmp_path / "no-user.toml")
+    cfg = config.load_config(tmp_path)
+    assert cfg.red_proof.get("enabled") is True
+    assert cfg.red_proof.get("red_proof_block_armed") is False
+    assert cfg.red_proof.get("wall_budget_s") == 120
+    assert cfg.red_proof.get("test_timeout_s") == 60

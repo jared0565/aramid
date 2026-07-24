@@ -132,6 +132,13 @@ score_block_armed = false      # NEW (2b) -- arms mutation-score transition regr
 [tdd]
 enabled = true
 
+# --- TDD gate sub-project 3: red-first proof at pre-push ---
+[red_proof]
+enabled = true
+red_proof_block_armed = false   # bake-then-arm; `aramid arm --red-proof` flips it
+wall_budget_s = 120             # whole-scan wall clock (all changed test files)
+test_timeout_s = 60             # per pytest invocation against the base tree
+
 # --- Phase 2c-1b: drain-time JS/TS mutation consumer ---
 [js_mutation]
 enabled = true
