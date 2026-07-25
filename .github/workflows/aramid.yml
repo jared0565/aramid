@@ -1,10 +1,30 @@
 # CI for aramid itself: install the package, run its test suite, dogfood the
 # gate against its own repo, and sanity-check the built wheel.
 #
-# Runs on windows-latest because the E2E suite (tests/e2e/test_windows_hooks.py)
-# is Windows-only (git hook shims, PATH resolution, taskkill process-tree kill)
-# and skips cleanly off win32 -- running here keeps that coverage live instead
-# of silently skipped.
+# MATRIX RATIONALE. This ran as a single windows-latest / Python 3.12 job until
+# 2026-07-25, which left two claims untested:
+#
+#   1. Platform. src/aramid has 17 platform branches across 11 modules
+#      (doctor, drain, schedule, dast, dast_probe, js_mutation, providers/base,
+#      runners/base, runners/eslint, runners/typecheck, toolpath). Every
+#      non-Windows branch had never executed anywhere. toolpath is the sharp
+#      case: it sits in the resolution path EVERY runner depends on, and if it
+#      misbehaves off Windows the tools come back MISSING -- which at pre-push
+#      escalates to exit 1, so a Linux user's first run would be "everything
+#      degraded" from code that looks correct here.
+#   2. Python version. pyproject declares requires-python = ">=3.11"; CI proved
+#      3.12 only. Local development runs 3.14, so the version actually used
+#      day to day was never the version CI tested.
+#
+# windows-latest stays the primary and keeps 3.14 (the dev version): the E2E
+# suite (tests/e2e/test_windows_hooks.py) is Windows-only -- git hook shims,
+# PATH resolution, taskkill process-tree kill -- and skips cleanly elsewhere,
+# so only the Windows legs keep that coverage live rather than silently
+# skipped. ubuntu carries the version spread because it is the cheapest
+# runner and the platform most third-party CI will actually use.
+#
+# fail-fast is off deliberately: the point of the first matrix run is to learn
+# EVERY place the platform assumption leaked, not just the earliest one.
 name: aramid
 
 on:
@@ -16,7 +36,26 @@ permissions:
 
 jobs:
   ci:
-    runs-on: windows-latest
+    name: ci (${{ matrix.os }}, py${{ matrix.python }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest   # primary; only legs that run the E2E suite
+            python: "3.12"
+          - os: windows-latest   # the version developed on locally
+            python: "3.14"
+          - os: ubuntu-latest    # the requires-python floor
+            python: "3.11"
+          - os: ubuntu-latest
+            python: "3.12"
+          - os: ubuntu-latest
+            python: "3.13"
+          - os: ubuntu-latest
+            python: "3.14"
+          - os: macos-latest
+            python: "3.12"
     steps:
       # v7/v7 target Node 24. v4/v5 targeted Node 20, which GitHub deprecated:
       # runs still passed but every one carried a "being forced to run on
@@ -30,7 +69,7 @@ jobs:
 
       - uses: actions/setup-python@v7
         with:
-          python-version: "3.12"
+          python-version: ${{ matrix.python }}
 
       - name: Install aramid (pulls in ruff, semgrep, pip-audit as deps)
         run: pip install -e .[dev]
