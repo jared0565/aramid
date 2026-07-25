@@ -1,5 +1,8 @@
 import subprocess
+import sys
 from pathlib import Path
+
+import pytest
 
 from aramid.hooks import (
     MARKER_START,
@@ -26,17 +29,45 @@ def _repo(tmp_path) -> Path:
 
 
 # --- win_sh_path ---------------------------------------------------------
+#
+# The drive-letter branch is only REACHABLE on Windows: `win_sh_path` re-casts
+# its argument with `Path(p)` (hooks.py:49), and on POSIX `Path("C:\\x\\y")` is
+# a single filename with an empty `.drive` -- there is no drive to convert, so
+# the input never reaches that branch. Passing a `PureWindowsPath` does not
+# help; the internal re-cast discards it.
+#
+# So the drive tests are win32-gated, and the pass-through branch -- the one
+# that actually executes when hooks are installed on Linux/macOS -- gets its
+# own test below, which previously had none.
 
+_WIN_ONLY = pytest.mark.skipif(
+    sys.platform != "win32",
+    reason="drive-letter branch is unreachable off Windows (Path() has no .drive there)")
+
+
+@_WIN_ONLY
 def test_win_sh_path_converts_drive_letter():
     assert win_sh_path(Path("C:\\x\\y")) == "/c/x/y"
 
 
+@_WIN_ONLY
 def test_win_sh_path_lowercases_drive_letter_and_handles_forward_slashes():
     assert win_sh_path(Path("D:/foo/bar.exe")) == "/d/foo/bar.exe"
 
 
+@_WIN_ONLY
 def test_win_sh_path_bare_drive_root():
     assert win_sh_path(Path("C:\\")) == "/c/"
+
+
+def test_win_sh_path_passes_posix_paths_through_unchanged():
+    """Runs EVERYWHERE, and is the branch that matters off Windows: installing
+    hooks on Linux/macOS bakes `sys.executable` into the shim via this
+    function, so a POSIX interpreter path must survive it untouched. Before
+    the platform matrix this branch had no test at all -- the three tests
+    above only covered the Windows half."""
+    assert win_sh_path(Path("/usr/bin/python3")) == "/usr/bin/python3"
+    assert win_sh_path(Path("/opt/py 3.14/bin/python")) == "/opt/py 3.14/bin/python"
 
 
 # --- render_shim ----------------------------------------------------------
