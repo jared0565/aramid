@@ -152,7 +152,7 @@ Config file: `aramid.toml` at the repo root. Three-layer merge: package defaults
 | `semgrep_block_armed` | bool | `false` | OWASP-bake arming flag; while false, semgrep BLOCK-tier findings are demoted to WARN. Flipped by `aramid arm`. |
 | `ignore_paths` | list[str] | the 8 built-ins below (set in `defaults.toml`) | Exclude patterns. The 8 built-ins — `.aramid/`, `graph-out/`, `.graphite*`, `.cache/`, `node_modules/`, `.venv/`, `__pycache__/`, `.git/` — are the default and are always unioned back in regardless of repo config (never removable); a repo's `ignore_paths` adds to them. |
 | `bake_started` | str \| None | `None` (absent from defaults.toml — TOML has no null literal) | ISO date string set by `init`'s repo stub marking when the WARN-only bake period began; reported by `status` as "bake in progress, day N". |
-| `test_command` | str \| None | `None` | Loaded into `Config` but has no read site anywhere in `src/aramid` outside `config.py` itself — reserved/currently unconsumed. |
+| `test_command` | str \| None | `None` | **Legacy alias for `[tests].command`.** Shipped in schema v1 documented but with no read site at all; now consumed by `pipeline.run_gate` as the fallback when `[tests].command` is unset. `[tests].command` wins if both are set. Prefer `[tests].command` in new config. |
 | `scope_subpath` | str \| None | `None` | Set by `init` when the target dir isn't the true repo root; printed as "scan scope: …". |
 
 ### `[timeouts]`
@@ -163,6 +163,23 @@ Config file: `aramid.toml` at the repo root. Three-layer merge: package defaults
 | `pre_push` | int (s) | `300` | Wall-clock budget for the pre-push gate. |
 
 Code's own ultimate fallback if the section were entirely absent: `60.0`.
+
+### `[tests]`
+
+The BLOCK-tier `tests` gate (pre-push and `--all`). Read by `pipeline.run_gate`, which resolves the section onto `RunContext.test_command` / `.test_timeout_s` / `.tests_enabled` — the Runner protocol is `run(ctx)`, so ctx is the only channel a runner has to config.
+
+| Key | Type | Default | Meaning |
+|---|---|---|---|
+| `enabled` | bool | `true` | `false` makes the runner **inapplicable**, so it is never selected and therefore never counts as degraded. (Degrading it instead would block every push — the very thing disabling it avoids.) A notice is printed on every gate run where this suppresses a real suite. |
+| `command` | str \| list[str] \| None | `None` (absent from defaults.toml — TOML has no null literal) | Overrides detection entirely. A string is split POSIX-style (`shlex.split`); a list is used verbatim — **prefer the list form on Windows**, since POSIX splitting eats backslashes. Never run through a shell. Setting it also makes the gate applicable to repos whose suite `detect_tests` doesn't recognize. Falls back to the legacy top-level `test_command`. |
+| `timeout_s` | int (s) | `300` | Per-invocation subprocess timeout. **Capped by `[timeouts].<gate>`**: `run_gate` abandons any runner still going at the gate's wall-clock budget, so a larger `timeout_s` can never be reached — aramid warns to stderr when the two are set incoherently, and does *not* silently override either. Raise both to allow a longer run. |
+
+Why it exists: `tests` is in `BLOCK_TIER_KEYS`, so a suite that overruns the timeout degrades the block tier and `policy.escalate_degraded` returns 1 at pre-push. With no way to point the gate at a fast subset, **every push blocks on any repo whose suite exceeds the budget** — aramid's own (~900 s) included. A gate that must routinely be bypassed with `--no-verify` trains the bypass, which disables every other check too.
+
+Two invariants worth keeping in mind when touching this:
+
+- BLOCK-tier escalation keys on the registry **key** (`results["tests"]`), not on `RunnerResult.tool`. A custom `make test` reports `tool == "make"`, which name-matches nothing in `BLOCK_TIER_KEYS`; if that ever switched to name-matching, configuring a command would silently demote the test gate out of BLOCK tier.
+- A configured command that parses to empty argv degrades `MISSING` rather than returning zero findings — a gate cannot fall silent because its own config is malformed. Likewise pytest's rc 5 ("no tests collected") stays blocking: a selector matching nothing is a vacuous gate, not a pass.
 
 ### `[triage]`
 

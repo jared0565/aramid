@@ -1,6 +1,35 @@
 # aramid dogfoods itself: this is the config a maintainer's `aramid init .`
-# would write. Kept to schema_version only -- equal to built-in defaults, so
-# aramid's own CI gate (`aramid check --all --strict --json`) is unchanged.
+# would write, plus the one override below.
 # Bump this in lockstep with aramid's CURRENT_SCHEMA_VERSION on a schema
 # change, or aramid will print a schema-mismatch warning on every run here.
 schema_version = 1
+
+# Point the BLOCK-tier pre-push test gate at the unit suite.
+#
+# WHY: `tests` is BLOCK-tier, and the full suite takes ~15 min locally against
+# a 300 s gate budget ([timeouts].pre_push), so it always TIMEOUTs -> degraded
+# -> exit 1. Every push blocked, on aramid's own repo. The alternative is
+# living on `git push --no-verify`, which disables gitleaks and the ratchet
+# too -- strictly worse than gating on a fast subset.
+#
+# WHAT THIS COSTS: the push gate no longer covers tests/integration or
+# tests/e2e. That coverage lives in CI, which runs the full `python -m pytest`
+# on every push across the 7-leg matrix -- so nothing is unverified, it is
+# verified a few minutes later instead of before the push.
+#
+# tests/unit is 791 tests in ~185 s locally; a measured pre-push run is ~243 s
+# wall clock (runners go concurrently). The argv form is used rather than a
+# string because POSIX splitting eats backslashes and this repo's primary dev
+# platform is Windows.
+[tests]
+command = ["python", "-m", "pytest", "-q", "tests/unit"]
+timeout_s = 600
+
+# Headroom over that measured ~243 s. These are TIMEOUTS, not costs: raising
+# the cap does not slow a passing push by one second, it only widens how slow
+# a run may get before the gate calls it hung. 300 s left just 57 s of margin
+# against a unit suite that grows with every task -- and the failure mode when
+# it crosses is not a warning, it is every push blocked. The only price is
+# that a genuinely hung suite takes 10 min rather than 5 to be declared hung.
+[timeouts]
+pre_push = 600

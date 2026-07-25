@@ -111,9 +111,25 @@ Once hooks are installed, every commit and push runs a fixed set of runners per 
 | `pre-push` | gitleaks, semgrep, eslint, typecheck, deps, tests |
 | `all` (`aramid check --all`) | same set as pre-push |
 
-Each runner also has to be *applicable* to actually run: ruff only if the repo has a Python stack, eslint only if it has a JS stack, typecheck only if a `tsconfig`/mypy config is present, deps only if a package manager or `requirements*.txt` exists, tests only if a test suite is detected. gitleaks and semgrep are always applicable. A runner that isn't applicable is simply never selected — it never counts as "degraded."
+Each runner also has to be *applicable* to actually run: ruff only if the repo has a Python stack, eslint only if it has a JS stack, typecheck only if a `tsconfig`/mypy config is present, deps only if a package manager or `requirements*.txt` exists, tests only if a test suite is detected (or `[tests].command` is set). gitleaks and semgrep are always applicable. A runner that isn't applicable is simply never selected — it never counts as "degraded."
 
 Runners execute concurrently, budgeted by `[timeouts]` (`pre_commit = 5` seconds, `pre_push = 300` seconds by default); a runner still running past its budget is abandoned and recorded as `TIMEOUT` rather than joined.
+
+#### Pointing the test gate at a fast subset
+
+`tests` is BLOCK-tier, so a suite that overruns the budget degrades the block tier and **blocks the push**. Most mature repos have a suite too slow for a push gate — aramid's own takes ~15 minutes. Point it at a fast subset rather than living on `--no-verify`, which disables every other check too:
+
+```toml
+[tests]
+command = ["pytest", "-q", "tests/unit"]   # argv form: no quoting rules
+timeout_s = 300                            # capped by [timeouts].pre_push
+```
+
+A string (`command = "pytest -q tests/unit"`) works too and is split POSIX-style; prefer the argv form on Windows, where POSIX splitting eats backslashes. The command is never run through a shell, and setting one also makes the gate work in repos whose layout `detect_tests` doesn't recognize (a `make test` wrapper, a suite under a subpath).
+
+`timeout_s` cannot exceed the gate's wall-clock budget — the gate abandons the runner at `[timeouts].pre_push` regardless — so raise both if you need a longer run. aramid warns when they're set incoherently.
+
+`enabled = false` removes the gate entirely (it then never counts as degraded either). aramid prints a notice on every run where that suppresses a real suite: a silently disabled block-tier check is worse than no check at all. Note that subsetting the push gate narrows what it covers — keep the full suite running in CI.
 
 ### Security blocks, quality warns — but not uniformly
 

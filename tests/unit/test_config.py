@@ -51,6 +51,49 @@ def test_defaults_only_when_no_user_or_repo_config(tmp_path, monkeypatch):
     assert cfg.block_rules["deps"]["block_severity"] == "critical"
 
 
+# --- (a2) [tests]: the BLOCK-tier test gate's own config ---------------------
+
+def test_tests_section_defaults(tmp_path, monkeypatch):
+    monkeypatch.setattr(config, "_user_config_path", lambda: _no_user_config(tmp_path))
+    repo = tmp_path / "repo-tests-default"
+    repo.mkdir()
+
+    cfg = config.load_config(repo)
+
+    assert cfg.tests["enabled"] is True
+    assert cfg.tests["timeout_s"] == 300
+    # No `command` key by default -- TOML has no null literal, so absence is
+    # how "auto-detect (pytest -q / npm test)" is spelled.
+    assert "command" not in cfg.tests
+
+
+def test_repo_tests_section_overrides_defaults(tmp_path, monkeypatch):
+    monkeypatch.setattr(config, "_user_config_path", lambda: _no_user_config(tmp_path))
+    repo = tmp_path / "repo-tests-override"
+    repo.mkdir()
+    (repo / "aramid.toml").write_text(
+        '[tests]\nenabled = false\ncommand = "pytest -q tests/unit"\n'
+        'timeout_s = 600\n', encoding="utf-8")
+
+    cfg = config.load_config(repo)
+
+    assert cfg.tests["enabled"] is False
+    assert cfg.tests["command"] == "pytest -q tests/unit"
+    assert cfg.tests["timeout_s"] == 600
+
+
+def test_tests_command_accepts_an_argv_array(tmp_path, monkeypatch):
+    monkeypatch.setattr(config, "_user_config_path", lambda: _no_user_config(tmp_path))
+    repo = tmp_path / "repo-tests-argv"
+    repo.mkdir()
+    (repo / "aramid.toml").write_text(
+        '[tests]\ncommand = ["pytest", "-q", "tests/unit"]\n', encoding="utf-8")
+
+    cfg = config.load_config(repo)
+
+    assert cfg.tests["command"] == ["pytest", "-q", "tests/unit"]
+
+
 # --- (b) is_ignored / filter_paths ------------------------------------------
 
 def test_is_ignored_matches_prefix_and_fnmatch():

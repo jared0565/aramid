@@ -60,6 +60,17 @@ class RunContext:
       <=24h cache -- a CVE that appeared inside the window is not masked. The
       interactive gates (pre-commit/pre-push) leave it False and keep the
       cache. Additive field: default False keeps every construction site valid.
+    test_command / test_timeout_s / tests_enabled: the `[tests]` config
+      section (plus the legacy top-level `test_command`), resolved by
+      aramid.pipeline.run_gate. The Runner protocol is `run(ctx)` -- ctx is
+      the ONLY channel a real runner has to config, which is why these are
+      narrow purpose-built fields rather than a whole Config (matching
+      `extra_semgrep_configs` above). `test_command` None/empty means
+      auto-detect; `test_timeout_s` None means the runner's own default
+      (runners.tests.TIMEOUT_S); `tests_enabled` False makes the tests
+      runner inapplicable, so it is never selected at all. All three are
+      additive with defaults, so every existing construction site (and
+      every runner that ignores them) stays valid unchanged.
     """
     root: Path
     files: list[str] = field(default_factory=list)
@@ -68,6 +79,9 @@ class RunContext:
     stacks: set[str] = field(default_factory=set)
     extra_semgrep_configs: tuple[str, ...] = ()
     force_refresh: bool = False
+    test_command: str | list[str] | None = None
+    test_timeout_s: float | None = None
+    tests_enabled: bool = True
 
 _WIN = sys.platform == "win32"
 _POST_KILL_DRAIN_S = 5.0   # cap on the post-_kill_tree reap wait (test seam)

@@ -20,6 +20,32 @@ ignore_paths = [
 pre_commit = 5
 pre_push = 300
 
+# --- The repo's own test suite: the BLOCK-tier `tests` gate (pre-push) ---
+[tests]
+# false takes the BLOCK-tier test gate out entirely. It then neither runs nor
+# counts as degraded -- otherwise disabling it would block every push, the
+# very thing it exists to avoid. aramid prints a notice on every gate run
+# where this suppresses the suite: a silently disabled block-tier check is
+# strictly worse than no check at all.
+enabled = true
+# Per-invocation subprocess timeout, in seconds. CAPPED BY [timeouts] above:
+# run_gate abandons any runner still going at the gate's wall-clock budget,
+# so a timeout_s larger than that budget can never be reached (aramid warns
+# when they are set incoherently). Raise BOTH to allow a longer run.
+timeout_s = 300
+# `command` is deliberately absent, like `test_command`/`bake_started` above
+# (TOML has no null literal): absent means "auto-detect", i.e. `pytest -q`
+# or `npm test` per detectors.detect_tests. Set it to point the gate at a
+# fast subset -- the full suite of a mature repo rarely fits a push gate,
+# and a gate you must routinely `--no-verify` past trains the bypass.
+#   command = "pytest -q tests/unit"        # string: split POSIX-style
+#   command = ["pytest", "-q", "tests/unit"]  # argv: no quoting rules at all
+# Prefer the argv form on Windows -- POSIX splitting eats backslashes, so a
+# `tests\unit` written as a string would lose its separator. Setting a
+# command also makes the gate applicable to repos whose suite the pytest/npm
+# heuristics do not recognize (a `make test` wrapper, a suite under a
+# subpath). It is never run through a shell.
+
 # --- Phase 2a (spec sections 3-4): zero-token triage, drain scheduling, pack ---
 [triage]
 min_score = 40

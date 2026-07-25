@@ -18,6 +18,7 @@ Runner selection is a monkeypatchable module-level registry (`RUNNERS`,
 without touching real tool binaries -- see tests/unit/test_pipeline.py.
 """
 import functools
+import sys
 import uuid
 from concurrent.futures import ThreadPoolExecutor, wait
 from dataclasses import dataclass, replace
@@ -159,9 +160,43 @@ def _is_applicable(key: str, ctx: RunContext) -> bool:
     if key == "deps":
         return ctx.pkg_manager is not None or any(ctx.root.glob("requirements*.txt"))
     if key == "tests":
-        return bool(detect_tests(ctx.root))
+        # `[tests].enabled = false` removes the gate rather than degrading
+        # it: a runner that is never selected cannot surface as
+        # MISSING/degraded, which for a BLOCK_TIER_KEYS member would block
+        # every push -- exactly what disabling it is meant to avoid.
+        # run_gate prints a notice whenever this suppresses a real suite.
+        if not ctx.tests_enabled:
+            return False
+        # A configured command IS the repo's test setup, so it makes the
+        # gate applicable on its own. Without this, pointing `[tests].command`
+        # at a `make test` wrapper (or a suite the pytest/npm heuristics
+        # don't recognize) would silently do nothing at all.
+        return bool(ctx.test_command) or bool(detect_tests(ctx.root))
     # gitleaks, semgrep, and any unrecognized key (e.g. test doubles): always applicable.
     return True
+
+
+def _tests_config_notices(gate: Gate, ctx: RunContext, budget_s: float) -> list[str]:
+    """Loud, per-run notices for `[tests]` config that would otherwise
+    silently weaken or neuter the BLOCK-tier test gate. Both cases below are
+    the same failure class this engine exists to prevent: a check that
+    reports nothing for a reason indistinguishable from "clean"."""
+    if "tests" not in GATE_RUNNER_KEYS.get(gate, []):
+        return []          # this gate never runs tests -- nothing to suppress
+    if not ctx.tests_enabled:
+        # Only worth saying when a suite actually exists to be skipped.
+        if detect_tests(ctx.root) or ctx.test_command:
+            return ["aramid: [tests].enabled = false -- the BLOCK-tier test "
+                    "gate is DISABLED for this repo; nothing here runs your "
+                    "suite."]
+        return []
+    if ctx.test_timeout_s and ctx.test_timeout_s > budget_s:
+        key = _BUDGET_KEY.get(gate, "pre_push")
+        return [f"aramid: [tests].timeout_s = {ctx.test_timeout_s:g}s exceeds the "
+                f"[timeouts].{key} budget of {budget_s:g}s -- the gate abandons "
+                f"the runner at {budget_s:g}s, so the larger timeout can never "
+                f"be reached. Raise both, or lower timeout_s."]
+    return []
 
 
 def _select_runners(gate: Gate, ctx: RunContext) -> dict[str, object]:
@@ -253,15 +288,24 @@ def run_gate(root: Path, gate: Gate, mode: str, cfg: config_mod.Config, ledger: 
     pack_file = root / RULES_REL_PATH
     extra_configs = ((str(pack_file),)
                      if cfg.pack.get("enabled", True) and pack_file.exists() else ())
+    # `[tests]` (schema v1's top-level `test_command` shipped documented but
+    # with no read site anywhere; it is consumed as a fallback rather than
+    # orphaned beside a new key doing the same job -- `[tests].command` wins).
+    tests_cfg = cfg.tests if isinstance(cfg.tests, dict) else {}
     ctx = RunContext(root=root, files=files, rng=rng,
                       pkg_manager=detect_package_manager(root),
                       stacks=detect_stacks(root, root),
                       extra_semgrep_configs=extra_configs,
-                      force_refresh=(mode == "all"))
+                      force_refresh=(mode == "all"),
+                      test_command=tests_cfg.get("command", cfg.test_command),
+                      test_timeout_s=tests_cfg.get("timeout_s"),
+                      tests_enabled=tests_cfg.get("enabled", True))
     selected = _select_runners(gate, ctx)
 
     # 3. run concurrently under the gate's wall-clock budget.
     budget_s = cfg.timeouts.get(_BUDGET_KEY.get(gate, "pre_push"), 60.0)
+    for notice in _tests_config_notices(gate, ctx, budget_s):
+        print(notice, file=sys.stderr)
     results = _run_selected(selected, ctx, budget_s)
     flat_results = _flatten(results)
 

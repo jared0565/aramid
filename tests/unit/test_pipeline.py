@@ -171,6 +171,208 @@ def test_no_test_setup_at_prepush_tests_not_selected_clean_exit(tmp_path, monkey
     ledger.close()
 
 
+# --------------------------------- (c3) [tests] config: command/timeout/off --
+
+def _ctx_spy(result: RunnerResult):
+    """A runner double that records the RunContext it was handed, so the
+    cfg -> RunContext plumbing can be asserted from the runner's side."""
+    seen: list = []
+
+    def run(ctx):
+        seen.append(ctx)
+        return result
+
+    return SimpleNamespace(run=run, parse=lambda r, c: []), seen
+
+
+def test_tests_config_reaches_the_runner_via_the_run_context(tmp_path, monkeypatch):
+    root = _repo(tmp_path)
+    (root / "tests").mkdir()
+    cfg = _cfg(root, tmp_path, monkeypatch)
+    ledger = _ledger(tmp_path)
+    cfg.tests = {"enabled": True, "command": "pytest -q tests/unit", "timeout_s": 900}
+
+    spy, seen = _ctx_spy(RunnerResult("pytest", ToolState.OK))
+    monkeypatch.setitem(pipeline.RUNNERS, "tests", spy)
+    monkeypatch.setitem(pipeline.GATE_RUNNER_KEYS, Gate.PRE_PUSH, ["tests"])
+
+    pipeline.run_gate(root, Gate.PRE_PUSH, "range", cfg, ledger, run_id="run-tc1")
+
+    assert len(seen) == 1
+    assert seen[0].test_command == "pytest -q tests/unit"
+    assert seen[0].test_timeout_s == 900
+    ledger.close()
+
+
+def test_tests_disabled_by_config_is_never_selected(tmp_path, monkeypatch):
+    """`[tests].enabled = false` takes the BLOCK-tier gate out entirely --
+    the runner must not run, and its absence must NOT read as degraded
+    (that would block every push, the very thing disabling it avoids)."""
+    root = _repo(tmp_path)
+    (root / "tests").mkdir()  # detection WOULD find a suite -- config wins
+    cfg = _cfg(root, tmp_path, monkeypatch)
+    ledger = _ledger(tmp_path)
+    cfg.tests = {"enabled": False}
+
+    spy, seen = _ctx_spy(RunnerResult("pytest", ToolState.OK))
+    monkeypatch.setitem(pipeline.RUNNERS, "tests", spy)
+    monkeypatch.setitem(pipeline.GATE_RUNNER_KEYS, Gate.PRE_PUSH, ["tests"])
+
+    result = pipeline.run_gate(root, Gate.PRE_PUSH, "range", cfg, ledger, run_id="run-tc2")
+
+    assert seen == []
+    assert result.degraded == []
+    assert result.exit_code == 0
+    ledger.close()
+
+
+def test_configured_command_makes_tests_applicable_without_detection(tmp_path, monkeypatch):
+    """A repo whose suite the pytest/npm heuristics don't recognize (a
+    `make test` wrapper, a suite under a subpath) still gets the gate once
+    it names a command -- otherwise configuring one would silently do
+    nothing."""
+    root = _repo(tmp_path)  # no tests/, no package.json
+    cfg = _cfg(root, tmp_path, monkeypatch)
+    ledger = _ledger(tmp_path)
+    cfg.tests = {"command": "make test"}
+
+    spy, seen = _ctx_spy(RunnerResult("make", ToolState.OK))
+    monkeypatch.setitem(pipeline.RUNNERS, "tests", spy)
+    monkeypatch.setitem(pipeline.GATE_RUNNER_KEYS, Gate.PRE_PUSH, ["tests"])
+
+    pipeline.run_gate(root, Gate.PRE_PUSH, "range", cfg, ledger, run_id="run-tc3")
+
+    assert len(seen) == 1
+    ledger.close()
+
+
+def test_custom_command_degradation_still_escalates_block_tier(tmp_path, monkeypatch):
+    """The invariant a custom command could plausibly break: BLOCK-tier
+    escalation keys on the registry KEY ("tests"), not on
+    RunnerResult.tool. A custom `make test` reports tool == "make", which
+    name-matches nothing in BLOCK_TIER_KEYS -- if the escalation ever
+    switched to name-matching, configuring a command would silently demote
+    the test gate out of BLOCK tier. Exit 1 here is the whole point."""
+    root = _repo(tmp_path)
+    cfg = _cfg(root, tmp_path, monkeypatch)
+    ledger = _ledger(tmp_path)
+    cfg.tests = {"command": "make test"}
+
+    monkeypatch.setitem(pipeline.RUNNERS, "tests",
+                         _fake(RunnerResult("make", ToolState.TIMEOUT)))
+    monkeypatch.setitem(pipeline.GATE_RUNNER_KEYS, Gate.PRE_PUSH, ["tests"])
+
+    result = pipeline.run_gate(root, Gate.PRE_PUSH, "range", cfg, ledger, run_id="run-tc4")
+
+    assert result.exit_code == 1
+    assert result.degraded_block_tier is True
+    assert result.degraded == ["make"]   # the NAME differs from the key
+    ledger.close()
+
+
+def test_legacy_top_level_test_command_is_honored(tmp_path, monkeypatch):
+    """`test_command` shipped in schema v1, was documented, and had no read
+    site at all. It is consumed as a fallback rather than orphaned beside a
+    new key that does the same thing."""
+    root = _repo(tmp_path)
+    (root / "tests").mkdir()
+    cfg = _cfg(root, tmp_path, monkeypatch)
+    ledger = _ledger(tmp_path)
+    cfg.test_command = "pytest -k smoke"
+
+    spy, seen = _ctx_spy(RunnerResult("pytest", ToolState.OK))
+    monkeypatch.setitem(pipeline.RUNNERS, "tests", spy)
+    monkeypatch.setitem(pipeline.GATE_RUNNER_KEYS, Gate.PRE_PUSH, ["tests"])
+
+    pipeline.run_gate(root, Gate.PRE_PUSH, "range", cfg, ledger, run_id="run-tc5")
+
+    assert seen[0].test_command == "pytest -k smoke"
+    ledger.close()
+
+
+def test_tests_command_wins_over_legacy_test_command(tmp_path, monkeypatch):
+    root = _repo(tmp_path)
+    (root / "tests").mkdir()
+    cfg = _cfg(root, tmp_path, monkeypatch)
+    ledger = _ledger(tmp_path)
+    cfg.test_command = "pytest -k smoke"
+    cfg.tests = {"command": "pytest -q tests/unit"}
+
+    spy, seen = _ctx_spy(RunnerResult("pytest", ToolState.OK))
+    monkeypatch.setitem(pipeline.RUNNERS, "tests", spy)
+    monkeypatch.setitem(pipeline.GATE_RUNNER_KEYS, Gate.PRE_PUSH, ["tests"])
+
+    pipeline.run_gate(root, Gate.PRE_PUSH, "range", cfg, ledger, run_id="run-tc6")
+
+    assert seen[0].test_command == "pytest -q tests/unit"
+    ledger.close()
+
+
+# ---- (c4) [tests] misconfiguration must be loud, never silently weakening ---
+
+def _ctx(root, **kw):
+    from aramid.runners.base import RunContext
+    return RunContext(root=root, **kw)
+
+
+def test_notice_when_the_test_gate_is_disabled(tmp_path):
+    root = tmp_path / "n1"
+    (root / "tests").mkdir(parents=True)
+    notices = pipeline._tests_config_notices(
+        Gate.PRE_PUSH, _ctx(root, tests_enabled=False), budget_s=300)
+    assert len(notices) == 1
+    assert "disabled" in notices[0].lower()
+
+
+def test_no_disabled_notice_at_a_gate_that_never_runs_tests(tmp_path):
+    """pre-commit doesn't run the test gate, so `enabled = false` changes
+    nothing there -- warning about it every commit would be noise."""
+    root = tmp_path / "n2"
+    (root / "tests").mkdir(parents=True)
+    assert pipeline._tests_config_notices(
+        Gate.PRE_COMMIT, _ctx(root, tests_enabled=False), budget_s=5) == []
+
+
+def test_no_disabled_notice_when_the_repo_has_no_suite_anyway(tmp_path):
+    root = tmp_path / "n3"
+    root.mkdir()
+    assert pipeline._tests_config_notices(
+        Gate.PRE_PUSH, _ctx(root, tests_enabled=False), budget_s=300) == []
+
+
+def test_notice_when_test_timeout_exceeds_the_gate_budget(tmp_path):
+    """`timeout_s` is capped by the gate's wall-clock budget: run_gate
+    abandons any runner still going at `budget_s`, so a larger timeout can
+    never be reached. Silently ignoring the configured value is exactly the
+    kind of false green light this engine exists to prevent."""
+    root = tmp_path / "n4"
+    (root / "tests").mkdir(parents=True)
+    notices = pipeline._tests_config_notices(
+        Gate.PRE_PUSH, _ctx(root, test_timeout_s=900.0), budget_s=300)
+    assert len(notices) == 1
+    assert "900" in notices[0] and "300" in notices[0]
+
+
+def test_no_timeout_notice_when_within_the_budget(tmp_path):
+    root = tmp_path / "n5"
+    (root / "tests").mkdir(parents=True)
+    assert pipeline._tests_config_notices(
+        Gate.PRE_PUSH, _ctx(root, test_timeout_s=120.0), budget_s=300) == []
+
+
+def test_run_gate_prints_the_tests_config_notices(tmp_path, monkeypatch, capsys):
+    root = _repo(tmp_path)
+    (root / "tests").mkdir()
+    cfg = _cfg(root, tmp_path, monkeypatch)
+    ledger = _ledger(tmp_path)
+    cfg.tests = {"enabled": False}
+
+    pipeline.run_gate(root, Gate.PRE_PUSH, "range", cfg, ledger, run_id="run-tc7")
+
+    assert "[tests].enabled" in capsys.readouterr().err
+    ledger.close()
+
+
 # ------------------------------------------------- (d) graph-out/ ignore -----
 
 def test_graph_out_path_never_reaches_runner_or_findings(tmp_path, monkeypatch):
