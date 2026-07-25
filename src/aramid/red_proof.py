@@ -64,12 +64,14 @@ def scan_scoped(ctx, cfg) -> tuple[list[RawFinding], set[str]]:
     re-running the scan. Fail-open: any error yields no findings -- a broken
     producer must never block a push or crash the gate.
 
-    proven_red contains ONLY files whose base-tree pytest run gave a
-    DEFINITIVE red verdict (rc 1/2 -- see the loop below). rc 5 (nothing
-    collected), a wall-budget break, and a per-file timeout are all
-    deliberately excluded: none of them prove anything about the file, they
-    mean "we couldn't tell", not "it's red" -- resolving an open finding on
-    an inconclusive verdict would silently clear a real gap."""
+    proven_red contains ONLY files whose base-tree pytest run exited rc 1/2
+    (see the loop below). rc 5 (nothing collected), a wall-budget break, and
+    a per-file timeout are all deliberately excluded: none of them prove
+    anything about the file, they mean "we couldn't tell", not "it's red" --
+    resolving an open finding on an inconclusive verdict would silently
+    clear a real gap. rc 1/2 is red EXCEPT under an addopts gate, which can
+    force it regardless of test outcomes (module docstring) -- the one
+    inconclusive case this scoping cannot filter out."""
     try:
         rcfg = getattr(cfg, "red_proof", None) or {}
         if not rcfg.get("enabled", True):
@@ -141,10 +143,14 @@ def auto_resolve_red_proof(ledger, run_id: str, at: str, proven_red, present_ids
     """Resolve open red-proof findings whose file the push definitively
     proved red (mirrors mutation_gate.auto_resolve_mutation and
     tdd.auto_resolve_tdd). proven_red (from scan_scoped) contains ONLY files
-    with a definitive rc 1/2 base-tree verdict -- budget-break, rc 5, and
-    timeout are deliberately excluded there (an inconclusive verdict must
-    never silently clear a real gap), so nothing here needs to re-check that;
-    a file's mere presence in proven_red already means "definitively red".
+    whose base-tree run exited rc 1/2 -- budget-break, rc 5, and timeout are
+    deliberately excluded there (an inconclusive verdict must never silently
+    clear a real gap), so nothing here re-checks the rc taxonomy. That is
+    NOT the same as "certainly red": under a repo addopts gate an rc 1/2 can
+    be infrastructure rather than a test outcome, and this function then
+    durably resolves a still-never-red finding, irreversibly (module
+    docstring). Do not add a resolve path that leans on presence in
+    proven_red meaning more than "the base run exited rc 1/2".
 
     present_ids skips anything this run's producer re-fired -- same
     requirement and reason as tdd.auto_resolve_tdd (auto_resolve runs AFTER
