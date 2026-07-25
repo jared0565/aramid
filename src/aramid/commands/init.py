@@ -37,6 +37,7 @@ from typing import Callable
 
 from aramid import config as config_mod
 from aramid import gitutil, hooks, policy, redact
+from aramid.commands import doctor as doctor_mod
 from aramid.commands.doctor import cmd_doctor
 from aramid.detectors import detect_package_manager, detect_stacks, nested_git_dirs
 from aramid.ledger import Ledger
@@ -226,10 +227,24 @@ def _init_one(target: Path) -> int:
 
     # step 3: doctor gate -- refuse to arm hooks (full abort) if a BLOCK-tier
     # tool is missing.
-    if cmd_doctor(root) != 0:
-        print("aramid: init: refusing to arm hooks -- a BLOCK-tier tool "
-              "(gitleaks/semgrep) is missing; run `aramid doctor` (or "
-              "`aramid doctor --fix`) and re-run init.", file=sys.stderr)
+    #
+    # Ask that question DIRECTLY; do not key on `cmd_doctor`'s exit code.
+    # doctor returns 2 for more than one condition, and one of them is
+    # "aramid.toml present but hooks missing" -- precisely the state init
+    # exists to fix, and precisely what a fresh CLONE of an onboarded repo
+    # looks like (`.git/hooks` is not version-controlled). Gating on the
+    # aggregate code made init refuse to install the very hooks whose absence
+    # produced the 2, while blaming a BLOCK-tier tool that was present --
+    # and doctor's own remedy line for that state says "run `aramid init .`".
+    # Reached through the module, not a from-import: the suite monkeypatches
+    # `doctor.probe_toolchain`, and a direct import would bind past the patch.
+    cmd_doctor(root)                       # print the report for the operator
+    statuses = doctor_mod.probe_toolchain(root)
+    missing_block = [n for n in doctor_mod.BLOCK_TIER if not statuses[n].present]
+    if missing_block:
+        print(f"aramid: init: refusing to arm hooks -- BLOCK-tier tool(s) "
+              f"missing: {', '.join(missing_block)}; run `aramid doctor` (or "
+              f"`aramid doctor --fix`) and re-run init.", file=sys.stderr)
         return 3
 
     # step 4: aramid.toml (only if absent) + ARAMID.md (always) + gitignore.

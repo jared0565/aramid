@@ -318,3 +318,27 @@ def test_validate_hook_shim_detects_missing_post_commit_triage_shim(tmp_path, mo
     post_commit.unlink()
 
     assert init._validate_hook_shim(r) is False
+
+
+def test_init_installs_hooks_on_a_configured_but_unenforced_repo(tmp_path, monkeypatch):
+    """Regression: the fresh-clone deadlock.
+
+    `aramid.toml` is committed, so a CLONE of an onboarded repo arrives with
+    config and no hooks. doctor reports that as "configured but NOT enforced"
+    and returns 2 -- and init's gate used to key on `cmd_doctor(root) != 0`,
+    so init refused to install the very hooks whose absence caused the 2,
+    while blaming a missing BLOCK-tier tool that was present. doctor's own
+    remedy line says "run `aramid init .`", which could not work.
+
+    All BLOCK-tier tools are present here; the ONLY unusual thing is the
+    pre-existing aramid.toml. init must succeed and install the shims."""
+    r = _repo(tmp_path)
+    (r / "aramid.toml").write_text("# pre-existing, as a clone would have\n",
+                                   encoding="utf-8")
+    monkeypatch.setattr(doctor, "probe_toolchain", _fake_present)
+
+    rc = init.cmd_init(r)
+
+    assert rc != 3, "init refused on the very state it exists to fix"
+    assert (hooks.hooks_dir(r) / "pre-commit").exists()
+    assert (hooks.hooks_dir(r) / "pre-push").exists()
