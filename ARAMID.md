@@ -9,9 +9,9 @@ This repo is armed with **aramid** -- a deterministic security and quality gate
 that runs in git hooks (`pre-commit`, `pre-push`) and is CI-ready via `aramid
 check --strict --json`.
 
-- **Detected stack:** __STACK__
-- **Package manager:** __PKG_MGR__
-- **Onboarded:** __DATE__
+- **Detected stack:** python
+- **Package manager:** none
+- **Onboarded:** 2026-07-25
 
 ## What aramid checks
 

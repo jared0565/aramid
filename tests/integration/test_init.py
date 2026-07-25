@@ -79,6 +79,38 @@ def test_init_arms_a_fresh_repo(tmp_path, monkeypatch):
     for entry in (".aramid/", "graph-out/", ".graphite*", ".cache/"):
         assert entry in gitignore_text
 
+
+def test_aramid_md_names_the_budget_keys_instead_of_hardcoding_them(tmp_path, monkeypatch):
+    """ARAMID.md is rendered from a template that never sees the repo's
+    config, so a literal "300s" in the budget table silently becomes a lie
+    the moment a repo raises `[timeouts].pre_push` -- which aramid's own
+    repo does. Name the key instead; it cannot drift."""
+    monkeypatch.setattr(doctor, "probe_toolchain", _fake_present)
+    r = _repo(tmp_path)
+
+    init.cmd_init(r)
+    text = (r / "ARAMID.md").read_text(encoding="utf-8")
+
+    assert "[timeouts].pre_push" in text
+    assert "[timeouts].pre_commit" in text
+    assert "| pre-push | 300s |" not in text
+    assert "| pre-commit | 5s |" not in text
+
+
+def test_aramid_md_documents_the_slow_suite_escape_hatch(tmp_path, monkeypatch):
+    """tests is BLOCK-tier, so a suite slower than the gate budget blocks
+    every push. The repo where an operator first hits that is exactly the
+    repo they just ran `init` on -- so the fix has to be discoverable here,
+    not only in the user guide."""
+    monkeypatch.setattr(doctor, "probe_toolchain", _fake_present)
+    r = _repo(tmp_path)
+
+    init.cmd_init(r)
+    text = (r / "ARAMID.md").read_text(encoding="utf-8")
+
+    assert "[tests]" in text
+    assert "command" in text
+
     shim = r / ".git" / "hooks" / "pre-commit"
     assert shim.exists()
     assert hooks.MARKER_START.encode() in shim.read_bytes()
