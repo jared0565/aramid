@@ -349,11 +349,49 @@ def probe_providers() -> list[str]:
     return lines
 
 
+def probe_enforcement(root: Path) -> str | None:
+    """Detect "configured but NOT enforced": `aramid.toml` present (so the
+    repo IS onboarded) while the gate shims are absent (so nothing fires).
+
+    This is the fresh-clone hole. `.git/hooks` is not version-controlled, so
+    cloning an onboarded repo -- or checking it out on another machine --
+    yields the committed config with no shims. The repo looks onboarded and
+    the gate silently never runs.
+
+    Returns a message, or None when there is nothing to report. No
+    `aramid.toml` means deliberately not onboarded, which is NOT a finding:
+    nagging every un-onboarded repo is how a real warning gets ignored.
+
+    Deliberately separate from `probe_interpreter`, which reports "no shim
+    installed yet" as a benign fallback note. Same underlying observation,
+    opposite severity -- that line is fine pre-`init` and alarming after it,
+    and only this function knows which case it is."""
+    try:
+        if not (root / "aramid.toml").exists():
+            return None
+        from aramid.hooks import GATES, hooks_dir
+        hdir = hooks_dir(root)
+        missing = [g.value for g in GATES if not (hdir / g.value).exists()]
+        if not missing:
+            return None
+        return (f"hooks: aramid.toml is present but {', '.join(missing)} "
+                f"missing from {hdir} -- this repo is configured but NOT "
+                f"enforced. Git hooks are not cloned; run `aramid init .`")
+    except Exception:
+        return None                     # fail open: never break doctor
+
+
 def cmd_doctor(root: Path, fix: bool = False) -> int:
     """Probe the toolchain (and shim interpreter); when `fix`, repair
     what's missing/owned and re-probe. Returns 0 if both BLOCK-tier tools
     (gitleaks, semgrep) are present, else 2 -- WARN-tier tool absence
-    (ruff, pip-audit) is reported but never changes the exit code."""
+    (ruff, pip-audit) is reported but never changes the exit code.
+
+    Also returns 2 for "configured but NOT enforced" (see
+    `probe_enforcement`). That widens 2 from "a BLOCK-tier tool is missing"
+    to "the gate is not fully operational", which covers both: in each case
+    the repo is not actually being gated, and reporting 0 would be a false
+    green light."""
     statuses = probe_toolchain(root)
 
     if fix:
@@ -375,11 +413,18 @@ def cmd_doctor(root: Path, fix: bool = False) -> int:
     print("autolearn:")
     print(_autolearn_probe_line())
 
+    unenforced = probe_enforcement(root)
+    if unenforced:
+        print(f"aramid: doctor: {unenforced}", file=sys.stderr)
+
     missing_block = [name for name in BLOCK_TIER if not statuses[name].present]
     if missing_block:
         print(f"aramid: doctor: BLOCK-tier tool(s) missing: {', '.join(missing_block)} "
               f"-- run `aramid doctor --fix`", file=sys.stderr)
         return 2
+
+    if unenforced:
+        return 2                        # tools fine, but nothing is gating
 
     print("aramid: doctor: all BLOCK-tier tools present.")
     return 0

@@ -270,3 +270,59 @@ def test_doctor_reports_foreign_autolearn_state_version():
     assert "DEGRADED" in line
     assert "foreign state version" in line
     assert "--rebuild" in line
+
+
+# --- "configured but NOT enforced": the fresh-clone hole --------------------
+# .git/hooks is NOT version-controlled, so cloning an onboarded repo yields
+# aramid.toml (committed) with no shims. The repo LOOKS onboarded and nothing
+# fires. doctor must name that state distinctly -- probe_interpreter's existing
+# "no shim installed yet" reads as benign and is not a substitute.
+
+def _onboarded(tmp_path, with_shim: bool) -> Path:
+    r = _repo(tmp_path)
+    (r / "aramid.toml").write_text("[tool]\n", encoding="utf-8")
+    if with_shim:
+        from aramid.hooks import hooks_dir
+        hdir = hooks_dir(r)
+        hdir.mkdir(parents=True, exist_ok=True)
+        (hdir / "pre-commit").write_bytes(b"#!/bin/sh\nexit 0\n")
+        (hdir / "pre-push").write_bytes(b"#!/bin/sh\nexit 0\n")
+    return r
+
+
+def test_doctor_flags_config_present_but_hooks_missing(tmp_path, monkeypatch, capsys):
+    monkeypatch.setattr(doctor, "probe_toolchain", lambda root: _all_present())
+    root = _onboarded(tmp_path, with_shim=False)
+
+    rc = doctor.cmd_doctor(root)
+    out = capsys.readouterr()
+    blob = out.out + out.err
+
+    assert rc == 2, "a configured-but-unenforced repo must not report healthy"
+    assert "NOT enforced" in blob
+    # Distinctness: must not be mistakable for the benign interpreter line.
+    assert "no shim installed yet" not in blob
+
+
+def test_doctor_stays_quiet_when_repo_was_never_onboarded(tmp_path, monkeypatch, capsys):
+    """No aramid.toml == deliberately not onboarded. Nagging here would make
+    the warning noise, and noise is how a real one gets ignored."""
+    monkeypatch.setattr(doctor, "probe_toolchain", lambda root: _all_present())
+    root = _repo(tmp_path)          # git repo, no aramid.toml
+
+    rc = doctor.cmd_doctor(root)
+    blob = capsys.readouterr()
+    assert rc == 0
+    assert "NOT enforced" not in (blob.out + blob.err)
+
+
+def test_doctor_clean_when_config_and_shims_both_present(tmp_path, monkeypatch, capsys):
+    """The counterfactual for the flag test: proves it keys on the SHIM's
+    absence, not merely on aramid.toml existing."""
+    monkeypatch.setattr(doctor, "probe_toolchain", lambda root: _all_present())
+    root = _onboarded(tmp_path, with_shim=True)
+
+    rc = doctor.cmd_doctor(root)
+    blob = capsys.readouterr()
+    assert rc == 0
+    assert "NOT enforced" not in (blob.out + blob.err)

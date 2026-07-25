@@ -127,6 +127,11 @@ def build_parser() -> argparse.ArgumentParser:
     p_schedule = sub.add_parser("schedule", help="register/remove/query the Windows Task Scheduler drain job")
     p_schedule.add_argument("action", choices=["install", "remove", "status"])
 
+    p_hooks = sub.add_parser("hooks",
+                             help="manage the machine-wide git hook template (seeds NEW clones/inits; "
+                                  "the shims no-op in repos without an aramid.toml)")
+    p_hooks.add_argument("action", choices=["install", "remove", "status"])
+
     p_rebaseline = sub.add_parser("rebaseline",
                                   help="re-snapshot current findings as the ratchet baseline (after a fingerprint-affecting upgrade)")
     p_rebaseline.add_argument("path", nargs="?", default=".")
@@ -234,6 +239,10 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.command == "schedule":
         return cmd_schedule(root, args.action)
+
+    if args.command == "hooks":
+        from aramid.commands.hooks_template import cmd_hooks
+        return cmd_hooks(args.action)
 
     if args.command == "rebaseline":
         return cmd_rebaseline(Path(args.path), yes=args.yes)
