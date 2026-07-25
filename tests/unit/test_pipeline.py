@@ -703,3 +703,29 @@ def test_range_mode_without_upstream_does_not_resolve_tdd(tmp_path, monkeypatch)
         assert led.open_findings()[fid]["status"] == "open"
     finally:
         led.close()
+
+
+def test_range_mode_without_upstream_does_not_resolve_mutation(tmp_path, monkeypatch):
+    """The mutation sibling of the guard-1 proof above. auto_resolve_mutation
+    was the LAST resolver still guarded by `mode == "range"` alone, one nesting
+    level outside `if rng:` -- so in this exact no-upstream repo it resolved on
+    the WHOLE tracked tree and appended a durable (un-undoable) FINDING_RESOLVED
+    for every open mutation finding on tracked source.
+
+    Only ONE mechanism is under test here: `_repo` has no tests/ directory, so
+    auto_resolve_mutation's `changed_test_stems` is empty and `test_added`
+    cannot fire. `source_touched` is the only path that can resolve a.py, and
+    only guard 1 stops it. Must FAIL if the call moves back out of `if rng:`."""
+    root = _repo(tmp_path)
+    assert gitutil.resolve_range(root) is None  # sanity: genuinely no upstream
+
+    cfg = _cfg(root, tmp_path, monkeypatch)
+    led = _ledger(tmp_path)
+    monkeypatch.setitem(pipeline.GATE_RUNNER_KEYS, Gate.PRE_PUSH, [])
+    fid = "m" * 64
+    try:
+        _seed_mut(led, fid=fid, file="a.py")   # TRACKED, and in the full-tree scope
+        pipeline.run_gate(root, Gate.PRE_PUSH, "range", cfg, led)
+        assert led.open_findings()[fid]["status"] == "open"
+    finally:
+        led.close()

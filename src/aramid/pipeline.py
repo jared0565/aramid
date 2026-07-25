@@ -326,23 +326,28 @@ def run_gate(root: Path, gate: Gate, mode: str, cfg: config_mod.Config, ledger: 
     # a disarmed (WARN) finding is ratchet-exempt and never auto-escalates.
     if gate is Gate.PRE_PUSH:
         review_mod.auto_resolve_llm(root, ledger, run_id, at)
-        # Resolution is meaningful only for a genuine push range: under
-        # mode "all"/"staged", scope_files is the whole tracked tree / the
-        # staged set, not "what the push changed" -- resolving on that would
-        # durably clear every open mutation finding on tracked source
-        # (persisted FINDING_RESOLVED). Surfacing below still runs in all
-        # modes so a full audit shows open findings.
+        # EVERY scope_files-driven resolver below needs BOTH guards, for two
+        # independent reasons -- each has its own regression test naming this
+        # nest by shape, so keep it nested rather than collapsing to one
+        # condition. Both reduce to "scope_files is not the push's delta":
+        #   mode: under "all"/"staged" it is the whole tracked tree / the
+        #         staged set.
+        #   rng:  under "range" with no upstream it is ALSO the whole tree.
+        # Resolving on either durably clears every open finding on tracked
+        # source -- FINDING_RESOLVED is persisted and cannot be un-appended.
+        # Surfacing below still runs in all modes so a full audit shows open
+        # findings. auto_resolve_llm above needs neither guard: it resolves on
+        # whether the evidence quote still exists at HEAD, deriving no range.
         if mode == "range":
-            mutation_gate.auto_resolve_mutation(ledger, run_id, at, scope_files)
-            # 1a-F2: the two synchronous producers resolve too. present_ids
-            # skips anything re-fired THIS run (these producers, unlike the
-            # drain's, fire in the run being resolved).
             if rng:
                 # mode == "range" is NOT enough: with no upstream and no
                 # origin/HEAD, _discover_files returns the whole tracked tree
                 # with rng == FULL_HISTORY_RNG (""), so scope_files is the
-                # repo, not the push's delta -- resolving on that durably
-                # clears every open tdd finding. Truthy rng == genuine range.
+                # repo, not the push's delta. Truthy rng == genuine range.
+                mutation_gate.auto_resolve_mutation(ledger, run_id, at, scope_files)
+                # 1a-F2: the two synchronous producers resolve too. present_ids
+                # skips anything re-fired THIS run (these producers, unlike the
+                # drain's, fire in the run being resolved).
                 present_ids = {f.id for f in findings}
                 if getattr(cfg, "tdd", {}).get("enabled", True):
                     tdd.auto_resolve_tdd(ledger, run_id, at, scope_files, present_ids)
