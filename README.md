@@ -257,8 +257,11 @@ Limitations:
 6. The base run inherits the repo's own pytest config: an `addopts` gate
    (coverage threshold, warnings-as-errors) can force any single-file base
    run non-zero — read as red. As a detector it still never raises a false
-   alarm, but as a resolver it is not harmless: it durably resolves any
-   existing open red-proof finding on the file and cannot self-correct,
+   alarm, but a *persistent* gate costs recall the way limitation 1 costs
+   it for one file: every base run reads red, so no genuine never-red
+   violation is ever flagged. And as a resolver it is not harmless: it
+   durably resolves any existing open red-proof finding on the file and
+   cannot self-correct,
    since a gated base run can never come back green to re-open it. This
    already happens during the bake, not only once armed.
 
