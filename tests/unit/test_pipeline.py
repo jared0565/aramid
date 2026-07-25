@@ -5,7 +5,7 @@ from types import SimpleNamespace
 
 from aramid import config, gitutil, pipeline
 from aramid.ledger import Ledger
-from aramid.models import EventType, Finding, Gate, Severity, Source, Verdict
+from aramid.models import Event, EventType, Finding, Gate, Severity, Source, Verdict
 from aramid.normalizer import RawFinding
 from aramid.runners.base import RunnerResult, ToolState
 
@@ -727,5 +727,58 @@ def test_range_mode_without_upstream_does_not_resolve_mutation(tmp_path, monkeyp
         _seed_mut(led, fid=fid, file="a.py")   # TRACKED, and in the full-tree scope
         pipeline.run_gate(root, Gate.PRE_PUSH, "range", cfg, led)
         assert led.open_findings()[fid]["status"] == "open"
+    finally:
+        led.close()
+
+
+def _crf(led, idx, target, killed_s1, survived_s1, killed_fps=(), survivor_fps=()):
+    # mirrors test_mutation_score_gate.py's _crf seeding pattern.
+    led.append(Event(EventType.CONSUMER_RUN_FINISHED, f"r{idx}", "t", payload={
+        "consumer": "mutation", "item_id": "q",
+        "mutation_scores": {"schema": 1, "targets": {target: {
+            "generated": killed_s1 + survived_s1, "killed_s1": killed_s1,
+            "survived_s1": survived_s1, "timeouts": 0, "errors": 0,
+            "fully_mutated": True, "killed_fps": list(killed_fps),
+            "survivor_fps": list(survivor_fps)}}}}))
+
+
+def test_range_mode_without_upstream_does_not_suppress_score_regression(
+        tmp_path, monkeypatch):
+    """The EPHEMERAL sibling of the two guards above, on the same root cause.
+    mutation_score_gate_findings takes changed_files under `mode == "range"`
+    alone, and uses it ONLY to suppress a transition regression whose
+    module-mapped test the push touched. With no upstream, scope_files is the
+    WHOLE tracked tree, so every mapped test looks "just changed" and the
+    suppression fires on a false premise -- the 2b gate goes silent on a real
+    regression.
+
+    Unlike its two siblings this writes NO ledger event, so the damage is one
+    quiet run rather than a durable false resolve -- which is why it is fixed
+    here separately rather than folded into the resolver guard.
+
+    tests/test_a.py must exist and be COMMITTED: it is what puts stem "test_a"
+    into the full-tree scope, and _module_tests("a") matching it is the exact
+    thing that wrongly suppresses. Must FAIL (finding absent) without the
+    `and rng` guard."""
+    root = _repo(tmp_path)
+    assert gitutil.resolve_range(root) is None  # sanity: genuinely no upstream
+
+    (root / "tests").mkdir()
+    (root / "tests" / "test_a.py").write_text(
+        "def test_a():\n    assert True\n", encoding="utf-8")
+    _git(root, "add", "-A")
+    _git(root, "commit", "-m", "add test_a")
+
+    cfg = _cfg(root, tmp_path, monkeypatch)
+    led = _ledger(tmp_path)
+    monkeypatch.setitem(pipeline.GATE_RUNNER_KEYS, Gate.PRE_PUSH, [])
+    try:
+        # baseline kills the fp; the current run has it as a confirmed survivor
+        _crf(led, 0, "a.py::f", 2, 0, killed_fps=["deadbeef", "other"])
+        _crf(led, 1, "a.py::f", 1, 2, killed_fps=["other"],
+             survivor_fps=["deadbeef"])
+        got = pipeline.run_gate(root, Gate.PRE_PUSH, "range", cfg, led)
+        assert any(f.tool == "mutation-score" and f.rule == "transition"
+                   for f in got.findings)
     finally:
         led.close()

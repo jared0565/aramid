@@ -357,14 +357,18 @@ def run_gate(root: Path, gate: Gate, mode: str, cfg: config_mod.Config, ledger: 
                     *review_mod.llm_gate_findings(cfg, ledger, gate),
                     *mutation_gate.mutation_gate_findings(cfg, ledger, gate),
                     # 2b: derived mutation-score regressions. changed_files
-                    # only under mode "range" (same rationale as the
-                    # auto_resolve guard above): under "all"/"staged",
-                    # scope_files is the whole tree / staged set, and
-                    # test-mapped suppression against that would suppress
-                    # everything. Ephemeral only -- no ledger write.
+                    # only for a GENUINE push delta, which needs both halves
+                    # of the resolver guard above: under "all"/"staged" --
+                    # and equally under "range" with no upstream --
+                    # scope_files is the whole tree / staged set, so every
+                    # module-mapped test looks "just changed" and the
+                    # test-mapped suppression silences every regression.
+                    # Ephemeral only (no ledger write), so unlike its two
+                    # siblings this costs one quiet run, not a durable
+                    # false resolve -- still wrong, just recoverable.
                     *mutation_score_gate.mutation_score_gate_findings(
                         cfg, ledger, gate,
-                        scope_files if mode == "range" else None)]
+                        scope_files if (mode == "range" and rng) else None)]
 
     # 8. exit code.
     degraded_tools = sorted({r.tool for r in flat_results if r.state in _BAD_STATES})
