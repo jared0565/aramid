@@ -264,6 +264,18 @@ Limitations:
    cannot self-correct,
    since a gated base run can never come back green to re-open it. This
    already happens during the bake, not only once armed.
+7. The base run's import path is forced to the base worktree
+   (`<wt>/src`, then `<wt>`, then the inherited `PYTHONPATH`). Without
+   this the base run imports whatever is *installed*, which under a pip
+   editable install is the live source the push is changing — so a
+   src-layout package resolved to head code, every genuinely red-first
+   test passed on "base", and the producer raised a false alarm for every
+   changed test file. That inverted the guarantee in limitations 1 and 2,
+   and it is fixed. Two residues remain: a PEP 660 **strict** editable
+   install hooks a `MetaPathFinder` rather than adding a `sys.path` entry,
+   and nothing on `PYTHONPATH` outranks that; and a package installed
+   non-editably still shadows the worktree unless its layout puts the
+   source under `<wt>/src` or `<wt>`.
 
 ### Phase 2b: the LLM reviewer
 

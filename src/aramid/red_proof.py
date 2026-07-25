@@ -38,7 +38,13 @@ already true during the disarmed/WARN-only bake, not only once armed.
 Unlike tdd's liberal-resolve (self-heals: ledger.py:76 re-detects once a
 finding's status is 'fixed'), this does NOT self-heal -- rc 0 is
 unreachable under such a gate, so the producer can never re-fire the
-fingerprint to reopen the finding."""
+fingerprint to reopen the finding.
+The base run's import path is forced to the base worktree by
+_base_import_env; without it the run imports the INSTALLED package, which
+under a pip editable install is the live source the push is changing --
+see that helper for why this inverted the producer rather than merely
+adding noise."""
+import os
 import shutil
 import sys
 import tempfile
@@ -55,6 +61,40 @@ from aramid.tdd import _split_range
 RULE = "test-not-red"
 _TOOL = "red-proof"
 _MESSAGE = "new test lines pass against the pre-change tree (never red)"
+
+
+def _base_import_env(wt: Path) -> dict[str, str]:
+    """Put the BASE worktree's own source ahead of everything else on the
+    child's import path.
+
+    Without this the base run imports whatever is already INSTALLED -- and
+    under a pip editable install (a .pth file naming the LIVE source dir)
+    that is precisely the code the push is changing, so the base run
+    exercises head source. A src-layout package is never reached by
+    pytest's cwd insertion either (the package sits at <root>/src/<pkg>,
+    not <root>/<pkg>), so the installed copy wins outright: a genuinely
+    red-first test PASSES on base and the producer emits a never-red
+    finding. That is a false alarm -- the one outcome spec s10 limitation 2
+    and the README both promise this producer never produces -- and it
+    fires for every changed test file, so under a normal editable-install
+    dev setup the check is not merely noisy, it is inverted.
+
+    PREPENDED, never assigned: run_subprocess merges this over os.environ,
+    so replacing PYTHONPATH outright would silently drop whatever the
+    developer's environment already puts there and break imports the base
+    run legitimately needs. Both <wt>/src and <wt> are added, covering
+    src-layout and flat-layout repos alike; a path that does not exist is
+    simply inert on sys.path.
+
+    Does NOT defeat a PEP 660 *strict* editable install, which installs a
+    MetaPathFinder rather than a sys.path entry -- no PYTHONPATH entry
+    outranks a meta-path hook. That case remains a live limitation.
+    """
+    parts = [str(wt / "src"), str(wt)]
+    existing = os.environ.get("PYTHONPATH", "")
+    if existing:
+        parts.append(existing)
+    return {"PYTHONPATH": os.pathsep.join(parts)}
 
 
 def scan_scoped(ctx, cfg) -> tuple[list[RawFinding], set[str]]:
@@ -111,7 +151,7 @@ def scan_scoped(ctx, cfg) -> tuple[list[RawFinding], set[str]]:
                 dest.write_text(content, encoding="utf-8")
                 res = run_subprocess(
                     [sys.executable, "-m", "pytest", "-q", rel],
-                    wt, test_timeout)
+                    wt, test_timeout, env=_base_import_env(wt))
                 if res.state is ToolState.OK and res.returncode == 0:
                     out.append(RawFinding(
                         tool=_TOOL, rule=RULE, severity_raw="medium",

@@ -2,6 +2,7 @@
 producer. Monkeypatch style mirrors tests/unit/test_tdd.py -- the plumbing
 (diff_new_lines/read_blob/_run/run_subprocess) is faked; real-git coverage
 lives in tests/integration/test_red_proof_gate.py (Task 3)."""
+import os
 import sys
 from pathlib import Path
 from types import SimpleNamespace
@@ -37,8 +38,8 @@ def _plumb(monkeypatch, new_lines, pytest_rcs, worktree_rc=0,
     monkeypatch.setattr(gitutil, "_run", lambda root, *a: _CP(worktree_rc))
     rcs = list(pytest_rcs)
 
-    def fake_run(argv, cwd, timeout_s):
-        runs.append((argv, cwd))
+    def fake_run(argv, cwd, timeout_s, env=None):
+        runs.append((argv, cwd, env))
         rc = rcs.pop(0)
         if rc == "timeout":
             return RunnerResult("pytest", ToolState.TIMEOUT)
@@ -65,9 +66,14 @@ def test_never_red_file_yields_finding(monkeypatch, tmp_path):
     # tempfile.mkdtemp(prefix="aramid-red-")/"wt" (red_proof.py), not under
     # tmp_path, so no literal path is available to assert against.
     assert len(runs) == 1
-    argv, cwd = runs[0]
+    argv, cwd, env = runs[0]
     assert argv == [sys.executable, "-m", "pytest", "-q", "tests/test_foo.py"]
     assert Path(cwd).name == "wt" and Path(cwd).parent.name.startswith("aramid-red-")
+    # The base run must import the BASE worktree's source, not whatever is
+    # installed -- see _base_import_env. Without this the whole producer
+    # inverts under a pip editable install.
+    assert env["PYTHONPATH"].split(os.pathsep)[:2] == [
+        str(Path(cwd) / "src"), str(cwd)]
 
 
 def test_red_on_base_yields_nothing(monkeypatch, tmp_path):

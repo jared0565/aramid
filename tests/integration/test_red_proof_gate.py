@@ -309,3 +309,97 @@ def test_auto_resolve_skipped_outside_range_mode(tmp_path, monkeypatch):
         assert ledger.open_findings()[fid]["status"] == "open"
     finally:
         ledger.close()
+
+
+# ------- src-layout + an installed shadow: the base run must import BASE ----
+
+def _src_layout_repo(tmp_path) -> Path:
+    """A src-layout repo: the package lives at src/mypkg, so the repo root
+    (which is pytest's cwd in the worktree) does NOT expose the package
+    name. This is the layout aramid itself uses, and the one where an
+    installed copy earlier on sys.path wins."""
+    bare = tmp_path / "origin2.git"
+    subprocess.run(["git", "init", "--bare", str(bare)], check=True,
+                   capture_output=True, text=True)
+    r = tmp_path / "r2"
+    r.mkdir()
+    _git(r, "init", "-b", "main")
+    _git(r, "config", "user.email", "t@t")
+    _git(r, "config", "user.name", "t")
+    (r / "src" / "mypkg").mkdir(parents=True)
+    (r / "tests").mkdir()
+    (r / "src" / "mypkg" / "__init__.py").write_text(
+        'VALUE = "base"\n', encoding="utf-8")
+    _git(r, "add", "-A")
+    _git(r, "commit", "-m", "initial")
+    _git(r, "remote", "add", "origin", str(bare))
+    _git(r, "push", "-u", "origin", "main")
+    return r
+
+
+def test_base_run_imports_base_source_not_an_installed_shadow(tmp_path, monkeypatch):
+    """A pip editable install puts the LIVE source dir on sys.path via a
+    .pth file. red_proof materializes the BASE tree into a worktree and runs
+    pytest there -- but with a src-layout package the worktree's `src` is on
+    no path at all, so `import mypkg` resolves to the installed (i.e. NEW)
+    code. The genuinely red-first test then PASSES on "base" and red_proof
+    reports it as never-red: a false alarm, which spec s10 limitation 2 and
+    the README both promise this producer never produces.
+
+    Every other fixture in this file dodges the bug by having its test body
+    do `sys.path.insert(0, os.getcwd())`. Real test files do not -- they
+    just import the package -- so this one imports normally. That fixture
+    habit is precisely why the suite stayed green over this defect.
+
+    The shadow on PYTHONPATH stands in for the editable install's .pth
+    entry: both are sys.path entries that outrank a worktree nobody put on
+    the path.
+    """
+    r = _src_layout_repo(tmp_path)
+
+    shadow = tmp_path / "installed"
+    (shadow / "mypkg").mkdir(parents=True)
+    (shadow / "mypkg" / "__init__.py").write_text(
+        'VALUE = "head"\n', encoding="utf-8")
+    monkeypatch.setenv("PYTHONPATH", str(shadow))
+
+    (r / "src" / "mypkg" / "__init__.py").write_text(
+        'VALUE = "head"\n', encoding="utf-8")
+    (r / "tests" / "test_value.py").write_text(
+        "from mypkg import VALUE\n\n\ndef test_value():\n"
+        '    assert VALUE == "head"\n', encoding="utf-8")
+    _git(r, "add", "-A")
+    _git(r, "commit", "-m", "bump VALUE + its test")
+
+    # Red-first for real: against BASE, VALUE == "base", so the test fails.
+    # Any finding here is the false alarm.
+    assert _scan(r) == []
+    _no_leaked_worktrees(r)
+
+
+def test_worktree_src_outranks_the_shadow_but_does_not_discard_pythonpath(tmp_path, monkeypatch):
+    """The fix prepends the worktree to PYTHONPATH -- it must PREPEND, not
+    replace. run_subprocess merges its env over os.environ, so assigning
+    PYTHONPATH outright would silently drop whatever the developer's
+    environment already put there and break imports the base run needs."""
+    r = _src_layout_repo(tmp_path)
+
+    keep = tmp_path / "keepme"
+    (keep / "sidecar").mkdir(parents=True)
+    (keep / "sidecar" / "__init__.py").write_text("OK = 1\n", encoding="utf-8")
+    monkeypatch.setenv("PYTHONPATH", str(keep))
+
+    (r / "src" / "mypkg" / "__init__.py").write_text(
+        'VALUE = "head"\n', encoding="utf-8")
+    (r / "tests" / "test_value.py").write_text(
+        "import sidecar\nfrom mypkg import VALUE\n\n\ndef test_value():\n"
+        '    assert sidecar.OK == 1 and VALUE == "base"\n', encoding="utf-8")
+    _git(r, "add", "-A")
+    _git(r, "commit", "-m", "bump VALUE + a test needing PYTHONPATH")
+
+    # Passes on base only if BOTH hold: the inherited PYTHONPATH survived
+    # (sidecar imports) AND the worktree won (VALUE == "base"). So a finding
+    # here proves the base run genuinely saw base source with env intact.
+    findings = _scan(r)
+    assert [f.file for f in findings] == ["tests/test_value.py"]
+    _no_leaked_worktrees(r)
