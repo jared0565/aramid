@@ -1,5 +1,4 @@
 import os
-import shutil
 import subprocess
 import sys
 import time
@@ -7,6 +6,8 @@ from dataclasses import dataclass, field
 from enum import StrEnum
 from pathlib import Path
 from typing import Protocol
+
+from aramid import toolpath
 
 class ToolState(StrEnum):
     OK = "ok"
@@ -87,8 +88,17 @@ def _kill_tree(proc: subprocess.Popen):
 
 def run_subprocess(argv, cwd: Path, timeout_s: float, env=None) -> RunnerResult:
     tool = Path(argv[0]).name
-    if shutil.which(argv[0]) is None and not Path(argv[0]).exists():
+    # Resolve through toolpath, NOT bare `shutil.which`: aramid downloads some
+    # binaries itself (gitleaks -> ~/.aramid/tools) and pip can place console
+    # scripts outside PATH. Using `which` alone here is what let `doctor --fix`
+    # report "OK gitleaks" while the gate skipped it as MISSING -- doctor and
+    # the runner must resolve identically or doctor is a false green light.
+    resolved = toolpath.resolve(argv[0])
+    if resolved is None:
         return RunnerResult(tool, ToolState.MISSING)
+    # Launch by absolute path so the child does not re-resolve against a PATH
+    # that may not contain the tool at all.
+    argv = [str(resolved), *argv[1:]]
     kwargs = {"creationflags": subprocess.CREATE_NEW_PROCESS_GROUP} if _WIN \
              else {"start_new_session": True}
     start = time.monotonic()

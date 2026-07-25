@@ -32,11 +32,12 @@ import platform
 import shutil
 import subprocess
 import sys
-import sysconfig
 import urllib.request
 import zipfile
 from dataclasses import dataclass
 from pathlib import Path
+
+from aramid import toolpath
 
 # BLOCK-tier tools per spec §3/§8 -- doctor's own pass/fail gate. `init`
 # (Task 6.2) refuses to arm hooks until both are present; this module only
@@ -84,49 +85,31 @@ class ToolStatus:
 
 
 def _tools_dir() -> Path:
-    """Seam for tests -- monkeypatch this rather than touching the real
-    ~/.aramid/tools on the machine running the test suite."""
-    return Path.home() / ".aramid" / "tools"
+    """Download DESTINATION for `_fix_gitleaks`. Delegates to `toolpath` so
+    there is one definition; kept as a named function because the fix tests
+    monkeypatch it to avoid writing to the real ~/.aramid/tools."""
+    return toolpath.tools_dir()
 
 
 def _exe_name(name: str) -> str:
-    return f"{name}.exe" if sys.platform == "win32" else name
+    return toolpath.exe_name(name)
 
 
 def _scripts_dirs() -> list[Path]:
-    """Every plausible location pip may have installed this interpreter's
-    console scripts to: the default sysconfig scheme, plus the per-user
-    scheme (an editable/`--user` install -- aramid's own on this host --
-    lands console scripts under the user scheme, which the default scheme
-    alone does not report)."""
-    dirs = [Path(sysconfig.get_path("scripts"))]
-    user_scheme = "nt_user" if os.name == "nt" else "posix_user"
-    try:
-        user_dir = Path(sysconfig.get_path("scripts", user_scheme))
-        if user_dir not in dirs:
-            dirs.append(user_dir)
-    except (KeyError, ValueError):
-        pass
-    return dirs
+    return toolpath.scripts_dirs()
 
 
+# Both locators now delegate to the SAME resolver the runners use. They used
+# to duplicate its search order, and the duplicate drifted: doctor looked in
+# ~/.aramid/tools while `run_subprocess` used bare `shutil.which`, so
+# `doctor --fix` could install gitleaks, report "OK", and leave the gate
+# skipping it as MISSING. One resolver is what makes doctor's verdict true.
 def _locate_owned_tool(name: str) -> Path | None:
-    exe = shutil.which(name)
-    if exe:
-        return Path(exe)
-    for scripts_dir in _scripts_dirs():
-        candidate = scripts_dir / _exe_name(name)
-        if candidate.exists():
-            return candidate
-    return None
+    return toolpath.resolve(name)
 
 
 def _locate_gitleaks() -> Path | None:
-    exe = shutil.which("gitleaks")
-    if exe:
-        return Path(exe)
-    candidate = _tools_dir() / _exe_name("gitleaks")
-    return candidate if candidate.exists() else None
+    return toolpath.resolve("gitleaks")
 
 
 def probe_tool(name: str) -> ToolStatus:
