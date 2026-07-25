@@ -18,11 +18,17 @@ jobs:
   ci:
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v4
+      # v7/v7 target Node 24. v4/v5 targeted Node 20, which GitHub deprecated:
+      # runs still passed but every one carried a "being forced to run on
+      # Node.js 24" annotation, i.e. we were already on 24 without having said
+      # so. Neither bump costs us anything -- checkout v7's fork-PR block only
+      # applies to pull_request_target/workflow_run (we use neither), and
+      # setup-python v7 removes the pip-install input (we never set it).
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0 # full history: gitleaks/fingerprint scanning wants real commit history
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.12"
 
