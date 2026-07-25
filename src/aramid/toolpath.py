@@ -31,10 +31,24 @@ def exe_name(name: str) -> str:
     return f"{name}.exe" if sys.platform == "win32" else name
 
 
+TOOLS_DIR_ENV = "ARAMID_TOOLS_DIR"
+
+
 def tools_dir() -> Path:
-    """aramid's own managed binaries. Also the single monkeypatch seam --
-    patch THIS and both doctor and the runners move together, which is the
-    property the old two-seam arrangement lacked."""
+    """aramid's own managed binaries. The single seam for redirecting them,
+    so doctor and the runners always move together -- the property the old
+    two-seam arrangement lacked.
+
+    Honors `$ARAMID_TOOLS_DIR`. That is an ENV VAR rather than only a
+    monkeypatch point because the gate runs in spawned processes: a git hook
+    shells out to `aramid check`, so a test (or an operator) that needs to
+    relocate this cannot reach the child by patching a function in the parent.
+    An env var is inherited down the whole chain -- git hook -> sh shim ->
+    interpreter -> `aramid check` -- which is exactly where the tool actually
+    gets resolved."""
+    override = os.environ.get(TOOLS_DIR_ENV)
+    if override:
+        return Path(override)
     return Path.home() / ".aramid" / "tools"
 
 

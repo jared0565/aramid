@@ -56,5 +56,14 @@ def _isolated_tools_dir(tmp_path, monkeypatch):
     CI does not have -- and a test simulating "BLOCK-tier tool missing" would
     quietly stop simulating anything. Same class as the template above: real
     machine state leaking into test outcomes. Tests that want the managed dir
-    patch this themselves; a later monkeypatch wins."""
-    monkeypatch.setattr(toolpath, "tools_dir", lambda: tmp_path / "aramid-tools")
+    patch this themselves; a later monkeypatch wins.
+
+    Set via ENV VAR rather than by patching the function, because several
+    tests drive a real `git commit` through an installed hook and the gate
+    then runs in a SPAWNED process (git -> sh shim -> interpreter ->
+    `aramid check`). A monkeypatch in the pytest process cannot reach that
+    child: it would resolve the real ~/.aramid/tools and the test's
+    PATH-scrubbing would stop simulating a missing tool. That is exactly how
+    test_windows_hooks' fail-open assertion broke. An env var is inherited
+    all the way down the chain."""
+    monkeypatch.setenv(toolpath.TOOLS_DIR_ENV, str(tmp_path / "aramid-tools"))
