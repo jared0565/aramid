@@ -150,7 +150,7 @@ The classifier (`policy.classify`) is the single source of truth, and the split 
   - OWASP block-list matches (`owasp-top-ten.*`, `*sqli*`, `*deserialization*`, `*command-injection*`) follow the top-level `semgrep_block_armed` (default **false**, i.e. baking).
   - Anything else from semgrep → `WARN`.
 - **tests-failed** → always `BLOCK`.
-- **tests-tool-missing** → always `BLOCK`. Fires only inside a dual-stack (pytest AND npm detected) run, when one suite's own tool binary can't be resolved at all — a single-suite repo with a missing tool still degrades the BLOCK tier instead (unchanged behavior, see above).
+- **tests-tool-missing** → always `BLOCK`. Fires only inside a dual-stack (pytest AND npm detected) run, when one suite's own tool binary can't be resolved at all. A single-suite repo (only pytest, or only npm, detected) whose one tool is missing does **not** get this finding — it still just degrades the BLOCK tier with no finding to explain it, exit `2` (or a pre-push block via the ratchet's degraded-tier rule), the same unchanged behavior as before this rule existed.
 - **dependency tools** (`pip-audit`, `npm`, `pnpm`, `yarn`) → `BLOCK` only if severity is at or above `[deps].block_severity` (default `"critical"`); otherwise `WARN`.
 - **llm-review** → the classifier itself always returns `WARN` structurally; a confirmed-critical LLM finding can only become `BLOCK` later, at the pre-push gate, once `[llm].llm_block_armed` is set (see [section 9](#9-the-bake-then-arm-model)).
 - Everything else → `WARN`.
