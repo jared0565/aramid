@@ -70,9 +70,15 @@ bare TIMEOUT (review B2 follow-up: two clocks, two origins).
 That specific walk no longer happens inside this module's worker thread
 today: `_detected()` below (Task 4, review M6+B7) reads
 `ctx.detected_tests`, precomputed by `aramid.pipeline.run_gate` in the
-MAIN thread -- before `ctx.gate_deadline` is even read there, let alone
-before `_select_runners`/`_run_selected` dispatch this module's worker at
-all (see `_detected()`'s own docstring below). A RunContext built outside
+MAIN thread -- before `ctx.gate_deadline` is ever CONSUMED here in
+`runners/tests.py` (this module's own first read of it is inside
+`_remaining()`, called from the worker thread below), let alone before
+`_select_runners`/`_run_selected` dispatch this module's worker at all
+(see `_detected()`'s own docstring below). NOT "before `gate_deadline` is
+captured" -- that capture (`aramid.pipeline.run_gate`, `gate_deadline =
+time.monotonic() + budget_s`) happens first of all, upstream of this
+entire paragraph; see `pipeline.py`'s own comment there for the single-
+origin argument in full. A RunContext built outside
 run_gate, with no cache populated, still falls back to a fresh in-worker
 `detect_tests(ctx.root)` call right here, unchanged from before caching
 existed -- so the ORIGINAL hazard this paragraph describes is still live

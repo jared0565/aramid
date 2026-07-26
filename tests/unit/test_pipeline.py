@@ -259,6 +259,58 @@ def test_dual_stack_missing_sub_blocks_and_accept_degraded_bypasses(tmp_path, mo
     ledger2.close()
 
 
+def test_gitleaks_finding_named_tests_tool_missing_still_blocks_with_accept_degraded(
+        tmp_path, monkeypatch):
+    """Closer 1 (re-review round 2): the tests-tool-missing exemption in
+    run_gate's exit-code gate MUST be scoped by TOOL, not rule alone. A
+    repo's own `.gitleaks.toml` can name a custom rule anything, including
+    literally "tests-tool-missing" -- `policy.classify`'s `tool ==
+    "gitleaks"` branch is the very first branch in that function and is
+    unconditional on rule, so a real secret reported under that rule name
+    classifies BLOCK regardless. If the exemption matched on rule alone, that
+    genuine secret finding would be silently excluded from
+    `gating_block_findings` and bypassed by `--accept-degraded` anyway --
+    exit 2 where a real secret must exit 1.
+
+    Constructed via a fake gitleaks runner (no real .gitleaks.toml needed)
+    so this is a controlled, deterministic proof, not a real-gitleaks
+    integration test. A genuinely MISSING "tests" tool rides alongside it so
+    degraded_block_tier is True and gate is PRE_PUSH + accept_degraded is
+    supplied -- i.e. the accept_degraded branch is actually reachable at
+    all -- proving it's specifically the gitleaks finding's tool that keeps
+    this blocking, not merely the absence of any degraded tool."""
+    root = _repo(tmp_path)
+    (root / "tests").mkdir()  # keeps "tests" applicable (real detect_tests signal).
+    (root / "tests" / "test_x.py").write_text(
+        "def test_x():\n    assert True\n", encoding="utf-8")
+    cfg = _cfg(root, tmp_path, monkeypatch)
+    ledger = _ledger(tmp_path)
+
+    raw = RawFinding(tool="gitleaks", rule="tests-tool-missing", severity_raw="high",
+                      file="secret.env", line=1,
+                      message="a real secret, adversarially named to collide with the rule")
+    monkeypatch.setitem(pipeline.RUNNERS, "gitleaks",
+                         _fake(RunnerResult("gitleaks", ToolState.OK), raws=[raw]))
+    monkeypatch.setitem(pipeline.RUNNERS, "tests",
+                         _fake(RunnerResult("tests", ToolState.MISSING)))
+    monkeypatch.setitem(pipeline.GATE_RUNNER_KEYS, Gate.PRE_PUSH, ["gitleaks", "tests"])
+
+    result = pipeline.run_gate(root, Gate.PRE_PUSH, "range", cfg, ledger,
+                                accept_degraded="ci runner has no test binary",
+                                run_id="run-closer1")
+
+    assert result.exit_code == 1
+    # Isolates the proof from any other PRE_PUSH producer -- see the same
+    # isolation comment on test_dual_stack_missing_sub_blocks_and_accept_
+    # degraded_bypasses above for why this matters.
+    assert [f.verdict for f in result.findings].count(Verdict.BLOCK) == 1
+    assert any(f.tool == "gitleaks" and f.rule == "tests-tool-missing"
+               and f.verdict is Verdict.BLOCK for f in result.findings)
+    bypass_events = [e for e in ledger.events() if e.type is EventType.INFRASTRUCTURE_BYPASS]
+    assert len(bypass_events) == 0
+    ledger.close()
+
+
 # --------------------------------------- (c2) applicability -- no test setup -
 
 def test_no_test_setup_at_prepush_tests_not_selected_clean_exit(tmp_path, monkeypatch):

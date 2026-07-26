@@ -592,26 +592,40 @@ def run_gate(root: Path, gate: Gate, mode: str, cfg: config_mod.Config, ledger: 
     )
     # [MUST FIX 2, whole-branch review] `gating_block_findings` -- the BLOCK
     # findings that must hard-gate BEFORE accept_degraded is ever consulted
-    # -- deliberately excludes `tests-tool-missing` (runners/tests.py's
-    # dual-suite aggregate: a detected sub-suite whose own tool binary could
-    # not be resolved at all). That rule exists to EXPLAIN a degradation
-    # already carried by `degraded_block_tier` above; it is not an
-    # independent test failure, so it must not defeat the documented
-    # `--accept-degraded` escape hatch the SAME way a top-level single-suite
-    # MISSING result already doesn't (that path never reaches this variable
-    # at all: parse() returns [] for it, so there is no BLOCK finding to
-    # trip over -- see runners/tests.py's TOOL_MISSING_RULE docstring).
-    # Matched by RULE alone, not `tool == "tests"` too: policy.classify's
-    # own `tests-tool-missing` branch (policy.py) is likewise rule-only, so
-    # matching on tool here as well would only create a second place that
-    # could silently drift out of sync with it. Scoped to this ONE rule,
+    # -- deliberately excludes `tool == "tests"` findings carrying the
+    # `tests-tool-missing` rule (runners/tests.py's dual-suite aggregate: a
+    # detected sub-suite whose own tool binary could not be resolved at
+    # all). That rule exists to EXPLAIN a degradation already carried by
+    # `degraded_block_tier` above; it is not an independent test failure, so
+    # it must not defeat the documented `--accept-degraded` escape hatch the
+    # SAME way a top-level single-suite MISSING result already doesn't
+    # (that path never reaches this variable at all: parse() returns [] for
+    # it, so there is no BLOCK finding to trip over -- see
+    # runners/tests.py's TOOL_MISSING_RULE docstring).
+    #
+    # [Closer 1, re-review round 2] MUST match BOTH tool AND rule, not rule
+    # alone -- a repo's own `.gitleaks.toml` can name a custom rule anything,
+    # including literally "tests-tool-missing". `policy.classify` dispatches
+    # on TOOL FIRST (its `if tool == "gitleaks": return ... Verdict.BLOCK`
+    # is the very first branch, unconditional on rule; classify never even
+    # reaches the rule-based `tests-tool-missing` branch for a gitleaks
+    # finding) -- so classify is already effectively tool-scoped for
+    # gitleaks/tdd/mutation/mutation-score/red-proof/semgrep via that early
+    # per-tool dispatch, while this `any()` was rule-only. That asymmetry is
+    # exactly what the `f.tool == "tests"` conjunct below closes: without
+    # it, a `RawFinding(tool="gitleaks", rule="tests-tool-missing")` -- a
+    # real secret, reported by a repo's own custom-named gitleaks rule --
+    # would classify BLOCK (via the gitleaks branch, correctly) and then be
+    # silently excluded from gating and bypassed by `--accept-degraded`
+    # anyway, exit 2 instead of 1. Scoped to this ONE tool+rule pair,
     # deliberately -- every OTHER BLOCK-tier finding (gitleaks secret, armed
     # semgrep, a genuine tests-failed, a critical CVE, ...) must still gate
     # HERE, before accept_degraded is ever reached; broadening this
     # exclusion to Verdict.BLOCK in general would make every block
     # bypassable, which is not the fix.
     gating_block_findings = any(
-        f.verdict is Verdict.BLOCK and f.rule != tests.TOOL_MISSING_RULE
+        f.verdict is Verdict.BLOCK
+        and not (f.tool == "tests" and f.rule == tests.TOOL_MISSING_RULE)
         for f in findings
     )
 
