@@ -1,8 +1,10 @@
 """tests adapter -- runs the target repo's own test suite.
 
 `pytest -q` for Python, `npm test` for JS (dispatched via
-detectors.detect_tests(), which already encodes "tests/ or test_*.py
-present" / "package.json defines a scripts.test entry"). A non-zero exit is
+detectors.detect_tests(), which already encodes "a real `conftest.py`,
+`test_*.py`, or `*_test.py` file present -- a bare `tests/` directory does
+not count on its own" / "package.json defines a scripts.test entry"). A
+non-zero exit is
 BLOCK-tier (design doc §3: "Tests | ... | BLOCK on fail"); this collapses
 into a single RawFinding(rule="tests-failed") rather than attempting to
 parse individual failures out of pytest/jest/mocha/vitest output, whose

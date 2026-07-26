@@ -131,6 +131,12 @@ A string (`command = "pytest -q tests/unit"`) works too and is split POSIX-style
 
 `enabled = false` removes the gate entirely (it then never counts as degraded either). aramid prints a notice on every run where that suppresses a real suite: a silently disabled block-tier check is worse than no check at all. Note that subsetting the push gate narrows what it covers — keep the full suite running in CI.
 
+#### When aramid doesn't recognize your suite
+
+Detection is literal, not semantic: it looks for a real `test_*.py`, `*_test.py`, or `conftest.py` file (or a `package.json` `scripts.test` entry), nothing more. A custom pytest `python_files` pattern, unittest-style `testfoo.py` naming, or a doctest-only suite are all invisible to it. If that's this repo's suite and nothing else tells the gate what to run, the tests runner is simply never *selected* — not degraded, not a visible failure, just absent — so the gate can exit clean at pre-push without ever having run your real tests. That is exactly the "reports nothing for a reason indistinguishable from clean" failure class this whole gate exists to prevent.
+
+aramid does print a stderr notice for exactly this case — a plausible `tests/`, `test/`, `pytest.ini`, `tox.ini`, or `[tool.pytest.ini_options]` setup found, but nothing recognized inside it. If you see it, set `[tests].command` to point aramid at your suite explicitly (same escape hatch as above); don't rely on renaming files to match the detector instead.
+
 #### Dual-stack repos: pytest AND npm
 
 If aramid detects both a real Python test file (`test_*.py`, `*_test.py`, or `conftest.py`) and a `package.json` `scripts.test` entry, it runs **both** suites at pre-push rather than picking one — a gate that silently ran only half a dual-stack repo's tests would be exactly the kind of gap this tool exists to close. The combined result blocks unless **both** suites pass; a failing suite reports the ordinary `tests-failed` finding either way, not some separate dual-stack-specific rule.
@@ -150,7 +156,7 @@ The classifier (`policy.classify`) is the single source of truth, and the split 
   - OWASP block-list matches (`owasp-top-ten.*`, `*sqli*`, `*deserialization*`, `*command-injection*`) follow the top-level `semgrep_block_armed` (default **false**, i.e. baking).
   - Anything else from semgrep → `WARN`.
 - **tests-failed** → always `BLOCK`.
-- **tests-tool-missing** → always `BLOCK`. Fires only inside a dual-stack (pytest AND npm detected) run, when one suite's own tool binary can't be resolved at all. A single-suite repo (only pytest, or only npm, detected) whose one tool is missing does **not** get this finding — it still just degrades the BLOCK tier with no finding to explain it, exit `2` (or a pre-push block via the ratchet's degraded-tier rule), the same unchanged behavior as before this rule existed.
+- **tests-tool-missing** → always `BLOCK`. Fires only inside a dual-stack (pytest AND npm detected) run, when one suite's own tool binary can't be resolved at all. A single-suite repo (only pytest, or only npm, detected) whose one tool is missing does **not** get this finding — it still just degrades the BLOCK tier with no finding to explain it: exit `2` normally, or exit `1` at pre-push specifically via `policy.escalate_degraded` (a pure tool-state check — unrelated to the new-findings ratchet), the same unchanged behavior as before this rule existed.
 - **dependency tools** (`pip-audit`, `npm`, `pnpm`, `yarn`) → `BLOCK` only if severity is at or above `[deps].block_severity` (default `"critical"`); otherwise `WARN`.
 - **llm-review** → the classifier itself always returns `WARN` structurally; a confirmed-critical LLM finding can only become `BLOCK` later, at the pre-push gate, once `[llm].llm_block_armed` is set (see [section 9](#9-the-bake-then-arm-model)).
 - Everything else → `WARN`.
