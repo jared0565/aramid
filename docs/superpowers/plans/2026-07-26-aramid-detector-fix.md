@@ -252,16 +252,37 @@ confirm the remaining sites are incidental", not "rewrite 26 fixtures".
   `conftest.py` is one of Task 1's three positive signals. **Reproduced in
   isolation: remaining files are `aramid.toml`, `calc.py`, `conftest.py`.**
 - So `consumers/mutation.py:110` no longer takes the structural-absence skip.
-  It proceeds, adds a worktree, and runs `_full_argv()` = `python -m pytest -q`
-  against a tree with no tests. **Measured: returncode 5, `ToolState.OK`.**
-- `mutation.py:144` is `if base_res.state is not ToolState.OK or
-  base_res.returncode != 0:` → **degraded**, note `baseline failing @ <head>`.
+  It proceeds and adds a worktree.
 
-**That note is a lie** — the baseline is not failing, there are no tests to run.
-The give-up guard at `mutation.py:118` bounds the damage at 3 drains per head,
-so this is not the "pins the queue forever" catastrophe the test's comment
-describes, but it does buy 3 rounds of worktree churn plus a wrong diagnosis
-where an instant OK-skip belongs.
+> **CORRECTION — the two paragraphs that stood here were WRONG, and the error is
+> mine (controller), caught by the Task 2 implementer's own first-hand
+> measurement.** I claimed the consumer then runs pytest "against a tree with no
+> tests → rc 5 → `mutation.py:144` degrades with `baseline failing @ <head>`".
+> **It does not.** `consume()` checks out the worktree at **`item.head`**, and
+> this test passes a **stale `head`** — captured inside `_repo()` *before* the
+> `rmtree` + "drop tests" commit. `git ls-tree` on that sha still contains
+> `tests/test_calc.py`, so the baseline run there exits **0, "1 passed"**, and
+> the observed failure is `res.findings` being non-empty (a real
+> `cmp-flip` "mutant survived"), not a degrade.
+>
+> **How I got it wrong:** I measured both halves correctly in isolation —
+> `detect_tests` on the working tree, and pytest's rc on a conftest-only
+> directory — then composed them without checking the composition against the
+> real control flow. The worktree is pinned to a *commit*, not to the working
+> tree, and I never traced that step. Having both premises and failing to
+> compose them is the same defect that produced this plan's earlier Criticals;
+> a measured half is not a measured whole. Note also that the wrong mechanism
+> still led to the right fix location — that is luck, not method.
+>
+> **The rc-5 → degrade conflation is nonetheless real** and reachable at a head
+> that genuinely has no tests (verified by checking out a second worktree at the
+> post-drop sha: rc 5, "no tests ran"). The fix below stands on its own merits.
+>
+> **The test carried a second, pre-existing bug:** its stale `head` meant it
+> never constructed the test-less repo it claims to. That was invisible before
+> Task 1 only because the old `detect_tests` returned `set()` and `consume()`
+> returned at line 110 before any worktree existed. Task 1 did not cause it; it
+> exposed it. Recapturing `head` after the drop-tests commit is part of the fix.
 
 **Fix the source, not the fixture.** `rc == 5` is *permanent structural
 absence* — the very condition lines 110–117 exist to OK-skip — while "baseline
