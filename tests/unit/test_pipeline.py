@@ -702,6 +702,93 @@ def test_hung_runner_does_not_block_past_gate_budget(tmp_path, monkeypatch):
     assert elapsed < 1.0  # returned near the 0.2s budget, not after the 2s sleep
     assert result.degraded == ["hangy"]
     assert result.exit_code == 2  # WARN-tier degrade only (not a BLOCK_TIER_KEYS member)
+
+
+# ------------------------- (i2) tests dual-suite: single deadline origin ---
+
+def test_dual_suite_deadline_shares_one_origin_with_the_real_executor_wait(
+        tmp_path, monkeypatch):
+    """Task 3 B2 follow-up regression guard. Exercises the REAL
+    aramid.pipeline._run_selected / ThreadPoolExecutor.wait() path through
+    run_gate -- unlike runners/tests.py's own unit tests, which time
+    _run_dual in isolation and never go through a real executor at all,
+    this is the specific blind spot that let the two-clock-origins defect
+    through review.
+
+    Mechanism under test: runners/tests.py's run() calls detect_tests() --
+    a filesystem walk -- BEFORE ever reaching the dual-suite budget logic,
+    and that walk happens INSIDE the worker thread _run_selected dispatches,
+    i.e. AFTER its wait(timeout=budget_s) has already started counting in
+    the main thread. A `started = time.monotonic()` captured after that
+    walk (the pre-fix code) silently drops however long the walk took from
+    the module's own budget accounting, so the two suites can be allotted
+    time as if the walk were free -- letting the worker's real finish land
+    AFTER wait()'s cutoff. When that happens, _run_selected treats the
+    "tests" future as not_done and replaces the WHOLE aggregate with a bare
+    RunnerResult("tests", TIMEOUT) carrying no sub_results at all -- a
+    completed suite's real, already-produced finding is discarded and the
+    push blocks naming "tests timeout" instead of the real cause.
+
+    Both detect_tests() calls (pipeline.py's own, in _select_runners /
+    _is_applicable, and runners/tests.py's own, inside run()) are faked
+    with a real sleep to simulate that walk taking measurable time --
+    exactly the scenario the coordinator's bug report names. run_subprocess
+    is faked to HONESTLY enforce the timeout_s it's given (sleeps at most
+    that long, and only reports a real result if actually given enough of
+    it), mirroring what a real subprocess does -- a fake that ignores
+    timeout_s outright would hide the very effect under test.
+
+    Numbers (generous margins deliberately, not razor's-edge, given real
+    threads + real sleeps): a 0.2s delay in _select_runners's own
+    detect_tests() call widens the gap between ctx.gate_deadline and
+    _run_selected's actual wait() cutoff (proven safe in runners/tests.py's
+    module docstring: every step between the deadline being set and wait()
+    being called can only ADD elapsed time, never remove it) by that same
+    0.2s -- so the FIXED code's worst-case finish, which lands at exactly
+    the deadline, still clears wait()'s cutoff with room to spare rather
+    than by mere scheduler luck."""
+    from aramid.runners import tests as tests_runner_mod
+
+    root = _repo(tmp_path)
+    (root / "package-lock.json").write_text("{}", encoding="utf-8")  # lockfile gate passes
+    cfg = _cfg(root, tmp_path, monkeypatch)
+    cfg.timeouts["pre_push"] = 0.6
+    ledger = _ledger(tmp_path)
+
+    monkeypatch.setattr(
+        pipeline, "detect_tests",
+        lambda r: (time.sleep(0.2), {"pytest", "npm"})[1])
+    monkeypatch.setattr(
+        tests_runner_mod, "detect_tests",
+        lambda r: (time.sleep(0.3), {"pytest", "npm"})[1])
+    monkeypatch.setitem(pipeline.GATE_RUNNER_KEYS, Gate.PRE_PUSH, ["tests"])
+
+    def fake_run_subprocess(argv, cwd, timeout_s, env=None):
+        needed = 0.05 if argv[0] == "pytest" else 0.4
+        if timeout_s < needed:
+            time.sleep(max(timeout_s, 0))
+            return RunnerResult(tool=argv[0], state=ToolState.TIMEOUT)
+        time.sleep(needed)
+        if argv[0] == "pytest":
+            return RunnerResult(tool="pytest", state=ToolState.OK, returncode=1, raw="1 failed\n")
+        return RunnerResult(tool="npm", state=ToolState.OK, returncode=0)
+
+    monkeypatch.setattr(tests_runner_mod, "run_subprocess", fake_run_subprocess)
+
+    result = pipeline.run_gate(root, Gate.PRE_PUSH, "range", cfg, ledger, run_id="run-b2-real")
+
+    tests_failed = [f for f in result.findings if f.rule == "tests-failed"]
+    # pytest genuinely completed (rc=1) well inside its correctly-reduced
+    # remaining allotment -- its real finding must survive, attributed to
+    # ITSELF, not swallowed into one generic aggregate-level notice.
+    assert any(f.tool == "pytest" for f in tests_failed)
+    # The failure mode this guards: the whole future abandoned and replaced
+    # by RunnerResult("tests", TIMEOUT) -- tool="tests" (the registry key,
+    # never a real sub-tool), message naming "tests timeout" rather than
+    # either suite's own outcome.
+    assert not any(f.tool == "tests" and "timeout" in f.message.lower()
+                   for f in tests_failed)
+    ledger.close()
     ledger.close()
 
 

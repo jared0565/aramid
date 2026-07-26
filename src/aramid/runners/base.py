@@ -71,19 +71,32 @@ class RunContext:
       runner inapplicable, so it is never selected at all. All three are
       additive with defaults, so every existing construction site (and
       every runner that ignores them) stays valid unchanged.
-    gate_budget_s: the CURRENT gate run's own wall-clock budget (the same
-      value aramid.pipeline._run_selected passes to its ThreadPoolExecutor
-      `wait(timeout=...)`), carried onto ctx so a runner that internally
-      executes more than one sequential sub-invocation (today: only
-      runners.tests's dual pytest+npm path) can divide ITS OWN deadline
-      across them instead of each sub-invocation getting an independent
-      full per-tool timeout that, summed, can exceed the slot
-      `_run_selected` will actually wait for. None means "no shared budget
-      known" (e.g. a RunContext built outside run_gate, as unit tests do) --
-      callers must treat that as "unbounded", not zero, so a runner that
-      never opts in keeps its current unbounded-by-this-field behavior.
-      Additive field: default None keeps every existing construction site
-      valid unchanged.
+    gate_deadline: an ABSOLUTE `time.monotonic()`-based instant -- NOT a
+      duration -- marking when the CURRENT gate run's wall-clock budget
+      expires. Set ONCE, in aramid.pipeline.run_gate, as `time.monotonic()
+      + budget_s`, at (or as close as practical to) the same reference
+      point that budget_s itself is computed from -- BEFORE _select_runners
+      / detect_tests() / any other pre-flight filesystem work runs. Carried
+      onto ctx so a runner that internally executes more than one
+      sequential sub-invocation (today: only runners.tests's dual
+      pytest+npm path) can check "how much time is actually left until
+      THIS instant" from wherever it happens to be in its own call chain,
+      rather than restarting its own clock partway through (e.g. inside a
+      worker thread, after its own detect_tests() filesystem walk has
+      already spent part of the budget) -- a fresh `time.monotonic()`
+      capture taken anywhere after the true origin systematically
+      UNDER-counts elapsed time and can let a runner's internal accounting
+      drift later than aramid.pipeline._run_selected's own
+      ThreadPoolExecutor `wait(timeout=budget_s)`, which measures from
+      close to that same original instant. Once `wait()` gives up, any
+      future still running is abandoned and REPLACED wholesale by a bare
+      TIMEOUT result with none of its real sub-results -- two clocks with
+      different origins is what let that happen (review B2 follow-up).
+      None means "no shared deadline known" (e.g. a RunContext built
+      outside run_gate, as unit tests do) -- callers must treat that as
+      "unbounded", not "already expired", so a runner that never opts in
+      keeps its current unbounded-by-this-field behavior. Additive field:
+      default None keeps every existing construction site valid unchanged.
     """
     root: Path
     files: list[str] = field(default_factory=list)
@@ -95,7 +108,7 @@ class RunContext:
     test_command: str | list[str] | None = None
     test_timeout_s: float | None = None
     tests_enabled: bool = True
-    gate_budget_s: float | None = None
+    gate_deadline: float | None = None
 
 _WIN = sys.platform == "win32"
 _POST_KILL_DRAIN_S = 5.0   # cap on the post-_kill_tree reap wait (test seam)

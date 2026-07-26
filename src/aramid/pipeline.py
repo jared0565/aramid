@@ -19,6 +19,7 @@ without touching real tool binaries -- see tests/unit/test_pipeline.py.
 """
 import functools
 import sys
+import time
 import uuid
 from concurrent.futures import ThreadPoolExecutor, wait
 from dataclasses import dataclass, replace
@@ -293,11 +294,24 @@ def run_gate(root: Path, gate: Gate, mode: str, cfg: config_mod.Config, ledger: 
     # orphaned beside a new key doing the same job -- `[tests].command` wins).
     tests_cfg = cfg.tests if isinstance(cfg.tests, dict) else {}
     # Computed here (not after ctx construction, as before) so it can ride
-    # onto RunContext.gate_budget_s: runners.tests's dual pytest+npm path
-    # needs the SAME wall-clock budget _run_selected below waits on, so the
-    # two suites split one deadline instead of each getting an independent
-    # full timeout that, summed, could overrun the slot (review B2).
+    # onto RunContext.gate_deadline as an ABSOLUTE instant, captured BEFORE
+    # _select_runners/detect_tests() or any other pre-flight filesystem
+    # work below runs: runners.tests's dual pytest+npm path needs to
+    # measure "time left" against the SAME origin _run_selected's own
+    # ThreadPoolExecutor.wait(timeout=budget_s) effectively uses, not a
+    # fresh clock restarted after its own detect_tests() walk -- two
+    # differently-anchored clocks is what let a completed suite's real
+    # result be silently replaced by a bare pipeline-level TIMEOUT (review
+    # B2 follow-up). See RunContext.gate_deadline's docstring for the
+    # single-origin argument in full, including why leaving
+    # _run_selected's own wait() as a duration (rather than also
+    # recomputing it from this deadline) is still safe: every step between
+    # this line and _run_selected's wait() call below (_select_runners
+    # included) can only ADD time before wait() starts counting, never
+    # subtract it, so wait()'s effective cutoff is provably >= this
+    # deadline -- never earlier.
     budget_s = cfg.timeouts.get(_BUDGET_KEY.get(gate, "pre_push"), 60.0)
+    gate_deadline = time.monotonic() + budget_s
     ctx = RunContext(root=root, files=files, rng=rng,
                       pkg_manager=detect_package_manager(root),
                       stacks=detect_stacks(root, root),
@@ -306,7 +320,7 @@ def run_gate(root: Path, gate: Gate, mode: str, cfg: config_mod.Config, ledger: 
                       test_command=tests_cfg.get("command", cfg.test_command),
                       test_timeout_s=tests_cfg.get("timeout_s"),
                       tests_enabled=tests_cfg.get("enabled", True),
-                      gate_budget_s=budget_s)
+                      gate_deadline=gate_deadline)
     selected = _select_runners(gate, ctx)
 
     # 3. run concurrently under the gate's wall-clock budget.

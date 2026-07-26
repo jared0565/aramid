@@ -472,7 +472,7 @@ def test_shared_budget_caps_the_second_suites_timeout(tmp_path, monkeypatch):
         return RunnerResult(tool=argv[0], state=ToolState.OK, returncode=0)
 
     monkeypatch.setattr(tests_runner, "run_subprocess", fake)
-    ctx = RunContext(root=tmp_path, gate_budget_s=0.5)
+    ctx = RunContext(root=tmp_path, gate_deadline=time.monotonic() + 0.5)
     tests_runner.run(ctx)
 
     assert captured[0][0] == "pytest"
@@ -502,7 +502,7 @@ def test_budget_exhausted_after_first_suite_skips_second_but_keeps_first_result(
         pytest.fail("npm must not run at all once the shared budget is exhausted")
 
     monkeypatch.setattr(tests_runner, "run_subprocess", fake)
-    ctx = RunContext(root=tmp_path, gate_budget_s=0.2)
+    ctx = RunContext(root=tmp_path, gate_deadline=time.monotonic() + 0.2)
     result = tests_runner.run(ctx)
 
     subs = {r.tool: r for r in result.sub_results}

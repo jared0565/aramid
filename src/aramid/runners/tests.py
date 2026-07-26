@@ -32,18 +32,41 @@ a useful, if partial, result on their own. `.returncode` on the combined
 result is meaningless (dataclass default 0, which reads as success) --
 consult `.sub_results` for the real per-suite exit codes.
 
-The two suites share ONE wall-clock deadline (`ctx.gate_budget_s`, the
-current gate's own budget -- see RunContext's docstring) rather than each
-getting an independent full per-tool timeout: they run sequentially inside
-one `run()` call, so two 300s-timeout suites would otherwise sum to 600s
-against a 300s pre-push slot -- well past what
-aramid.pipeline._run_selected's ThreadPoolExecutor actually waits for,
-which would discard BOTH suites' results behind a single bare
-pipeline-level TIMEOUT (tool="tests", no `.sub_results`) naming the wrong
-cause. If the shared budget is exhausted before the second suite can run
-at all, that suite is reported as TIMEOUT directly -- attributed to ITS
-OWN sub-result, not the slot -- while the first suite's real result/
-findings are still returned.
+The two suites share ONE wall-clock deadline (`ctx.gate_deadline`, an
+ABSOLUTE `time.monotonic()` instant set once by aramid.pipeline.run_gate
+-- see RunContext's docstring) rather than each getting an independent
+full per-tool timeout: they run sequentially inside one `run()` call, so
+two 300s-timeout suites would otherwise sum to 600s against a 300s
+pre-push slot -- well past what aramid.pipeline._run_selected's
+ThreadPoolExecutor actually waits for, which would discard BOTH suites'
+results behind a single bare pipeline-level TIMEOUT (tool="tests", no
+`.sub_results`) naming the wrong cause. If the shared deadline is already
+past before the second suite can run at all, that suite is reported as
+TIMEOUT directly -- attributed to ITS OWN sub-result, not the slot --
+while the first suite's real result/findings are still returned.
+
+**Why an ABSOLUTE deadline, not a duration measured from a `started`
+captured here:** this module's own `run()` calls `detect_tests()` (a
+filesystem walk) BEFORE ever reaching the dual-suite path, and that walk
+happens INSIDE the worker thread `_run_selected` dispatches -- i.e. AFTER
+its `ThreadPoolExecutor.wait(timeout=budget_s)` has already started
+counting in the main thread. A `started = time.monotonic()` captured
+after that walk silently drops however long the walk took from this
+module's own accounting, letting its internally-computed "remaining
+budget" run later than `_run_selected`'s wait() actually waits -- which
+is exactly what let a completed suite's real result be replaced by a
+bare TIMEOUT (review B2 follow-up: two clocks, two origins). Measuring
+against `ctx.gate_deadline` instead -- an instant fixed once, upstream,
+before any of that walking runs -- means "how much time is left" is
+always correct regardless of how much preliminary work already happened
+or where in the call chain the check is made. `_run_selected`'s own
+wait() is intentionally left as a duration rather than also recomputed
+from this deadline: every step between the deadline being set and
+wait() being called (runner selection included) can only ADD elapsed
+time before wait() starts counting, never remove it, so wait()'s
+effective cutoff is provably >= `ctx.gate_deadline` -- this module's
+worst-case finish (bounded by that same deadline) can never land after
+it.
 
 The dual-run only happens when the JS side looks genuinely set up -- a JS
 package-manager lockfile (package-lock.json/pnpm-lock.yaml/yarn.lock) is
@@ -130,16 +153,23 @@ def _timeout(ctx) -> float:
     return float(configured) if configured else TIMEOUT_S
 
 
-def _budget(ctx) -> float:
-    """The current gate's shared wall-clock budget (RunContext.gate_budget_s
-    -- see that field's docstring in runners/base.py), or unbounded when
-    unset. A RunContext built outside aramid.pipeline.run_gate (as unit
-    tests, and any future caller that doesn't opt in, do) must not have its
-    dual-suite behavior silently capped by a budget nobody configured --
-    `float("inf")` makes `min(_timeout(ctx), remaining)` degrade to exactly
-    today's single per-tool timeout, unchanged, when this field is absent."""
-    configured = getattr(ctx, "gate_budget_s", None)
-    return float(configured) if configured else float("inf")
+def _remaining(ctx) -> float:
+    """How much time is left until `ctx.gate_deadline` (RunContext's
+    docstring has the full single-origin argument), measured FRESH
+    against `time.monotonic()` every time this is called -- never against
+    a `started` captured once and reused, which is exactly the bug this
+    replaced (review B2 follow-up: a fresh start captured after this
+    module's own detect_tests() walk silently drops however long that
+    walk took, letting the internally-computed budget run later than
+    aramid.pipeline._run_selected's own wait() already gave up).
+    Unbounded (`float("inf")`) when `ctx.gate_deadline` is unset -- a
+    RunContext built outside run_gate (as unit tests, and any future
+    caller that doesn't opt in, do) must not have its dual-suite behavior
+    silently capped by a deadline nobody configured; that makes
+    `min(_timeout(ctx), remaining)` degrade to exactly today's single
+    per-tool timeout, unchanged, when this field is absent."""
+    deadline = getattr(ctx, "gate_deadline", None)
+    return (deadline - time.monotonic()) if deadline is not None else float("inf")
 
 
 def _argv(command: str | list) -> list[str]:
@@ -181,14 +211,16 @@ def run_npm_test(ctx, timeout_s: float | None = None) -> RunnerResult:
                            timeout_s if timeout_s is not None else _timeout(ctx))
 
 
-def _run_one_within_budget(tool_name: str, run_one, ctx, started: float,
-                            budget: float) -> RunnerResult:
-    """Run one suite capped by whatever remains of the shared `budget`
-    ([review B2]) -- never by its own full per-tool timeout alone. If the
-    budget is already exhausted before this suite even starts, it is
-    reported as TIMEOUT directly (attributed to its OWN sub-result) instead
-    of launching a subprocess we already know cannot finish in time."""
-    remaining = budget - (time.monotonic() - started)
+def _run_one_within_deadline(tool_name: str, run_one, ctx) -> RunnerResult:
+    """Run one suite capped by whatever remains until `ctx.gate_deadline`
+    ([review B2]) -- never by its own full per-tool timeout alone, and
+    checked FRESH via `_remaining(ctx)` right here rather than against a
+    duration threaded in from an earlier capture (see `_remaining`'s
+    docstring for why that distinction is the whole fix). If the deadline
+    has already passed before this suite even starts, it is reported as
+    TIMEOUT directly (attributed to its OWN sub-result) instead of
+    launching a subprocess we already know cannot finish in time."""
+    remaining = _remaining(ctx)
     if remaining <= 0:
         return RunnerResult(tool_name, ToolState.TIMEOUT)
     return run_one(ctx, min(_timeout(ctx), remaining))
@@ -197,12 +229,9 @@ def _run_one_within_budget(tool_name: str, run_one, ctx, started: float,
 def _run_dual(ctx) -> RunnerResult:
     """Both `detect_tests()` kinds are present and the lockfile gate passed
     (`_dual_stack_run` below): run BOTH suites sequentially, sharing one
-    wall-clock budget, and bundle the results (module docstring)."""
-    budget = _budget(ctx)
-    started = time.monotonic()
-
-    py_result = _run_one_within_budget("pytest", run_pytest, ctx, started, budget)
-    npm_result = _run_one_within_budget("npm", run_npm_test, ctx, started, budget)
+    wall-clock deadline, and bundle the results (module docstring)."""
+    py_result = _run_one_within_deadline("pytest", run_pytest, ctx)
+    npm_result = _run_one_within_deadline("npm", run_npm_test, ctx)
 
     # [review M2]: OK iff BOTH subs OK; otherwise the FIRST non-OK sub-state,
     # in the fixed pytest-then-npm order `.sub_results` carries below.
