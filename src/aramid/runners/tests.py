@@ -14,8 +14,15 @@ read as a pass just because there's no exit code to check -- this is a
 BLOCK-tier gate, so both produce the same blocking `tests-failed` finding
 as a non-zero exit, rather than silently falling through the
 `state is not OK -> []` guard other adapters use for their non-blocking
-JSON tools. Only MISSING (no test framework detected -- a legitimate skip,
-not a failure) still yields zero findings.
+JSON tools. MISSING yields zero findings when nothing is detected at all --
+a legitimate skip. It also still yields zero findings when a single
+detected suite's own tool binary can't be resolved, exactly as before this
+module's dual-suite path existed: that case only degrades the BLOCK tier,
+via pipeline.run_gate's degraded_block_tier/--accept-degraded escape
+hatch, never a finding. Only the third shape -- a sub-result of the
+dual-suite run below, one of pytest/npm detected but unable to run at all
+-- produces a finding, via TOOL_MISSING_RULE, because there the
+aggregate's own state can't otherwise say which suite never ran.
 
 Dual-stack repos (both a real Python test file AND a `package.json`
 `scripts.test` entry -- detect_tests() returns both "pytest" and "npm"):

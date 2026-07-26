@@ -131,6 +131,14 @@ A string (`command = "pytest -q tests/unit"`) works too and is split POSIX-style
 
 `enabled = false` removes the gate entirely (it then never counts as degraded either). aramid prints a notice on every run where that suppresses a real suite: a silently disabled block-tier check is worse than no check at all. Note that subsetting the push gate narrows what it covers — keep the full suite running in CI.
 
+#### Dual-stack repos: pytest AND npm
+
+If aramid detects both a real Python test file (`test_*.py`, `*_test.py`, or `conftest.py`) and a `package.json` `scripts.test` entry, it runs **both** suites at pre-push rather than picking one — a gate that silently ran only half a dual-stack repo's tests would be exactly the kind of gap this tool exists to close. The combined result blocks unless **both** suites pass; a failing suite reports the ordinary `tests-failed` finding either way, not some separate dual-stack-specific rule.
+
+The npm side only joins the run when a JS package-manager lockfile is present (`package-lock.json`, `pnpm-lock.yaml`, or `yarn.lock`). A `package.json` with a `scripts.test` entry but nothing installed behind it is common — linters, formatters, and git hook managers (prettier, husky) often ship one as boilerplate — so promoting every such repo to a second BLOCK-tier suite would manufacture false blocks on repos that never meant to run JS tests at all. Without a lockfile, aramid runs pytest only and prints a notice explaining that npm was skipped rather than silently dropping it; `npm install` (or pnpm/yarn) is enough to have it join on the next run. This requirement affects only the *dual-stack promotion* — a JS-only repo (no pytest detected) still runs `npm test` with no lockfile required at all.
+
+If either suite's own tool binary can't be found (not installed, not on PATH) **within a dual-stack run**, the push blocks with an explicit `tests-tool-missing` finding rather than an unexplained degraded exit — see below. A single-suite repo (only pytest, or only npm, detected) whose one tool is missing still degrades the BLOCK tier the same way it always has (see [section 6](#6-diagnostics--aramid-doctor-and-aramid-update-rules)); `aramid doctor` does not yet probe for pytest or npm specifically.
+
 ### Security blocks, quality warns — but not uniformly
 
 The classifier (`policy.classify`) is the single source of truth, and the split isn't one rule per tool:
@@ -142,6 +150,7 @@ The classifier (`policy.classify`) is the single source of truth, and the split 
   - OWASP block-list matches (`owasp-top-ten.*`, `*sqli*`, `*deserialization*`, `*command-injection*`) follow the top-level `semgrep_block_armed` (default **false**, i.e. baking).
   - Anything else from semgrep → `WARN`.
 - **tests-failed** → always `BLOCK`.
+- **tests-tool-missing** → always `BLOCK`. Fires only inside a dual-stack (pytest AND npm detected) run, when one suite's own tool binary can't be resolved at all — a single-suite repo with a missing tool still degrades the BLOCK tier instead (unchanged behavior, see above).
 - **dependency tools** (`pip-audit`, `npm`, `pnpm`, `yarn`) → `BLOCK` only if severity is at or above `[deps].block_severity` (default `"critical"`); otherwise `WARN`.
 - **llm-review** → the classifier itself always returns `WARN` structurally; a confirmed-critical LLM finding can only become `BLOCK` later, at the pre-push gate, once `[llm].llm_block_armed` is set (see [section 9](#9-the-bake-then-arm-model)).
 - Everything else → `WARN`.
@@ -422,7 +431,7 @@ mutant_timeout_s = 120
 confirm_cap = 3
 ```
 
-Requirement: a pytest test stack must be detected (a `tests/` dir or any `test_*.py`) — otherwise it OK-skips permanently and harmlessly (`"no python test stack (mutation skipped)"`) rather than pinning the queue item forever.
+Requirement: a pytest test stack must be detected — a real `test_*.py`, `*_test.py`, or `conftest.py` file; a bare `tests/` directory by itself no longer counts — otherwise it OK-skips permanently and harmlessly (`"no python test stack (mutation skipped)"`) rather than pinning the queue item forever.
 
 ### js_mutation (JS/TS)
 
