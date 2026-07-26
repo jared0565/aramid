@@ -139,10 +139,51 @@ def test_no_pytest_stack_skips_ok_with_loud_note(tmp_path, monkeypatch):
     _shutil.rmtree(r / "tests")
     _git(r, "add", "-A")
     _git(r, "commit", "-q", "-m", "drop tests")
+    # The item must reference the commit that actually reflects the removed
+    # tests: `consume()` checks out a worktree at `item.head` (gitutil
+    # worktree add --detach), and a worktree pinned to the PRE-drop `head`
+    # still has tests/test_calc.py in its git tree -- the "test-less repo"
+    # this test claims to construct would never actually exist on disk
+    # where consume() looks for it. Recapturing head here is what makes the
+    # worktree's contents match the scenario the test above describes; it
+    # was silently irrelevant before Task 1 only because the old
+    # detect_tests(ctx.root) check returned empty and consume() returned at
+    # line ~110, before a worktree was ever created.
+    head = _sha(r)
     res = _consume(r, base, head, monkeypatch, tmp_path)
     assert res.state == "ok"
     assert res.findings == []
     assert "no python test stack" in res.note
+
+
+def test_baseline_rc5_is_ok_skip_not_degraded(tmp_path, monkeypatch):
+    """Unit-style sibling of the E2E test above: pins the BASELINE rc==5
+    branch directly (mutation.py's `base_res.state is ToolState.OK and
+    base_res.returncode == 5` check) via a scripted run_subprocess, so the
+    proof doesn't depend on real pytest's exit code or on constructing a
+    real worktree whose tree has no test files.
+
+    rc 5 = pytest collected no tests -- PERMANENT structural absence, the
+    same condition the detect_tests() skip earlier in consume() exists for,
+    not a transiently failing baseline. Must be an OK-skip (never
+    "degraded"), and the note must NOT start with "baseline failing @ " --
+    that literal prefix is what base.prior_note_count's give-up counter
+    matches, and conflating the two note families would let a permanent
+    no-tests repo silently count toward the 3-strikes give-up alongside a
+    genuinely red baseline."""
+    from aramid.runners.base import RunnerResult, ToolState
+    r, base, head = _repo(tmp_path, WEAK_TEST)
+
+    def scripted(argv, cwd, timeout, **kw):
+        return RunnerResult(tool="pytest", state=ToolState.OK, returncode=5)
+
+    monkeypatch.setattr(mut_consumer, "run_subprocess", scripted)
+    res = _consume(r, base, head, monkeypatch, tmp_path)
+    assert res.state == "ok"
+    assert res.findings == []
+    assert "no python test stack" in res.note
+    assert "baseline failing" not in res.note
+    assert _no_worktrees(r), "throwaway worktree must be removed"
 
 
 def test_baseline_red_degrades_no_findings(tmp_path, monkeypatch):

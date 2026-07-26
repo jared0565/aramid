@@ -31,6 +31,18 @@ _BASELINE_GIVE_UP = 3   # mirrors llm_review._MALFORMED_GIVE_UP
 _SAFE_STEM = re.compile(r"^[A-Za-z0-9_]+$")
 _K_KEYWORDS = {"not", "and", "or"}   # pytest -k expression keywords
 
+# pytest exits 5 for "no tests were collected" -- mirrors
+# runners/tests.py's _PYTEST_NO_TESTS_RC. On the BASELINE run (the full-suite
+# check at the top of the try block below) this is PERMANENT structural
+# absence, the same condition the detect_tests() skip earlier in consume()
+# exists for: a repo that has committed to pytest (e.g. a root conftest.py,
+# one of Task 1's three positive detect_tests signals) but has no tests to
+# run AT THIS HEAD. It is never a transiently failing baseline, so it must
+# not share the "baseline failing @ " note family -- that literal prefix is
+# what base.prior_note_count's give-up counter matches (see the give-up
+# check above the worktree try block), and this rc is not a failure at all.
+_PYTEST_NO_TESTS_RC = 5
+
 # M5: batches are budget-truncated (variable membership across drains), so
 # the drain normalizes them with occurrence_index pinned to 0 -- one finding
 # per (tool, rule, file, line-content), truncation-stable fingerprints.
@@ -141,6 +153,23 @@ def consume(item, ctx: DrainContext) -> ConsumerResult:
                                   note=f"worktree add failed: {(cp.stderr or '').strip()[:200]}")
 
         base_res = run_subprocess(_full_argv(), wt, mutant_timeout * 4)
+        if base_res.state is ToolState.OK and base_res.returncode == _PYTEST_NO_TESTS_RC:
+            # Permanent structural absence, not a failing baseline: the note
+            # deliberately keeps the "no python test stack" wording used by
+            # the detect_tests() skip above (and is retained by the E2E test
+            # asserting on it) even though detect_tests DID find a pytest
+            # signal here (e.g. a root conftest.py) -- rc 5 means the suite
+            # it detected has nothing to run AT THIS HEAD, which is the same
+            # species of absence, just discovered one step later. Accepted
+            # trade (per the sub-project 3 brief): a stale `[tests].command`
+            # selector or `addopts` that matches nothing would also exit 5
+            # here and read as permanent absence rather than misconfigured --
+            # cheaper than 3 rounds of worktree churn misdiagnosing it as a
+            # red baseline, per the give-up guard's own accepted bound.
+            return ConsumerResult(consumer=NAME, state="ok",
+                                  note="no python test stack (mutation skipped: "
+                                       "pytest collected no tests at this head)",
+                                  duration_s=time.monotonic() - started)
         if base_res.state is not ToolState.OK or base_res.returncode != 0:
             # Note text is load-bearing: the give-up counter above matches
             # notes starting with "baseline failing @ <head12>".
