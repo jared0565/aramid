@@ -294,6 +294,32 @@ def _tests_config_notices(gate: Gate, ctx: RunContext, budget_s: float) -> list[
                 # would skip this comparison entirely whenever timeout_s is
                 # unset, exactly the case this notice must still cover
                 # (e.g. a repo that only lowers [timeouts].pre_push).
+                #
+                # [MUST FIX 3, whole-branch review] KNOWN, ACCEPTED GAP --
+                # strict `>`, not `>=`, means this notice is PROVABLY INERT
+                # at stock defaults: timeout_s and timeouts.pre_push both
+                # default to 300 (defaults.toml), so `effective_timeout >
+                # budget_s` is `300 > 300` = False and nothing prints. Yet
+                # runners.tests._run_one_within_deadline's `min(_timeout(ctx),
+                # remaining)` still truncates the SECOND suite below 300s the
+                # moment the first suite consumes any wall-clock time at all
+                # -- which is every real run. So a stock dual-stack repo
+                # whose two suites' true durations sum past 300s can still
+                # block with a bare "npm timeout: test suite failed" and NO
+                # notice at all explaining that the shared budget, not the
+                # suite, ran out. Switching to `>=` was considered and
+                # rejected: at stock defaults EVERY dual-stack repo has
+                # effective_timeout == budget_s, so `>=` fires on every
+                # single push for every such repo regardless of how fast its
+                # suites actually run -- reintroducing the exact always-
+                # fires false-positive rev 1's `2 * effective > budget_s`
+                # rule caused and review B5 forbade (see above). Closing this
+                # honestly requires a POST-RUN notice (something that can
+                # see whether `_run_one_within_deadline` actually had to
+                # truncate a suite, which this call site -- two lines before
+                # `_run_selected` even runs, see run_gate below -- cannot);
+                # that is a separate, out-of-scope sub-project, not a
+                # same-round fix. Tracked as a follow-up, not fixed here.
                 effective_timeout = ctx.test_timeout_s or tests.TIMEOUT_S
                 if effective_timeout > budget_s:
                     key = _BUDGET_KEY.get(gate, "pre_push")
@@ -564,9 +590,32 @@ def run_gate(root: Path, gate: Gate, mode: str, cfg: config_mod.Config, ledger: 
     degraded_block_tier = any(
         key in results and results[key].state in _BAD_STATES for key in BLOCK_TIER_KEYS
     )
-    block_findings = any(f.verdict is Verdict.BLOCK for f in findings)
+    # [MUST FIX 2, whole-branch review] `gating_block_findings` -- the BLOCK
+    # findings that must hard-gate BEFORE accept_degraded is ever consulted
+    # -- deliberately excludes `tests-tool-missing` (runners/tests.py's
+    # dual-suite aggregate: a detected sub-suite whose own tool binary could
+    # not be resolved at all). That rule exists to EXPLAIN a degradation
+    # already carried by `degraded_block_tier` above; it is not an
+    # independent test failure, so it must not defeat the documented
+    # `--accept-degraded` escape hatch the SAME way a top-level single-suite
+    # MISSING result already doesn't (that path never reaches this variable
+    # at all: parse() returns [] for it, so there is no BLOCK finding to
+    # trip over -- see runners/tests.py's TOOL_MISSING_RULE docstring).
+    # Matched by RULE alone, not `tool == "tests"` too: policy.classify's
+    # own `tests-tool-missing` branch (policy.py) is likewise rule-only, so
+    # matching on tool here as well would only create a second place that
+    # could silently drift out of sync with it. Scoped to this ONE rule,
+    # deliberately -- every OTHER BLOCK-tier finding (gitleaks secret, armed
+    # semgrep, a genuine tests-failed, a critical CVE, ...) must still gate
+    # HERE, before accept_degraded is ever reached; broadening this
+    # exclusion to Verdict.BLOCK in general would make every block
+    # bypassable, which is not the fix.
+    gating_block_findings = any(
+        f.verdict is Verdict.BLOCK and f.rule != tests.TOOL_MISSING_RULE
+        for f in findings
+    )
 
-    if block_findings:
+    if gating_block_findings:
         exit_code = 1
     elif accept_degraded and gate is Gate.PRE_PUSH and degraded_block_tier:
         ledger.append(Event(

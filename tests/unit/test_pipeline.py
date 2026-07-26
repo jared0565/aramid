@@ -153,10 +153,20 @@ def test_accept_degraded_bypass_survives_single_suite_missing_tool_binary(tmp_pa
     degraded-tool path (MISSING -> tests.parse() returns [] -> exit code
     governed by degraded_block_tier/accept_degraded), not the NEW
     tests-tool-missing BLOCK finding runners/tests.py added for a
-    dual-suite aggregate's sub-result -- a BLOCK finding would short-
-    circuit past `--accept-degraded` entirely (run_gate's
-    `if block_findings: exit_code = 1` is checked before the
-    accept_degraded elif), silently killing this exact escape hatch."""
+    dual-suite aggregate's sub-result: with only ONE candidate tool here,
+    `degraded_tools` already names it, so a Finding would be redundant, not
+    disambiguating (contrast the dual-stack case in
+    test_dual_stack_missing_sub_blocks_and_accept_degraded_bypasses below,
+    where a sub-result Finding is the only thing that says WHICH suite
+    never ran). [Updated, MUST FIX 2 whole-branch review] This docstring
+    used to justify the same expectation by saying a BLOCK finding here
+    would short-circuit past `--accept-degraded` entirely (run_gate's `if
+    block_findings: exit_code = 1` checked before the accept_degraded
+    elif) -- true at the time, but pipeline.run_gate now excludes any
+    tests-tool-missing finding from that check by rule regardless of
+    top-level-vs-sub, so that is no longer what protects this escape hatch
+    either way; the redundancy argument above is the reason this
+    single-suite case stays finding-free."""
     from aramid.runners import tests as tests_runner_mod
 
     root = _repo(tmp_path)
@@ -180,6 +190,73 @@ def test_accept_degraded_bypass_survives_single_suite_missing_tool_binary(tmp_pa
     assert len(bypass_events) == 1
     assert bypass_events[0].payload["reason"] == "ci runner has no test binary"
     ledger.close()
+
+
+def test_dual_stack_missing_sub_blocks_and_accept_degraded_bypasses(tmp_path, monkeypatch):
+    """MUST FIX 7 (deferred #7, upgraded), also the MUST FIX 2 regression
+    guard: end-to-end proof through the REAL aramid.runners.tests module
+    (only run_subprocess is faked -- pipeline.RUNNERS is untouched) that a
+    dual-stack repo (pyproject.toml + tests/test_x.py + package.json test
+    script + a JS lockfile, so the real dual-suite path in _dual_stack_run
+    runs) whose npm binary can't be resolved:
+
+      (1) blocks the push with NO --accept-degraded -- same shape as
+          test_missing_block_tier_tool_at_prepush_exits_one's single-suite
+          case, now proven for the dual-stack aggregate too, and
+      (2) --accept-degraded still bypasses it (exit 2, one BYPASS event) --
+          MUST FIX 2's fix. Before it, the tests-tool-missing BLOCK finding
+          runners/tests.py emits for this exact sub-result short-circuited
+          past `--accept-degraded` entirely (pipeline.py's `if
+          block_findings: exit_code = 1` ran before the accept_degraded
+          elif), the same way
+          test_accept_degraded_bypass_survives_single_suite_missing_tool_
+          binary above proves the single-suite case never did. No prior
+          test drove this dual-stack MISSING sub through
+          run_gate -> classify -> normalize at all (whole-branch review
+          finding 7); this is that missing test, and its two scenarios are
+          exactly the "one test, two assertions" the finding named."""
+    from aramid.runners import tests as tests_runner_mod
+
+    root = _repo(tmp_path)
+    (root / "pyproject.toml").write_text("[project]\nname = 'x'\n", encoding="utf-8")
+    (root / "tests").mkdir()
+    (root / "tests" / "test_x.py").write_text(
+        "def test_x():\n    assert True\n", encoding="utf-8")
+    (root / "package.json").write_text('{"scripts": {"test": "vitest"}}', encoding="utf-8")
+    (root / "package-lock.json").write_text("{}", encoding="utf-8")  # lockfile gate passes
+    cfg = _cfg(root, tmp_path, monkeypatch)
+    monkeypatch.setitem(pipeline.GATE_RUNNER_KEYS, Gate.PRE_PUSH, ["tests"])
+
+    def fake_run_subprocess(argv, cwd, timeout_s, env=None):
+        if argv[0] == "pytest":
+            return RunnerResult(tool="pytest", state=ToolState.OK, returncode=0)
+        return RunnerResult(tool="npm", state=ToolState.MISSING)
+
+    monkeypatch.setattr(tests_runner_mod, "run_subprocess", fake_run_subprocess)
+
+    # (1) no --accept-degraded: blocks.
+    ledger1 = _ledger(tmp_path, name="ledger1.db")
+    result1 = pipeline.run_gate(root, Gate.PRE_PUSH, "range", cfg, ledger1, run_id="run-f7-block")
+    assert result1.exit_code == 1
+    assert any(f.rule == "tests-tool-missing" and f.verdict is Verdict.BLOCK
+               for f in result1.findings)
+    # Isolates this proof from any OTHER PRE_PUSH producer (e.g. tdd.scan)
+    # that might independently add an unrelated BLOCK finding -- without
+    # this, scenario (2) below returning exit_code 1 could be misread as
+    # MUST FIX 2's fix failing when it would really be a different finding
+    # entirely.
+    assert [f.verdict for f in result1.findings].count(Verdict.BLOCK) == 1
+    ledger1.close()
+
+    # (2) --accept-degraded: bypasses.
+    ledger2 = _ledger(tmp_path, name="ledger2.db")
+    result2 = pipeline.run_gate(root, Gate.PRE_PUSH, "range", cfg, ledger2,
+                                accept_degraded="ci runner has no npm binary", run_id="run-f7-bypass")
+    assert result2.exit_code == 2
+    bypass_events = [e for e in ledger2.events() if e.type is EventType.INFRASTRUCTURE_BYPASS]
+    assert len(bypass_events) == 1
+    assert bypass_events[0].payload["reason"] == "ci runner has no npm binary"
+    ledger2.close()
 
 
 # --------------------------------------- (c2) applicability -- no test setup -
@@ -565,9 +642,25 @@ def test_dual_suite_budget_notice_fires_when_effective_timeout_exceeds_budget(tm
 
 
 def test_no_dual_suite_budget_notice_at_stock_defaults(tmp_path):
-    """[review B5] THE regression guard: stock timeout_s=300 / pre_push=300
-    must NOT fire -- rev 1's `2 x timeout_s > budget` rule fired here on
-    every push for every dual-stack repo, which is the bug B5 replaced."""
+    """[review B5] Regression guard for HALF of the stock-defaults story:
+    rev 1's `2 x timeout_s > budget` rule fired here on every push for
+    every dual-stack repo, which is the bug B5 replaced -- this pins that
+    the always-fires bug has NOT returned.
+
+    [MUST FIX 3, whole-branch review] This does NOT mean stock defaults are
+    fully covered -- do not read the `== []` below as "nothing to see
+    here". At timeout_s=pre_push=300, `effective_timeout > budget_s` is
+    `300 > 300` = False by construction, so THIS notice is provably inert
+    at stock defaults on every dual-stack repo, always -- yet the second
+    suite still gets truncated below 300s by runners.tests.
+    _run_one_within_deadline's `min(_timeout(ctx), remaining)` the moment
+    the first suite consumes any wall-clock time at all. That gap is
+    real, known, and deliberately NOT fixed in this round (see the
+    `effective_timeout > budget_s` predicate's own comment above, a few
+    lines up in pipeline.py, for why `>=` was rejected and what actually
+    closing it would require). This test only certifies the narrower,
+    already-fixed claim: the notice does not fire SPURIOUSLY at stock
+    defaults, not that stock defaults need no notice at all."""
     root = _dual_stack_root(tmp_path, "budget2", lockfile="package-lock.json")
     assert pipeline._tests_config_notices(
         Gate.PRE_PUSH, _ctx(root), budget_s=300.0) == []
@@ -1099,7 +1192,26 @@ def test_dual_suite_deadline_shares_one_origin_with_the_real_executor_wait(
     # pytest genuinely completed (rc=1) well inside its correctly-reduced
     # remaining allotment -- its real finding must survive, attributed to
     # ITSELF, not swallowed into one generic aggregate-level notice.
-    assert any(f.tool == "pytest" for f in tests_failed)
+    pytest_findings = [f for f in tests_failed if f.tool == "pytest"]
+    assert len(pytest_findings) == 1
+    # [MUST FIX 4, whole-branch review -- third hole in this guard] Matching
+    # on `f.tool == "pytest"` alone does NOT prove pytest actually ran to
+    # completion: under the regression this guards against (sabotaging
+    # pipeline.py's `gate_deadline = time.monotonic() + budget_s` down to
+    # `gate_deadline = budget_s` -- a bare duration, not an absolute
+    # instant), `_remaining(ctx)` goes deeply negative for BOTH sub-results,
+    # `_run_one_within_deadline` returns a bare TIMEOUT for EACH one
+    # WITHOUT ever calling run_subprocess, and parse()'s TIMEOUT branch
+    # still produces a tool="pytest" tests-failed finding -- so the tool-
+    # name-only assertion above passes whether or not pytest ever actually
+    # ran. The MESSAGE is the only thing that distinguishes a genuine rc=1
+    # completion ("pytest exited 1: test suite failed") from a same-tool
+    # TIMEOUT ("pytest timeout: test suite failed"), so it must be pinned
+    # too. Verified concretely (see report): with only the tool-name
+    # assertion, the :430 sabotage above still made this test pass; adding
+    # this message assertion is what makes it fail for the right reason.
+    assert "exited 1" in pytest_findings[0].message
+    assert "timeout" not in pytest_findings[0].message.lower()
     # The failure mode this guards: the whole future abandoned and replaced
     # by RunnerResult("tests", TIMEOUT) -- tool="tests" (the registry key,
     # never a real sub-tool), message naming "tests timeout" rather than

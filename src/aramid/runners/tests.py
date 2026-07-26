@@ -55,27 +55,44 @@ TIMEOUT directly -- attributed to ITS OWN sub-result, not the slot --
 while the first suite's real result/findings are still returned.
 
 **Why an ABSOLUTE deadline, not a duration measured from a `started`
-captured here:** this module's own `run()` calls `detect_tests()` (a
-filesystem walk) BEFORE ever reaching the dual-suite path, and that walk
-happens INSIDE the worker thread `_run_selected` dispatches -- i.e. AFTER
-its `ThreadPoolExecutor.wait(timeout=budget_s)` has already started
+captured here:** [MUST FIX 6, whole-branch review -- corrects a stale
+claim] BEFORE Task 4's detect_tests() caching, this module's own `run()`
+called `detect_tests()` (a filesystem walk) directly, and that walk
+happened INSIDE the worker thread `_run_selected` dispatches -- i.e. AFTER
+its `ThreadPoolExecutor.wait(timeout=budget_s)` had already started
 counting in the main thread. A `started = time.monotonic()` captured
-after that walk silently drops however long the walk took from this
+after that walk silently dropped however long the walk took from this
 module's own accounting, letting its internally-computed "remaining
 budget" run later than `_run_selected`'s wait() actually waits -- which
 is exactly what let a completed suite's real result be replaced by a
-bare TIMEOUT (review B2 follow-up: two clocks, two origins). Measuring
-against `ctx.gate_deadline` instead -- an instant fixed once, upstream,
-before any of that walking runs -- means "how much time is left" is
-always correct regardless of how much preliminary work already happened
-or where in the call chain the check is made. `_run_selected`'s own
-wait() is intentionally left as a duration rather than also recomputed
-from this deadline: every step between the deadline being set and
-wait() being called (runner selection included) can only ADD elapsed
-time before wait() starts counting, never remove it, so wait()'s
-effective cutoff is provably >= `ctx.gate_deadline` -- this module's
-worst-case finish (bounded by that same deadline) can never land after
-it.
+bare TIMEOUT (review B2 follow-up: two clocks, two origins).
+
+That specific walk no longer happens inside this module's worker thread
+today: `_detected()` below (Task 4, review M6+B7) reads
+`ctx.detected_tests`, precomputed by `aramid.pipeline.run_gate` in the
+MAIN thread -- before `ctx.gate_deadline` is even read there, let alone
+before `_select_runners`/`_run_selected` dispatch this module's worker at
+all (see `_detected()`'s own docstring below). A RunContext built outside
+run_gate, with no cache populated, still falls back to a fresh in-worker
+`detect_tests(ctx.root)` call right here, unchanged from before caching
+existed -- so the ORIGINAL hazard this paragraph describes is still live
+on that path, just no longer on the run_gate path.
+
+The absolute-deadline design is correct independent of that detail, which
+is why it still stands even though its motivating example moved: real
+elapsed time still accrues between `ctx.gate_deadline`'s capture in
+run_gate and this module's own dual-suite calls (runner selection, thread
+dispatch, the first suite's own run), so measuring against
+`ctx.gate_deadline` instead -- an instant fixed once, upstream, before any
+of that intervening work runs -- means "how much time is left" is always
+correct regardless of how much preliminary work already happened or where
+in the call chain the check is made. `_run_selected`'s own wait() is
+intentionally left as a duration rather than also recomputed from this
+deadline: every step between the deadline being set and wait() being
+called (runner selection included) can only ADD elapsed time before
+wait() starts counting, never remove it, so wait()'s effective cutoff is
+provably >= `ctx.gate_deadline` -- this module's worst-case finish
+(bounded by that same deadline) can never land after it.
 
 The dual-run only happens when the JS side looks genuinely set up -- a JS
 package-manager lockfile (package-lock.json/pnpm-lock.yaml/yarn.lock) is
@@ -126,10 +143,22 @@ _SUITE_FILE_MARKER = "<test-suite>"
 # top-level single-suite or run_custom MISSING result stays the existing
 # silent-skip/degraded-tool path (parse() -> [], exit code governed by
 # pipeline.run_gate's degraded_block_tier / --accept-degraded), because
-# that path already has a correct, deliberate escape hatch
-# (--accept-degraded -> INFRASTRUCTURE_BYPASS) that a BLOCK finding would
-# short-circuit past (pipeline.py's `if block_findings: exit_code = 1`
-# runs before the accept_degraded elif). Reported as tool="tests" (the
+# there only ONE tool was ever a candidate: `result.degraded`/
+# `degraded_tools` already names it, so a Finding here would be
+# redundant, not disambiguating -- unlike a dual-suite sub, where the
+# aggregate's own combined state can't say WHICH of pytest/npm never ran
+# (module docstring above).
+#
+# [Corrected, MUST FIX 2 whole-branch review] This distinction is no
+# longer what keeps `--accept-degraded` working, either way. This comment
+# used to also argue that a top-level MISSING must stay on the silent
+# path because a BLOCK finding here would short-circuit past
+# `--accept-degraded` entirely (pipeline.py's `if block_findings:
+# exit_code = 1` ran before the accept_degraded elif) -- true at the
+# time, but pipeline.run_gate now excludes any tests-tool-missing finding
+# from that check BY RULE, regardless of top-level-vs-sub, precisely
+# because this finding only ever EXPLAINS a degradation
+# `degraded_block_tier` already carries. Reported as tool="tests" (the
 # registry key), NOT the sub-tool's own name, for two more reasons:
 # reusing rule="tests-failed" with tool="npm"/"pytest" would collide on
 # fingerprint with a genuine test failure (line_content is "" for the
@@ -340,16 +369,28 @@ def parse(result: RunnerResult, ctx, *, _sub: bool = False) -> list[RawFinding]:
             #
             # Deliberately NOT generalized to top-level single-suite/
             # run_custom MISSING results, even though they can ALSO carry
-            # tool="pytest"/"npm"/"make" != "tests": turning that into a
-            # BLOCK finding would flow through pipeline.run_gate's
-            # `if block_findings: exit_code = 1` BEFORE the `elif
-            # accept_degraded and ... degraded_block_tier` branch is ever
-            # reached, silently killing the `--accept-degraded` escape
-            # hatch for exactly the "CI runner has no test binary" case
-            # test_pipeline.py's own accept_degraded test names. That
-            # existing degraded-tool path (MISSING -> [] -> exit_code
-            # governed by degraded_block_tier/accept_degraded) is the
-            # correct, unchanged behavior for a top-level MISSING.
+            # tool="pytest"/"npm"/"make" != "tests": there only ONE tool
+            # was ever a candidate, so degraded_block_tier/result.degraded
+            # already names it and a Finding here would be redundant, not
+            # disambiguating -- unlike a dual-suite sub, where the
+            # aggregate's own combined state can't say WHICH of pytest/npm
+            # never ran.
+            #
+            # [Corrected, MUST FIX 2 whole-branch review] This is no
+            # longer about protecting `--accept-degraded` either. This
+            # comment used to argue that generalizing would flow through
+            # pipeline.run_gate's `if block_findings: exit_code = 1`
+            # BEFORE the `elif accept_degraded and ... degraded_block_tier`
+            # branch is ever reached, silently killing the escape hatch
+            # for exactly the "CI runner has no test binary" case
+            # test_pipeline.py's own accept_degraded tests name -- true at
+            # the time, but pipeline.run_gate now excludes any
+            # tests-tool-missing finding from that check by rule, so the
+            # escape hatch no longer depends on this finding staying
+            # sub-only. That existing degraded-tool path (MISSING -> [] ->
+            # exit_code governed by degraded_block_tier/accept_degraded)
+            # remains the correct, unchanged behavior for a top-level
+            # MISSING regardless.
             return [RawFinding(
                 tool="tests",
                 rule=TOOL_MISSING_RULE,

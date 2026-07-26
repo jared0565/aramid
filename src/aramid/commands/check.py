@@ -34,9 +34,19 @@ is the ratchet's own escalation, downgrades to 0/2.
   (b) a degraded BLOCK-tier tool (gitleaks/semgrep/tests -- `run_gate`'s own
       `degraded_block_tier` local, now exposed on `GateResult` and read back
       here verbatim via `result.degraded_block_tier`) at pre-push. This
-      route produces zero Finding objects (the tool never ran, so it never
-      emitted anything to classify) -- it would be invisible to a
-      findings-only check. Deliberately NOT re-derived from
+      route USUALLY produces zero Finding objects (the tool never ran, so
+      it never emitted anything to classify) -- it would be invisible to a
+      findings-only check on its own. [Updated, MUST FIX 2 whole-branch
+      review] Not always, though: a dual-suite `tests-tool-missing`
+      finding (runners/tests.py) CAN reach exit_code==1 via this same
+      route despite being a real Finding, because `run_gate`'s BLOCK-
+      gating check excludes that one rule by name (it only ever explains
+      a degradation `degraded_block_tier` already carries). Harmless
+      either way for the logic below: (a) above's own `classify()`
+      re-check independently also calls that finding genuine (policy.py's
+      dedicated `tests-tool-missing` branch is an unconditional BLOCK), so
+      (a) and (b) agree on the outcome even in the case where both are
+      technically true at once. Deliberately NOT re-derived from
       `result.degraded` (tool NAMES, from `RunnerResult.tool`) intersected
       against `pipeline.BLOCK_TIER_KEYS` (registry KEYS): those two can
       diverge -- e.g. the "tests" registry key can produce a RunnerResult
