@@ -987,12 +987,12 @@ def test_dual_suite_deadline_shares_one_origin_with_the_real_executor_wait(
     this is the specific blind spot that let the two-clock-origins defect
     through review.
 
-    Mechanism under test: runners/tests.py's run() calls detect_tests() --
-    a filesystem walk -- BEFORE ever reaching the dual-suite budget logic,
-    and that walk happens INSIDE the worker thread _run_selected dispatches,
-    i.e. AFTER its wait(timeout=budget_s) has already started counting in
-    the main thread. A `started = time.monotonic()` captured after that
-    walk (the pre-fix code) silently drops however long the walk took from
+    Mechanism under test: runners/tests.py's run() calls a filesystem-walk
+    equivalent BEFORE ever reaching the dual-suite budget logic, and that
+    walk happens INSIDE the worker thread _run_selected dispatches, i.e.
+    AFTER its wait(timeout=budget_s) has already started counting in the
+    main thread. A `started = time.monotonic()` captured after that walk
+    (the pre-94fc6e8 code) silently drops however long the walk took from
     the module's own budget accounting, so the two suites can be allotted
     time as if the walk were free -- letting the worker's real finish land
     AFTER wait()'s cutoff. When that happens, _run_selected treats the
@@ -1001,14 +1001,27 @@ def test_dual_suite_deadline_shares_one_origin_with_the_real_executor_wait(
     completed suite's real, already-produced finding is discarded and the
     push blocks naming "tests timeout" instead of the real cause.
 
-    Both detect_tests() calls (pipeline.py's own, in _select_runners /
-    _is_applicable, and runners/tests.py's own, inside run()) are faked
-    with a real sleep to simulate that walk taking measurable time --
-    exactly the scenario the coordinator's bug report names. run_subprocess
-    is faked to HONESTLY enforce the timeout_s it's given (sleeps at most
-    that long, and only reports a real result if actually given enough of
-    it), mirroring what a real subprocess does -- a fake that ignores
-    timeout_s outright would hide the very effect under test.
+    [Task 4 rearm] Before Task 4's detect_tests() caching, that in-worker
+    walk WAS a literal `detect_tests(ctx.root)` call inside run(), so
+    patching `tests_runner_mod.detect_tests` with a sleep faithfully
+    simulated it. After caching, run() calls `_detected(ctx)` instead,
+    which is a cache hit for any run_gate-built ctx (this test's ctx IS
+    one) -- `detect_tests` is never reached on that path at all, so the
+    old monkeypatch silently went dead and this test would pass whether or
+    not the single-origin fix was even present. Verified concretely: the
+    pre-94fc6e8 two-clock-origin arithmetic was temporarily reintroduced
+    into runners/tests.py with Task 4's caching left intact, and this test
+    (pre-rearm) still passed -- proof the guard had no live exposure path.
+    Patching `tests_runner_mod._detected` instead -- the function run()
+    ACTUALLY calls now -- restores a genuine in-worker delay on the live
+    call site; pipeline.py's own `detect_tests` (the ONE walk that
+    populates ctx.detected_tests, in run_gate, before _select_runners) is
+    untouched by caching and is still faked the same way as before.
+
+    run_subprocess is faked to HONESTLY enforce the timeout_s it's given
+    (sleeps at most that long, and only reports a real result if actually
+    given enough of it), mirroring what a real subprocess does -- a fake
+    that ignores timeout_s outright would hide the very effect under test.
 
     Numbers (generous margins deliberately, not razor's-edge, given real
     threads + real sleeps): a 0.2s delay in _select_runners's own
@@ -1031,8 +1044,8 @@ def test_dual_suite_deadline_shares_one_origin_with_the_real_executor_wait(
         pipeline, "detect_tests",
         lambda r: (time.sleep(0.2), {"pytest", "npm"})[1])
     monkeypatch.setattr(
-        tests_runner_mod, "detect_tests",
-        lambda r: (time.sleep(0.3), {"pytest", "npm"})[1])
+        tests_runner_mod, "_detected",
+        lambda ctx: (time.sleep(0.3), {"pytest", "npm"})[1])
     monkeypatch.setitem(pipeline.GATE_RUNNER_KEYS, Gate.PRE_PUSH, ["tests"])
 
     def fake_run_subprocess(argv, cwd, timeout_s, env=None):
