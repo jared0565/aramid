@@ -1031,7 +1031,25 @@ def test_dual_suite_deadline_shares_one_origin_with_the_real_executor_wait(
     being called can only ADD elapsed time, never remove it) by that same
     0.2s -- so the FIXED code's worst-case finish, which lands at exactly
     the deadline, still clears wait()'s cutoff with room to spare rather
-    than by mere scheduler luck."""
+    than by mere scheduler luck.
+
+    [review round 2, rearm-of-the-rearm] Patching `_detected` by NAME is
+    not, by itself, proof the delay actually fires: `monkeypatch.setattr`
+    only raises if the target attribute is missing entirely (an outright
+    rename/removal of `_detected` would fail loudly). If a future change
+    ever inlines `_detected`'s cache-check logic directly into run() while
+    leaving `_detected` defined but unused, this patch would keep
+    succeeding -- attribute still exists -- while never being called
+    again, silently. That is the exact hollow-guard class this test was
+    just rearmed to close, one level deeper. Both fakes below therefore
+    record every call they receive, and the test asserts each fired at
+    least once BEFORE trusting anything the timing assertions say --
+    verified concretely: temporarily pointing the `_detected` patch at
+    `detect_tests` instead (simulating exactly that orphaned-patch
+    scenario -- a real, existing attribute `run()` no longer calls on the
+    cached path) made the call-count assertion fail while the timing
+    assertions below would have stayed green, i.e. exactly the silent
+    vacuous-pass this guards against."""
     from aramid.runners import tests as tests_runner_mod
 
     root = _repo(tmp_path)
@@ -1040,12 +1058,21 @@ def test_dual_suite_deadline_shares_one_origin_with_the_real_executor_wait(
     cfg.timeouts["pre_push"] = 0.6
     ledger = _ledger(tmp_path)
 
-    monkeypatch.setattr(
-        pipeline, "detect_tests",
-        lambda r: (time.sleep(0.2), {"pytest", "npm"})[1])
-    monkeypatch.setattr(
-        tests_runner_mod, "_detected",
-        lambda ctx: (time.sleep(0.3), {"pytest", "npm"})[1])
+    pipeline_detect_calls: list = []
+    detected_calls: list = []
+
+    def fake_pipeline_detect_tests(r):
+        pipeline_detect_calls.append(r)
+        time.sleep(0.2)
+        return {"pytest", "npm"}
+
+    def fake_detected(ctx):
+        detected_calls.append(ctx)
+        time.sleep(0.3)
+        return {"pytest", "npm"}
+
+    monkeypatch.setattr(pipeline, "detect_tests", fake_pipeline_detect_tests)
+    monkeypatch.setattr(tests_runner_mod, "_detected", fake_detected)
     monkeypatch.setitem(pipeline.GATE_RUNNER_KEYS, Gate.PRE_PUSH, ["tests"])
 
     def fake_run_subprocess(argv, cwd, timeout_s, env=None):
@@ -1061,6 +1088,12 @@ def test_dual_suite_deadline_shares_one_origin_with_the_real_executor_wait(
     monkeypatch.setattr(tests_runner_mod, "run_subprocess", fake_run_subprocess)
 
     result = pipeline.run_gate(root, Gate.PRE_PUSH, "range", cfg, ledger, run_id="run-b2-real")
+
+    # [review round 2] Both injected delays must actually have fired -- an
+    # orphaned patch (attribute exists, but nothing on the live path calls
+    # it anymore) would leave the timing assertions below vacuously green.
+    assert len(pipeline_detect_calls) >= 1
+    assert len(detected_calls) >= 1
 
     tests_failed = [f for f in result.findings if f.rule == "tests-failed"]
     # pytest genuinely completed (rc=1) well inside its correctly-reduced
