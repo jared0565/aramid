@@ -212,12 +212,47 @@ aramid-root row proves nothing, because `detect_stacks` short-circuits on
 
 ### Task 2: migrate existing fixtures that fake applicability with a bare `tests/` dir
 
-**[review C3 — measured, not theoretical.]** Applying Task 1 and running just
-two files gives **5 failures**: `test_missing_block_tier_tool_at_prepush_exits_one`,
-`test_missing_block_tier_tool_with_accept_degraded_exits_two_and_logs_bypass`,
-`test_notice_when_the_test_gate_is_disabled`,
-`test_run_gate_prints_the_tests_config_notices`,
-`test_fresh_ledger_prepush_degraded_block_tier_tool_name_diverges_from_key`.
+**MEASURED 2026-07-26 by prototyping the Task 1 change and running all ten
+candidate files — this list is exact, not predicted.** Result:
+**8 failed, 123 passed** (317s). The failing tests, in full:
+
+```
+tests/unit/test_pipeline.py::test_missing_block_tier_tool_at_prepush_exits_one
+tests/unit/test_pipeline.py::test_missing_block_tier_tool_with_accept_degraded_exits_two_and_logs_bypass
+tests/unit/test_pipeline.py::test_notice_when_the_test_gate_is_disabled
+tests/unit/test_pipeline.py::test_run_gate_prints_the_tests_config_notices
+tests/unit/test_runner_tests.py::test_timeout_comes_from_the_context_when_configured
+tests/unit/test_runner_tests.py::test_timeout_falls_back_to_the_module_default_when_unset
+tests/integration/test_check.py::test_fresh_ledger_prepush_degraded_block_tier_tool_name_diverges_from_key
+tests/integration/test_mutation_consumer.py::test_no_pytest_stack_skips_ok_with_loud_note
+```
+
+**The review's figure of 5 was an undercount** — it ran only two files. Three
+failures live outside those: both `test_runner_tests.py` timeout tests and
+`test_mutation_consumer.py::test_no_pytest_stack_skips_ok_with_loud_note`. That
+last one is in a *consumer*, not the gate, and is worth understanding rather
+than merely repairing: it exercises the skip path that `detect_tests` feeds at
+`consumers/mutation.py:110`.
+
+**26 fixture sites, but only 8 failing tests — the sites are NOT all
+load-bearing.** Four files carrying `(root/"tests").mkdir()` calls did not break
+at all (`test_red_proof_gate.py` 2 sites, `test_mutation_gate_e2e.py`,
+`test_mutation_score_gate_e2e.py`, `test_tdd_gate.py`). In those the directory
+is used as a path, not to trigger detection. So this task is "repair these 8 and
+confirm the remaining sites are incidental", not "rewrite 26 fixtures".
+
+**Two files were included specifically as controls, and BOTH PASSED:**
+- `tests/integration/test_js_mutation_consumer.py` — its `_js_repo` fixture
+  writes a `package.json` test script with **no lockfile**. Under rev 2's design
+  (lockfile gate inside `detect_tests`) the re-review predicted this would break
+  all 14 of its test functions. It passes under rev 3. **The B1/B3 fix is
+  empirically validated**, not merely argued.
+- `tests/unit/test_detectors.py` — the direct test of the changed module.
+
+**Also verified with the prototype in the tree:**
+- Global Constraint 1 holds — aramid still `{'python'}` / `{'pytest'}`.
+- The motivating bug is fixed — pawscout goes `{'js','python'}` / `{'npm','pytest'}`
+  → `{'js'}` / `{'npm'}`, so it would need no hand-written `aramid.toml` at all.
 
 Cause: fixtures do `(root / "tests").mkdir()` with the comment *"makes 'tests'
 applicable via detect_tests()"*. `_is_applicable` (`pipeline.py:174`) calls the
