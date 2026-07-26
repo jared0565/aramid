@@ -71,6 +71,19 @@ class RunContext:
       runner inapplicable, so it is never selected at all. All three are
       additive with defaults, so every existing construction site (and
       every runner that ignores them) stays valid unchanged.
+    gate_budget_s: the CURRENT gate run's own wall-clock budget (the same
+      value aramid.pipeline._run_selected passes to its ThreadPoolExecutor
+      `wait(timeout=...)`), carried onto ctx so a runner that internally
+      executes more than one sequential sub-invocation (today: only
+      runners.tests's dual pytest+npm path) can divide ITS OWN deadline
+      across them instead of each sub-invocation getting an independent
+      full per-tool timeout that, summed, can exceed the slot
+      `_run_selected` will actually wait for. None means "no shared budget
+      known" (e.g. a RunContext built outside run_gate, as unit tests do) --
+      callers must treat that as "unbounded", not zero, so a runner that
+      never opts in keeps its current unbounded-by-this-field behavior.
+      Additive field: default None keeps every existing construction site
+      valid unchanged.
     """
     root: Path
     files: list[str] = field(default_factory=list)
@@ -82,6 +95,7 @@ class RunContext:
     test_command: str | list[str] | None = None
     test_timeout_s: float | None = None
     tests_enabled: bool = True
+    gate_budget_s: float | None = None
 
 _WIN = sys.platform == "win32"
 _POST_KILL_DRAIN_S = 5.0   # cap on the post-_kill_tree reap wait (test seam)

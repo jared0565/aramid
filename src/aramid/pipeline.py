@@ -292,6 +292,12 @@ def run_gate(root: Path, gate: Gate, mode: str, cfg: config_mod.Config, ledger: 
     # with no read site anywhere; it is consumed as a fallback rather than
     # orphaned beside a new key doing the same job -- `[tests].command` wins).
     tests_cfg = cfg.tests if isinstance(cfg.tests, dict) else {}
+    # Computed here (not after ctx construction, as before) so it can ride
+    # onto RunContext.gate_budget_s: runners.tests's dual pytest+npm path
+    # needs the SAME wall-clock budget _run_selected below waits on, so the
+    # two suites split one deadline instead of each getting an independent
+    # full timeout that, summed, could overrun the slot (review B2).
+    budget_s = cfg.timeouts.get(_BUDGET_KEY.get(gate, "pre_push"), 60.0)
     ctx = RunContext(root=root, files=files, rng=rng,
                       pkg_manager=detect_package_manager(root),
                       stacks=detect_stacks(root, root),
@@ -299,11 +305,11 @@ def run_gate(root: Path, gate: Gate, mode: str, cfg: config_mod.Config, ledger: 
                       force_refresh=(mode == "all"),
                       test_command=tests_cfg.get("command", cfg.test_command),
                       test_timeout_s=tests_cfg.get("timeout_s"),
-                      tests_enabled=tests_cfg.get("enabled", True))
+                      tests_enabled=tests_cfg.get("enabled", True),
+                      gate_budget_s=budget_s)
     selected = _select_runners(gate, ctx)
 
     # 3. run concurrently under the gate's wall-clock budget.
-    budget_s = cfg.timeouts.get(_BUDGET_KEY.get(gate, "pre_push"), 60.0)
     for notice in _tests_config_notices(gate, ctx, budget_s):
         print(notice, file=sys.stderr)
     results = _run_selected(selected, ctx, budget_s)

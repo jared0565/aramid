@@ -78,6 +78,19 @@ def test_tests_failed_always_blocks():
     assert v is Verdict.BLOCK
 
 
+# --- classify: tests-tool-missing (Task 3, review B4) ------------------------
+
+def test_tests_tool_missing_always_blocks():
+    """runners/tests.py's dual-suite aggregate emits this for a
+    detect_tests()-detected suite whose tool binary could not be run at
+    all -- tool="tests" (never "npm"/"pytest", to avoid both a fingerprint
+    collision with tests-failed and the _DEPS_TOOLS fallthrough below).
+    Unconditional BLOCK, like tests-failed above: a detected suite that
+    never ran is exactly as actionable as one that ran and failed."""
+    _, v = policy.classify("tests", "tests-tool-missing", "high", Gate.PRE_PUSH, _cfg(armed=False))
+    assert v is Verdict.BLOCK
+
+
 # --- classify: deps threshold -----------------------------------------------
 
 def test_deps_at_threshold_blocks():

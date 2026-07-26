@@ -159,6 +159,17 @@ def classify(tool: str, rule: str, severity_raw: str, gate: Gate, cfg) -> tuple[
     if rule == "tests-failed":
         return severity, Verdict.BLOCK
 
+    # [review B4] runners/tests.py's dual-suite aggregate: a detect_tests()
+    # -detected suite whose tool binary could not be resolved/run at all.
+    # tool="tests" (never "npm"/"pytest") is what routes here rather than
+    # into the `_DEPS_TOOLS` branch below -- see runners/tests.py's
+    # TOOL_MISSING_RULE docstring for why that distinct tool+rule pairing
+    # is load-bearing (fingerprint collision / block_severity fallthrough).
+    # Unconditional BLOCK, like tests-failed just above: a detected suite
+    # that never ran is exactly as actionable as one that ran and failed.
+    if rule == "tests-tool-missing":
+        return severity, Verdict.BLOCK
+
     if tool in _DEPS_TOOLS:
         threshold = _map_severity(block_rules.get("deps", {}).get("block_severity", "critical"))
         if _SEVERITY_ORDER.index(severity) >= _SEVERITY_ORDER.index(threshold):
