@@ -8,7 +8,30 @@ from pathlib import Path
 # already caught by that rule). Kept local to this module: init.py's
 # `--discover` skip-list serves a different walk (finding nested repos) and
 # is not reused here.
-_EXCLUDED_DIRS = {"node_modules", "venv", "build"}
+#
+# [MUST FIX 1, whole-branch review] Exactly the six names review B6
+# mandated -- `node_modules`, `graph-out`, `venv`, `env`, `build`,
+# `site-packages` -- not the three this module originally shipped with.
+# `env` and `site-packages` are the two that matter most: `python -m venv
+# env` is at least as common a convention as `venv`, and the dot-directory
+# rule does not cover it, so a bare `env/` virtualenv was reopening the
+# EXACT bug this whole module exists to fix (a TypeScript repo's vendored
+# `conftest.py`/`test_*.py` under `env/Lib/site-packages/` made
+# detect_stacks/detect_tests report "python"/"pytest", which then ran
+# `pytest -q` at the repo root and blocked every push with exit 5) --
+# reached by a different vector than the original bug report. `site-
+# packages` is excluded independently of `env`/`venv` too, since some
+# virtualenv tools and vendoring conventions place it directly under a
+# differently-named (or no) wrapper directory. `graph-out/` mirrors
+# `defaults.toml`'s own `ignore_paths` entry for aramid's graphite
+# artifacts. DELIBERATE ACCEPTED TRADE-OFF: a real, non-virtualenv source
+# directory that happens to be named exactly `env/` (or any of the other
+# five names) is invisible to both walks below -- same as `venv`/`build`
+# always were. Renaming such a directory, or adding a real pytest-shaped
+# file elsewhere in the repo, are the two ways around it; this module does
+# not attempt to distinguish "a directory named env that IS a virtualenv"
+# from "a directory named env that ISN'T".
+_EXCLUDED_DIRS = {"node_modules", "graph-out", "venv", "env", "build", "site-packages"}
 
 
 def _iter_files(base: Path):
@@ -29,7 +52,22 @@ def _iter_files(base: Path):
 def _is_pytest_file(name: str) -> bool:
     """True for `conftest.py`, `test_*.py`, or `*_test.py` -- the three
     positive pytest signals (deliberate; a bare `tests/` directory is not
-    one of them -- see detect_tests)."""
+    one of them -- see detect_tests).
+
+    [MUST FIX 5, whole-branch review / deferred #2] Matching is a plain
+    string comparison, hence deliberately CASE-SENSITIVE on every platform
+    -- `TEST_FOO.PY` / `Conftest.PY` / `BAR_TEST.PY` do not match. This is
+    a decision, not an accidental narrowing: the code this module replaced
+    used `Path.rglob("test_*.py")` / `Path.rglob("*.py")`, whose case
+    sensitivity is platform-dependent (case-insensitive on Windows/macOS's
+    default filesystems, case-sensitive on Linux) -- the OLD behaviour was
+    already platform-divergent, not a stable contract this module is
+    weakening. Uniform case-sensitivity matches CI (which runs on Linux)
+    on every platform, including this one. Accepted trade-off: pytest
+    itself WOULD collect `TEST_FOO.PY` on Windows (its own collection
+    globbing normcases there), so this is a real, deliberate false
+    negative on Windows for an all-caps filename -- traded for a detector
+    that agrees with itself regardless of which OS aramid runs on."""
     if name == "conftest.py":
         return True
     if name.endswith("_test.py"):
@@ -42,7 +80,10 @@ def detect_stacks(root: Path, scope: Path) -> set[str]:
     # `scope` (not `root`) bases the walk: it's the only path guaranteed to
     # prefix what the walk yields (init.py may pass a subdirectory here;
     # pipeline.py passes `root`). `or` short-circuits, so a `pyproject.toml`
-    # at root skips the walk entirely.
+    # at root skips the walk entirely. `.suffix == ".py"` is deliberately
+    # case-sensitive, same decision and rationale as _is_pytest_file's own
+    # docstring (MUST FIX 5, whole-branch review) -- a `BAR.PY` file is not
+    # detected on any platform.
     if (root / "pyproject.toml").exists() or any(p.suffix == ".py" for p in _iter_files(scope)):
         s.add("python")
     if (root / "package.json").exists():
