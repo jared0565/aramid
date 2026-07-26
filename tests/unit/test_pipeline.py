@@ -1168,15 +1168,59 @@ def test_dual_suite_deadline_shares_one_origin_with_the_real_executor_wait(
     given enough of it), mirroring what a real subprocess does -- a fake
     that ignores timeout_s outright would hide the very effect under test.
 
-    Numbers (generous margins deliberately, not razor's-edge, given real
-    threads + real sleeps): a 0.2s delay in _select_runners's own
-    detect_tests() call widens the gap between ctx.gate_deadline and
-    _run_selected's actual wait() cutoff (proven safe in runners/tests.py's
-    module docstring: every step between the deadline being set and wait()
-    being called can only ADD elapsed time, never remove it) by that same
-    0.2s -- so the FIXED code's worst-case finish, which lands at exactly
-    the deadline, still clears wait()'s cutoff with room to spare rather
-    than by mere scheduler luck.
+    [CI flake fix, whole-branch-fix round: CI run 30208508818 failed this
+    test on `assert "exited 1" in pytest_findings[0].message` -- a loaded
+    macOS runner got 'pytest timeout: test suite failed' instead. Root
+    cause: the previous revision of this docstring analysed exactly ONE
+    margin (below, M1) and let a "generous margins deliberately" claim
+    about M1 stand in for a SEPARATE quantity, M2, that nobody had actually
+    computed and that turned out to be razor-thin. Also corrects a stale
+    attribution: the detect_tests() delay below is NOT inside
+    _select_runners -- _select_runners never calls detect_tests itself, it
+    only reads the ctx.detected_tests cache that run_gate's own
+    `detect_tests(root)` call (pipeline.py:464) populates, in the MAIN
+    thread, before ctx is even built (before _select_runners exists to call
+    anything).]
+
+    Numbers: budget_s=3.0 (cfg.timeouts["pre_push"]); a 1.0s delay in
+    run_gate's `detect_tests(root)` call, MAIN thread, before ctx/dispatch;
+    a 1.5s delay in tests_runner_mod._detected, WORKER thread, once run()
+    starts. Three margins fall out, and they are three DIFFERENT
+    quantities -- this is the distinction the pre-fix docstring collapsed:
+
+    M1 (deadline vs. the real executor's wait() cutoff): the 1.0s
+    pre-flight delay in the main thread means _run_selected's
+    wait(timeout=budget_s) is only called at T0+1.0, so its cutoff is
+    T0+4.0 -- 1.0s later than ctx.gate_deadline itself (T0+3.0). Proven
+    safe in runners/tests.py's module docstring: every step between the
+    deadline being set and wait() being called can only ADD elapsed time,
+    never remove it, so wait()'s cutoff is provably >= gate_deadline. This
+    is the ONLY margin the pre-fix docstring analysed.
+    M2 (pytest's OWN allotment vs. what it needs -- the one that actually
+    failed in CI): by the time pytest's _run_one_within_deadline call reads
+    _remaining(ctx), the worker has spent 1.0s (pre-flight) + 1.5s
+    (_detected) = 2.5s of the 3.0s budget, leaving a 0.5s allotment;
+    fake_run_subprocess needs only 0.05s for "pytest" -- an absolute 0.45s
+    of slack. At the PREVIOUS numbers (budget 0.6/0.2/0.3, pytest needing
+    0.05 of a 0.1s allotment) this margin was a mere 0.05s: a loaded macOS
+    runner overshooting either sleep by ~50ms (ordinary scheduler jitter,
+    not a hang) drove `remaining` below `needed`, flipping
+    fake_run_subprocess's branch from "completed rc=1" to TIMEOUT. 0.45s
+    is a ~9x larger absolute margin on the identical real-clock primitives
+    (real threads, real time.sleep) -- not immune to jitter in principle,
+    but no longer razor's-edge either.
+    M3 (npm still gets truncated -- now asserted directly below, not left
+    to arithmetic alone): after pytest's 0.05s, npm's own
+    _run_one_within_deadline call sees a ~0.45s allotment against a 2.0s
+    need -- truncated with ~1.55s to spare, landing npm's fake sleep
+    (`max(timeout_s, 0)` ~= 0.45s) at approximately gate_deadline, the
+    designed worst case. If real scheduler overshoot ever consumed all of
+    M2 and then some, npm could instead hit _run_one_within_deadline's
+    `remaining <= 0` short-circuit and never reach fake_run_subprocess at
+    all -- still a TIMEOUT, still the same finding and message, so the
+    assertions below hold either way; this docstring does not claim the
+    min()-path is the only route to npm's truncation, only the expected
+    one.
 
     [review round 2, rearm-of-the-rearm] Patching `_detected` by NAME is
     not, by itself, proof the delay actually fires: `monkeypatch.setattr`
@@ -1200,7 +1244,7 @@ def test_dual_suite_deadline_shares_one_origin_with_the_real_executor_wait(
     root = _repo(tmp_path)
     (root / "package-lock.json").write_text("{}", encoding="utf-8")  # lockfile gate passes
     cfg = _cfg(root, tmp_path, monkeypatch)
-    cfg.timeouts["pre_push"] = 0.6
+    cfg.timeouts["pre_push"] = 3.0
     ledger = _ledger(tmp_path)
 
     pipeline_detect_calls: list = []
@@ -1208,12 +1252,12 @@ def test_dual_suite_deadline_shares_one_origin_with_the_real_executor_wait(
 
     def fake_pipeline_detect_tests(r):
         pipeline_detect_calls.append(r)
-        time.sleep(0.2)
+        time.sleep(1.0)
         return {"pytest", "npm"}
 
     def fake_detected(ctx):
         detected_calls.append(ctx)
-        time.sleep(0.3)
+        time.sleep(1.5)
         return {"pytest", "npm"}
 
     monkeypatch.setattr(pipeline, "detect_tests", fake_pipeline_detect_tests)
@@ -1221,7 +1265,7 @@ def test_dual_suite_deadline_shares_one_origin_with_the_real_executor_wait(
     monkeypatch.setitem(pipeline.GATE_RUNNER_KEYS, Gate.PRE_PUSH, ["tests"])
 
     def fake_run_subprocess(argv, cwd, timeout_s, env=None):
-        needed = 0.05 if argv[0] == "pytest" else 0.4
+        needed = 0.05 if argv[0] == "pytest" else 2.0
         if timeout_s < needed:
             time.sleep(max(timeout_s, 0))
             return RunnerResult(tool=argv[0], state=ToolState.TIMEOUT)
@@ -1264,6 +1308,23 @@ def test_dual_suite_deadline_shares_one_origin_with_the_real_executor_wait(
     # this message assertion is what makes it fail for the right reason.
     assert "exited 1" in pytest_findings[0].message
     assert "timeout" not in pytest_findings[0].message.lower()
+    # [invariant 4, whole-branch-fix round] npm must still be the suite the
+    # shared deadline truncates -- previously only implied by this
+    # docstring's own arithmetic (M3 above), never asserted, so a change
+    # that accidentally gave npm enough allotment to complete would have
+    # passed silently. needed=2.0 against a ~0.45s allotment means npm's
+    # own _run_one_within_deadline call reports TIMEOUT, and parse()'s
+    # TIMEOUT branch (runners/tests.py) yields tool="npm",
+    # message="npm timeout: test suite failed" -- a distinct finding from
+    # pytest's (different `tool`, so a different fingerprint), meaning both
+    # survive independently rather than colliding in the ledger. Verified
+    # concretely (see report): temporarily lowering npm's `needed` below
+    # its allotment (so it completes rc=0 instead of truncating) makes
+    # `len(npm_findings) == 1` fail -- a real, running proof that this
+    # assertion is load-bearing, not vacuous.
+    npm_findings = [f for f in tests_failed if f.tool == "npm"]
+    assert len(npm_findings) == 1
+    assert "timeout" in npm_findings[0].message.lower()
     # The failure mode this guards: the whole future abandoned and replaced
     # by RunnerResult("tests", TIMEOUT) -- tool="tests" (the registry key,
     # never a real sub-tool), message naming "tests timeout" rather than
