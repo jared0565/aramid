@@ -226,8 +226,8 @@ Additional limitations beyond the advisory ones above:
 ### Red-first proof (TDD gate, sub-project 3)
 
 At every `pre-push`, changed test files are examined — but only if at least
-one of their changed lines is a new test **definition** (`def`/`async def`
-whose name starts with `test`, found by walking the real `ast`, never by
+one of their changed lines is itself a test **definition** line (`def`/`async
+def` whose name starts with `test`, found by walking the real `ast`, never by
 matching text against the diff — limitation 8). A qualifying file's head
 version is then run — against a throwaway worktree at the range's *base*. A
 file whose tests all pass on the pre-change tree was never red, so it proves
@@ -288,13 +288,18 @@ Limitations:
    and nothing on `PYTHONPATH` outranks that; and a package installed
    non-editably still shadows the worktree unless its layout puts the
    source under `<wt>/src` or `<wt>`.
-8. A subject is only examined if at least one of its changed lines is a new
-   test **definition** line — `def`/`async def` whose name starts with
+8. A subject is only examined if at least one of its changed lines is itself
+   a test **definition** line — `def`/`async def` whose name starts with
    `test`, found by walking the real `ast`, never by matching text against
    the diff (a string literal or docstring that merely *contains*
    `def test_x():`-shaped text does not count, nor does a line added inside
-   an existing test's body). This closes the false-alarm class in
-   limitation 1, at a deliberate recall cost: a new
+   an existing test's body). "Changed" includes a pure modification of an
+   already-existing def line (a reformat, a rename), not only a freshly
+   added one — that is not a distinct false-positive class, it is limitation
+   1's whole-file behavior under the same name, since the base run still
+   proves nothing more than "the whole file passed". This closes the
+   false-alarm class in limitation 1 for edits that touch no test
+   definition at all, at a deliberate recall cost: a new
    `@pytest.mark.parametrize` case added to an existing test function, or a
    strengthened assertion in an existing test's body, is not scanned at all.
    That is not an oversight — this producer's contract is recall loss only,
@@ -304,7 +309,13 @@ Limitations:
    before a subprocess is even spent on it. One resolution-side consequence
    follows: such an edit can no longer prove a file's open red-proof finding
    red either, so it can no longer auto-resolve that finding — only a push
-   that adds a new test definition can.
+   that changes a test-definition line can. A BOM-prefixed file's otherwise-
+   qualifying change is invisible to this gate too: the BOM makes `ast.parse`
+   raise a `SyntaxError`, so the file is silently never scanned — correct
+   fail-open behavior, but a real recall cost. The name check is hard-coded
+   to `test`; a repo that configures pytest's `python_functions` to
+   something else has its differently-named tests invisible to this gate
+   regardless of that setting.
 
 ### Phase 2b: the LLM reviewer
 

@@ -31,14 +31,16 @@ loss, not by itself a false positive); only subject files are materialized
 at head, so a new test depending on head changes to non-test files it
 imports usually collection-errors -> counts as red; single run, no flake
 retries. A separate content gate (T-4, see _new_test_def_lines) requires at
-least one changed line to be a new test-definition line before a subject is
-scanned at all -- before this gate, subject selection had no content check,
-so any edit to an already-green test file (a fixture repair, a comment, a
-docstring) still triggered a full base rerun and could produce a genuine
-false alarm; the gate closes that at the cost of no longer scanning edits
-that only strengthen an existing test's body (a new parametrize case, a
-tightened assertion) -- recall traded for soundness, this producer's actual
-contract, not a compromise of it.
+least one changed line to itself be a test-definition line before a subject
+is scanned at all (a pure reformat of an already-existing def line counts,
+same as a freshly added one -- "changed", not "new") -- before this gate,
+subject selection had no content check, so any edit to an already-green
+test file (a fixture repair, a comment, a docstring) still triggered a full
+base rerun and could produce a genuine false alarm; the gate closes that at
+the cost of no longer scanning edits that only strengthen an existing
+test's body (a new parametrize case, a tightened assertion) -- recall
+traded for soundness, this producer's actual contract, not a compromise of
+it.
 The base run inherits the repo's own pytest config -- an addopts gate
 (coverage thresholds, warnings-as-errors) can force a single-file base run
 non-zero regardless of test outcomes, reading as red. As a detector this
@@ -72,7 +74,7 @@ from aramid.tdd import _split_range
 
 RULE = "test-not-red"
 _TOOL = "red-proof"
-_MESSAGE = "a new test definition passes against the pre-change tree (never red)"
+_MESSAGE = "a changed test-definition line passes against the pre-change tree (never red)"
 
 
 def _new_test_def_lines(content: str) -> set[int]:
@@ -97,9 +99,13 @@ def _new_test_def_lines(content: str) -> set[int]:
     does, because then the def line is itself newly added.
 
     Fail-open by construction: unparsable content (SyntaxError, or any
-    other parse failure) yields an empty set, i.e. "no new test def" --
-    the same silent-skip fate as an unreadable blob, never an exception
-    escaping into scan_scoped's subject loop."""
+    other parse failure) yields an empty set, i.e. "no test-definition line
+    at all" -- the same silent-skip fate as an unreadable blob, never an
+    exception escaping into scan_scoped's subject loop. A BOM-prefixed file
+    lands here too (a UTF-8 BOM makes ast.parse raise SyntaxError), so a
+    legitimately changed test in such a file is silently never scanned --
+    correct fail-open behavior, real recall cost (README, Red-first proof
+    limitation 8)."""
     try:
         tree = ast.parse(content)
     except Exception:
@@ -163,15 +169,15 @@ def scan_scoped(ctx, cfg) -> tuple[list[RawFinding], set[str]]:
     force it regardless of test outcomes (module docstring) -- the one
     inconclusive case this scoping cannot filter out.
 
-    A subject whose changed lines include no new test-*definition* line
+    A subject with no test-*definition* line among its changed lines
     (the T-4 content gate, _new_test_def_lines) never reaches the pytest run
     at all, so it lands in neither out nor proven_red -- from this
     function's return value alone that is indistinguishable from a file the
     wall budget skipped. Both mean only "not scanned this run", never
     "clean"; a push that merely strengthens an existing test's assertion or
     adds a `@pytest.mark.parametrize` case can no longer auto-resolve an
-    open red-proof finding on that file this way -- only a push that adds a
-    new test definition can."""
+    open red-proof finding on that file this way -- only a push that changes
+    a test-definition line can."""
     try:
         rcfg = getattr(cfg, "red_proof", None) or {}
         if not rcfg.get("enabled", True):
@@ -207,8 +213,10 @@ def scan_scoped(ctx, cfg) -> tuple[list[RawFinding], set[str]]:
                 if not content:
                     continue        # unreadable/empty head blob: fail-open
                 if not (_new_test_def_lines(content) & new_lines[rel]):
-                    # T-4 content gate: no NEW test *definition* line among
-                    # this subject's changed lines -- skip before the
+                    # T-4 content gate: no test *definition* line among this
+                    # subject's changed lines (a pure reformat of an
+                    # existing def line counts as "changed" too, same as a
+                    # freshly added one) -- skip before the
                     # worktree write/subprocess entirely (fail-open: an
                     # unparsable blob lands here too, via the empty set
                     # _new_test_def_lines returns on SyntaxError). Before
@@ -228,7 +236,7 @@ def scan_scoped(ctx, cfg) -> tuple[list[RawFinding], set[str]]:
                     # consequence follows: such a file can no longer land in
                     # proven_red from this kind of edit, so it can no longer
                     # auto-resolve an open red-proof finding on that file --
-                    # only a push that adds a new test definition can.
+                    # only a push that changes a test-definition line can.
                     continue
                 dest = wt / rel
                 dest.parent.mkdir(parents=True, exist_ok=True)

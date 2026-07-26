@@ -38,9 +38,9 @@ def _plumb(monkeypatch, new_lines, pytest_rcs, worktree_rc=0, blob=None):
     `def test_x():` test-definition line positioned at the LOWEST changed
     line number across every value in new_lines -- so the T-4 content gate
     (src/aramid/red_proof.py's _new_test_def_lines, which every subject now
-    passes through before the subprocess) sees a genuine new test def among
-    the changed lines, matching what each of these tests already assumed
-    before the gate existed. Pass an explicit blob (e.g. "" for the
+    passes through before the subprocess) sees a genuine test-definition
+    line among the changed lines, matching what each of these tests already
+    assumed before the gate existed. Pass an explicit blob (e.g. "" for the
     unreadable-blob test) to bypass this and use it verbatim -- the gate
     itself is exercised directly by the content-gate tests below, not by
     this default."""
@@ -72,10 +72,12 @@ def test_never_red_file_yields_finding(monkeypatch, tmp_path):
     f = findings[0]
     assert (f.tool, f.rule, f.severity_raw, f.file, f.line) == \
         ("red-proof", "test-not-red", "medium", "tests/test_foo.py", 0)
-    # T-4: the message now names the actual predicate (a new test
-    # DEFINITION passing on base), not just "new test lines" -- key the
-    # assertion on that distinguishing word rather than on "never red",
-    # which both the old and new wording share and so cannot tell apart.
+    # T-4: the message now names the actual predicate (a CHANGED test
+    # DEFINITION line passing on base -- "changed", not "new": a pure
+    # reformat of an existing def line satisfies the gate too), not just
+    # "new test lines" -- key the assertion on the distinguishing word
+    # rather than on "never red", which both the old and new wording share
+    # and so cannot tell apart.
     assert "definition" in f.message
     # SP3-M1: assert the actual pytest invocation, not just its outcome --
     # `_plumb`'s docstring always claimed `runs` was captured "for
@@ -207,7 +209,7 @@ NOW = "2026-07-21T12:00:00+00:00"
 def _rp_finding(fid="e" * 64, file="tests/test_foo.py"):
     return Finding(id=fid, tool="red-proof", rule="test-not-red", severity_raw="medium",
                    severity=Severity.MEDIUM, verdict=Verdict.WARN, file=file,
-                   line=0, message="a new test definition passes against the pre-change tree (never red)",
+                   line=0, message="a changed test-definition line passes against the pre-change tree (never red)",
                    evidence="", gate=Gate.PRE_PUSH, source=Source.DETERMINISTIC)
 
 
