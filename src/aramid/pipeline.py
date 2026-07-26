@@ -172,32 +172,148 @@ def _is_applicable(key: str, ctx: RunContext) -> bool:
         # gate applicable on its own. Without this, pointing `[tests].command`
         # at a `make test` wrapper (or a suite the pytest/npm heuristics
         # don't recognize) would silently do nothing at all.
-        return bool(ctx.test_command) or bool(detect_tests(ctx.root))
+        return bool(ctx.test_command) or bool(_detected_tests(ctx))
     # gitleaks, semgrep, and any unrecognized key (e.g. test doubles): always applicable.
     return True
 
 
+def _detected_tests(ctx: RunContext) -> set[str]:
+    """`detect_tests(ctx.root)`, cached on `ctx.detected_tests` when
+    aramid.pipeline.run_gate precomputed it (Task 4, review M6+B7) -- see
+    RunContext.detected_tests's own docstring for why that field defaults
+    to `None`, never `set()`. Every reader in this module goes through
+    here (rather than calling `detect_tests` directly) so a gate run walks
+    the tree once, not once per reader."""
+    return ctx.detected_tests if ctx.detected_tests is not None else detect_tests(ctx.root)
+
+
+def _plausible_test_setup(root: Path) -> bool:
+    """[review I3 + B1] A repo-level signal that SOME kind of test setup
+    exists, independent of whether detect_tests() recognizes it. Task 1
+    tightened detect_tests() to require a real pytest-shaped file name
+    (test_*.py / *_test.py / conftest.py) or a package.json test script --
+    correctly closing a false-positive bug (a bare tests/*.test.ts
+    directory used to count on its own) -- but that same tightening
+    creates real false negatives this notice exists to surface: a custom
+    `python_files` pytest.ini pattern, unittest-style `testfoo.py` naming,
+    or a doctest-only suite all leave detect_tests() empty even though a
+    real suite is right there. Literal signals, deliberately -- this only
+    decides whether to print an informational notice, never gate/policy
+    behavior, so a loose match costs one stderr line, never a false BLOCK."""
+    if (root / "tests").is_dir() or (root / "test").is_dir():
+        return True
+    if (root / "pytest.ini").exists() or (root / "tox.ini").exists():
+        return True
+    pyproject = root / "pyproject.toml"
+    if pyproject.exists():
+        try:
+            return "[tool.pytest.ini_options]" in pyproject.read_text(encoding="utf-8")
+        except OSError:
+            return False
+    return False
+
+
 def _tests_config_notices(gate: Gate, ctx: RunContext, budget_s: float) -> list[str]:
     """Loud, per-run notices for `[tests]` config that would otherwise
-    silently weaken or neuter the BLOCK-tier test gate. Both cases below are
+    silently weaken or neuter the BLOCK-tier test gate. Every case below is
     the same failure class this engine exists to prevent: a check that
-    reports nothing for a reason indistinguishable from "clean"."""
+    reports nothing for a reason indistinguishable from "clean".
+
+    [review I5] These ACCUMULATE: multiple independent conditions can be
+    true in the same run (e.g. a false-negative test setup AND an
+    over-budget timeout_s), and each gets its own notice. The first version
+    of this function `return`ed at the first matching branch, which would
+    have silently hidden every notice after it -- collect into a list and
+    return once, at the end, instead."""
     if "tests" not in GATE_RUNNER_KEYS.get(gate, []):
         return []          # this gate never runs tests -- nothing to suppress
+    notices: list[str] = []
     if not ctx.tests_enabled:
         # Only worth saying when a suite actually exists to be skipped.
-        if detect_tests(ctx.root) or ctx.test_command:
-            return ["aramid: [tests].enabled = false -- the BLOCK-tier test "
-                    "gate is DISABLED for this repo; nothing here runs your "
-                    "suite."]
-        return []
+        # Nothing else below is reachable once the gate is off outright --
+        # every other notice here is about a suite that WOULD run.
+        if _detected_tests(ctx) or ctx.test_command:
+            notices.append(
+                "aramid: [tests].enabled = false -- the BLOCK-tier test "
+                "gate is DISABLED for this repo; nothing here runs your "
+                "suite.")
+        return notices
+
+    # [review I3 + B1] "suite present but not running": only meaningful
+    # when nothing already tells the gate exactly what to run -- an
+    # explicit `[tests].command` IS the repo's answer and short-circuits
+    # detection entirely (runners.tests.run()'s own first check), so
+    # neither case below can be silently dropping anything while one is set.
+    if not ctx.test_command:
+        kinds = _detected_tests(ctx)
+        if not kinds and _plausible_test_setup(ctx.root):
+            notices.append(
+                "aramid: tests: a tests/, test/, pytest.ini, tox.ini, or "
+                "[tool.pytest.ini_options] setup was found, but aramid's "
+                "detector recognized no suite in it (custom python_files "
+                "patterns, unittest-style testfoo.py naming, and "
+                "doctest-only suites aren't recognized) -- the BLOCK-tier "
+                "test gate has nothing to run. Set [tests].command to "
+                "point aramid at your suite explicitly.")
+        elif "pytest" in kinds and "npm" in kinds:
+            # [review I3 + B1, MANDATORY case] Both kinds detected, but the
+            # C1 lockfile gate (runners/tests.py) means npm only actually
+            # runs when a JS package-manager lockfile backs it up. Resolved
+            # the same way _dual_stack_run does (ctx.pkg_manager first, a
+            # fresh detect_package_manager(root) only as fallback) so this
+            # check and the real runner never disagree about which repos
+            # get promoted to a dual run.
+            pkg_manager = ctx.pkg_manager or detect_package_manager(ctx.root)
+            if pkg_manager is None:
+                notices.append(
+                    "aramid: tests: both a Python test suite and a "
+                    "package.json test script were detected, but no JS "
+                    "lockfile (package-lock.json / pnpm-lock.yaml / "
+                    "yarn.lock) was found -- the npm suite is being "
+                    "skipped this run (pytest still runs). Run `npm "
+                    "install` (or pnpm/yarn), or set [tests].command to "
+                    "run it explicitly.")
+            else:
+                # [review B5] Informational only -- Task 3's shared
+                # ctx.gate_deadline is what actually keeps a dual-suite run
+                # inside budget_s; this only explains a run that had to
+                # share it. Deliberately NOT `2 * effective > budget_s`
+                # (rev 1's rule): stock timeout_s/pre_push are both 300, so
+                # that form fires on every push for every dual-stack repo.
+                # A SINGLE effective timeout already exceeding the WHOLE
+                # shared budget is a narrower, still-exact signal: it
+                # guarantees runners.tests._run_one_within_deadline's
+                # `min(_timeout(ctx), remaining)` caps whichever suite runs
+                # second below its nominal timeout on EVERY invocation,
+                # regardless of how fast either suite actually runs (even a
+                # zero-duration first suite leaves only budget_s <
+                # effective_timeout for the second) -- a guarantee, not a
+                # hypothetical "might". Uses `ctx.test_timeout_s or
+                # tests.TIMEOUT_S`, NOT the `if ctx.test_timeout_s and ...`
+                # shape of the single-suite notice below -- that guard
+                # would skip this comparison entirely whenever timeout_s is
+                # unset, exactly the case this notice must still cover
+                # (e.g. a repo that only lowers [timeouts].pre_push).
+                effective_timeout = ctx.test_timeout_s or tests.TIMEOUT_S
+                if effective_timeout > budget_s:
+                    key = _BUDGET_KEY.get(gate, "pre_push")
+                    notices.append(
+                        f"aramid: tests: this repo runs a pytest suite AND "
+                        f"an npm suite sequentially, sharing ONE "
+                        f"[timeouts].{key} budget of {budget_s:g}s -- the "
+                        f"effective per-suite timeout "
+                        f"({effective_timeout:g}s) already exceeds that "
+                        f"shared budget on its own, so the second suite is "
+                        f"guaranteed a reduced (or zero) allotment. Raise "
+                        f"[timeouts].{key}, or lower [tests].timeout_s.")
+
     if ctx.test_timeout_s and ctx.test_timeout_s > budget_s:
         key = _BUDGET_KEY.get(gate, "pre_push")
-        return [f"aramid: [tests].timeout_s = {ctx.test_timeout_s:g}s exceeds the "
-                f"[timeouts].{key} budget of {budget_s:g}s -- the gate abandons "
-                f"the runner at {budget_s:g}s, so the larger timeout can never "
-                f"be reached. Raise both, or lower timeout_s."]
-    return []
+        notices.append(f"aramid: [tests].timeout_s = {ctx.test_timeout_s:g}s exceeds the "
+                        f"[timeouts].{key} budget of {budget_s:g}s -- the gate abandons "
+                        f"the runner at {budget_s:g}s, so the larger timeout can never "
+                        f"be reached. Raise both, or lower timeout_s.")
+    return notices
 
 
 def _select_runners(gate: Gate, ctx: RunContext) -> dict[str, object]:
@@ -312,6 +428,14 @@ def run_gate(root: Path, gate: Gate, mode: str, cfg: config_mod.Config, ledger: 
     # deadline -- never earlier.
     budget_s = cfg.timeouts.get(_BUDGET_KEY.get(gate, "pre_push"), 60.0)
     gate_deadline = time.monotonic() + budget_s
+    # detect_tests() is a filesystem walk -- cached on RunContext (Task 4,
+    # review M6+B7) so _is_applicable, _tests_config_notices, and
+    # runners.tests.run() each read the SAME result instead of each
+    # repeating the walk. Computed here, AFTER gate_deadline's own origin
+    # is captured, for the identical single-origin reason gate_deadline's
+    # docstring gives for detect_package_manager/detect_stacks below: this
+    # walk must count against the budget, never be free relative to it.
+    detected_tests = detect_tests(root)
     ctx = RunContext(root=root, files=files, rng=rng,
                       pkg_manager=detect_package_manager(root),
                       stacks=detect_stacks(root, root),
@@ -320,7 +444,8 @@ def run_gate(root: Path, gate: Gate, mode: str, cfg: config_mod.Config, ledger: 
                       test_command=tests_cfg.get("command", cfg.test_command),
                       test_timeout_s=tests_cfg.get("timeout_s"),
                       tests_enabled=tests_cfg.get("enabled", True),
-                      gate_deadline=gate_deadline)
+                      gate_deadline=gate_deadline,
+                      detected_tests=detected_tests)
     selected = _select_runners(gate, ctx)
 
     # 3. run concurrently under the gate's wall-clock budget.

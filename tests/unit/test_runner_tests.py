@@ -485,6 +485,38 @@ def test_shared_budget_caps_the_second_suites_timeout(tmp_path, monkeypatch):
     assert 0.05 < captured[1][1] < 0.45
 
 
+def test_run_respects_the_cached_detected_tests_over_a_fresh_walk(tmp_path, monkeypatch):
+    """[review M6+B7] Proves runners.tests.run() actually reads
+    ctx.detected_tests when the caller (aramid.pipeline.run_gate)
+    precomputed it, instead of unconditionally re-walking via
+    detect_tests(ctx.root). root has a real pytest file (a fresh walk
+    WOULD find "pytest" and invoke run_subprocess); the ctx explicitly
+    caches an empty set instead, which must be trusted -- proven by
+    run_subprocess never being called at all."""
+    (tmp_path / "tests").mkdir()
+    (tmp_path / "tests" / "test_x.py").write_text("def test_x(): pass\n")
+
+    def fail_if_called(argv, cwd, timeout_s, env=None):
+        pytest.fail(f"run_subprocess must not be called when the cache says "
+                    f"no suite was detected (argv={argv})")
+
+    monkeypatch.setattr(tests_runner, "run_subprocess", fail_if_called)
+    result = tests_runner.run(RunContext(root=tmp_path, detected_tests=set()))
+    assert result.state is ToolState.MISSING
+
+
+def test_run_uses_the_cached_detected_tests_for_dual_stack_dispatch(tmp_path, monkeypatch):
+    """The cache must also carry a REAL positive result correctly: a repo
+    with NO on-disk test signals at all still dispatches to the dual-suite
+    path when the ctx explicitly caches {"pytest", "npm"}."""
+    (tmp_path / "package-lock.json").write_text("{}")  # lockfile gate passes
+    calls: list = []
+    monkeypatch.setattr(tests_runner, "run_subprocess", _tracking_ok_fake(calls))
+    result = tests_runner.run(RunContext(root=tmp_path, detected_tests={"pytest", "npm"}))
+    assert result.tool == "tests"
+    assert [r.tool for r in result.sub_results] == ["pytest", "npm"]
+
+
 def test_budget_exhausted_after_first_suite_skips_second_but_keeps_first_result(
         tmp_path, monkeypatch):
     """[review B2] Two suites whose combined runtime exceeds the budget

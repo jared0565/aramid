@@ -172,6 +172,21 @@ def _remaining(ctx) -> float:
     return (deadline - time.monotonic()) if deadline is not None else float("inf")
 
 
+def _detected(ctx) -> set[str]:
+    """`ctx.detected_tests` if the caller precomputed it -- aramid.pipeline.
+    run_gate does, once per gate run (Task 4, review M6+B7), before this
+    module's own worker thread even starts -- else a fresh
+    `detect_tests(ctx.root)` walk exactly as before caching existed.
+    getattr-based, matching `_timeout`/`_remaining`'s own defensive style:
+    a RunContext built directly by a unit test (or any caller outside
+    run_gate) has no cache to read, and `None` must fall back to a real
+    walk rather than being treated as "no suite detected" -- see
+    RunContext.detected_tests's own docstring for why the field defaults
+    to `None`, never `set()`."""
+    cached = getattr(ctx, "detected_tests", None)
+    return cached if cached is not None else detect_tests(ctx.root)
+
+
 def _argv(command: str | list) -> list[str]:
     """A repo's configured `[tests].command` -> argv for run_subprocess.
 
@@ -275,7 +290,7 @@ def run(ctx) -> RunnerResult:
     command = getattr(ctx, "test_command", None)
     if command:
         return run_custom(ctx, command)
-    kinds = detect_tests(ctx.root)
+    kinds = _detected(ctx)
     if "pytest" in kinds and "npm" in kinds:
         return _dual_stack_run(ctx)
     if "pytest" in kinds:

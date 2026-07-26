@@ -97,6 +97,31 @@ class RunContext:
       "unbounded", not "already expired", so a runner that never opts in
       keeps its current unbounded-by-this-field behavior. Additive field:
       default None keeps every existing construction site valid unchanged.
+    detected_tests: `detectors.detect_tests(root)` cached by
+      aramid.pipeline.run_gate (Task 4, review M6+B7) -- a filesystem walk
+      that would otherwise be repeated once per reader per gate run
+      (pipeline.py's `_is_applicable` and `_tests_config_notices`, plus
+      runners.tests.run() -- three call sites, three walks). Computed ONCE,
+      after `gate_deadline`'s own origin is captured (same single-origin
+      reasoning as gate_deadline itself: the walk must count against the
+      budget, not be free relative to it), and threaded onto ctx so every
+      reader sees the SAME result instead of re-walking.
+      Deliberately defaults to `None`, NOT `stacks`' `field(
+      default_factory=set)` pattern above -- `stacks` makes "empty" and "not
+      computed" indistinguishable, which is harmless for `stacks` (nothing
+      treats an empty set as significant on its own) but would be actively
+      wrong here: a `detected_tests` field defaulting to `set()` and read
+      directly would make every bare `RunContext(root=...)` -- how the vast
+      majority of this repo's own unit tests construct one, well over a
+      hundred call sites across tests/ -- silently read as "no suite
+      detected", which flips `_is_applicable`'s tests-gate check to False
+      and makes runners.tests.run() return MISSING unconditionally. `None`
+      is instead an explicit "not computed here" sentinel: every reader
+      must fall back to a fresh `detect_tests(ctx.root)` walk when this is
+      `None` (`ctx.detected_tests if ctx.detected_tests is not None else
+      detect_tests(ctx.root)`), which is exactly today's uncached behavior
+      for any RunContext built outside run_gate. Additive field: default
+      None keeps every existing construction site valid unchanged.
     """
     root: Path
     files: list[str] = field(default_factory=list)
@@ -109,6 +134,7 @@ class RunContext:
     test_timeout_s: float | None = None
     tests_enabled: bool = True
     gate_deadline: float | None = None
+    detected_tests: set[str] | None = None
 
 _WIN = sys.platform == "win32"
 _POST_KILL_DRAIN_S = 5.0   # cap on the post-_kill_tree reap wait (test seam)

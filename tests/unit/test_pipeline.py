@@ -396,6 +396,13 @@ def test_notice_when_test_timeout_exceeds_the_gate_budget(tmp_path):
     kind of false green light this engine exists to prevent."""
     root = tmp_path / "n4"
     (root / "tests").mkdir(parents=True)
+    # A real test file, not a bare dir (Task 1 convention, matching
+    # test_notice_when_the_test_gate_is_disabled above) -- a bare tests/
+    # dir with nothing recognized inside it is now ALSO a signal for the
+    # separate I3+B1 "suite present but not running" notice (review I3+B1),
+    # and this test must isolate the timeout notice alone.
+    (root / "tests" / "test_x.py").write_text(
+        "def test_x():\n    assert True\n", encoding="utf-8")
     notices = pipeline._tests_config_notices(
         Gate.PRE_PUSH, _ctx(root, test_timeout_s=900.0), budget_s=300)
     assert len(notices) == 1
@@ -405,6 +412,10 @@ def test_notice_when_test_timeout_exceeds_the_gate_budget(tmp_path):
 def test_no_timeout_notice_when_within_the_budget(tmp_path):
     root = tmp_path / "n5"
     (root / "tests").mkdir(parents=True)
+    # See comment above -- a real file keeps this isolated from the I3+B1
+    # false-negative notice, which a bare tests/ dir would now also trigger.
+    (root / "tests" / "test_x.py").write_text(
+        "def test_x():\n    assert True\n", encoding="utf-8")
     assert pipeline._tests_config_notices(
         Gate.PRE_PUSH, _ctx(root, test_timeout_s=120.0), budget_s=300) == []
 
@@ -422,6 +433,267 @@ def test_run_gate_prints_the_tests_config_notices(tmp_path, monkeypatch, capsys)
 
     assert "[tests].enabled" in capsys.readouterr().err
     ledger.close()
+
+
+# --------------------------------------- (c5) [review I5] notices accumulate -
+
+def test_notices_accumulate_instead_of_short_circuiting_at_first_match(tmp_path):
+    """[review I5] Two INDEPENDENT conditions true at once (a false-negative
+    test setup, per I3+B1, and an over-budget timeout_s) must each produce
+    their own notice. The pre-fix function returned at the first matching
+    branch, which would silently hide the second one here."""
+    root = tmp_path / "acc1"
+    (root / "tests").mkdir(parents=True)
+    (root / "tests" / "testfoo.py").write_text(
+        "import unittest\nclass T(unittest.TestCase):\n"
+        "    def test_x(self):\n        pass\n", encoding="utf-8")
+    assert pipeline.detect_tests(root) == set()  # sanity: unittest-style name, unrecognized
+
+    notices = pipeline._tests_config_notices(
+        Gate.PRE_PUSH, _ctx(root, test_timeout_s=900.0), budget_s=300)
+
+    assert len(notices) == 2
+    assert any("900" in n and "300" in n for n in notices)
+    assert any("[tests].command" in n for n in notices)
+
+
+# ------------------------------------- (c6) [review I3+B1] suite not running -
+
+def test_false_negative_notice_when_tests_dir_has_unittest_style_naming(tmp_path):
+    """[review I3+B1 case 1] Task 1 tightened detect_tests() to require
+    test_*.py / *_test.py / conftest.py -- a real unittest-style `testfoo.py`
+    (no underscore after "test") is invisible to it, even though a tests/
+    directory plainly exists."""
+    root = tmp_path / "fn1"
+    (root / "tests").mkdir(parents=True)
+    (root / "tests" / "testfoo.py").write_text(
+        "import unittest\nclass T(unittest.TestCase):\n"
+        "    def test_x(self):\n        pass\n", encoding="utf-8")
+    assert pipeline.detect_tests(root) == set()  # sanity
+
+    notices = pipeline._tests_config_notices(Gate.PRE_PUSH, _ctx(root), budget_s=300)
+
+    assert len(notices) == 1
+    assert "[tests].command" in notices[0]
+
+
+def test_false_negative_notice_when_pytest_ini_exists_with_no_tests_dir(tmp_path):
+    """A second, independent signal (pytest.ini) -- proves the check is an
+    OR over several markers, not hardcoded to a tests/ directory."""
+    root = tmp_path / "fn2"
+    root.mkdir()
+    (root / "pytest.ini").write_text("[pytest]\npython_files = check_*.py\n", encoding="utf-8")
+    (root / "check_foo.py").write_text("def check_x():\n    assert True\n", encoding="utf-8")
+    assert pipeline.detect_tests(root) == set()  # sanity: custom python_files, unrecognized
+
+    notices = pipeline._tests_config_notices(Gate.PRE_PUSH, _ctx(root), budget_s=300)
+
+    assert len(notices) == 1
+    assert "[tests].command" in notices[0]
+
+
+def test_no_false_negative_notice_when_nothing_plausible_exists(tmp_path):
+    """Negative control: a repo with no test setup at all (no tests/,
+    test/, pytest.ini, tox.ini, or pyproject pytest section) must stay
+    silent -- there's genuinely nothing to explain."""
+    root = tmp_path / "fn3"
+    root.mkdir()
+    assert pipeline._tests_config_notices(Gate.PRE_PUSH, _ctx(root), budget_s=300) == []
+
+
+def test_no_false_negative_notice_when_test_command_is_configured(tmp_path):
+    """An explicit [tests].command IS the repo's answer -- it must suppress
+    the false-negative notice even though detect_tests() would still find
+    nothing and a tests/ dir with unrecognized content still exists."""
+    root = tmp_path / "fn4"
+    (root / "tests").mkdir(parents=True)
+    (root / "tests" / "testfoo.py").write_text("def check(): pass\n", encoding="utf-8")
+    assert pipeline._tests_config_notices(
+        Gate.PRE_PUSH, _ctx(root, test_command="make test"), budget_s=300) == []
+
+
+def _dual_stack_root(tmp_path, name, lockfile=None):
+    root = tmp_path / name
+    root.mkdir()
+    (root / "pyproject.toml").write_text("[project]\nname = 'x'\n", encoding="utf-8")
+    tests_dir = root / "tests"
+    tests_dir.mkdir()
+    (tests_dir / "test_x.py").write_text("def test_x():\n    assert True\n", encoding="utf-8")
+    (root / "package.json").write_text('{"scripts": {"test": "vitest"}}', encoding="utf-8")
+    if lockfile:
+        (root / lockfile).write_text("{}", encoding="utf-8")
+    return root
+
+
+def test_mandatory_notice_when_dual_kinds_detected_but_no_lockfile(tmp_path):
+    """[review I3+B1 case 2, MANDATORY] Both kinds detected (a real pytest
+    file AND a package.json test script) but no JS lockfile -- the npm
+    suite is silently skipped per the C1 decision. Rev 2's five Python-only
+    signals all missed this: detect_tests() here is NON-empty (it finds
+    "pytest" and "npm"), so the case-1 branch never fires, yet a real
+    suite is still being dropped -- a Vitest/Jest repo with no tests/
+    directory of its own would have matched none of the five."""
+    root = _dual_stack_root(tmp_path, "mand1", lockfile=None)
+    assert pipeline.detect_tests(root) == {"pytest", "npm"}  # sanity: not empty
+
+    notices = pipeline._tests_config_notices(Gate.PRE_PUSH, _ctx(root), budget_s=300)
+
+    assert len(notices) == 1
+    assert "npm" in notices[0]
+    assert "[tests].command" in notices[0]
+
+
+def test_no_mandatory_notice_when_lockfile_present(tmp_path):
+    root = _dual_stack_root(tmp_path, "mand2", lockfile="package-lock.json")
+    assert pipeline._tests_config_notices(Gate.PRE_PUSH, _ctx(root), budget_s=300.0) == []
+
+
+# ------------------------------------------- (c7) [review B5] dual-suite budget
+
+def test_dual_suite_budget_notice_fires_when_effective_timeout_exceeds_budget(tmp_path):
+    """[review B5] Lockfile present -- a real dual run WILL happen -- and
+    the effective per-suite timeout (falls back to runners.tests.TIMEOUT_S
+    since test_timeout_s is unset here) already exceeds the shared budget
+    on its own, so the second suite is guaranteed a reduced allotment."""
+    root = _dual_stack_root(tmp_path, "budget1", lockfile="package-lock.json")
+
+    notices = pipeline._tests_config_notices(Gate.PRE_PUSH, _ctx(root), budget_s=60.0)
+
+    assert len(notices) == 1
+    assert "300" in notices[0]   # effective timeout (TIMEOUT_S fallback)
+    assert "60" in notices[0]    # the shared budget
+
+
+def test_no_dual_suite_budget_notice_at_stock_defaults(tmp_path):
+    """[review B5] THE regression guard: stock timeout_s=300 / pre_push=300
+    must NOT fire -- rev 1's `2 x timeout_s > budget` rule fired here on
+    every push for every dual-stack repo, which is the bug B5 replaced."""
+    root = _dual_stack_root(tmp_path, "budget2", lockfile="package-lock.json")
+    assert pipeline._tests_config_notices(
+        Gate.PRE_PUSH, _ctx(root), budget_s=300.0) == []
+
+
+def test_no_dual_suite_budget_notice_when_test_command_configured(tmp_path):
+    """An explicit [tests].command runs ONE invocation (run_custom), never
+    the dual-suite path -- the notice must not fire even though dual kinds
+    and a lockfile are both present and the budget is tiny."""
+    root = _dual_stack_root(tmp_path, "budget4", lockfile="package-lock.json")
+    assert pipeline._tests_config_notices(
+        Gate.PRE_PUSH, _ctx(root, test_command="make test"), budget_s=1.0) == []
+
+
+def test_no_dual_suite_budget_notice_for_single_suite_repo(tmp_path):
+    """Only a pytest suite detected (no package.json at all) -- there is
+    nothing to share the deadline with, so the notice must not fire even
+    at a tiny budget."""
+    root = tmp_path / "budget5"
+    (root / "tests").mkdir(parents=True)
+    (root / "tests" / "test_x.py").write_text(
+        "def test_x():\n    assert True\n", encoding="utf-8")
+    assert pipeline._tests_config_notices(
+        Gate.PRE_PUSH, _ctx(root), budget_s=1.0) == []
+
+
+# --------------------------------------------- (c8) [review M6+B7] caching ---
+
+def test_detect_tests_walks_the_filesystem_only_once_per_gate_run(tmp_path, monkeypatch):
+    """[review M6+B7] Before caching, a single pre-push gate run on a
+    test-bearing repo called detect_tests() up to THREE times: pipeline.py's
+    _is_applicable, pipeline.py's _tests_config_notices, and runners.tests's
+    own run() -- each a fresh os.walk. Caching the result once on
+    RunContext.detected_tests collapses this to exactly one call, no
+    matter how many places read it."""
+    from aramid.runners import tests as tests_runner_mod
+
+    root = _repo(tmp_path)
+    (root / "tests").mkdir()
+    (root / "tests" / "test_x.py").write_text(
+        "def test_x():\n    assert True\n", encoding="utf-8")
+    cfg = _cfg(root, tmp_path, monkeypatch)
+    ledger = _ledger(tmp_path)
+
+    calls: list = []
+    real = pipeline.detect_tests
+
+    def counting(r):
+        calls.append(r)
+        return real(r)
+
+    monkeypatch.setattr(pipeline, "detect_tests", counting)
+    monkeypatch.setattr(tests_runner_mod, "detect_tests", counting)
+    monkeypatch.setattr(
+        tests_runner_mod, "run_subprocess",
+        lambda argv, cwd, timeout_s, env=None: RunnerResult(
+            tool="pytest", state=ToolState.OK, returncode=0))
+    monkeypatch.setitem(pipeline.GATE_RUNNER_KEYS, Gate.PRE_PUSH, ["tests"])
+
+    pipeline.run_gate(root, Gate.PRE_PUSH, "range", cfg, ledger, run_id="run-cache1")
+
+    assert len(calls) == 1
+    ledger.close()
+
+
+def test_run_gate_populates_detected_tests_on_the_context(tmp_path, monkeypatch):
+    """Proves run_gate actually WIRES the cache through the RunContext it
+    builds -- not merely that the field exists on the dataclass."""
+    root = _repo(tmp_path)
+    (root / "tests").mkdir()
+    (root / "tests" / "test_x.py").write_text(
+        "def test_x():\n    assert True\n", encoding="utf-8")
+    cfg = _cfg(root, tmp_path, monkeypatch)
+    ledger = _ledger(tmp_path)
+
+    spy, seen = _ctx_spy(RunnerResult("pytest", ToolState.OK))
+    monkeypatch.setitem(pipeline.RUNNERS, "tests", spy)
+    monkeypatch.setitem(pipeline.GATE_RUNNER_KEYS, Gate.PRE_PUSH, ["tests"])
+
+    pipeline.run_gate(root, Gate.PRE_PUSH, "range", cfg, ledger, run_id="run-cache2")
+
+    assert seen[0].detected_tests == {"pytest"}
+    ledger.close()
+
+
+def test_is_applicable_reads_the_cached_detected_tests_not_a_fresh_walk(tmp_path):
+    """[review M6+B7] The cache must actually be CONSULTED, not merely
+    stored: root has a real pytest file (a fresh walk WOULD find "pytest"),
+    but the ctx explicitly caches an empty set, which must win."""
+    root = tmp_path / "cache1"
+    (root / "tests").mkdir(parents=True)
+    (root / "tests" / "test_x.py").write_text(
+        "def test_x():\n    assert True\n", encoding="utf-8")
+    assert pipeline.detect_tests(root) == {"pytest"}  # sanity: a fresh walk WOULD find it
+
+    ctx = _ctx(root, detected_tests=set())
+    assert pipeline._is_applicable("tests", ctx) is False
+
+
+def test_tests_config_notices_reads_the_cached_detected_tests_not_a_fresh_walk(tmp_path):
+    root = tmp_path / "cache2"
+    (root / "tests").mkdir(parents=True)
+    (root / "tests" / "test_x.py").write_text(
+        "def test_x():\n    assert True\n", encoding="utf-8")
+    assert pipeline.detect_tests(root) == {"pytest"}  # sanity
+
+    ctx = _ctx(root, tests_enabled=False, detected_tests=set())
+    # A fresh walk would find "pytest" and fire the disabled-notice; the
+    # cache says "nothing detected" and must be trusted instead.
+    assert pipeline._tests_config_notices(Gate.PRE_PUSH, ctx, budget_s=300) == []
+
+
+def test_bare_run_context_construction_still_works_after_caching_field_added(tmp_path):
+    """[review M6+B7] The sentinel guarantee: a bare RunContext(root=...) --
+    as ~137 call sites across tests/ construct it -- must behave exactly as
+    before the `detected_tests` field was added (fall back to a fresh
+    walk), never read as "no suite detected" just because the field
+    defaults to unset."""
+    root = tmp_path / "bare1"
+    (root / "tests").mkdir(parents=True)
+    (root / "tests" / "test_x.py").write_text(
+        "def test_x():\n    assert True\n", encoding="utf-8")
+    from aramid.runners.base import RunContext
+    ctx = RunContext(root=root)
+    assert ctx.detected_tests is None
+    assert pipeline._is_applicable("tests", ctx) is True
 
 
 # ------------------------------------------------- (d) graph-out/ ignore -----
