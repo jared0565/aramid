@@ -241,6 +241,51 @@ at all (`test_red_proof_gate.py` 2 sites, `test_mutation_gate_e2e.py`,
 is used as a path, not to trigger detection. So this task is "repair these 8 and
 confirm the remaining sites are incidental", not "rewrite 26 fixtures".
 
+#### 7 of the 8 are fixture repairs. The 8th is a SOURCE BUG — do not repair it.
+
+`test_mutation_consumer.py::test_no_pytest_stack_skips_ok_with_loud_note` is
+**not** a fixture that fakes applicability. Mechanism, measured 2026-07-26:
+
+- `_repo()` writes a root **`conftest.py`** (it sets `sys.path` so
+  `from calc import is_adult` resolves). The test then `rmtree`s `tests/`.
+- Old `detect_tests` → `set()`; new `detect_tests` → `{'pytest'}`, because
+  `conftest.py` is one of Task 1's three positive signals. **Reproduced in
+  isolation: remaining files are `aramid.toml`, `calc.py`, `conftest.py`.**
+- So `consumers/mutation.py:110` no longer takes the structural-absence skip.
+  It proceeds, adds a worktree, and runs `_full_argv()` = `python -m pytest -q`
+  against a tree with no tests. **Measured: returncode 5, `ToolState.OK`.**
+- `mutation.py:144` is `if base_res.state is not ToolState.OK or
+  base_res.returncode != 0:` → **degraded**, note `baseline failing @ <head>`.
+
+**That note is a lie** — the baseline is not failing, there are no tests to run.
+The give-up guard at `mutation.py:118` bounds the damage at 3 drains per head,
+so this is not the "pins the queue forever" catastrophe the test's comment
+describes, but it does buy 3 rounds of worktree churn plus a wrong diagnosis
+where an instant OK-skip belongs.
+
+**Fix the source, not the fixture.** `rc == 5` is *permanent structural
+absence* — the very condition lines 110–117 exist to OK-skip — while "baseline
+failing" is transient. Split them at `mutation.py:144`: a `ToolState.OK` result
+with `returncode == 5` returns `state="ok"` with a note in the structural-absence
+family, and every other non-zero returncode keeps today's degraded path and its
+verbatim `baseline failing @ ` prefix (load-bearing: `mutation.py:118`'s
+`prior_note_count` matches that literal). Add a red-first test for the rc-5 skip.
+
+**DO NOT delete `conftest.py` from `_repo()` to make this green.** It is
+load-bearing for every other test in the file — without it `from calc import
+is_adult` fails and the whole module breaks.
+
+**`conftest.py` stays a Task 1 signal — this is not a reason to revisit it.**
+Considered and rejected: pawscout's false positive was *wrong language* (a
+`tests/` dir of `.test.ts`, zero Python anywhere); a root `conftest.py` is a repo
+that has committed to pytest and merely has no tests *right now*. Dropping the
+signal would trade a bounded, self-healing consumer degrade for the C1/B1 hazard
+the plan ranks strictly worse — a silently deleted BLOCK-tier check.
+
+`consumers/js_mutation.py:155` has the same `state is not OK or returncode != 0`
+shape, but Task 1 leaves the **npm** branch of `detect_tests` unchanged and npm
+has no stable no-tests exit code. Out of scope; do not touch it.
+
 **Two files were included specifically as controls, and BOTH PASSED:**
 - `tests/integration/test_js_mutation_consumer.py` — its `_js_repo` fixture
   writes a `package.json` test script with **no lockfile**. Under rev 2's design
