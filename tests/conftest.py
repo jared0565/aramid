@@ -11,7 +11,7 @@ patched location.
 """
 import pytest
 
-from aramid import autolearn, toolpath
+from aramid import autolearn, config, toolpath
 
 
 @pytest.fixture(autouse=True)
@@ -67,3 +67,27 @@ def _isolated_tools_dir(tmp_path, monkeypatch):
     test_windows_hooks' fail-open assertion broke. An env var is inherited
     all the way down the chain."""
     monkeypatch.setenv(toolpath.TOOLS_DIR_ENV, str(tmp_path / "aramid-tools"))
+
+
+@pytest.fixture(autouse=True)
+def _isolated_user_config(tmp_path, monkeypatch):
+    """Keep `config.load_config` off the real `~/.aramid/config.toml`.
+
+    `load_config` layers `_user_config_path()` (`Path.home() / ".aramid" /
+    "config.toml"`) over the packaged defaults before the repo's own
+    aramid.toml. Same class as the three fixtures above: a developer machine
+    that happens to have a real ~/.aramid/config.toml (e.g. one that sets
+    `[tests]`/`test_command` for unrelated reasons) would silently change
+    what every `load_config(...)`-calling test sees, while CI -- which has
+    no such file -- would keep reporting green. `doctor` (T-2) is the first
+    caller of `load_config` these doctor tests exercise, but every other
+    `cmd_*` entry point already calls it too, so this protects the whole
+    suite, not just the new tests, exactly like the tools-dir fixture
+    protects more than just the tests that added it.
+
+    Point at a path that does not exist (matching `probe_tool`'s own
+    "not found" contract) rather than an empty file -- `load_config` already
+    treats a missing user config as "no override", so this reproduces
+    today's typical clean-machine behavior instead of inventing a new one."""
+    monkeypatch.setattr(config, "_user_config_path",
+                        lambda: tmp_path / "no-such-user-config.toml")

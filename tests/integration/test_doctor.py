@@ -2,6 +2,9 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+
+from aramid import toolpath
 from aramid.commands import doctor
 
 
@@ -326,3 +329,202 @@ def test_doctor_clean_when_config_and_shims_both_present(tmp_path, monkeypatch, 
     blob = capsys.readouterr()
     assert rc == 0
     assert "NOT enforced" not in (blob.out + blob.err)
+
+
+def _shim_hooks(root: Path) -> None:
+    """Install dummy hook shims so `probe_enforcement`'s 'configured but NOT
+    enforced' check stays quiet. Several tests below write a custom
+    aramid.toml to exercise `[tests]` specifically -- without this, the mere
+    presence of aramid.toml with no `.git/hooks` shims ALSO contributes an
+    unrelated exit-2 reason (probe_enforcement), confounding what's actually
+    under test."""
+    from aramid.hooks import hooks_dir
+    hdir = hooks_dir(root)
+    hdir.mkdir(parents=True, exist_ok=True)
+    (hdir / "pre-commit").write_bytes(b"#!/bin/sh\nexit 0\n")
+    (hdir / "pre-push").write_bytes(b"#!/bin/sh\nexit 0\n")
+
+
+# --- T-2: doctor must probe the test toolchain ------------------------------
+# `tests` is BLOCK-tier in the gate (pipeline.BLOCK_TIER_KEYS), but doctor's
+# own BLOCK_TIER/ALL_TOOLS never covered it -- so doctor could print "all
+# BLOCK-tier tools present" and exit 0 on a repo whose test tool is absent,
+# and the very next push would be blocked by a degraded BLOCK-tier `tests`
+# runner doctor never warned about. Each test below pins one of the three
+# cases (custom command / detected suite / no suite) plus the exit-code rule.
+
+def test_cmd_doctor_returns_2_and_reports_when_detected_pytest_tool_is_missing(
+        tmp_path, monkeypatch, capsys):
+    """THE bug this ticket exists to fix, pinned directly: a repo with a real
+    test file but no pytest binary must make doctor exit 2 -- and say why --
+    not print 'all BLOCK-tier tools present.' and exit 0."""
+    root = _repo(tmp_path)
+    (root / "test_something.py").write_text("def test_x():\n    assert True\n",
+                                             encoding="utf-8")
+
+    monkeypatch.setattr(doctor, "probe_toolchain", lambda root: _all_present())
+
+    def fake_probe_tool(name):
+        if name == "pytest":
+            return doctor.ToolStatus("pytest", False, detail="not found on PATH")
+        raise AssertionError(f"unexpected probe_tool call: {name}")
+
+    monkeypatch.setattr(doctor, "probe_tool", fake_probe_tool)
+
+    rc = doctor.cmd_doctor(root)
+    blob = capsys.readouterr()
+    text = blob.out + blob.err
+
+    assert rc == 2
+    assert "all BLOCK-tier tools present." not in text
+    assert "pytest" in text and "MISSING" in text
+
+
+def test_cmd_doctor_dual_stack_probes_both_pytest_and_npm(tmp_path, monkeypatch, capsys):
+    """Case 2, dual-stack: detect_tests() returning BOTH kinds must probe
+    BOTH -- not silently pick one, the exact bug class runners/tests.py's own
+    dual-suite path exists to close, mirrored here for doctor's report."""
+    root = _repo(tmp_path)
+    (root / "test_something.py").write_text("def test_x():\n    assert True\n",
+                                             encoding="utf-8")
+    (root / "package.json").write_text('{"scripts": {"test": "jest"}}\n', encoding="utf-8")
+
+    monkeypatch.setattr(doctor, "probe_toolchain", lambda root: _all_present())
+
+    def fake_probe_tool(name):
+        if name == "pytest":
+            return doctor.ToolStatus("pytest", True, "8.0.0")
+        if name == "npm":
+            return doctor.ToolStatus("npm", False, detail="not found")
+        raise AssertionError(f"unexpected probe_tool call: {name}")
+
+    monkeypatch.setattr(doctor, "probe_tool", fake_probe_tool)
+
+    rc = doctor.cmd_doctor(root)
+    text = "".join(capsys.readouterr())
+
+    assert rc == 2
+    assert "pytest" in text and "npm" in text
+
+
+def test_cmd_doctor_no_test_suite_reports_and_does_not_exit_2(tmp_path, monkeypatch, capsys):
+    """Case 3: no test suite at all is a LEGITIMATE state, not a broken
+    toolchain -- must not exit 2, and must say so (not just stay silent,
+    which would be indistinguishable from doctor not having checked)."""
+    root = _repo(tmp_path)          # no test files, no package.json
+    monkeypatch.setattr(doctor, "probe_toolchain", lambda root: _all_present())
+
+    rc = doctor.cmd_doctor(root)
+    text = "".join(capsys.readouterr()).lower()
+
+    assert rc == 0
+    assert "no test suite" in text
+
+
+def test_cmd_doctor_configured_command_resolving_argv0_does_not_exit_2(
+        tmp_path, monkeypatch, capsys):
+    """Case 1, aramid's own repo shape: `[tests].command` is
+    `["python", "-m", "pytest", "-q", "tests/unit"]` -- argv[0] is `python`,
+    which always resolves. Must report truthfully without implying the
+    suite actually runs or that its selector matches anything."""
+    root = _repo(tmp_path)
+    (root / "aramid.toml").write_text(
+        '[tests]\ncommand = ["python", "-m", "pytest", "-q", "tests/unit"]\n',
+        encoding="utf-8")
+    _shim_hooks(root)
+    monkeypatch.setattr(doctor, "probe_toolchain", lambda root: _all_present())
+    monkeypatch.setattr(toolpath, "resolve",
+                        lambda name: Path(sys.executable) if name == "python" else None)
+
+    rc = doctor.cmd_doctor(root)
+    text = "".join(capsys.readouterr())
+
+    assert rc == 0
+    assert "python" in text
+    assert "does not verify the suite runs" in text
+
+
+def test_cmd_doctor_configured_command_argv0_missing_returns_2(tmp_path, monkeypatch, capsys):
+    """Case 1, the failing half: a configured command whose argv[0] is not
+    on PATH must make doctor exit 2, exactly like a detected-but-absent
+    pytest/npm does."""
+    root = _repo(tmp_path)
+    (root / "aramid.toml").write_text(
+        '[tests]\ncommand = ["definitely-not-a-real-exe-xyz", "-q"]\n', encoding="utf-8")
+    _shim_hooks(root)
+    monkeypatch.setattr(doctor, "probe_toolchain", lambda root: _all_present())
+    monkeypatch.setattr(toolpath, "resolve", lambda name: None)
+
+    rc = doctor.cmd_doctor(root)
+    text = "".join(capsys.readouterr())
+
+    assert rc == 2
+    assert "definitely-not-a-real-exe-xyz" in text
+
+
+def test_cmd_doctor_configured_command_never_calls_probe_tool(tmp_path, monkeypatch):
+    """SECURITY [T-2]: a `[tests].command` is EXTERNAL INPUT (aramid.toml
+    ships with a cloned repo). probe_tool executes `<name> --version` under
+    a S603 justification that assumes `name` is never external input --
+    passing a configured argv[0] to it would invalidate that justification
+    as written. This must go through toolpath.resolve (pure lookup) only."""
+    root = _repo(tmp_path)
+    (root / "aramid.toml").write_text(
+        '[tests]\ncommand = ["some-configured-exe", "-q"]\n', encoding="utf-8")
+    _shim_hooks(root)
+    monkeypatch.setattr(doctor, "probe_toolchain", lambda root: _all_present())
+    monkeypatch.setattr(toolpath, "resolve", lambda name: None)
+
+    def fail_if_called(name):
+        raise AssertionError(f"probe_tool must never be called with external input: {name}")
+
+    monkeypatch.setattr(doctor, "probe_tool", fail_if_called)
+
+    doctor.cmd_doctor(root)     # must not raise via fail_if_called above
+
+
+@pytest.mark.parametrize("toml_body", [
+    '[tests]\ncommand = []\n',                    # empty list -> falsy, falls to detection
+    '[tests]\ncommand = 42\n',                    # non-list, non-string
+    '[tests]\ncommand = [123, "-q"]\n',           # list with a non-string element
+    '[tests]\ncommand = "   "\n',                 # parses to an empty argv
+])
+def test_cmd_doctor_never_raises_on_malformed_tests_command(tmp_path, monkeypatch, toml_body):
+    """`[tests].command` comes from a cloned repo's aramid.toml -- doctor
+    must degrade a malformed value to a report, never an exception
+    (probe_tool's own docstring says it never raises; this preserves that
+    for the new test-toolchain probe too)."""
+    root = _repo(tmp_path)
+    (root / "aramid.toml").write_text(toml_body, encoding="utf-8")
+    _shim_hooks(root)
+    monkeypatch.setattr(doctor, "probe_toolchain", lambda root: _all_present())
+
+    rc = doctor.cmd_doctor(root)     # must not raise
+
+    assert rc in (0, 2)
+
+
+def test_cmd_doctor_tests_disabled_does_not_exit_2_even_with_no_tool(
+        tmp_path, monkeypatch, capsys):
+    """[tests].enabled = false removes the tests runner from selection
+    entirely (pipeline._is_applicable) -- it can never surface as
+    MISSING/degraded at the real gate, so doctor reporting exit 2 here would
+    be lying in the OPPOSITE direction: the same error class this ticket
+    exists to fix, just inverted."""
+    root = _repo(tmp_path)
+    (root / "test_something.py").write_text("def test_x():\n    assert True\n",
+                                             encoding="utf-8")
+    (root / "aramid.toml").write_text('[tests]\nenabled = false\n', encoding="utf-8")
+    _shim_hooks(root)
+    monkeypatch.setattr(doctor, "probe_toolchain", lambda root: _all_present())
+
+    def fail_if_called(name):
+        raise AssertionError(f"a disabled test gate must not be probed: {name}")
+
+    monkeypatch.setattr(doctor, "probe_tool", fail_if_called)
+
+    rc = doctor.cmd_doctor(root)
+    text = "".join(capsys.readouterr()).lower()
+
+    assert rc == 0
+    assert "disabled" in text

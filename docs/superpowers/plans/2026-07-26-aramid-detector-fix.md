@@ -559,8 +559,19 @@ named precedent is the trap — do not follow it here.
   **pytest absent** — a Python repo with `test_*.py` on a fresh clone, an
   unactivated venv, or a `python:3.12-slim` CI image takes the *single-suite*
   path, `run_pytest` → MISSING → `degraded_block_tier` → exit 1, and nothing in
-  C1 touches it. The deferral still stands for this branch's scope, but the real
-  mitigation is the `tests-tool-missing` finding from Task 3, which makes such a
-  block self-explaining regardless of which tool is absent. Follow-up ticket.
+  C1 touches it. **Second correction (T-2 brief):** this bullet also used to
+  claim the real mitigation was the `tests-tool-missing` finding from Task 3,
+  "which makes such a block self-explaining regardless of which tool is
+  absent." **That claim was false too, and is withdrawn.** Task 3's finding
+  (`runners/tests.py`'s `TOOL_MISSING_RULE`) is emitted only from `parse()`'s
+  `_sub` guard — i.e. only for a sub-result of a *dual-stack* aggregate. The
+  single-suite case this same bullet just called dominant (pytest absent, no
+  npm side at all) never sets `_sub=True`, so it produces **no finding** —
+  `degraded_block_tier`/`--accept-degraded` still governs the exit code, but
+  with nothing in the findings list explaining why. The actual mitigation is
+  `doctor` itself probing the test toolchain before the push happens
+  (`commands/doctor.py::probe_tests`), not a gate-time finding that — as it
+  turns out — does not even fire in the dominant case. Shipped as T-2; no
+  longer a follow-up.
 - pawscout's broken vitest install, its 2 critical CVEs, and its untracked
   `.aramid/` directory are the user's calls and unrelated to this diff.

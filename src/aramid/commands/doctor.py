@@ -39,6 +39,19 @@ from pathlib import Path
 
 from aramid import toolpath
 
+# T-2: `doctor` also probes the repo's TEST toolchain (`probe_tests` below).
+# `tests` is BLOCK-tier in the gate (pipeline.BLOCK_TIER_KEYS), but neither
+# BLOCK_TIER nor ALL_TOOLS above has ever covered it -- so doctor could print
+# "all BLOCK-tier tools present" and exit 0 on a repo whose test tool is
+# absent, and the very next push would be blocked by a degraded BLOCK-tier
+# `tests` runner doctor never warned about. Deliberately kept OUT of
+# BLOCK_TIER/ALL_TOOLS (see probe_tests' own docstring): those two tuples
+# drive the unconditional probe loop and `--fix`, and test tools are
+# repo-dependent, not aramid-owned -- `--fix` must never try to install them.
+# probe_tests' own MISSING verdicts fold into cmd_doctor's exit code via a
+# separate `missing_tests` list, parallel to `missing_block` but never
+# merged with it.
+
 # BLOCK-tier tools per spec §3/§8 -- doctor's own pass/fail gate. `init`
 # (Task 6.2) refuses to arm hooks until both are present; this module only
 # owns the probe-and-report/repair behavior, not that refusal.
@@ -187,6 +200,146 @@ def probe_toolchain(root: Path) -> dict[str, ToolStatus]:
     statuses = {name: probe_tool(name) for name in ALL_TOOLS}
     statuses["interpreter"] = probe_interpreter(root)
     return statuses
+
+
+def _tests_section(cfg) -> dict:
+    """`cfg.tests` if it is actually a dict -- a hand-edited aramid.toml
+    could set `tests` to any TOML type (e.g. a bare string or number), and
+    that must degrade to "no section" rather than blow up the `.get()`
+    calls below. Mirrors aramid.pipeline.run_gate's own `tests_cfg =
+    cfg.tests if isinstance(cfg.tests, dict) else {}` guard at the
+    RunContext construction site -- same rule, so doctor and the real gate
+    can never disagree about what counts as "no [tests] section"."""
+    return cfg.tests if isinstance(cfg.tests, dict) else {}
+
+
+def _tests_enabled(cfg) -> bool:
+    return bool(_tests_section(cfg).get("enabled", True))
+
+
+def _effective_test_command(cfg):
+    """The SAME precedence aramid.pipeline.run_gate resolves onto
+    RunContext.test_command: `[tests].command` wins over the legacy
+    top-level `test_command` (schema v1's key, shipped documented but with
+    no read site anywhere until now -- see pipeline.py's own comment at
+    that call site). Falsy (None/""/[]) means "not configured" either
+    way -- matching `runners.tests.run()`'s own `if command:` check, so a
+    RunContext built from this same Config would make the identical
+    branch decision doctor just reported."""
+    return _tests_section(cfg).get("command", cfg.test_command)
+
+
+def _configured_argv0(command) -> tuple[str | None, str | None]:
+    """Parse a configured `[tests].command` down to just its argv[0] -- the
+    only thing doctor may look at (see `probe_tests`' docstring for why it
+    must never reach `probe_tool` here). Reuses `runners.tests._argv` -- the
+    exact parsing rule `run_custom` applies to this same config value at
+    gate time -- rather than a second, independent implementation that
+    could quietly drift from it (the same one-true-resolver argument
+    `toolpath.py`'s own docstring makes about tool-path resolution).
+
+    `_argv` itself has no try/except: it is only ever called one step away
+    from a subprocess boundary, inside a gate runner. doctor has no such
+    boundary, and its own contract (`probe_tool`'s docstring) is that it
+    never raises -- so this wraps the call and turns any TOML value
+    `_argv` cannot parse (an int, a float, a bool, a table/dict -- anything
+    that is not a list/tuple/str) into a plain reported reason instead of
+    a propagating exception. Also rejects an argv that parses but is empty,
+    or whose first element is itself an empty string (`shlex.split('"" -q')`
+    -> `['', '-q']`) -- `Path("")` / `toolpath.resolve("")` would otherwise
+    resolve to the cwd rather than visibly failing.
+
+    Returns (argv0, None) on success, or (None, reason) -- reason is always
+    a human-readable string, never an exception -- when `command` doesn't
+    yield a usable argv[0]."""
+    from aramid.runners.tests import _argv
+    try:
+        argv = _argv(command)
+    except (TypeError, ValueError, AttributeError) as exc:
+        return None, f"[tests].command is set but not a valid command ({exc})"
+    if not argv or not argv[0]:
+        return None, "[tests].command is set but parses to an empty command"
+    return argv[0], None
+
+
+def probe_tests(root: Path, cfg) -> list[ToolStatus]:
+    """Probe the repo's TEST toolchain -- the BLOCK-tier `tests` runner
+    (pipeline.BLOCK_TIER_KEYS) that BLOCK_TIER/ALL_TOOLS above have never
+    covered (see this module's docstring). Mirrors `runners.tests.run()`'s
+    own dispatch order exactly -- `[tests].enabled`, then a configured
+    command, then detection -- so what doctor reports is always what the
+    gate would actually try to do:
+
+      0. `[tests].enabled = false`: `pipeline._is_applicable` removes the
+         tests runner from selection entirely -- a runner that is never
+         selected cannot surface as MISSING/degraded, so a missing tool
+         behind a disabled gate is not a broken toolchain. Reported, never
+         counted as broken -- the same "legitimate state" logic as case 3
+         below, just gated on config instead of detection.
+      1. `[tests].command` (or the legacy top-level `test_command`) is
+         set: the configured command short-circuits detection entirely,
+         so pytest/npm are irrelevant. SECURITY: this value is EXTERNAL
+         INPUT -- `aramid.toml` ships with a cloned repo -- so it is never
+         passed to `probe_tool`, which executes `<name> --version` under a
+         S603 justification that assumes `name` is always a hardcoded
+         literal, never external input. `toolpath.resolve` is pure lookup
+         and executes nothing, so it -- and only it -- is used here.
+         Resolving argv[0] proves the binary exists, NOT that the suite
+         runs or that its selector matches anything -- the wording below
+         says so.
+      2. No command, but `detect_tests` finds pytest and/or npm: probe
+         each with the existing hardcoded-name `probe_tool` path, exactly
+         as the four ALL_TOOLS tools are probed -- "pytest"/"npm" here are
+         hardcoded string literals in this function, never external input,
+         so `probe_tool`'s S603 justification holds for these calls too.
+      3. Neither: no test suite exists in this repo. A legitimate,
+         non-broken state -- reported as present=True so it can never
+         contribute a MISSING/exit-2 verdict; a repo with no tests must
+         not be told its toolchain is broken.
+
+    Returns one ToolStatus per probed tool (0, 1, or 2 entries depending on
+    the case) -- never raises, matching `probe_tool`'s own contract: a
+    malformed `[tests].command` degrades to a report via
+    `_configured_argv0` above, same as a missing/garbled tool degrades to
+    "missing"."""
+    if not _tests_enabled(cfg):
+        return [ToolStatus(
+            "tests", True,
+            detail="[tests].enabled = false -- the BLOCK-tier test gate is "
+                   "disabled for this repo; toolchain not probed")]
+
+    command = _effective_test_command(cfg)
+    if command:
+        argv0, reason = _configured_argv0(command)
+        if reason is not None:
+            return [ToolStatus("tests", False, detail=reason)]
+        located = toolpath.resolve(argv0)
+        if located is None:
+            return [ToolStatus(
+                "tests", False,
+                detail=(f"[tests].command is configured (argv[0] '{argv0}') "
+                        f"but '{argv0}' was not found on PATH or in "
+                        f"aramid's managed locations"))]
+        return [ToolStatus(
+            "tests", True, str(located),
+            detail=(f"custom [tests].command configured -- argv[0] "
+                    f"'{argv0}' resolves; this does not verify the suite "
+                    f"runs or that its selector matches anything"))]
+
+    from aramid.detectors import detect_tests
+    kinds = detect_tests(root)
+    if not kinds:
+        return [ToolStatus("tests", True,
+                            detail="no test suite detected -- nothing to probe")]
+
+    out = []
+    if "pytest" in kinds:
+        s = probe_tool("pytest")
+        out.append(ToolStatus("tests-pytest", s.present, s.version, s.detail))
+    if "npm" in kinds:
+        s = probe_tool("npm")
+        out.append(ToolStatus("tests-npm", s.present, s.version, s.detail))
+    return out
 
 
 def _report_line(status: ToolStatus) -> str:
@@ -374,7 +527,16 @@ def cmd_doctor(root: Path, fix: bool = False) -> int:
     `probe_enforcement`). That widens 2 from "a BLOCK-tier tool is missing"
     to "the gate is not fully operational", which covers both: in each case
     the repo is not actually being gated, and reporting 0 would be a false
-    green light."""
+    green light.
+
+    T-2: also returns 2 when the repo's TEST toolchain is broken (see
+    `probe_tests`) -- a detected-or-configured test suite whose tool cannot
+    be resolved, exactly the state that leaves the BLOCK-tier `tests`
+    runner degraded at the next push. Kept as its own `missing_tests` list,
+    parallel to `missing_block` but never merged into BLOCK_TIER itself
+    (test tools are repo-dependent, not aramid-owned -- see this module's
+    docstring). A repo with no test suite, or with `[tests].enabled =
+    false`, is a legitimate state and never contributes here."""
     statuses = probe_toolchain(root)
 
     if fix:
@@ -384,9 +546,14 @@ def cmd_doctor(root: Path, fix: bool = False) -> int:
             _fix_gitleaks()
         statuses = probe_toolchain(root)
 
+    from aramid import config as config_mod
+    test_statuses = probe_tests(root, config_mod.load_config(root))
+
     print("aramid doctor:")
     for name in ALL_TOOLS:
         print(_report_line(statuses[name]))
+    for s in test_statuses:
+        print(_report_line(s))
     print(_report_line(statuses["interpreter"]))
 
     print("llm providers:")
@@ -401,9 +568,15 @@ def cmd_doctor(root: Path, fix: bool = False) -> int:
         print(f"aramid: doctor: {unenforced}", file=sys.stderr)
 
     missing_block = [name for name in BLOCK_TIER if not statuses[name].present]
+    missing_tests = [s.name for s in test_statuses if not s.present]
     if missing_block:
         print(f"aramid: doctor: BLOCK-tier tool(s) missing: {', '.join(missing_block)} "
               f"-- run `aramid doctor --fix`", file=sys.stderr)
+    if missing_tests:
+        print(f"aramid: doctor: BLOCK-tier test toolchain broken: "
+              f"{', '.join(missing_tests)} -- the next push will be blocked "
+              f"by a degraded BLOCK-tier `tests` runner", file=sys.stderr)
+    if missing_block or missing_tests:
         return 2
 
     if unenforced:
