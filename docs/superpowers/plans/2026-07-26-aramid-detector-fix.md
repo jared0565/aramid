@@ -1,208 +1,322 @@
-# Aramid Stack/Test Detector Fix — Implementation Plan
+# Aramid Stack/Test Detector Fix — Implementation Plan (rev 2)
 
 **Date:** 2026-07-26
 **Branch:** `feat/detector-stack-fix` (base `f462d27`)
+**Status:** rev 2 — rewritten after an adversarial plan review returned 3 Critical
+and 9 Important findings against rev 1. Every correction below is traceable to a
+finding; do not "simplify" back toward rev 1.
 
 ## Context
 
-Onboarding aramid to its first non-self repo (`pawscout-worker`, a Cloudflare
-Worker / TypeScript project) surfaced a product bug that blocks **every** push
-on **most** JS/TS repos. All three defects below were measured live on
-2026-07-25/26, not inferred:
+Onboarding aramid to its first non-self repo (`pawscout-worker`, Cloudflare
+Worker / TypeScript) surfaced a bug that blocks **every** push on **most** JS/TS
+repos. Measured live 2026-07-25/26:
 
 | # | Defect | Evidence |
 |---|---|---|
-| 1 | `detect_tests` calls a repo "pytest" because a `tests/` dir merely **exists** | pawscout's `tests/` is all `.test.ts`, **zero** `test_*.py`; `detect_tests` returned `{'npm','pytest'}` |
-| 2 | `detect_stacks` calls a repo "python" on **one** stray file | the only `.py` outside `node_modules` is `.claude/graph-reminder.py`; returned `{'js','python'}` |
-| 3 | `runners/tests.py: run()` checks `"pytest" in kinds` **before** npm, with no tiebreak | ran `pytest -q` on a TS repo → **rc 5, "no tests ran"** → blocking `tests-failed` → `tests` is BLOCK-tier → exit 1 at pre-push |
+| 1 | `detect_tests` calls a repo "pytest" because a `tests/` dir merely **exists** | pawscout's `tests/` is all `.test.ts`, **zero** `test_*.py` |
+| 2 | `detect_stacks` calls a repo "python" on **one** stray file | only `.py` outside `node_modules` is `.claude/graph-reminder.py` |
+| 3 | `runners/tests.py: run()` prefers pytest with no tiebreak | ran `pytest -q` on a TS repo → **rc 5** → blocking `tests-failed` → BLOCK-tier → exit 1 |
 
-Measured end-to-end on pawscout: gate exit 1 in 20s with
-`pytest:tests-failed "pytest exited 5: no tests were collected"`. The
-workaround (`[tests].command = ["npm","test"]`) works — verified, exit 1 in
-128s with `npm:tests-failed`, i.e. the *right* suite finally running — but it
-requires every JS/TS repo to hand-write config before aramid is usable.
-
-Also in scope: both detectors `rglob` through `node_modules`. `ignore_paths`
-(which already contains `node_modules/`) is applied later in
-`config.filter_paths`, never in the detectors.
+End-to-end on pawscout: exit 1 in 20s with `pytest:tests-failed`. With the
+`[tests].command` workaround: exit 1 in 128s with `npm:tests-failed` — the right
+suite finally running. The workaround works but forces every JS/TS repo to
+hand-write config before aramid is usable.
 
 ## Global Constraints
 
 1. **Do not regress aramid's own gate.** aramid has **no** `package.json`;
-   `detect_stacks(root, root)` → `{'python'}` and `detect_tests(root)` →
-   `{'pytest'}` today. Both must still hold after this change. Verify by
-   running the detectors against the repo root, not by reasoning.
-2. **Dogfooding will NOT exercise the new code path.** aramid's own
-   `aramid.toml` sets `[tests].command`, which short-circuits detection
-   entirely in `runners/tests.py: run()`. A green aramid pre-push proves
-   nothing about this change. Fixture repos are the only real proof.
-3. **Mirror `runners/deps.py`, do not invent a new aggregation.** That module
-   already solves "one registry key, two underlying tools":
-   `_run_mixed(ctx)` returns a `RunnerResult` carrying a `.sub_results` list,
-   and `parse()` recurses via `getattr(result, "sub_results", None)`.
-4. **INVERT deps' combined-state rule.** `deps._run_mixed` uses OR
-   (`ok = py.state is OK or js.state is OK`) — lenient, correct for audits.
-   `tests` requires the opposite: **worst-state-wins**, both suites must be OK
-   for the combined result to be OK. Copying deps verbatim silently inverts
-   the requirement this task exists to satisfy.
-5. **`.tool` on the combined result is the registry key `"tests"`**, matching
-   `deps` (`RunnerResult("deps", ...)`). Per-suite `.tool` values
-   (`"pytest"`, `"npm"`) live on the sub-results. This is load-bearing:
-   `runners/tests.py: parse()` branches on `result.tool == "pytest"` for the
-   rc-5 message, and `commands/check.py:34-47` documents that
-   `degraded_block_tier` is read off `GateResult` **precisely because**
-   `RunnerResult.tool` can diverge from the registry key. Do not "fix" that
-   divergence here.
-6. **No behaviour change when only one suite is detected.** Single-suite
-   repos must take the existing single-result path, not a one-element
-   aggregate.
-7. Preserve the rc-5 wording shipped in the `[tests]` work — it names
-   `[tests].command` and is doing its job in the field.
-8. `python -m` invocation convention. Never edit `graph-out/`. No backticks
-   inside `git commit -m` strings (use `-F` with a file or a stdin heredoc).
-9. Red-first proof required per task: show the new tests failing before the
-   source change, passing after.
+   `detect_stacks(root, root)` → `{'python'}`, `detect_tests(root)` →
+   `{'pytest'}`. Both must still hold. Verify by running them, not by reasoning.
+2. **Dogfooding CANNOT exercise the new path.** aramid's `aramid.toml` sets
+   `[tests].command`, which short-circuits detection in `run()`. A green aramid
+   pre-push proves nothing here. Fixture repos are the only proof.
+3. **Mirror `runners/deps.py`'s `.sub_results` shape** (`deps.py:368-409`) —
+   but see Constraint 4. The *shape* is right; the *state rule* is not.
+4. **INVERT deps' combined-state rule, and understand what it ranges over.**
+   `deps._run_mixed` uses OR (`deps.py:374`). `tests` needs worst-wins. But
+   `ToolState.OK` means **"the subprocess completed"**, not "tests passed"
+   (`base.py:138` returns OK with any returncode). A *failing* suite is
+   `OK` + `returncode != 0` and blocks via `parse` → `tests-failed` →
+   `block_findings` (`pipeline.py:422`), **never** via the aggregate state.
+   The state rule ranges over `ToolState` only.
+5. **`.tool` on the aggregate is the registry key `"tests"`**; per-suite tools
+   live on sub-results. Load-bearing: `parse` branches on
+   `result.tool == "pytest"` for the rc-5 message (`tests.py:116`), and
+   `check.py:34-47` documents that `degraded_block_tier` is read off
+   `GateResult` *because* `.tool` can diverge from the key. Do not "fix" that.
+6. **No behaviour change when only one suite is detected** — single-suite repos
+   take the existing single-result path and produce **no** `sub_results`.
+7. Preserve the rc-5 wording verbatim — it names `[tests].command` and works.
+8. `python -m` convention. Never edit `graph-out/`. No backticks in
+   `git commit -m` (use `-F` with a file or heredoc).
+9. Red-first proof per task: new tests fail before the source change, pass after.
+10. **The graphite-managed instruction files** (`GRAPHITE.md`, `CLAUDE.md`,
+    `ANTIGRAVITY.md`, `.github/copilot-instructions.md`) are auto-regenerated by
+    graphite's tooling and are currently dirty for unrelated reasons. Do not
+    stage them in this branch's commits.
 
 ## Design decisions (settled — do not re-litigate)
 
-- **Dual-stack policy: run BOTH suites and aggregate.** Chosen by the user
-  over "pick one, warn loudly" and "refuse to guess". Rationale: aramid's own
-  `_tests_config_notices` docstring states that a check reporting nothing for
-  a reason indistinguishable from "clean" is the failure class this engine
-  exists to prevent. Silently skipping a whole suite is exactly that.
-- **Timeout is per-suite**, matching today's single-suite semantics.
-  `_timeout(ctx)` is unchanged and applies to each subprocess. The gate's
-  wall-clock budget still caps the whole slot — so two sequential suites can
-  exceed it. Task 3 adds a notice for that case rather than silently halving.
-- **`detect_stacks` dot-directory exclusion.** `.claude/graph-reminder.py` is
-  tooling, not project source. Exclude dot-directories **and** `node_modules`
-  from the `.py` walk. Match the existing in-file idiom from
-  `nested_git_dirs`: `"node_modules" not in p.parts`. The exclusion must
-  compose with the `scope` parameter (`scope_subpath`), which is a distinct
-  argument from `root` — `init.py:252` passes `(root, scope_root)` while
-  `pipeline.py:297` passes `(root, root)`.
-- **`detect_tests` must accept all three pytest conventions**, not just
-  `test_*.py`: pytest's default `python_files` is `test_*.py *_test.py`, and
-  a `conftest.py` also denotes a pytest suite. Requiring only `test_*.py`
-  would newly break real Python repos — a regression in the opposite
-  direction.
+- **Dual-stack policy: run BOTH suites and aggregate.** Chosen by the user over
+  "pick one, warn loudly" and "refuse to guess". Rationale: aramid's own
+  `_tests_config_notices` docstring states that a check reporting nothing for a
+  reason indistinguishable from "clean" is the failure class this engine exists
+  to prevent.
+- **[review C1] Gate the npm auto-run on a real lockfile, not on
+  `package.json` alone.** Mirror `_is_applicable("deps")` (`pipeline.py:161`),
+  which requires `pkg_manager is not None` (i.e. `detect_package_manager` found
+  `package-lock.json` / `pnpm-lock.yaml` / `yarn.lock`) rather than a bare
+  manifest. **Why this is mandatory:** without it, a Python repo with a
+  `package.json` for prettier/husky/docs — or a Python backend with a JS
+  frontend — starts auto-running npm. If npm is not on PATH (a Python dev's
+  machine, a `python:3.12-slim` CI image) the sub-result is `MISSING`, the
+  aggregate degrades, `tests` is BLOCK-tier, and the push exits 1 **with no
+  finding explaining it** (`tests.py:103` returns `[]` for MISSING). That
+  transplants onto working Python repos exactly the burden this plan exists to
+  remove. pawscout has `package-lock.json`, so it is unaffected by the gate.
+- **[review C1] A MISSING test tool must produce an explicit finding.**
+  Blocking without an explanation is the same failure class as above. Note this
+  gap is **pre-existing**, not introduced here: a single-suite repo whose pytest
+  binary is absent already exits 1 with zero findings today. Fixing it is a
+  small, contained improvement that makes the dual path self-explaining.
+- **[review I1+I2] Use `os.walk` with in-place directory pruning, NOT `rglob`
+  plus a post-filter.** One mechanism fixes two defects:
+  - `rglob` has no pruning API, so a post-filter still descends into
+    `node_modules`. It also *removes* today's early exit — `any(rglob("*.py"))`
+    currently short-circuits on pawscout's first hit (`.claude/graph-reminder.py`),
+    so filtering that file out drives the generator to exhaustion through the
+    whole `node_modules` tree. These calls run **outside** the gate budget
+    (`pipeline.py:297, 174, 188` all precede `_run_selected` at line 309), and
+    pre-commit's budget is 5s.
+  - `p.parts` on an `rglob` result contains **every ancestor**, including
+    components outside the repo. A dot-component check against absolute parts
+    breaks any checkout under `~/.local/`, `~/.config/`, `~/.cache/`, or a CI
+    cache path: `detect_stacks` loses `python` → ruff silently stops running at
+    pre-commit; `detect_tests` loses `pytest` → the BLOCK-tier slot is never
+    selected, so it never even surfaces as degraded. Pruning on **directory
+    names** in `os.walk` is inherently relative and cannot make this mistake.
+  - Exclusion set: source it from the canonical `ignore_paths` in
+    `data/defaults.toml:13-16` (`.aramid/`, `graph-out/`, `.graphite*`,
+    `.cache/`, `node_modules/`, `.venv/`, `__pycache__/`, `.git/`) plus
+    `venv/`, `env/`, `build/`, `site-packages`, plus any dot-directory. The
+    non-dot entries matter: vendored trees are full of `conftest.py` and
+    `test_*.py`, and adding `conftest.py` as a detection pattern makes a false
+    positive from one materially more likely.
+- **`detect_tests` accepts all three pytest conventions** — `test_*.py`,
+  `*_test.py`, `conftest.py`. pytest's default `python_files` is
+  `test_*.py *_test.py`; requiring only the first would newly break real Python
+  repos.
 
 ---
 
-### Task 1: `detectors.py` — stop the false positives
+### Task 1: `detectors.py` — prune the walk, stop the false positives
 
-Fix `detect_stacks` and `detect_tests`. Both currently walk `node_modules`.
+Rewrite the two detectors using `os.walk` with in-place pruning
+(`dirnames[:] = [d for d in dirnames if d not in EXCLUDED and not d.startswith(".")]`).
 
-**`detect_tests(root)`** — drop the bare `(root / "tests").exists()` clause.
-A repo is "pytest" iff it has an actual Python test file: any of
-`test_*.py`, `*_test.py`, or `conftest.py`, excluding `node_modules` and
-dot-directories. The `npm` branch (a `test` script in `package.json`) is
-unchanged.
+**`detect_tests(root)`** — drop the bare `(root / "tests").exists()` clause. A
+repo is "pytest" iff a real Python test file exists: `test_*.py`, `*_test.py`,
+or `conftest.py`. The npm branch additionally requires a lockfile per the C1
+decision above (a `scripts.test` entry alone is no longer sufficient).
 
 **`detect_stacks(root, scope)`** — keep `(root / "pyproject.toml").exists()`.
-Replace `any(scope.rglob("*.py"))` with a walk that ignores `node_modules`
-and dot-directories. The `package.json` → `js` branch is unchanged.
+Replace `any(scope.rglob("*.py"))` with the pruned walk, **based at `scope`**
+(review I9: `scope` is the only base guaranteed to prefix what the walk yields;
+`init.py:252` passes a possibly-subdirectory `scope_root`, `pipeline.py:297`
+passes `root`). The `package.json` → `js` branch is unchanged.
 
-**Tests** (`tests/unit/test_detectors.py`), each a fixture repo on tmp_path:
+**Tests** (`tests/unit/test_detectors.py`), fixture repos on `tmp_path`:
 
 | fixture | `detect_stacks` | `detect_tests` |
 |---|---|---|
-| TS-only + `tests/` dir of `.test.ts` + `package.json` test script | `{'js'}` | `{'npm'}` |
+| TS-only, `tests/` of `.test.ts`, `package.json` test script + lockfile | `{'js'}` | `{'npm'}` |
 | TS repo whose only `.py` is `.claude/graph-reminder.py` | `{'js'}` | `{'npm'}` |
 | Python repo, `tests/test_foo.py` | `{'python'}` | `{'pytest'}` |
 | Python repo, `tests/foo_test.py` only | `{'python'}` | `{'pytest'}` |
 | Python repo, `conftest.py` only | `{'python'}` | `{'pytest'}` |
 | Python repo, `pyproject.toml`, no `.py` at all | `{'python'}` | `set()` |
-| genuine dual-stack (`pyproject.toml` + `test_*.py` + `package.json` script) | `{'js','python'}` | `{'npm','pytest'}` |
+| **Python repo, `.py` files but NO `pyproject.toml`** | `{'python'}` | `{'pytest'}` |
+| genuine dual-stack (`pyproject.toml` + `test_*.py` + script + lockfile) | `{'js','python'}` | `{'npm','pytest'}` |
+| **`package.json` with a test script but NO lockfile** | `{'js'}` | `set()` |
 | `.py` present **only** under `node_modules/` | `{'js'}` | `{'npm'}` |
+| `.py`/`test_*.py` present only under `venv/` and `build/` | `{}` | `set()` |
+| **whole repo nested under a dot-ancestor** (`<tmp>/.local/src/repo`) | `{'python'}` | `{'pytest'}` |
+| **`scope` = a subdirectory, `.py` only outside it** | no `python` | — |
 | aramid's own repo root | contains `python` | contains `pytest` |
 
-The last row is Global Constraint 1 as an executable assertion.
+Rows in **bold** exist because of specific review findings and must not be
+dropped. The "`.py` but no `pyproject.toml`" row is review M1: without it the
+aramid-root row proves nothing, because `detect_stacks` short-circuits on
+`pyproject.toml` via `or` and never evaluates the walk at all.
 
 ---
 
-### Task 2: `runners/tests.py` — run both suites, aggregate worst-state-wins
+### Task 2: migrate existing fixtures that fake applicability with a bare `tests/` dir
 
-Rework `run(ctx)`. Current precedence (`test_command` → pytest → npm →
-MISSING) becomes: an explicit `test_command` still wins outright and
-short-circuits everything (unchanged). Otherwise, on `detect_tests(ctx.root)`:
+**[review C3 — measured, not theoretical.]** Applying Task 1 and running just
+two files gives **5 failures**: `test_missing_block_tier_tool_at_prepush_exits_one`,
+`test_missing_block_tier_tool_with_accept_degraded_exits_two_and_logs_bypass`,
+`test_notice_when_the_test_gate_is_disabled`,
+`test_run_gate_prints_the_tests_config_notices`,
+`test_fresh_ledger_prepush_degraded_block_tier_tool_name_diverges_from_key`.
 
-- both `pytest` and `npm` → run both, return the aggregate described below
-- exactly one → today's single-result path, unchanged (Global Constraint 6)
-- neither → `RunnerResult("tests", ToolState.MISSING)`, unchanged
+Cause: fixtures do `(root / "tests").mkdir()` with the comment *"makes 'tests'
+applicable via detect_tests()"*. `_is_applicable` (`pipeline.py:174`) calls the
+**real** `detect_tests`, so the monkeypatched fake runner is never reached and
+the runner is never selected.
 
-**Aggregate** — mirror `deps._run_mixed`, with the state rule INVERTED per
-Global Constraint 4:
+**Full blast radius, counted: 26 occurrences across 8 files** —
+`tests/unit/test_pipeline.py` (13), `tests/unit/test_runner_tests.py` (5),
+`tests/integration/test_check.py` (2), `test_red_proof_gate.py` (2),
+`test_mutation_gate_e2e.py`, `test_mutation_consumer.py`,
+`test_mutation_score_gate_e2e.py`, `test_tdd_gate.py` (1 each).
 
-- `.tool` = `"tests"`; `.sub_results` = `[pytest_result, npm_result]`
-- state is `OK` **only if both** sub-results are `OK`; otherwise the worst
-  sub-state. One suite OK + one MISSING is **not** OK — `tests` is in
-  `BLOCK_TIER_KEYS`, so this degrades and blocks at pre-push. That is the
-  deliberate consequence of "neither suite can hide"; state it in the
-  docstring so it is not later mistaken for a bug.
-- `.returncode` on the aggregate is not meaningful; per-suite return codes
-  live on the sub-results, which is what `parse` reads.
+Audit **every** site. Where applicability is the point, write a real
+`tests/test_x.py` instead of a bare directory. Enumerate in the task report
+which sites changed and which were left (a `tests/` dir used purely as a path,
+not for detection, needs no change).
 
-**`parse(result, ctx)`** — add the `sub_results` recursion exactly as
-`deps.parse` does it, as the first branch. Each sub-result then flows through
-the existing per-tool logic untouched, so the rc-5 `result.tool == "pytest"`
-message keeps working with no edit to that branch.
+**This task exists so the implementer does not mistake these failures for their
+own bug and weaken the detector to make them green.**
+
+---
+
+### Task 3: `runners/tests.py` — run both suites, aggregate on `ToolState`
+
+`run(ctx)`: explicit `test_command` still wins and short-circuits (unchanged).
+Otherwise on `detect_tests(ctx.root)`: both kinds → run both and aggregate;
+exactly one → today's single-result path (Constraint 6); neither → `MISSING`.
+
+**Aggregate** — `deps._run_mixed`'s shape with the state rule inverted:
+
+- `.tool = "tests"`, `.sub_results = [pytest_result, npm_result]`
+- **[review M2]** state is `OK` iff **both** subs are `OK`; otherwise the first
+  non-`OK` sub-state. `ToolState` is an unordered `StrEnum` (`base.py:12-16`)
+  and every non-OK member is in `_BAD_STATES` (`pipeline.py:69`), so only
+  OK-vs-not-OK is ever consulted — do not invent an ordering.
+- **[review M4]** `.returncode` on the aggregate is meaningless but defaults to
+  `0`, which reads as success. Document it on the aggregate.
+- One suite OK + one MISSING → aggregate not OK → degrades → blocks at
+  pre-push. This is intended, and the C1 lockfile gate plus the explicit MISSING
+  finding are what keep it from being a silent trap.
+
+**`parse(result, ctx)`** — **[review I4] the `sub_results` recursion MUST be the
+first statement, before the `if result.state is ToolState.MISSING: return []`
+guard at `tests.py:103`.** `deps.parse` can be careless about ordering because
+it has no such guard; this module does. Under worst-wins the aggregate's state
+*is* MISSING in exactly the one-missing case, so a recursion placed after the
+guard silently discards **both** suites' findings — and the push still exits 1
+via `degraded_block_tier`, so the bug hides behind a correct exit code.
+
+Additionally, emit an explicit finding when a *detected* suite's tool is
+MISSING, so a block always carries an explanation (C1).
 
 **Tests** (`tests/unit/test_runner_tests.py`), with fake sub-runners — do not
-shell out to real pytest/npm:
+shell out:
 
 - both OK → aggregate OK, `.tool == "tests"`, two sub-results
-- pytest OK + npm failing → aggregate NOT OK (the inverted-rule regression
-  test; name it so its purpose survives)
-- pytest OK + npm MISSING → aggregate degraded, not OK
-- both fail → findings from **both** suites appear (neither hidden)
+- **the inverted-rule regression test: pytest OK + npm MISSING → aggregate NOT
+  OK.** **[review C2]** rev 1 specified "pytest OK + npm *failing*" here, which
+  is unimplementable: a failing suite is `OK` + `rc != 0`, so under a *correct*
+  worst-wins rule both subs are OK and the aggregate is OK — the assertion would
+  fail against correct code, and "fixing" it by folding `returncode` into the
+  state rule yields `degraded_block_tier=True` with `degraded=[]`, reporting a
+  test failure as tool degradation. MISSING is the only clean discriminator
+  against deps' OR (`deps._run_mixed` with `py=OK, js=MISSING` returns OK).
+- pytest failing (`rc=1`) + npm OK → aggregate **OK**, and a `tests-failed`
+  finding is produced. Pins Constraint 4 from the other side.
+- both fail → findings from **both** suites (neither hidden)
+- **[review I4]** one sub MISSING + one sub `rc != 0` → the failing sub's
+  `tests-failed` finding is still returned. This is the test that catches a
+  mis-ordered recursion; without it I4 ships silently.
 - single-suite repo → single result, **no** `sub_results` attribute
-- explicit `[tests].command` set on a dual-stack repo → command wins, neither
-  suite auto-runs
-- rc 5 from the pytest sub-result still produces the `[tests].command`
-  wording
+- explicit `[tests].command` on a dual-stack repo → command wins, neither suite
+  auto-runs
+- rc 5 from the pytest sub-result still produces the `[tests].command` wording
 
 ---
 
-### Task 3: budget notice + docs
+### Task 4: notices + caching
 
-**Notice.** Extend `pipeline._tests_config_notices` for the dual-suite case:
-when both suites will run and `2 × [tests].timeout_s` exceeds the gate's
-wall-clock budget, warn that the slot can be abandoned mid-run. Same rationale
-as the existing over-budget notice — it is the identical failure class
-(a check that reports nothing for a reason indistinguishable from clean).
-Test it alongside the existing notice tests in `tests/unit/test_pipeline.py`.
+**[review I5] Make `_tests_config_notices` accumulate.** It currently `return`s
+at the first matching branch (`pipeline.py:194-198`), so appending another
+`if ... return` makes the notices mutually exclusive. Collect into a list and
+return at the end.
 
-**Docs.**
-- `docs/knowledge-base.md` — document the corrected detector rules and the
-  dual-stack run-both behaviour, including the block-on-degrade consequence.
-- `docs/user-guide.md` — note that `[tests].command` remains the escape hatch
-  and still overrides detection entirely.
-- `src/aramid/data/ARAMID.md.tmpl` — the onboarding template should say what
-  a dual-stack repo does, since that is now a real behaviour a new user meets.
-- `README.md` — only if a documented limitation actually changes.
+**Dual-suite budget notice.** Warn when both suites will run and the *effective*
+per-suite timeout (config value, else `tests.TIMEOUT_S` = 300.0 — the existing
+`if ctx.test_timeout_s and ...` guard at `pipeline.py:193` would skip exactly
+the unset case) means the slot can exceed the gate budget. **Do not use rev 1's
+`2 × timeout_s > budget` rule**: stock defaults are `timeout_s = 300` and
+`pre_push = 300` (`defaults.toml:21,35`), so it would fire on every push for
+every dual-stack repo, and a notice that always fires is one nobody reads.
+Scope it to configurations the user actually chose, or raise the default budget.
+
+**[review I3] "No suite detected" notice.** When the gate includes `tests`,
+`tests_enabled` is true, no `[tests].command` is set, and `detect_tests` is
+empty *while a plausible test setup exists* (`tests/`, `test/`, `pytest.ini`,
+`tox.ini`, `[tool.pytest.ini_options]`), print a notice pointing at
+`[tests].command`. Tightening detection creates real false negatives — custom
+`python_files`, unittest-style `testfoo.py`, doctest-only suites — and by this
+plan's own rationale a silently vanished BLOCK-tier gate is worse than the
+budget notice.
+
+**[review M6] Cache `detect_tests` on `RunContext`.** It is called up to three
+times per gate run (`pipeline.py:174`, `pipeline.py:188`, `tests.py:94`), each
+now doing a pruned walk. `stacks` is already carried on `RunContext`
+(`base.py:79`) — follow that established pattern.
+
+---
+
+### Task 5: docs
+
+- `docs/knowledge-base.md` — corrected detector rules, the lockfile requirement
+  for npm auto-run, dual-stack run-both, and the block-on-degrade consequence.
+- `docs/user-guide.md` — `[tests].command` remains the escape hatch and still
+  overrides detection entirely.
+- `src/aramid/data/ARAMID.md.tmpl` — what a dual-stack repo does.
+- **[review M5]** `init.py:252` feeds `detect_stacks` into
+  `render_repo_stub` (line 260) and `_write_aramid_md` (line 265), so tightening
+  the detector changes what a **fresh `aramid.toml`** contains — not only prose.
+  Check `tests/integration/test_init.py` for assertions that move.
+- `README.md` only if a documented limitation actually changes.
 
 ---
 
 ## Self-Review Checklist (controller, before the whole-branch review)
 
 - [ ] `detect_stacks(Path('.'), Path('.'))` on aramid still contains `python`;
-      `detect_tests(Path('.'))` still contains `pytest` (Constraint 1, run it)
-- [ ] Full suite green; count == baseline 1108 + exactly the new tests
-- [ ] Red-first proof shown per task (tests fail before, pass after)
+      `detect_tests(Path('.'))` still contains `pytest` — run it, don't reason
+- [ ] Full suite green. **Count = baseline 1108 + new tests ± the existing tests
+      changed in Task 2 — enumerate them explicitly.** Rev 1 said "baseline +
+      exactly the new tests", which would have read as a false green light
+      against 26 known-affected fixture sites.
+- [ ] Red-first proof shown per task
 - [ ] `deps.py` untouched — the precedent was copied, not refactored
-- [ ] Combined-state rule is worst-wins, and a test would fail if flipped to
-      deps' OR
-- [ ] Single-suite repos produce no `sub_results` attribute
+- [ ] A test fails if the state rule is flipped to deps' OR (the MISSING case)
+- [ ] A test fails if the `parse` recursion is moved after the MISSING guard
+- [ ] Single-suite repos produce no `sub_results`
 - [ ] rc-5 `[tests].command` wording preserved verbatim
 - [ ] `ruff` clean over every touched file
 - [ ] `python -m aramid check --gate pre-push` rc 0 before any push
 - [ ] End-to-end: on pawscout with its `aramid.toml` **removed**, the gate
-      selects `npm test` rather than pytest (the original bug, gone). Restore
-      the file afterwards — that repo's config is not this branch's business.
+      selects `npm test`, not pytest. Restore the file afterwards.
 
-## Out of scope
+## Out of scope — deliberately, with reasons
 
-pawscout's broken vitest install, its 2 critical CVEs, and the untracked
-`.aramid/` directory in that repo are all the user's calls and unrelated to
-this diff. Do not fold them in.
+- **[review I7] `gitutil.is_test_file` carries the same `tests/` heuristic**
+  (`gitutil.py:117-124`), with verbatim copies in `consumers/mutation.py:63-68`
+  and `consumers/fuzz.py:35-40` and six consumers. On pawscout this makes
+  `red_proof` create a worktree and run `pytest` against changed `.ts` files
+  every push. **Verdicts stay safe** — `red_proof.py:158-165` admits only rc 0
+  (finding) and rc 1/2 (`proven_red`), and a `.ts` file yields neither — so this
+  is wasted worktree churn and wall clock, not a wrong result. Excluded to keep
+  this branch focused; three call sites and six consumers is its own change.
+  Logged as a follow-up ticket in the ledger.
+- **[review I8] `doctor`/`init` do not probe the test toolchain**
+  (`doctor.py:45` checks only gitleaks/semgrep). With the C1 lockfile gate the
+  "npm absent" case becomes rare, and the explicit MISSING finding makes it
+  self-explaining when it happens. Follow-up ticket.
+- pawscout's broken vitest install, its 2 critical CVEs, and its untracked
+  `.aramid/` directory are the user's calls and unrelated to this diff.
