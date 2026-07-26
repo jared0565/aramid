@@ -102,7 +102,11 @@ def test_missing_block_tier_tool_at_prepush_exits_one(tmp_path, monkeypatch):
     (root / "tests").mkdir()  # a test suite IS present -> "tests" stays
     # applicable (detect_tests non-empty); the fake below simulates the
     # runner itself self-reporting MISSING (e.g. pytest binary absent),
-    # which is the scenario this test is actually about.
+    # which is the scenario this test is actually about. A bare directory
+    # is no longer a detect_tests() signal (Task 1) -- a real test file is
+    # what keeps "tests" applicable here.
+    (root / "tests" / "test_x.py").write_text(
+        "def test_x():\n    assert True\n", encoding="utf-8")
     cfg = _cfg(root, tmp_path, monkeypatch)
     ledger = _ledger(tmp_path)
 
@@ -120,6 +124,8 @@ def test_missing_block_tier_tool_at_prepush_exits_one(tmp_path, monkeypatch):
 def test_missing_block_tier_tool_with_accept_degraded_exits_two_and_logs_bypass(tmp_path, monkeypatch):
     root = _repo(tmp_path)
     (root / "tests").mkdir()  # see comment above -- keeps "tests" applicable.
+    (root / "tests" / "test_x.py").write_text(
+        "def test_x():\n    assert True\n", encoding="utf-8")
     cfg = _cfg(root, tmp_path, monkeypatch)
     ledger = _ledger(tmp_path)
 
@@ -318,6 +324,10 @@ def _ctx(root, **kw):
 def test_notice_when_the_test_gate_is_disabled(tmp_path):
     root = tmp_path / "n1"
     (root / "tests").mkdir(parents=True)
+    # A real test file, not a bare dir (Task 1) -- the notice only fires
+    # when detect_tests(root) finds an actual suite to be silently skipped.
+    (root / "tests" / "test_x.py").write_text(
+        "def test_x():\n    assert True\n", encoding="utf-8")
     notices = pipeline._tests_config_notices(
         Gate.PRE_PUSH, _ctx(root, tests_enabled=False), budget_s=300)
     assert len(notices) == 1
@@ -363,6 +373,8 @@ def test_no_timeout_notice_when_within_the_budget(tmp_path):
 def test_run_gate_prints_the_tests_config_notices(tmp_path, monkeypatch, capsys):
     root = _repo(tmp_path)
     (root / "tests").mkdir()
+    (root / "tests" / "test_x.py").write_text(
+        "def test_x():\n    assert True\n", encoding="utf-8")
     cfg = _cfg(root, tmp_path, monkeypatch)
     ledger = _ledger(tmp_path)
     cfg.tests = {"enabled": False}

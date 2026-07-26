@@ -170,7 +170,10 @@ def test_blank_custom_command_is_missing_not_a_silent_pass(tmp_path, monkeypatch
 
 
 def test_timeout_comes_from_the_context_when_configured(tmp_path, monkeypatch):
+    # A real test file, not a bare dir (Task 1) -- run() only reaches
+    # run_subprocess (and thus the spy) when detect_tests() finds a suite.
     (tmp_path / "tests").mkdir()
+    (tmp_path / "tests" / "test_x.py").write_text("def test_x(): pass\n")
     captured = _spy(monkeypatch)
     tests_runner.run(RunContext(root=tmp_path, test_timeout_s=42.0))
     assert captured["timeout_s"] == 42.0
@@ -178,6 +181,7 @@ def test_timeout_comes_from_the_context_when_configured(tmp_path, monkeypatch):
 
 def test_timeout_falls_back_to_the_module_default_when_unset(tmp_path, monkeypatch):
     (tmp_path / "tests").mkdir()
+    (tmp_path / "tests" / "test_x.py").write_text("def test_x(): pass\n")
     captured = _spy(monkeypatch)
     tests_runner.run(RunContext(root=tmp_path))
     assert captured["timeout_s"] == tests_runner.TIMEOUT_S

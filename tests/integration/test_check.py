@@ -165,6 +165,10 @@ def test_fresh_ledger_prepush_degraded_block_tier_tool_name_diverges_from_key(
     root = _repo(tmp_path)
     _no_user_config(tmp_path, monkeypatch)
     (root / "tests").mkdir()  # makes "tests" applicable via detect_tests()
+    # A bare dir is no longer a detect_tests() signal (Task 1) -- a real
+    # test file is what keeps "tests" applicable.
+    (root / "tests" / "test_x.py").write_text(
+        "def test_x():\n    assert True\n", encoding="utf-8")
     assert not Ledger(root / ".aramid" / "ledger.db").has_baseline()
 
     # Simulate: pytest detected as the test framework, but the pytest
