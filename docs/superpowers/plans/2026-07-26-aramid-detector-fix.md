@@ -2,9 +2,18 @@
 
 **Date:** 2026-07-26
 **Branch:** `feat/detector-stack-fix` (base `f462d27`)
-**Status:** rev 2 — rewritten after an adversarial plan review returned 3 Critical
-and 9 Important findings against rev 1. Every correction below is traceable to a
-finding; do not "simplify" back toward rev 1.
+**Status:** rev 3 — rev 1 drew 3 Critical / 9 Important / 6 Minor from an
+adversarial review; rev 2's corrections drew a further 2 Critical from a scoped
+re-review, both caused by rev 2's own C1 fix. Every correction is traceable to a
+finding; do not "simplify" back toward an earlier rev.
+
+**The single most important lesson across both rounds:** rev 2 closed C1 by
+tightening `detect_tests`, and that *created* a worse defect (B1) — a lockfile-less
+JS repo lost its BLOCK-tier gate entirely and exited 0, because an unselected
+runner cannot degrade. The fix that finally works puts the restriction at the
+**decision point** (`runners/tests.py: run()`), not in the **shared predicate**
+(`detect_tests`, which has five callers). Restrictions belong where the decision
+is made, not where the facts are gathered.
 
 ## Context
 
@@ -63,18 +72,50 @@ hand-write config before aramid is usable.
   `_tests_config_notices` docstring states that a check reporting nothing for a
   reason indistinguishable from "clean" is the failure class this engine exists
   to prevent.
-- **[review C1] Gate the npm auto-run on a real lockfile, not on
-  `package.json` alone.** Mirror `_is_applicable("deps")` (`pipeline.py:161`),
-  which requires `pkg_manager is not None` (i.e. `detect_package_manager` found
-  `package-lock.json` / `pnpm-lock.yaml` / `yarn.lock`) rather than a bare
-  manifest. **Why this is mandatory:** without it, a Python repo with a
-  `package.json` for prettier/husky/docs — or a Python backend with a JS
-  frontend — starts auto-running npm. If npm is not on PATH (a Python dev's
-  machine, a `python:3.12-slim` CI image) the sub-result is `MISSING`, the
-  aggregate degrades, `tests` is BLOCK-tier, and the push exits 1 **with no
-  finding explaining it** (`tests.py:103` returns `[]` for MISSING). That
-  transplants onto working Python repos exactly the burden this plan exists to
-  remove. pawscout has `package-lock.json`, so it is unaffected by the gate.
+- **[review C1 + B1 + B3] The lockfile requirement gates the DUAL-RUN
+  DECISION ONLY. It must NOT live inside `detect_tests`.**
+
+  *The hazard it closes (C1):* a Python repo with a `package.json` for
+  prettier/husky/docs — or a Python backend with a JS frontend — must not start
+  auto-running npm. If npm is absent (a Python dev's machine, a
+  `python:3.12-slim` CI image) the sub-result is `MISSING`, the aggregate
+  degrades, `tests` is BLOCK-tier, and the push exits 1 **with no finding**
+  (`tests.py:103` returns `[]` for MISSING).
+
+  *Why it must not go in `detect_tests` (B1):* `_is_applicable("tests")` ends in
+  `bool(ctx.test_command) or bool(detect_tests(ctx.root))` (`pipeline.py:174`).
+  If the detector returned `set()` for a lockfile-less JS repo, the runner would
+  never be **selected**; an unselected runner cannot degrade
+  (`degraded_block_tier` is `key in results and ...`, `pipeline.py:419-421`), so
+  the result is **exit 0 with no test gate at all** — a silently deleted
+  BLOCK-tier check. By this plan's own ordering that is *worse* than the loud
+  wrong block C1 fixes. Victims: pnpm/npm workspaces whose lock sits at the
+  monorepo root, libraries that gitignore their lockfile, and Bun (`bun.lockb`)
+  / Deno (`deno.lock`) — neither name is in `detectors.py:13`'s fixed 3-tuple.
+
+  *Why it must not go in `detect_tests` (B3):* the detector has **five**
+  callers, not three — `pipeline.py:174`, `pipeline.py:188`, `tests.py:94`,
+  **`consumers/js_mutation.py:108`**, and **`consumers/mutation.py:110`**.
+  `js_mutation.py:115` is `detect_package_manager(ctx.root) or "npm"`, an
+  explicit fallback written for the no-lockfile case; gating the detector would
+  make that fallback unreachable and permanently OK-skip JS mutation on every
+  lockfile-less repo. It would also break
+  `tests/integration/test_js_mutation_consumer.py::_js_repo` (14 test
+  functions), whose fixture writes a `package.json` with a `test` script and no
+  lockfile.
+
+  **Therefore:** `detect_tests` keeps today's npm rule (a `scripts.test` entry)
+  and its contract is unchanged for all five callers. The lockfile is consulted
+  **only** in `runners/tests.py: run()`, and only when BOTH kinds are detected:
+  with a lockfile → run both; without → run pytest only and emit a notice naming
+  the skipped npm suite. A JS-only repo with no lockfile is untouched — it takes
+  the existing single-suite path and npm still runs.
+
+  **[review B9]** This is a stricter rule reasoned *by analogy* to
+  `_is_applicable("deps")` (`pipeline.py:161`), not a mirror of it: that line is
+  a permissive OR, this is a narrow AND on one branch. Weigh it as such.
+  Verified 2026-07-26: pawscout has a git-tracked `package-lock.json` and
+  `detect_package_manager` returns `npm`, so it runs both suites.
 - **[review C1] A MISSING test tool must produce an explicit finding.**
   Blocking without an explanation is the same failure class as above. Note this
   gap is **pre-existing**, not introduced here: a single-suite repo whose pytest
@@ -96,13 +137,27 @@ hand-write config before aramid is usable.
     pre-commit; `detect_tests` loses `pytest` → the BLOCK-tier slot is never
     selected, so it never even surfaces as degraded. Pruning on **directory
     names** in `os.walk` is inherently relative and cannot make this mistake.
-  - Exclusion set: source it from the canonical `ignore_paths` in
-    `data/defaults.toml:13-16` (`.aramid/`, `graph-out/`, `.graphite*`,
-    `.cache/`, `node_modules/`, `.venv/`, `__pycache__/`, `.git/`) plus
-    `venv/`, `env/`, `build/`, `site-packages`, plus any dot-directory. The
-    non-dot entries matter: vendored trees are full of `conftest.py` and
+  - **[review B6] Exclusion set — bare directory NAMES, hardcoded, deliberately
+    a second copy.** `os.walk` yields bare names, so entries must be
+    `node_modules`, `graph-out`, `venv`, `env`, `build`, `site-packages` —
+    **no trailing slashes** (`d not in EXCLUDED` can never match
+    `"node_modules/"`). Dot-directories are covered by
+    `d.startswith(".")`, which already subsumes `.aramid`, `.venv`, `.cache`,
+    `.git` and the `.graphite*` fnmatch pattern — so do not add those, and note
+    why, or a later reader will "fix" the missing `.graphite*` wrongly.
+    Rev 2 said "source it from the canonical `ignore_paths`
+    (`defaults.toml:13-16`)"; that is **not possible** and the word "canonical"
+    is withdrawn. `ignore_paths` lives on `Config` (`pipeline.py:338` reads
+    `cfg.ignore_paths`), whereas `detect_stacks(root, scope)` /
+    `detect_tests(root)` take no config and `detectors.py` imports only `json`
+    and `pathlib`; reading the TOML here would add a `tomllib` +
+    `importlib.resources` load to a function called 3-4× per gate run. Use a
+    documented module-level literal and say in a comment that it intentionally
+    duplicates a subset of `ignore_paths`.
+    The non-dot entries matter: vendored trees are full of `conftest.py` and
     `test_*.py`, and adding `conftest.py` as a detection pattern makes a false
-    positive from one materially more likely.
+    positive from one materially more likely. Accepted cost: a real package
+    named `env` or `build` is pruned — rare, and stated here deliberately.
 - **`detect_tests` accepts all three pytest conventions** — `test_*.py`,
   `*_test.py`, `conftest.py`. pytest's default `python_files` is
   `test_*.py *_test.py`; requiring only the first would newly break real Python
@@ -117,8 +172,10 @@ Rewrite the two detectors using `os.walk` with in-place pruning
 
 **`detect_tests(root)`** — drop the bare `(root / "tests").exists()` clause. A
 repo is "pytest" iff a real Python test file exists: `test_*.py`, `*_test.py`,
-or `conftest.py`. The npm branch additionally requires a lockfile per the C1
-decision above (a `scripts.test` entry alone is no longer sufficient).
+or `conftest.py`. **The npm branch is UNCHANGED** (a `scripts.test` entry in
+`package.json`) — per the C1/B1/B3 decision the lockfile is consulted only in
+`runners/tests.py: run()`, never here, so this detector's contract stays stable
+for all five of its callers.
 
 **`detect_stacks(root, scope)`** — keep `(root / "pyproject.toml").exists()`.
 Replace `any(scope.rglob("*.py"))` with the pruned walk, **based at `scope`**
@@ -138,9 +195,10 @@ passes `root`). The `package.json` → `js` branch is unchanged.
 | Python repo, `pyproject.toml`, no `.py` at all | `{'python'}` | `set()` |
 | **Python repo, `.py` files but NO `pyproject.toml`** | `{'python'}` | `{'pytest'}` |
 | genuine dual-stack (`pyproject.toml` + `test_*.py` + script + lockfile) | `{'js','python'}` | `{'npm','pytest'}` |
-| **`package.json` with a test script but NO lockfile** | `{'js'}` | `set()` |
+| **`package.json` with a test script but NO lockfile** | `{'js'}` | `{'npm'}` |
+| **dual-stack but NO lockfile** (`pyproject.toml` + `test_*.py` + script) | `{'js','python'}` | `{'npm','pytest'}` |
 | `.py` present **only** under `node_modules/` | `{'js'}` | `{'npm'}` |
-| `.py`/`test_*.py` present only under `venv/` and `build/` | `{}` | `set()` |
+| `.py`/`test_*.py` present only under `venv/` and `build/` | `set()` | `set()` |
 | **whole repo nested under a dot-ancestor** (`<tmp>/.local/src/repo`) | `{'python'}` | `{'pytest'}` |
 | **`scope` = a subdirectory, `.py` only outside it** | no `python` | — |
 | aramid's own repo root | contains `python` | contains `pytest` |
@@ -201,6 +259,61 @@ exactly one → today's single-result path (Constraint 6); neither → `MISSING`
   pre-push. This is intended, and the C1 lockfile gate plus the explicit MISSING
   finding are what keep it from being a silent trap.
 
+**[review B2 — CRITICAL] The two suites MUST share one deadline.** This is a
+correctness requirement, not a tuning knob, and it is the reason rev 2's
+"notice" approach was wrong.
+
+`_run_selected` submits **one** future per registry key and does
+`done, not_done = wait(future_to_key, timeout=budget_s)` (`pipeline.py:219-233`);
+anything still running becomes `RunnerResult(key, ToolState.TIMEOUT)` — `tool`
+`"tests"`, **no `sub_results`**. Because the aggregate runs both suites
+sequentially inside that single future (mirroring `deps._run_mixed`), a pytest
+run that already finished is **discarded wholesale** when npm overruns the
+budget. `parse` then takes the TIMEOUT branch (`tests.py:105-113`) and emits
+`tests-failed "tests timeout: test suite failed"`, which `policy.classify:159-160`
+makes an unconditional BLOCK. **The push blocks naming the wrong cause, with the
+real finding gone.**
+
+Under stock defaults this is the expected path, not an edge: `timeout_s = 300`
+is **per suite** and `pre_push = 300` is the **whole slot**
+(`defaults.toml:21,35`), so two suites exceed the slot by construction — a
+dual-stack repo whose suites each pass in 200s would block on "tests timeout".
+
+**Required:** carry the gate's wall-clock budget onto `RunContext` as an
+additive field (same precedent as `test_timeout_s` / `tests_enabled`), and have
+the dual path enforce a shared deadline: each suite gets
+`min(effective_timeout, remaining_budget)`, so the pair cannot overrun the slot.
+If the budget still expires mid-run, return the aggregate with the sub-results
+gathered **so far** rather than letting the slot be replaced by a bare TIMEOUT —
+a partial run must report what it learned.
+
+**Tests:** two suites whose combined runtime exceeds the budget still produce
+the completed suite's findings; and the second suite's timeout is attributed to
+that suite, not to the slot.
+
+**[review B4] The MISSING finding must be fully specified**, because the two
+natural readings both misbehave:
+- Reusing `rule="tests-failed"` with `tool="npm"` collides on fingerprint.
+  `compute_fingerprint` hashes `(tool, rule, path, line_content, occurrence)`
+  (`fingerprint.py:11-14`) and `line_content` is `""` for the `<test-suite>`
+  marker, so "npm missing" and a genuine `npm test` failure are the **same
+  finding id**. `ledger.record_run` only appends `FINDING_DETECTED` when the id
+  is absent or `fixed` (`ledger.py:75-78`), so once "missing" is open a later
+  real failure never updates the payload — `aramid status` keeps reporting the
+  wrong cause.
+- Inventing a rule while keeping `tool="npm"` drops into
+  `if tool in _DEPS_TOOLS` (`policy.py:23`), so `[deps].block_severity` would
+  govern a missing-test-tool notice.
+
+**Therefore:** emit it as `tool="tests"`, `rule="tests-tool-missing"`, and add an
+explicit `policy.classify` branch returning BLOCK for that rule (adjacent to the
+`tests-failed` branch at `policy.py:159-160`). Distinct fingerprint, no
+`_DEPS_TOOLS` fallthrough. `parse` distinguishes "a detected suite's tool is
+missing" from `run_custom`'s empty-argv case via `result.tool != "tests"` on the
+sub-result — state that explicitly, and update the module docstring at
+`tests.py:17-18` ("Only MISSING ... still yields zero findings"), which this
+contradicts, as part of Task 5.
+
 **`parse(result, ctx)`** — **[review I4] the `sub_results` recursion MUST be the
 first statement, before the `if result.state is ToolState.MISSING: return []`
 guard at `tests.py:103`.** `deps.parse` can be careless about ordering because
@@ -234,6 +347,11 @@ shell out:
 - explicit `[tests].command` on a dual-stack repo → command wins, neither suite
   auto-runs
 - rc 5 from the pytest sub-result still produces the `[tests].command` wording
+- **both kinds detected but NO lockfile → pytest runs, npm does NOT, a single
+  (non-aggregate) result is returned, and the skipped-suite notice fires.** This
+  is the C1/B1 boundary; without this test the lockfile gate is unpinned.
+- **a JS-only repo with no lockfile still runs `npm test`** via the single-suite
+  path — the B1 regression test proving no gate was deleted.
 
 ---
 
@@ -244,28 +362,46 @@ at the first matching branch (`pipeline.py:194-198`), so appending another
 `if ... return` makes the notices mutually exclusive. Collect into a list and
 return at the end.
 
-**Dual-suite budget notice.** Warn when both suites will run and the *effective*
-per-suite timeout (config value, else `tests.TIMEOUT_S` = 300.0 — the existing
-`if ctx.test_timeout_s and ...` guard at `pipeline.py:193` would skip exactly
-the unset case) means the slot can exceed the gate budget. **Do not use rev 1's
-`2 × timeout_s > budget` rule**: stock defaults are `timeout_s = 300` and
-`pre_push = 300` (`defaults.toml:21,35`), so it would fire on every push for
-every dual-stack repo, and a notice that always fires is one nobody reads.
-Scope it to configurations the user actually chose, or raise the default budget.
+**[review B5] Dual-suite budget notice — informational only.** Task 3's shared
+deadline is what *fixes* the budget problem; this notice merely explains a
+truncated run. **Do not use rev 1's `2 × timeout_s > budget` rule** (stock
+`timeout_s = 300` / `pre_push = 300`, `defaults.toml:21,35`, so it fires on
+every push for every dual-stack repo — a notice that always fires is one nobody
+reads). Base it on the *effective* per-suite timeout (config value, else
+`tests.TIMEOUT_S` = 300.0; note the existing `if ctx.test_timeout_s and ...`
+guard at `pipeline.py:193` would skip exactly the unset case), and emit it only
+when the shared deadline actually had to truncate a suite.
 
-**[review I3] "No suite detected" notice.** When the gate includes `tests`,
-`tests_enabled` is true, no `[tests].command` is set, and `detect_tests` is
-empty *while a plausible test setup exists* (`tests/`, `test/`, `pytest.ini`,
-`tox.ini`, `[tool.pytest.ini_options]`), print a notice pointing at
-`[tests].command`. Tightening detection creates real false negatives — custom
-`python_files`, unittest-style `testfoo.py`, doctest-only suites — and by this
-plan's own rationale a silently vanished BLOCK-tier gate is worse than the
-budget notice.
+**Rev 2 offered "scope it, or raise the default budget" — the second option is
+withdrawn.** Editing `defaults.toml`'s `pre_push` changes the wall-clock budget
+for every repo and every runner, which is a global behaviour change that must
+not arrive inside a task titled "notices + caching".
 
-**[review M6] Cache `detect_tests` on `RunContext`.** It is called up to three
-times per gate run (`pipeline.py:174`, `pipeline.py:188`, `tests.py:94`), each
-now doing a pruned walk. `stacks` is already carried on `RunContext`
-(`base.py:79`) — follow that established pattern.
+**[review I3 + B1] "Suite present but not running" notice.** Trigger when the
+gate includes `tests`, `tests_enabled` is true, and no `[tests].command` is set,
+in **either** of these cases:
+1. `detect_tests` is empty while a plausible test setup exists — `tests/`,
+   `test/`, `pytest.ini`, `tox.ini`, `[tool.pytest.ini_options]`. Tightening
+   detection creates real false negatives (custom `python_files`,
+   unittest-style `testfoo.py`, doctest-only suites).
+2. **Both kinds are detected but no recognised lockfile exists**, so the npm
+   suite is being skipped per the C1 decision. **This case is mandatory:** rev
+   2's trigger list was five Python-only signals, so a Vitest/Jest repo with
+   `src/**/*.test.ts` and no `tests/` directory matched none of them — the one
+   condition the lockfile gate newly creates was invisible to the very notice
+   meant to cover it. Name the skipped suite and point at `[tests].command`.
+
+**[review M6 + B7] Cache `detect_tests` on `RunContext` — with a `None`
+sentinel, NOT the `stacks` pattern.** The three call sites are real
+(`pipeline.py:174`, `pipeline.py:188`, `tests.py:94`). But `stacks` is
+`field(default_factory=set)` (`base.py:79`), which makes "empty" and "not
+computed" indistinguishable: a `detected_tests` field defaulting to `set()` and
+read directly at `tests.py:94` would turn every bare `RunContext(root=...)` into
+"no suite detected" → `run()` returns MISSING. There are **124** bare
+`RunContext(root=` constructions across `tests/`, 21 in
+`tests/unit/test_runner_tests.py` alone. Default the field to `None` and fall
+back (`ctx.detected_tests if ... is not None else detect_tests(ctx.root)`). The
+named precedent is the trap — do not follow it here.
 
 ---
 
@@ -315,8 +451,15 @@ now doing a pruned walk. `stacks` is already carried on `RunContext`
   this branch focused; three call sites and six consumers is its own change.
   Logged as a follow-up ticket in the ledger.
 - **[review I8] `doctor`/`init` do not probe the test toolchain**
-  (`doctor.py:45` checks only gitleaks/semgrep). With the C1 lockfile gate the
-  "npm absent" case becomes rare, and the explicit MISSING finding makes it
-  self-explaining when it happens. Follow-up ticket.
+  (`doctor.py:45` is `BLOCK_TIER = ("gitleaks", "semgrep")`; `ALL_TOOLS` adds
+  only ruff and pip-audit — neither pytest nor npm). Rev 2 justified deferring
+  this by saying the C1 lockfile gate makes "npm absent" rare. **That reason was
+  wrong and is withdrawn:** it addresses only the npm half. The dominant case is
+  **pytest absent** — a Python repo with `test_*.py` on a fresh clone, an
+  unactivated venv, or a `python:3.12-slim` CI image takes the *single-suite*
+  path, `run_pytest` → MISSING → `degraded_block_tier` → exit 1, and nothing in
+  C1 touches it. The deferral still stands for this branch's scope, but the real
+  mitigation is the `tests-tool-missing` finding from Task 3, which makes such a
+  block self-explaining regardless of which tool is absent. Follow-up ticket.
 - pawscout's broken vitest install, its 2 critical CVEs, and its untracked
   `.aramid/` directory are the user's calls and unrelated to this diff.
