@@ -536,7 +536,24 @@ def cmd_doctor(root: Path, fix: bool = False) -> int:
     parallel to `missing_block` but never merged into BLOCK_TIER itself
     (test tools are repo-dependent, not aramid-owned -- see this module's
     docstring). A repo with no test suite, or with `[tests].enabled =
-    false`, is a legitimate state and never contributes here."""
+    false`, is a legitimate state and never contributes here.
+
+    [review] Also returns 3 -- the "engine or config error" tier used
+    throughout this codebase (cli.py's argparse-failure remap;
+    cmd_status's identical `except Exception: ... return 3` around this
+    SAME load_config call) -- when aramid.toml cannot be parsed at all.
+    Deliberately its own code, never folded into the 2 above: a broken
+    config and a missing BLOCK-tier tool are different problems with
+    different remedies (fix the TOML vs. install the tool), and conflating
+    them would send an operator chasing the wrong one. Unlike cmd_status,
+    doctor does NOT abort on this -- every other probe here (ALL_TOOLS,
+    interpreter, llm providers, autolearn) is independent of aramid.toml's
+    content and still runs and prints; only the test-toolchain probe
+    (which needs `[tests].command`/`.enabled` from that same file) is
+    skipped, replaced by a status saying so. A diagnostic tool that dies on
+    the one input it should diagnose is worse than one that never had the
+    feature -- matching this module's existing probe_enforcement/
+    probe_providers fail-open convention."""
     statuses = probe_toolchain(root)
 
     if fix:
@@ -547,7 +564,22 @@ def cmd_doctor(root: Path, fix: bool = False) -> int:
         statuses = probe_toolchain(root)
 
     from aramid import config as config_mod
-    test_statuses = probe_tests(root, config_mod.load_config(root))
+    cfg = None
+    config_error: str | None = None
+    try:
+        cfg = config_mod.load_config(root)
+    except Exception as exc:
+        # fail open: never break doctor -- aramid.toml is EXTERNAL input
+        # (ships with a cloned repo, hand-editable), and a broken one is
+        # precisely when an operator reaches for `doctor`. See
+        # probe_enforcement/probe_providers above for the same convention,
+        # and cmd_status for the same try/except around this same call.
+        config_error = str(exc)
+
+    test_statuses = (probe_tests(root, cfg) if cfg is not None else
+                     [ToolStatus("tests", True,
+                                 detail="not probed -- aramid.toml is unparseable "
+                                        "(see the error reported below)")])
 
     print("aramid doctor:")
     for name in ALL_TOOLS:
@@ -567,6 +599,11 @@ def cmd_doctor(root: Path, fix: bool = False) -> int:
     if unenforced:
         print(f"aramid: doctor: {unenforced}", file=sys.stderr)
 
+    if config_error is not None:
+        print(f"aramid: doctor: aramid.toml is unparseable -- {config_error} "
+              f"-- fix aramid.toml and re-run `aramid doctor` (the test "
+              f"toolchain could not be probed)", file=sys.stderr)
+
     missing_block = [name for name in BLOCK_TIER if not statuses[name].present]
     missing_tests = [s.name for s in test_statuses if not s.present]
     if missing_block:
@@ -578,6 +615,9 @@ def cmd_doctor(root: Path, fix: bool = False) -> int:
               f"by a degraded BLOCK-tier `tests` runner", file=sys.stderr)
     if missing_block or missing_tests:
         return 2
+
+    if config_error is not None:
+        return 3
 
     if unenforced:
         return 2                        # tools fine, but nothing is gating

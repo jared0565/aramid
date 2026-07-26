@@ -528,3 +528,38 @@ def test_cmd_doctor_tests_disabled_does_not_exit_2_even_with_no_tool(
 
     assert rc == 0
     assert "disabled" in text
+
+
+# --- [review] doctor must not crash on a malformed aramid.toml --------------
+# config_mod.load_config(root) was unguarded: a real TOMLDecodeError from
+# aramid.toml's own SYNTAX (not just a malformed [tests].command VALUE, which
+# _configured_argv0 already handled) raised straight through cmd_doctor, with
+# zero output and no dispatch-level handler in cli.main to catch it. A broken
+# config is exactly when an operator reaches for `doctor`.
+
+@pytest.mark.parametrize("label,toml_body", [
+    ("unclosed string", 'name = "unterminated\n'),
+    ("bad table header", '[tests\ncommand = ["pytest"]\n'),
+    ("duplicate key", 'schema_version = 1\nschema_version = 2\n'),
+])
+def test_cmd_doctor_never_raises_on_unparseable_aramid_toml(
+        tmp_path, monkeypatch, capsys, label, toml_body):
+    """Red-first per shape: each of these raised tomllib.TOMLDecodeError
+    straight out of cmd_doctor before the fix. After the fix: readable
+    output naming the unparseable config, no traceback, the rest of the
+    probe (tools/interpreter/providers/autolearn) still runs, and a DISTINCT
+    exit code from 2 (BLOCK-tier tool missing) -- these are different
+    problems with different remedies."""
+    root = _repo(tmp_path)
+    (root / "aramid.toml").write_text(toml_body, encoding="utf-8")
+    monkeypatch.setattr(doctor, "probe_toolchain", lambda root: _all_present())
+
+    rc = doctor.cmd_doctor(root)     # must not raise, label=label
+    text = "".join(capsys.readouterr())
+
+    assert rc == 3, label
+    assert "aramid.toml" in text, label
+    assert rc != 2, f"{label}: must not be conflated with BLOCK-tier-tool-missing"
+    # the rest of the probe still ran and printed, config error notwithstanding
+    assert "gitleaks" in text, label
+    assert "llm providers:" in text, label
