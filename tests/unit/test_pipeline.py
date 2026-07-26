@@ -143,6 +143,45 @@ def test_missing_block_tier_tool_with_accept_degraded_exits_two_and_logs_bypass(
     ledger.close()
 
 
+def test_accept_degraded_bypass_survives_single_suite_missing_tool_binary(tmp_path, monkeypatch):
+    """Task 3 regression guard: exercises the REAL aramid.runners.tests
+    module end to end (only run_subprocess is faked -- pipeline.RUNNERS
+    is untouched), unlike every other accept_degraded test above, which
+    replaces the whole "tests" entry with a double whose parse() ignores
+    its argument. A single-suite repo whose ONE detected suite's tool
+    binary can't be resolved must still take the pre-existing
+    degraded-tool path (MISSING -> tests.parse() returns [] -> exit code
+    governed by degraded_block_tier/accept_degraded), not the NEW
+    tests-tool-missing BLOCK finding runners/tests.py added for a
+    dual-suite aggregate's sub-result -- a BLOCK finding would short-
+    circuit past `--accept-degraded` entirely (run_gate's
+    `if block_findings: exit_code = 1` is checked before the
+    accept_degraded elif), silently killing this exact escape hatch."""
+    from aramid.runners import tests as tests_runner_mod
+
+    root = _repo(tmp_path)
+    (root / "tests").mkdir()
+    (root / "tests" / "test_x.py").write_text(
+        "def test_x():\n    assert True\n", encoding="utf-8")
+    cfg = _cfg(root, tmp_path, monkeypatch)
+    ledger = _ledger(tmp_path)
+
+    monkeypatch.setattr(
+        tests_runner_mod, "run_subprocess",
+        lambda argv, cwd, timeout_s, env=None: RunnerResult(tool="pytest", state=ToolState.MISSING))
+    monkeypatch.setitem(pipeline.GATE_RUNNER_KEYS, Gate.PRE_PUSH, ["tests"])
+
+    result = pipeline.run_gate(root, Gate.PRE_PUSH, "range", cfg, ledger,
+                                accept_degraded="ci runner has no test binary", run_id="run-c2-real")
+
+    assert result.exit_code == 2
+    assert not any(f.rule == "tests-tool-missing" for f in result.findings)
+    bypass_events = [e for e in ledger.events() if e.type is EventType.INFRASTRUCTURE_BYPASS]
+    assert len(bypass_events) == 1
+    assert bypass_events[0].payload["reason"] == "ci runner has no test binary"
+    ledger.close()
+
+
 # --------------------------------------- (c2) applicability -- no test setup -
 
 def test_no_test_setup_at_prepush_tests_not_selected_clean_exit(tmp_path, monkeypatch):

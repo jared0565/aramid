@@ -29,47 +29,17 @@ def test_parse_npm_test_nonzero_is_single_finding():
     assert findings[0].rule == "tests-failed"
 
 
-def test_parse_no_framework_detected_missing_is_still_a_silent_skip():
-    """The GENUINE silent-skip case: `run()`'s own "nothing detected at
-    all" fallthrough, and run_custom's empty-argv misconfiguration, both
-    return tool="tests" (the registry key) with state MISSING -- a
-    legitimate skip, not a failure."""
-    result = RunnerResult(tool="tests", state=ToolState.MISSING)
-    assert tests_runner.parse(result, RunContext(root=Path("."))) == []
-
-
-def test_parse_detected_suite_tool_missing_is_a_blocking_finding():
-    """[review B4] A DIFFERENT MISSING from the one above: detect_tests()
-    found a real suite, but the tool binary itself could not be resolved
-    (a toolpath resolution failure inside run_subprocess) --
-    RunnerResult.tool ends up "pytest"/"npm", never "tests". This must NOT
-    silently disappear: a check reporting nothing for a reason
-    indistinguishable from "clean" is the exact bug class this module
-    exists to fix, so it now yields an explicit tests-tool-missing
-    finding instead of the old blanket `[]`."""
+def test_parse_skips_non_ok_state():
+    """A bare top-level MISSING (single-suite `run_pytest`/`run_npm_test`,
+    or run_custom's empty-argv case) stays a silent skip, UNCHANGED --
+    the tests-tool-missing finding (review B4, below) is deliberately
+    scoped to a dual-suite aggregate's sub-result only (`parse()`'s
+    private `_sub` flag), never a top-level call: the degraded-tool path
+    a top-level MISSING already takes (pipeline.run_gate's
+    degraded_block_tier / --accept-degraded) has its own correct escape
+    hatch that a BLOCK finding here would short-circuit past."""
     result = RunnerResult(tool="pytest", state=ToolState.MISSING)
-    findings = tests_runner.parse(result, RunContext(root=Path(".")))
-    assert len(findings) == 1
-    assert findings[0].tool == "tests"
-    assert findings[0].rule == tests_runner.TOOL_MISSING_RULE
-
-
-def test_custom_command_binary_missing_is_a_blocking_finding_too(tmp_path, monkeypatch):
-    """The `result.tool != "tests"` MISSING rule (B4) is not special-cased
-    to the detect_tests() dual-suite path -- a configured
-    `[tests].command` whose binary can't be resolved is the identical
-    silent-trap shape (a configured check reporting nothing,
-    indistinguishable from "clean"), so it now surfaces the same
-    tests-tool-missing BLOCK finding rather than the old blanket `[]`."""
-    monkeypatch.setattr(
-        tests_runner, "run_subprocess",
-        lambda argv, cwd, timeout_s, env=None: RunnerResult(tool="make", state=ToolState.MISSING))
-    ctx = RunContext(root=tmp_path, test_command="make test")
-    result = tests_runner.run(ctx)
-    findings = tests_runner.parse(result, ctx)
-    assert len(findings) == 1
-    assert findings[0].tool == "tests"
-    assert findings[0].rule == tests_runner.TOOL_MISSING_RULE
+    assert tests_runner.parse(result, RunContext(root=Path("."))) == []
 
 
 def test_parse_timeout_is_blocking_finding_not_silent_pass():
@@ -508,7 +478,11 @@ def test_shared_budget_caps_the_second_suites_timeout(tmp_path, monkeypatch):
     assert captured[0][0] == "pytest"
     assert captured[0][1] == pytest.approx(0.5, abs=0.05)   # ~full shared budget
     assert captured[1][0] == "npm"
-    assert 0.15 < captured[1][1] < 0.45   # budget minus ~0.2s pytest already spent
+    # Budget minus ~0.2s pytest already spent -- a wide band (not a tight
+    # pytest.approx) because real sleep() can overshoot under scheduler
+    # jitter; still comfortably separates "capped by remaining" from
+    # either the full 300s per-tool default or a fresh 0.5s budget.
+    assert 0.05 < captured[1][1] < 0.45
 
 
 def test_budget_exhausted_after_first_suite_skips_second_but_keeps_first_result(

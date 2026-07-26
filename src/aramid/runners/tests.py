@@ -86,13 +86,22 @@ _PYTEST_NO_TESTS_RC = 5
 # neither a tracked blob nor a file on disk.
 _SUITE_FILE_MARKER = "<test-suite>"
 
-# [review B4] The fully-specified finding for "detect_tests() found this
-# suite, but its tool binary could not be resolved/run at all" (toolpath
-# resolution failure inside run_subprocess -- see runners/base.py). Reported
-# as tool="tests" (the registry key), NOT the sub-tool's own name, for two
-# reasons: reusing rule="tests-failed" with tool="npm"/"pytest" would
-# collide on fingerprint with a genuine test failure (line_content is ""
-# for the <test-suite> marker either way, so the two hash identical, and
+# [review B4] The fully-specified finding for "one sub-result of a
+# dual-suite aggregate is a suite detect_tests() found, but whose tool
+# binary could not be resolved/run at all" (toolpath resolution failure
+# inside run_subprocess -- see runners/base.py). Only ever emitted for a
+# SUB-result of the aggregate (see parse()'s `_sub` guard below) -- a
+# top-level single-suite or run_custom MISSING result stays the existing
+# silent-skip/degraded-tool path (parse() -> [], exit code governed by
+# pipeline.run_gate's degraded_block_tier / --accept-degraded), because
+# that path already has a correct, deliberate escape hatch
+# (--accept-degraded -> INFRASTRUCTURE_BYPASS) that a BLOCK finding would
+# short-circuit past (pipeline.py's `if block_findings: exit_code = 1`
+# runs before the accept_degraded elif). Reported as tool="tests" (the
+# registry key), NOT the sub-tool's own name, for two more reasons:
+# reusing rule="tests-failed" with tool="npm"/"pytest" would collide on
+# fingerprint with a genuine test failure (line_content is "" for the
+# <test-suite> marker either way, so the two hash identical, and
 # ledger.record_run only appends FINDING_DETECTED when a finding id is
 # absent or "fixed" -- once "missing" is open a later real failure never
 # updates the payload); inventing a new rule while keeping tool="npm" would
@@ -247,7 +256,7 @@ def run(ctx) -> RunnerResult:
     return RunnerResult("tests", ToolState.MISSING)
 
 
-def parse(result: RunnerResult, ctx) -> list[RawFinding]:
+def parse(result: RunnerResult, ctx, *, _sub: bool = False) -> list[RawFinding]:
     # [review I4] This recursion MUST be the first statement, before the
     # MISSING guard below. Under worst-wins (M2) the AGGREGATE's own state
     # IS MISSING in the one-suite-OK-one-MISSING case, so a recursion
@@ -260,21 +269,34 @@ def parse(result: RunnerResult, ctx) -> list[RawFinding]:
     if sub_results is not None:
         findings: list[RawFinding] = []
         for sub in sub_results:
-            findings.extend(parse(sub, ctx))
+            findings.extend(parse(sub, ctx, _sub=True))
         return findings
     if result.state is ToolState.MISSING:
-        if result.tool != "tests":
-            # [review B4] `result.tool` is the SUB-tool's own name
-            # ("pytest"/"npm") here, never "tests" -- detect_tests() found
-            # this suite, but its binary could not be resolved/run at all
-            # (toolpath resolution failure inside run_subprocess). That is
-            # a real, actionable gap -- a check reporting nothing for a
-            # reason indistinguishable from "clean" -- not the same MISSING
-            # as `run()`'s own "nothing detected at all" fallthrough or
-            # run_custom's empty-argv misconfiguration, both of which carry
-            # tool="tests" and stay a silent skip, below. Reachable both as
-            # a top-level single-suite result and (via the recursion above)
-            # as one aggregate sub-result -- the rule is the same either way.
+        if _sub and result.tool != "tests":
+            # [review B4] Only "on the sub-result" (`_sub=True`, set solely
+            # by the recursion above), never for a bare top-level call.
+            # `result.tool` is the SUB-tool's own name ("pytest"/"npm")
+            # here, never "tests" -- detect_tests() found this suite, but
+            # its binary could not be resolved/run at all (toolpath
+            # resolution failure inside run_subprocess). That is a real,
+            # actionable gap inside a dual-suite aggregate -- one sub ran,
+            # one didn't, and the aggregate's own state alone doesn't say
+            # which -- not the same MISSING as `run()`'s own "nothing
+            # detected at all" fallthrough or run_custom's empty-argv
+            # misconfiguration (both top-level, tool="tests").
+            #
+            # Deliberately NOT generalized to top-level single-suite/
+            # run_custom MISSING results, even though they can ALSO carry
+            # tool="pytest"/"npm"/"make" != "tests": turning that into a
+            # BLOCK finding would flow through pipeline.run_gate's
+            # `if block_findings: exit_code = 1` BEFORE the `elif
+            # accept_degraded and ... degraded_block_tier` branch is ever
+            # reached, silently killing the `--accept-degraded` escape
+            # hatch for exactly the "CI runner has no test binary" case
+            # test_pipeline.py's own accept_degraded test names. That
+            # existing degraded-tool path (MISSING -> [] -> exit_code
+            # governed by degraded_block_tier/accept_degraded) is the
+            # correct, unchanged behavior for a top-level MISSING.
             return [RawFinding(
                 tool="tests",
                 rule=TOOL_MISSING_RULE,
