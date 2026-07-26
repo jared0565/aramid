@@ -7,6 +7,8 @@ import sys
 from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
+
 from aramid import gitutil, red_proof
 from aramid.ledger import Ledger
 from aramid.models import Finding, Gate, Severity, Source, Verdict
@@ -28,12 +30,25 @@ class _CP:
         self.returncode, self.stdout, self.stderr = rc, "", ""
 
 
-def _plumb(monkeypatch, new_lines, pytest_rcs, worktree_rc=0,
-           blob="def test_x():\n    assert True\n"):
+def _plumb(monkeypatch, new_lines, pytest_rcs, worktree_rc=0, blob=None):
     """Fake the full plumbing. pytest_rcs is consumed one rc per subject run;
-    returns the list of pytest argv invocations for assertions."""
+    returns the list of pytest argv invocations for assertions.
+
+    blob=None (the default) auto-generates a fake head blob with a real
+    `def test_x():` test-definition line positioned at the LOWEST changed
+    line number across every value in new_lines -- so the T-4 content gate
+    (src/aramid/red_proof.py's _new_test_def_lines, which every subject now
+    passes through before the subprocess) sees a genuine new test def among
+    the changed lines, matching what each of these tests already assumed
+    before the gate existed. Pass an explicit blob (e.g. "" for the
+    unreadable-blob test) to bypass this and use it verbatim -- the gate
+    itself is exercised directly by the content-gate tests below, not by
+    this default."""
     runs = []
     monkeypatch.setattr(gitutil, "diff_new_lines", lambda root, b, h: new_lines)
+    if blob is None:
+        first_line = min((min(s) for s in new_lines.values() if s), default=1)
+        blob = "\n" * (first_line - 1) + "def test_x():\n    assert True\n"
     monkeypatch.setattr(gitutil, "read_blob", lambda root, ref, rel: blob)
     monkeypatch.setattr(gitutil, "_run", lambda root, *a: _CP(worktree_rc))
     rcs = list(pytest_rcs)
@@ -57,7 +72,11 @@ def test_never_red_file_yields_finding(monkeypatch, tmp_path):
     f = findings[0]
     assert (f.tool, f.rule, f.severity_raw, f.file, f.line) == \
         ("red-proof", "test-not-red", "medium", "tests/test_foo.py", 0)
-    assert "never red" in f.message
+    # T-4: the message now names the actual predicate (a new test
+    # DEFINITION passing on base), not just "new test lines" -- key the
+    # assertion on that distinguishing word rather than on "never red",
+    # which both the old and new wording share and so cannot tell apart.
+    assert "definition" in f.message
     # SP3-M1: assert the actual pytest invocation, not just its outcome --
     # `_plumb`'s docstring always claimed `runs` was captured "for
     # assertions" but no call site ever read it. argv must be the exact
@@ -188,7 +207,7 @@ NOW = "2026-07-21T12:00:00+00:00"
 def _rp_finding(fid="e" * 64, file="tests/test_foo.py"):
     return Finding(id=fid, tool="red-proof", rule="test-not-red", severity_raw="medium",
                    severity=Severity.MEDIUM, verdict=Verdict.WARN, file=file,
-                   line=0, message="new test lines pass against the pre-change tree (never red)",
+                   line=0, message="a new test definition passes against the pre-change tree (never red)",
                    evidence="", gate=Gate.PRE_PUSH, source=Source.DETERMINISTIC)
 
 
@@ -269,3 +288,80 @@ def test_scan_is_thin_wrapper(monkeypatch, tmp_path):
     a = red_proof.scan(_ctx(["tests/test_foo.py"], root=tmp_path), _cfg())
     b = red_proof.scan_scoped(_ctx(["tests/test_foo.py"], root=tmp_path), _cfg())[0]
     assert a and a == b
+
+
+# -------------------------------------------------- T-4 content gate --------
+# _new_test_def_lines is the pure AST predicate; scan_scoped's per-subject
+# loop gates a subject on (_new_test_def_lines(content) & new_lines[rel])
+# immediately after the read_blob/empty-content check and before any
+# worktree write or subprocess. Each case below is one row of the prototype
+# table T-4 was signed off against -- case_id doubles as the failure label.
+
+_REAL_CASE_CONTENT = (
+    "def test_other():\n"
+    "    assert True\n"
+    "\n"
+    "\n"
+    "def test_check_writes_config(tmp_path):\n"
+    "    p = tmp_path / 'conf.py'\n"
+    "    p.write_text(\n"
+    '        "def test_x():\\n    assert True\\n", encoding="utf-8")\n'
+    "    assert p.exists()\n"
+)
+# added = {8}: only the write_text(...) call's argument line changed -- a
+# STRING LITERAL that CONTAINS "def test_x():" text, not a real def. Both
+# real def lines (1 and 5) are pre-existing/untouched context.
+
+_GATE_CASES = [
+    ("real_case_string_literal_arg", _REAL_CASE_CONTENT, {8}, False),
+    ("genuinely_new_def",
+     "def test_old():\n    assert True\n\n\ndef test_new():\n    assert True\n",
+     {5, 6}, True),
+    ("string_literal_assignment",
+     'X = "def test_x():\\n    assert True\\n"\n', {1}, False),
+    ("triple_quoted_block",
+     "DOC = '''\ndef test_gen():\n    pass\n'''\n", {1, 2, 3, 4}, False),
+    ("async_def", "async def test_a():\n    assert True\n", {1, 2}, True),
+    ("class_and_indented_method",
+     "class TestFoo:\n    def test_m(self):\n        assert True\n",
+     {1, 2, 3}, True),
+    ("decorated_parametrize",
+     "import pytest\n\n\n@pytest.mark.parametrize('x', [1, 2])\n"
+     "def test_p(x):\n    assert x\n", {4, 5}, True),
+    ("line_inside_existing_body",
+     "def test_existing():\n    x = 1\n    assert x == 1\n", {2}, False),
+    ("comment_only_line",
+     "def test_existing():\n    # a new comment\n    assert True\n", {2}, False),
+    ("syntax_error_fails_open", "def test_broken(:\n    pass\n", {1}, False),
+]
+
+
+@pytest.mark.parametrize("case_id,content,added,expected", _GATE_CASES,
+                         ids=[c[0] for c in _GATE_CASES])
+def test_new_test_def_lines_gate_cases(case_id, content, added, expected):
+    assert bool(red_proof._new_test_def_lines(content) & added) is expected
+
+
+def test_gate_suppresses_string_literal_lookalike_end_to_end(monkeypatch, tmp_path):
+    """T-4 acceptance (a): a fixture-repair-shaped change whose only added
+    line is a write_text(...) call passing a STRING that merely CONTAINS
+    "def test_x():" text must not produce a finding -- and must not even
+    reach the subprocess (runs == []), unlike before T-4 where this exact
+    shape (no content check at all) produced a false alarm."""
+    runs = _plumb(monkeypatch, {"tests/test_check.py": {8}}, [0],
+                  blob=_REAL_CASE_CONTENT)
+    assert red_proof.scan(
+        _ctx(["tests/test_check.py"], root=tmp_path), _cfg()) == []
+    assert runs == []          # gate skipped the subprocess entirely
+
+
+def test_gate_allows_genuine_new_test_def_end_to_end(monkeypatch, tmp_path):
+    """T-4 acceptance (b): a genuinely new `def test_new():` among the added
+    lines must still reach the subprocess (runs has one entry) and still
+    fire when it passes on base."""
+    blob = "def test_old():\n    assert True\n\n\ndef test_new():\n    assert True\n"
+    runs = _plumb(monkeypatch, {"tests/test_foo.py": {5, 6}}, [0], blob=blob)
+    findings = red_proof.scan(
+        _ctx(["tests/test_foo.py"], root=tmp_path), _cfg())
+    assert [f.file for f in findings] == ["tests/test_foo.py"]
+    assert len(runs) == 1

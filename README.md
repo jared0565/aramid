@@ -225,10 +225,13 @@ Additional limitations beyond the advisory ones above:
 
 ### Red-first proof (TDD gate, sub-project 3)
 
-At every `pre-push`, the test files your range changed are run — head
-version — against a throwaway worktree at the range's *base*. A file whose
-tests all pass on the pre-change tree was never red, so it proves nothing
-about the change: one finding per such file (tool `red-proof`, rule
+At every `pre-push`, changed test files are examined — but only if at least
+one of their changed lines is a new test **definition** (`def`/`async def`
+whose name starts with `test`, found by walking the real `ast`, never by
+matching text against the diff — limitation 8). A qualifying file's head
+version is then run — against a throwaway worktree at the range's *base*. A
+file whose tests all pass on the pre-change tree was never red, so it proves
+nothing about the change: one finding per such file (tool `red-proof`, rule
 `test-not-red`, severity medium). Collection errors count as red — a test
 importing a brand-new module *is* red on the base tree.
 
@@ -245,7 +248,16 @@ files are skipped silently.
 Limitations:
 
 1. The verdict is per test *file*: an old test in a changed file failing on
-   base masks a never-red new test — a missed signal, never a false alarm.
+   base masks a never-red new test (a missed signal). Before the content
+   gate (limitation 8) existed, this whole-file design also produced
+   genuine false alarms: any changed line in a test file triggered a full
+   base rerun regardless of what changed, so a fixture repair, a comment,
+   or any other non-test-adding edit to an already-green file could be
+   flagged as never-red — this is why the gate exists. It closes that
+   specific class, but one masking residue survives it: once a file passes
+   the gate and a finding fires, the whole-file verdict still can't say
+   *which* test definition in the file was the one that never went red, if
+   the file holds more than one.
 2. Any import failure on base counts as red, including files trivially
    broken on base for unrelated reasons.
 3. Only the changed test files themselves are materialized at head — a new
@@ -276,6 +288,23 @@ Limitations:
    and nothing on `PYTHONPATH` outranks that; and a package installed
    non-editably still shadows the worktree unless its layout puts the
    source under `<wt>/src` or `<wt>`.
+8. A subject is only examined if at least one of its changed lines is a new
+   test **definition** line — `def`/`async def` whose name starts with
+   `test`, found by walking the real `ast`, never by matching text against
+   the diff (a string literal or docstring that merely *contains*
+   `def test_x():`-shaped text does not count, nor does a line added inside
+   an existing test's body). This closes the false-alarm class in
+   limitation 1, at a deliberate recall cost: a new
+   `@pytest.mark.parametrize` case added to an existing test function, or a
+   strengthened assertion in an existing test's body, is not scanned at all.
+   That is not an oversight — this producer's contract is recall loss only,
+   never a false positive, and this trades one false-positive class (any
+   edit to an already-green test file) for a symmetric false-negative class
+   (an edit that only touches an existing test's body) one layer earlier,
+   before a subprocess is even spent on it. One resolution-side consequence
+   follows: such an edit can no longer prove a file's open red-proof finding
+   red either, so it can no longer auto-resolve that finding — only a push
+   that adds a new test definition can.
 
 ### Phase 2b: the LLM reviewer
 

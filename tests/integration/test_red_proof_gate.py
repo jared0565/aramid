@@ -69,9 +69,47 @@ NEVER_RED = ("import os\nimport sys\nsys.path.insert(0, os.getcwd())\n"
              "from src.foo import foo\n\n\ndef test_foo():\n"
              "    assert foo() == 1\n\n\ndef test_trivial():\n"
              "    assert True\n")
+# T-4's motivating bug, reproduced with real git + a real pytest subprocess:
+# the only change is a non-test helper appended after the untouched
+# test_foo() -- its name doesn't start with "test" (pytest never collects
+# it) and the "def test_x():" text it happens to embed is inside a plain str
+# argument, not a real def. Pre-T-4, subject selection had no content check
+# at all, so this file (a changed line in a test FILE, full stop) still got
+# a whole-file base rerun; test_foo() alone passes on base (foo() == 1
+# unchanged), so pytest's rc was 0 and red-proof raised a false alarm on a
+# file where literally nothing new was ever tested.
+FIXTURE_REPAIR = ("import os\nimport sys\nsys.path.insert(0, os.getcwd())\n"
+                  "from src.foo import foo\n\n\ndef test_foo():\n"
+                  "    assert foo() == 1\n\n\n"
+                  "def _write_broken_config(tmp_path):\n"
+                  "    (tmp_path / 'conf.py').write_text(\n"
+                  '        "def test_x():\\n    assert True\\n", encoding="utf-8")\n')
+# T-4: GENUINELY_RED must include a genuinely NEW test-definition line among
+# its added/changed lines, or the content gate (red_proof._new_test_def_lines)
+# skips the subject before pytest ever runs -- an assertion-only edit to the
+# existing test_foo() is exactly the "strengthened assertion" case the gate
+# deliberately no longer scans (module docstring / README limitation 8). The
+# appended test_new() is a pure addition relative to every base this constant
+# is diffed against in this file, so it lands in the diff's added lines
+# regardless of layout -- verified via real `git diff --unified=0` before
+# this was written, not just reasoned about.
 GENUINELY_RED = ("import os\nimport sys\nsys.path.insert(0, os.getcwd())\n"
                  "from src.foo import foo\n\n\ndef test_foo():\n"
-                 "    assert foo() == 2\n")
+                 "    assert foo() == 2\n\n\ndef test_new():\n"
+                 "    assert True\n")
+# Used only by test_fingerprint_stable_across_pushes, whose second push's
+# base is push 1's LANDED NEVER_RED tree (not the original initial commit).
+# Content gate note: this keeps test_trivial UNCHANGED (a rename would still
+# diff as a same-offset line change and happen to satisfy the gate, but only
+# by positional coincidence with whatever NEVER_RED looks like -- fragile).
+# Appending test_extra instead is a pure addition, so the gate-passing
+# def line is layout-independent -- verified via real `git diff --unified=0`
+# against the landed NEVER_RED base before this was written.
+STILL_NEVER_RED = ("import os\nimport sys\nsys.path.insert(0, os.getcwd())\n"
+                   "from src.foo import foo\n\n\ndef test_foo():\n"
+                   "    assert foo() == 2\n\n\ndef test_trivial():\n"
+                   "    assert True\n\n\ndef test_extra():\n"
+                   "    assert True\n")
 
 
 def _scan(r):
@@ -97,6 +135,24 @@ def test_real_never_red_push_flags(tmp_path):
     findings = _scan(r)
     assert [f.file for f in findings] == ["tests/test_foo.py"]
     assert findings[0].tool == "red-proof" and findings[0].line == 0
+    _no_leaked_worktrees(r)
+
+
+def test_real_fixture_repair_is_not_flagged(tmp_path):
+    """T-4 acceptance (a), with real git and a real pytest subprocess (not
+    the unit tests' mocked plumbing): a commit that adds no new test
+    DEFINITION at all -- only a non-test helper that happens to embed
+    "def test_x():" text inside a string argument -- must not be flagged.
+    src/foo.py is deliberately left untouched (unlike _commit_change_and_test):
+    a fixture repair changes only the test file, and the base run must be
+    genuinely all-green on its own merits (test_foo() unchanged, foo() == 1
+    on both sides) so a finding here could only be explained by the missing
+    content check T-4 closes."""
+    r = _repo_with_upstream(tmp_path)
+    (r / "tests" / "test_foo.py").write_text(FIXTURE_REPAIR, encoding="utf-8")
+    _git(r, "add", "-A")
+    _git(r, "commit", "-m", "fixture repair: unrelated helper + embedded text")
+    assert _scan(r) == []
     _no_leaked_worktrees(r)
 
 
@@ -136,7 +192,7 @@ def test_fingerprint_stable_across_pushes(tmp_path):
     _git(r, "push", "origin", "main")   # push 1 lands; the base advances
     # Second push: assert the now-landed behavior (foo() == 2) -- it passes
     # on the NEW base, so it is never-red again with different content.
-    (r / "tests" / "test_foo.py").write_text(GENUINELY_RED, encoding="utf-8")
+    (r / "tests" / "test_foo.py").write_text(STILL_NEVER_RED, encoding="utf-8")
     _git(r, "add", "-A")
     _git(r, "commit", "-m", "still never red")
     second = _scan(r)[0]
@@ -343,8 +399,9 @@ def test_base_run_imports_base_source_not_an_installed_shadow(tmp_path, monkeypa
     pytest there -- but with a src-layout package the worktree's `src` is on
     no path at all, so `import mypkg` resolves to the installed (i.e. NEW)
     code. The genuinely red-first test then PASSES on "base" and red_proof
-    reports it as never-red: a false alarm, which spec s10 limitation 2 and
-    the README both promise this producer never produces.
+    reports it as never-red: a false alarm -- the exact failure mode the
+    whole-file design and the T-4 content gate exist to keep out short of a
+    defect like this one (README, Red-first proof limitations).
 
     Every other fixture in this file dodges the bug by having its test body
     do `sys.path.insert(0, os.getcwd())`. Real test files do not -- they

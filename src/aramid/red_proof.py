@@ -23,11 +23,22 @@ tdd.scan's business, 1a). Head content is materialized via git show
 
 Never raises into run_gate (fail-open, the whole-file discipline);
 worktree cleanup in finally with the consumers/mutation.py leak-warning
-fallback. Limitations (spec s10): whole-file verdict -- an old test in a
-changed file failing on base masks a never-red new test (recall loss only,
-never a false positive); only subject files are materialized at head, so a
-new test depending on head changes to non-test files it imports usually
-collection-errors -> counts as red; single run, no flake retries.
+fallback. Limitations (spec s10): whole-file verdict, decided by one pytest
+run over the whole file -- an old test in a changed file failing on base
+masks a never-red new test, and a fired finding cannot say which test
+definition in the file was the one that never went red (recall/attribution
+loss, not by itself a false positive); only subject files are materialized
+at head, so a new test depending on head changes to non-test files it
+imports usually collection-errors -> counts as red; single run, no flake
+retries. A separate content gate (T-4, see _new_test_def_lines) requires at
+least one changed line to be a new test-definition line before a subject is
+scanned at all -- before this gate, subject selection had no content check,
+so any edit to an already-green test file (a fixture repair, a comment, a
+docstring) still triggered a full base rerun and could produce a genuine
+false alarm; the gate closes that at the cost of no longer scanning edits
+that only strengthen an existing test's body (a new parametrize case, a
+tightened assertion) -- recall traded for soundness, this producer's actual
+contract, not a compromise of it.
 The base run inherits the repo's own pytest config -- an addopts gate
 (coverage thresholds, warnings-as-errors) can force a single-file base run
 non-zero regardless of test outcomes, reading as red. As a detector this
@@ -44,6 +55,7 @@ _base_import_env; without it the run imports the INSTALLED package, which
 under a pip editable install is the live source the push is changing --
 see that helper for why this inverted the producer rather than merely
 adding noise."""
+import ast
 import os
 import shutil
 import sys
@@ -60,7 +72,44 @@ from aramid.tdd import _split_range
 
 RULE = "test-not-red"
 _TOOL = "red-proof"
-_MESSAGE = "new test lines pass against the pre-change tree (never red)"
+_MESSAGE = "a new test definition passes against the pre-change tree (never red)"
+
+
+def _new_test_def_lines(content: str) -> set[int]:
+    """T-4 content gate: line numbers of `def`/`async def` NAME lines for
+    functions whose name starts with "test", found by walking the real
+    `ast` -- never text/regex matching. A regex naively matching a
+    `def test_`-shaped line also matches a STRING LITERAL that merely
+    CONTAINS that text: T-4's motivating false alarm was a fixture-repair
+    commit whose only change was a `write_text(...)` call passing
+    '"def test_x():\\n    assert True\\n"' as a plain str argument. A regex
+    fires on that; an AST walk cannot, because it only ever yields real
+    ast.FunctionDef/AsyncFunctionDef nodes -- a Constant/Str node holding
+    that text is never one, no matter what characters it contains, and the
+    same goes for a triple-quoted docstring/comment block that merely
+    contains def-shaped text.
+
+    node.lineno on a decorated function is the `def` line itself, not the
+    decorator's line (true since Python 3.8) -- so a diff that adds a new
+    decorator over an already-existing, unchanged def does NOT satisfy this
+    gate (the def line itself is untouched context, not a changed line),
+    while a diff that adds both a new decorator and the def it decorates
+    does, because then the def line is itself newly added.
+
+    Fail-open by construction: unparsable content (SyntaxError, or any
+    other parse failure) yields an empty set, i.e. "no new test def" --
+    the same silent-skip fate as an unreadable blob, never an exception
+    escaping into scan_scoped's subject loop."""
+    try:
+        tree = ast.parse(content)
+    except Exception:
+        return set()
+    lines: set[int] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) \
+           and node.name.startswith("test"):
+            lines.add(node.lineno)
+    return lines
 
 
 def _base_import_env(wt: Path) -> dict[str, str]:
@@ -74,8 +123,9 @@ def _base_import_env(wt: Path) -> dict[str, str]:
     pytest's cwd insertion either (the package sits at <root>/src/<pkg>,
     not <root>/<pkg>), so the installed copy wins outright: a genuinely
     red-first test PASSES on base and the producer emits a never-red
-    finding. That is a false alarm -- the one outcome spec s10 limitation 2
-    and the README both promise this producer never produces -- and it
+    finding. That is a false alarm -- the exact failure mode the whole-file
+    design and the T-4 content gate exist to keep out short of a defect
+    like this one (see the README's Red-first proof limitations) -- and it
     fires for every changed test file, so under a normal editable-install
     dev setup the check is not merely noisy, it is inverted.
 
@@ -111,7 +161,17 @@ def scan_scoped(ctx, cfg) -> tuple[list[RawFinding], set[str]]:
     resolving an open finding on an inconclusive verdict would silently
     clear a real gap. rc 1/2 is red EXCEPT under an addopts gate, which can
     force it regardless of test outcomes (module docstring) -- the one
-    inconclusive case this scoping cannot filter out."""
+    inconclusive case this scoping cannot filter out.
+
+    A subject whose changed lines include no new test-*definition* line
+    (the T-4 content gate, _new_test_def_lines) never reaches the pytest run
+    at all, so it lands in neither out nor proven_red -- from this
+    function's return value alone that is indistinguishable from a file the
+    wall budget skipped. Both mean only "not scanned this run", never
+    "clean"; a push that merely strengthens an existing test's assertion or
+    adds a `@pytest.mark.parametrize` case can no longer auto-resolve an
+    open red-proof finding on that file this way -- only a push that adds a
+    new test definition can."""
     try:
         rcfg = getattr(cfg, "red_proof", None) or {}
         if not rcfg.get("enabled", True):
@@ -146,6 +206,30 @@ def scan_scoped(ctx, cfg) -> tuple[list[RawFinding], set[str]]:
                 content = gitutil.read_blob(ctx.root, head, rel)
                 if not content:
                     continue        # unreadable/empty head blob: fail-open
+                if not (_new_test_def_lines(content) & new_lines[rel]):
+                    # T-4 content gate: no NEW test *definition* line among
+                    # this subject's changed lines -- skip before the
+                    # worktree write/subprocess entirely (fail-open: an
+                    # unparsable blob lands here too, via the empty set
+                    # _new_test_def_lines returns on SyntaxError). Before
+                    # this gate, subject selection had no content check at
+                    # all (gitutil.is_test_file matches on path only), so a
+                    # fixture repair, a comment, or any other non-test-
+                    # adding edit to an already-green test file still
+                    # triggered a full whole-file base rerun and could
+                    # produce a genuine false alarm -- the bug this gate
+                    # closes (T-4). The trade: a new
+                    # @pytest.mark.parametrize case on an existing function,
+                    # or a strengthened assertion in an existing test, is no
+                    # longer scanned either -- not an oversight, but this
+                    # producer's own contract (recall loss only, never a
+                    # false positive) enforced one layer earlier, before a
+                    # subprocess is even spent on it. One resolution-side
+                    # consequence follows: such a file can no longer land in
+                    # proven_red from this kind of edit, so it can no longer
+                    # auto-resolve an open red-proof finding on that file --
+                    # only a push that adds a new test definition can.
+                    continue
                 dest = wt / rel
                 dest.parent.mkdir(parents=True, exist_ok=True)
                 dest.write_text(content, encoding="utf-8")
@@ -183,9 +267,10 @@ def auto_resolve_red_proof(ledger, run_id: str, at: str, proven_red, present_ids
     """Resolve open red-proof findings whose file the push definitively
     proved red (mirrors mutation_gate.auto_resolve_mutation and
     tdd.auto_resolve_tdd). proven_red (from scan_scoped) contains ONLY files
-    whose base-tree run exited rc 1/2 -- budget-break, rc 5, and timeout are
-    deliberately excluded there (an inconclusive verdict must never silently
-    clear a real gap), so nothing here re-checks the rc taxonomy. That is
+    whose base-tree run exited rc 1/2 -- budget-break, rc 5, timeout, and
+    (T-4) a subject the content gate skipped before ever running pytest are
+    all deliberately excluded there (an inconclusive verdict must never
+    silently clear a real gap), so nothing here re-checks the rc taxonomy. That is
     NOT the same as "certainly red": under a repo addopts gate an rc 1/2 can
     be infrastructure rather than a test outcome, and this function then
     durably resolves a still-never-red finding, irreversibly (module
