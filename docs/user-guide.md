@@ -84,7 +84,7 @@ aramid init path\to\workspace --discover
 4. Appends any missing `.gitignore` entries: `.aramid/`, `graph-out/`, `.graphite*`, `.cache/`.
 5. Installs idempotent git hook shims for `pre-commit`, `pre-push`, and `post-commit`. If a foreign hook already exists at one of those paths, it's chained to `<hook>.aramid-chained` rather than clobbered.
 6. Registers the repo in the machine-global registry (this is what makes it a candidate for `aramid drain --all` later).
-7. Runs a one-time full-history gitleaks scan (`git log --all`), recording any hits as **historical, non-blocking** findings — a secret that's already in history doesn't suddenly block your next commit, but it is now tracked (see `ledger mark-rotated` in [section 5](#5-understanding--handling-findings)).
+7. Runs a one-time full-history gitleaks scan (`git log --all`), recording any hits as **historical, non-blocking** findings — a secret that's already in history doesn't suddenly block your next commit, but it is now tracked until retired — `ledger mark-rotated` for a real leak, `ledger mark-not-a-secret` for a false positive (see [section 5](#5-understanding--handling-findings)).
 8. Writes the ratchet baseline once, guarded so a re-run of `init` never resets it.
 9. Validates that the installed hook shim files exist and carry aramid's marker.
 10. Prints a summary: repo root, scan scope, any nested-repo exclusions, detected stack, whether hooks are armed, baseline finding count, and historical secret count.
@@ -231,7 +231,7 @@ A read-only snapshot — never mutates anything:
 aramid status
 ```
 
-Reports: last run summary; open/historical/overridden finding counts; count of findings new since the baseline; count of findings aging past 30 days open; per-tool skip streaks; unrotated historical secrets (with a hint to use `ledger mark-rotated`); while `semgrep_block_armed` is still `false`, the bake day-count and per-rule semgrep hit counts (so you can spot noisy rules before arming); an LLM review status line (open/confirmed-critical counts, armed/baking state, OpenRouter monthly spend vs. cap, ladder tiers) plus an autolearn line; queue status (queued count/score/age, drained/expired counts); last drain timestamp; whether the repo is registered; whether scheduled drain is installed.
+Reports: last run summary; open/historical/not-a-secret/overridden finding counts; count of findings new since the baseline; count of findings aging past 30 days open; per-tool skip streaks; unrotated historical secrets (with a hint to use `ledger mark-rotated`); while `semgrep_block_armed` is still `false`, the bake day-count and per-rule semgrep hit counts (so you can spot noisy rules before arming); an LLM review status line (open/confirmed-critical counts, armed/baking state, OpenRouter monthly spend vs. cap, ladder tiers) plus an autolearn line; queue status (queued count/score/age, drained/expired counts); last drain timestamp; whether the repo is registered; whether scheduled drain is installed.
 
 ### The ledger
 
@@ -242,16 +242,24 @@ aramid ledger filter --tool ruff --rule S608 --status open --severity high
 ```
 
 - `ledger list` — one line per finding: `[status] id tool:rule file:line — message`.
-- `ledger show <id>` — full record (`tool, rule, file, line, severity, verdict, message, evidence, historical, status`) plus every ledger event tied to that id. Exits `3` for an unknown id.
+- `ledger show <id>` — full record (`tool, rule, file, line, severity, verdict, message, evidence, historical, status, reason`) plus every ledger event tied to that id. Exits `3` for an unknown id. `reason` is populated once a finding has been overridden or marked not-a-secret; a rotated finding's reason is recorded in the ledger event but not currently surfaced here.
 - `ledger filter` — all four filters are optional and AND-combined.
 
-If `init`'s one-time full-history secret scan found something, rotate the credential and then mark it:
+If `init`'s one-time full-history secret scan found something, it has two possible exits: rotate the credential and mark it rotated, or confirm it was never a secret in the first place and mark it as such.
+
+Rotate a real leak, then record it:
 
 ```powershell
 aramid ledger mark-rotated <id> --reason "rotated in vault, 2026-07-20"
 ```
 
-`--reason` is required. This only works when the finding's status is exactly `historical` — it refuses (exit `3`) otherwise rather than silently no-op'ing.
+Some hits are not leaks at all. gitleaks' `generic-api-key` rule flags any sufficiently long, high-entropy string, so it routinely catches values that are secret-*shaped* but not secret — for example, a Shopify app's public client ID embedded in a `wrangler.toml`, already published in the storefront's HTML by design. Confirm that, then mark it not-a-secret instead of rotating it:
+
+```powershell
+aramid ledger mark-not-a-secret <id> --reason "public Shopify client ID, published in the storefront meta tag"
+```
+
+`--reason` is required for both commands. `mark-not-a-secret` only works when the finding's status is exactly `historical` — it refuses (exit `3`) for a live `open` finding (use a committed `.aramid-suppressions.toml` entry for a BLOCK, or `aramid override` for a WARN) and for a finding already retired either way, rather than silently no-op'ing. That restriction matters because `not_a_secret`, like `historical`, is inert at gate time — a finding re-fires at its normal severity if it's ever re-detected in the working tree, regardless of ledger status. So loosening the guard would not open a gate bypass; it would open a **reporting** bypass — an uncommitted way to drop an open BLOCK finding out of `status`'s counts, sidestepping the committed, reviewable `.aramid-suppressions.toml` that BLOCK-tier suppression deliberately requires. `mark-rotated`, by contrast, accepts a `historical` finding OR one already marked `not_a_secret`: discovering that a supposed false positive is in fact a real credential, and rotating it, only adds caution, so that direction is never blocked. Neither mark can ever be undone — the ledger is append-only, and there is no path back from `rotated` to `not_a_secret`.
 
 ### Overriding a WARN finding
 
@@ -536,7 +544,7 @@ aramid pack add <finding_id>
 aramid pack compile
 ```
 
-`pack add` promotes any ledger finding to a compiled semgrep rule (a rotated secret → a redacted reintroduction rule; a fixed CVE/GHSA/PySec/OSV finding → a manifest ban rule; anything else → a draft sentinel you're expected to edit before committing). `pack compile` does this for every eligible finding in one pass. This compiled ruleset is exactly what the `regression_pack` drain consumer replays against each queue item, and what `[pack].pack_block_armed` gates.
+`pack add` promotes any ledger finding to a compiled semgrep rule: a rotated secret becomes a redacted reintroduction rule, a fixed CVE/GHSA/PySec/OSV finding becomes a manifest ban rule, and anything else — including a not-a-secret finding, which has no specialized compiler — becomes a draft sentinel rule you're expected to edit before committing. `pack compile` is narrower: it auto-promotes only the eligible findings (rotated secrets, fixed vuln findings) in one pass, silently skipping everything else — a not-a-secret finding is never auto-promoted into a rule this way, correctly, since a confirmed false positive must never become a permanent gate rule. This compiled ruleset is exactly what the `regression_pack` drain consumer replays against each queue item, what `[pack].pack_block_armed` gates, and what rides along as an extra semgrep config at every pre-commit/pre-push gate — so the rotated/not-a-secret split here is the actual, operator-visible difference between the two retirement exits: rotating a secret eventually compiles a standing gate rule against its reintroduction, while marking it not-a-secret never does.
 
 ---
 
@@ -570,4 +578,4 @@ aramid check --gate pre-push --all --strict --json
 
 **A bad flag or unknown subcommand** — any argparse failure (bad flags, unknown subcommand, no subcommand at all) is remapped to exit `3`, matching a genuine engine error, so scripts checking for `3` catch both cases.
 
-**Historical secrets flagged by the one-time `init` scan** — rotate the credential, then `aramid ledger mark-rotated <id> --reason "..."` (only valid while the finding's status is `historical`).
+**Historical secrets flagged by the one-time `init` scan** — if it's a real leak, rotate the credential, then `aramid ledger mark-rotated <id> --reason "..."`. If it's a false positive instead (gitleaks' `generic-api-key` rule in particular flags plenty of secret-shaped, non-secret values), retire it with `aramid ledger mark-not-a-secret <id> --reason "..."` instead. `mark-not-a-secret` only works while the finding's status is exactly `historical`; `mark-rotated` also accepts a finding already marked not-a-secret, since discovering a supposed false positive was real after all and rotating it only adds caution. Neither mark can be undone.

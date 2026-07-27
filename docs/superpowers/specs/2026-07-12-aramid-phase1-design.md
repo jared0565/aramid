@@ -85,7 +85,7 @@ per-repo onboarding via `init`, per-repo config and state.
 | `aramid check [--gate pre-commit\|pre-push] [--staged\|--range\|--all] [--strict] [--json] [--accept-degraded --reason "…"]` | Run the pipeline. `--strict` treats degraded/error as failure (CI mode). |
 | `aramid doctor` | Verify/repair toolchain and shim interpreter; install pinned gitleaks into the managed tools dir. |
 | `aramid status` | Last run, open findings, NEW-since-baseline, aging ("12 medium findings open >30 days"), skip-visibility ("semgrep: skipped last N runs"), unrotated historical secrets. |
-| `aramid ledger [list\|show\|filter\|mark-rotated <id>]` | Query findings; `mark-rotated` transitions a `historical` secret finding to `rotated` (writes a `finding_rotated` event, requires `--reason`). |
+| `aramid ledger [list\|show\|filter\|mark-rotated <id>\|mark-not-a-secret <id>]` | Query findings; a `historical` secret finding has two exits: `mark-rotated` transitions it to `rotated` for a real leak (writes a `finding_rotated` event, requires `--reason`), `mark-not-a-secret` transitions it to `not_a_secret` for a false positive (writes a `finding_not_a_secret` event, requires `--reason`). `mark-rotated` also accepts a finding already `not_a_secret`; there is no reverse transition. |
 | `aramid override <id> --reason "…"` | Suppress a WARN finding (ledger-logged). BLOCK findings require the committed allowlist instead (§6). Re-running it re-affirms a stale override (§4). |
 | `aramid arm` | End the per-repo WARN-only bake: sets `semgrep_block_armed = true` in `aramid.toml` (§8). Arming is always manual — no timer state. |
 | `aramid update-rules` | Refresh the vendored semgrep ruleset explicitly. Never happens at commit time. |
@@ -211,7 +211,7 @@ message       human explanation
 evidence      redacted excerpt (§6)
 gate, run_id  provenance
 source        "deterministic" (Phase 2 adds "llm")
-status        open | fixed | overridden | historical | rotated  (materialized from ledger events)
+status        open | fixed | overridden | historical | rotated | not_a_secret  (materialized from ledger events)
 ```
 
 ### Fingerprint (the most load-bearing algorithm in the platform)
@@ -248,9 +248,9 @@ SQLite at `.aramid/ledger.db`, **gitignored**, event-sourced:
 
 - Events: `run_started`, `run_finished`, `finding_detected` (carries
   `historical: true` when produced by init's full-history scan), `finding_resolved`,
-  `finding_overridden`, `finding_rotated`, `infrastructure_bypass`,
-  `baseline_snapshot`. Each carries `run_id` and the run's **scan scope** (files ×
-  tools actually evaluated).
+  `finding_overridden`, `finding_rotated`, `finding_not_a_secret`,
+  `infrastructure_bypass`, `baseline_snapshot`. Each carries `run_id` and the run's
+  **scan scope** (files × tools actually evaluated).
 - Current finding state is a materialized view over events.
 - **Scope-aware resolution:** `open → fixed` only when a run whose scope covered that
   finding's file with that finding's tool no longer reports it. A scoped pre-commit run
@@ -281,9 +281,29 @@ must survive review is suppression of blocks, which lives in the committed file.
   credential** (with file:line, and commit hash for history hits).
 - `init` runs a one-time full-history gitleaks scan; hits are recorded via
   `finding_detected` events flagged `historical: true` — non-blocking, but listed in
-  `status` with rotation guidance until retired with
-  `aramid ledger mark-rotated <id> --reason "rotated in <system>"` (writes a
-  `finding_rotated` event; status becomes `rotated`).
+  `status` until retired. A `historical` hit has two retirement exits:
+  - **Rotation**, for a real leak: `aramid ledger mark-rotated <id> --reason "rotated
+    in <system>"` (writes a `finding_rotated` event; status becomes `rotated`).
+  - **Not-a-secret**, for a false positive: `aramid ledger mark-not-a-secret <id>
+    --reason "…"` (writes a `finding_not_a_secret` event; status becomes
+    `not_a_secret`). High-false-positive gitleaks rules — `generic-api-key` above
+    all, which flags any sufficiently long, high-entropy string — make this a
+    routine exit, not a corner case.
+
+  `mark-not-a-secret` accepts a target only when its status is exactly `historical`
+  — never a live `open` finding. `historical` and `not_a_secret` are both inert at
+  gate time: a finding re-fires at its normal tier if it is ever re-detected in the
+  working tree, regardless of ledger status. So this restriction guards against a
+  **reporting** bypass, not a gate bypass — an uncommitted way to drop an open
+  BLOCK finding out of `status`'s counts, sidestepping the committed, reviewable
+  suppression this section already requires for BLOCK tier.
+
+  Transitions move only toward more caution. `mark-rotated` also accepts a target
+  already marked `not_a_secret` — discovering that a supposed false positive is in
+  fact a real credential, and rotating it, is strictly safety-improving and must
+  never be blocked by the earlier not-a-secret call. There is no reverse
+  transition: no un-mark, no path from `rotated` back to `not_a_secret`. The ledger
+  is append-only, and a rotation is a safety assertion that is never rewritten.
 
 ### Suppression — two tiers
 
@@ -409,3 +429,11 @@ defects — an exit-code contract that could not express the tiered failure poli
 escape hatch with no transport into git hooks, an unrotatable "historical" status, an
 undefined ratchet baseline, and undefined behavior for new branches, among others —
 all fixed in this revision before user sign-off.
+
+A third pass later revisited the same historical-secret lifecycle this revision
+fixed, and found it still modeled every hit as a real leak with rotation as the
+only exit — a false positive (routine under gitleaks' high-false-positive rules,
+`generic-api-key` above all) had nowhere to go but a permanent nag or a false entry
+in an append-only ledger. §5/§6 now give a `historical` hit a second, equally
+restricted retirement path (`not_a_secret`), directional so it can never widen into
+a gate or reporting bypass.

@@ -92,7 +92,7 @@ territory. Don't mistake a clean `aramid check` for full security coverage.
 ## Commands
 
 - `aramid check [--gate pre-commit|pre-push] [--staged|--range|--all]` -- run the gate manually.
-- `aramid status` -- open findings, new-since-baseline, unrotated historical secrets.
+- `aramid status` -- open findings, new-since-baseline, unrotated historical secrets (see `ledger mark-rotated` / `mark-not-a-secret` below).
 - `aramid doctor [--fix]` -- verify/repair the toolchain and the installed hook's interpreter.
 - `aramid override <id> --reason "..."` -- suppress a WARN finding (ledger-logged).
 - `aramid arm` -- end the semgrep WARN-only bake.
@@ -104,7 +104,9 @@ territory. Don't mistake a clean `aramid check` for full security coverage.
 `aramid init` ran a one-time full-history gitleaks scan across this repo. Any
 hits are recorded in the ledger as historical, non-blocking findings -- see
 `aramid status`. **Deleting the line does not fix a leaked credential --
-rotate it**, then retire the finding with
-`aramid ledger mark-rotated <id> --reason "rotated in <system>"`.
+rotate it**, then retire the finding with `aramid ledger mark-rotated <id>
+--reason "rotated in <system>"` -- or, if it turns out not to be a secret at
+all (common with gitleaks' `generic-api-key` rule), `mark-not-a-secret`
+instead of `mark-rotated`.
 
 <!-- /aramid:managed -->

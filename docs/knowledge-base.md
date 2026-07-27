@@ -408,11 +408,12 @@ Sweep registered repos, catch-up-triage, pop the highest-scored queued item(s), 
 - `--dry-run` — read-only preview, no lock, no mutation.
 - `--max-items N` (int, default `None`) — caps items drained this run.
 
-### `aramid ledger list|show <id>|filter [--tool] [--rule] [--status] [--severity]|mark-rotated <id> --reason REASON`
+### `aramid ledger list|show <id>|filter [--tool] [--rule] [--status] [--severity]|mark-rotated <id> --reason REASON|mark-not-a-secret <id> --reason REASON`
 - `list` — every open/known finding, one line each.
 - `show <id>` — full record fields plus every ledger event tied to that id (exit 3 if id unknown).
 - `filter [--tool] [--rule] [--status] [--severity]` — all optional/AND-combined.
-- `mark-rotated <id> --reason REASON` — `--reason` required; only valid when the finding's status is exactly `historical`, else refuses with exit 3.
+- `mark-rotated <id> --reason REASON` — `--reason` required; valid when the finding's status is `historical` OR `not_a_secret`, else refuses with exit 3. Accepting `not_a_secret` too is deliberate: a supposed false positive later found to be a real credential can still be rotated — transitions only ever move toward more caution.
+- `mark-not-a-secret <id> --reason REASON` — `--reason` required; valid only when the finding's status is exactly `historical` (never a live `open` finding), else refuses with exit 3. Retires a false-positive historical hit (status becomes `not_a_secret`) without asserting a rotation that never happened. Reporting-only and inert at gate time: a re-detected instance still classifies exactly as before, so this is not a gate-bypass path. Neither mark can be undone.
 - Bare `aramid ledger` — usage line, exit 3.
 
 ### `aramid override <id> --reason REASON`
@@ -420,8 +421,8 @@ Suppress a WARN-tier finding, ledger-logged. `--reason` required (non-empty afte
 
 ### `aramid pack list|add <id>|compile`
 - `list` — existing pack rule ids.
-- `add <finding_id>` — promotes a finding to a pack rule (specialized compiler for rotated gitleaks secrets or fixed CVE/GHSA/PYSEC/OSV vuln findings; otherwise a DRAFT sentinel rule with a warning to edit its pattern-regex).
-- `compile` — auto-promotes every eligible finding in one pass.
+- `add <finding_id>` — promotes a finding to a pack rule (specialized compiler for rotated gitleaks secrets or fixed CVE/GHSA/PYSEC/OSV vuln findings; otherwise — including a not-a-secret finding, which has no specialized compiler — a DRAFT sentinel rule with a warning to edit its pattern-regex).
+- `compile` — auto-promotes only the eligible findings (rotated secrets, fixed vuln findings) in one pass, silently skipping the rest; a not-a-secret finding is never auto-promoted this way, correctly, since a confirmed false positive must not become a standing gate rule (`pack_cmd.py:16` → `pipeline.py:431-433`, the compiled ruleset loads as an extra semgrep config at every gate).
 - Bare `aramid pack` — usage line, exit 3.
 
 ### `aramid autolearn [--rebuild]`
@@ -486,7 +487,9 @@ Register/remove/query a Windows Task Scheduler job running `<interpreter> -m ara
 | `aramid schedule` | `3` on non-Windows, unknown action, or non-zero `schtasks` result; otherwise mirrors `schtasks`' own return code (`status`) |
 | `aramid drain` | `0` ok; `2` degraded (some repo/consumer failed, rest completed); `3` if the lock is already held (real drain, not dry-run) or the registry is unusable; `0` also when no repos are registered/given |
 | `aramid triage` | `0` on success (queued or not); `3` on engine error |
-| `aramid ledger show <id>` / `mark-rotated` | `3` if id unknown / finding not in `historical` status |
+| `aramid ledger show <id>` | `3` if id unknown |
+| `aramid ledger mark-rotated` | `3` if id unknown, or finding's status is neither `historical` nor `not_a_secret` |
+| `aramid ledger mark-not-a-secret` | `3` if id unknown, or finding's status is not exactly `historical` |
 | `aramid override` | `3` if the finding is BLOCK-tier (refused) |
 | `aramid pack` (bare) | `3` (usage line) |
 | `aramid ledger` (bare) | `3` (usage line) |
