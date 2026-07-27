@@ -411,7 +411,7 @@ Sweep registered repos, catch-up-triage, pop the highest-scored queued item(s), 
 ### `aramid ledger list|show <id>|filter [--tool] [--rule] [--status] [--severity]|mark-rotated <id> --reason REASON|mark-not-a-secret <id> --reason REASON`
 - `list` — every open/known finding, one line each.
 - `show <id>` — full record fields plus every ledger event tied to that id (exit 3 if id unknown).
-- `filter [--tool] [--rule] [--status] [--severity]` — all optional/AND-combined.
+- `filter [--tool] [--rule] [--status] [--severity]` — all optional/AND-combined. `--status` takes the underlying status string with underscores (`not_a_secret`), which differs from the hyphenated `not-a-secret` label `aramid status` displays.
 - `mark-rotated <id> --reason REASON` — `--reason` required; valid when the finding's status is `historical` OR `not_a_secret`, else refuses with exit 3. Accepting `not_a_secret` too is deliberate: a supposed false positive later found to be a real credential can still be rotated — transitions only ever move toward more caution.
 - `mark-not-a-secret <id> --reason REASON` — `--reason` required; valid only when the finding's status is exactly `historical` (never a live `open` finding), else refuses with exit 3. Retires a false-positive historical hit (status becomes `not_a_secret`) without asserting a rotation that never happened. Reporting-only and inert at gate time: a re-detected instance still classifies exactly as before, so this is not a gate-bypass path. Neither mark can be undone.
 - Bare `aramid ledger` — usage line, exit 3.

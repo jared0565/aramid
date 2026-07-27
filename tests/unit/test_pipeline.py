@@ -1396,8 +1396,9 @@ def test_not_a_secret_is_not_an_override_at_gate_time(tmp_path):
     led.append(Event(EventType.FINDING_NOT_A_SECRET, uuid.uuid4().hex, "t2",
                      finding_id="id2", payload={"reason": "test fixture value"}))
     records = pipeline._overrides_from_ledger(led)
-    led.close()
+    assert led.open_findings()["id2"]["status"] == "not_a_secret"
     assert records == []
+    led.close()
 
 
 # ------------------------------------------------------- (tdd) pre-push ----
