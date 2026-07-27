@@ -33,6 +33,26 @@ def _header_value(text: str, label: str) -> str:
     return m.group(1).strip()
 
 
+# The date aramid was onboarded into its own repo. This is a HISTORICAL FACT, not
+# a build stamp -- but `_render_aramid_md` stamps `date.today()`, and the sync test
+# below has to normalise that away or it would fail every day. Normalising it means
+# nothing else checks it, so a future regeneration that forgets to restore the real
+# date would silently rewrite history and still pass. Hence this pin: if it fails,
+# either restore the date or, if aramid was genuinely re-onboarded, change it here
+# deliberately.
+ONBOARDED_DATE = "2026-07-25"
+
+
+def test_aramid_md_records_the_real_onboarding_date():
+    actual = (REPO_ROOT / "ARAMID.md").read_text(encoding="utf-8")
+    assert _header_value(actual, "Onboarded") == ONBOARDED_DATE, (
+        "ARAMID.md's Onboarded date changed. `_render_aramid_md` stamps date.today(), "
+        "so this is what a regeneration looks like when the historical date was not "
+        "restored -- that records a falsehood. Restore it, or update ONBOARDED_DATE "
+        "here if the repo really was re-onboarded."
+    )
+
+
 def test_aramid_md_is_in_sync_with_its_template():
     actual = (REPO_ROOT / "ARAMID.md").read_text(encoding="utf-8")
 
@@ -47,12 +67,35 @@ def test_aramid_md_is_in_sync_with_its_template():
     )
 
     if _ONBOARDED.sub(r"\1DATE", actual) != _ONBOARDED.sub(r"\1DATE", rendered):
-        tmpl_lines = set(rendered.splitlines())
-        missing = [ln for ln in tmpl_lines - set(actual.splitlines()) if ln.strip()]
+        # Normalise the date here too, else the always-differing Onboarded line shows
+        # up as phantom "drift". Iterate the template in order rather than differencing
+        # sets -- set order is hash-randomised, so the reported lines would otherwise
+        # vary between runs on identical input.
+        def _norm(lines):
+            return {_ONBOARDED.sub(r"\1DATE", ln) for ln in lines}
+
+        def _only_in(a, b):
+            other = _norm(b)
+            return [ln for ln in a
+                    if ln.strip() and _ONBOARDED.sub(r"\1DATE", ln) not in other]
+
+        # Report BOTH directions: drift can be the template gaining content the
+        # rendered file lacks (the observed case, twice) or the rendered file
+        # carrying hand-edits the template never had. Iterate in file order --
+        # set order is hash-randomised and would vary between runs on identical
+        # input, making the diagnostic look nondeterministic.
+        missing = _only_in(rendered.splitlines(), actual.splitlines())
+        extra = _only_in(actual.splitlines(), rendered.splitlines())
+        detail = ""
+        if missing:
+            detail += (f"\n{len(missing)} template line(s) ABSENT from ARAMID.md:\n  "
+                       + "\n  ".join(missing[:5]))
+        if extra:
+            detail += (f"\n{len(extra)} line(s) in ARAMID.md NOT in the template "
+                       f"(hand-edited?):\n  " + "\n  ".join(extra[:5]))
         raise AssertionError(
             "ARAMID.md has drifted from src/aramid/data/ARAMID.md.tmpl. "
             "The template is the source of truth; regenerate the rendered file "
-            "(preserving its Onboarded date) rather than hand-editing one of them.\n"
-            f"{len(missing)} template line(s) absent from ARAMID.md, first few:\n  "
-            + "\n  ".join(missing[:5])
+            "(preserving its Onboarded date) rather than hand-editing one of them."
+            + detail
         )
