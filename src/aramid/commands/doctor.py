@@ -138,7 +138,7 @@ def probe_tool(name: str) -> ToolStatus:
     # a sibling executable by bare name -- both need this to succeed.
     env = {**os.environ, "PATH": str(exe.parent) + os.pathsep + os.environ.get("PATH", "")}
     try:
-        # noqa justification (S603): `exe` is not attacker-controlled -- it
+        # S603 justification: `exe` is not attacker-controlled -- it
         # is the Path this function itself just resolved via
         # `_locate_gitleaks`/`_locate_owned_tool` (shutil.which or a fixed,
         # known scripts dir), and `name` comes from the hardcoded ALL_TOOLS
@@ -353,7 +353,7 @@ def _fix_pip_toolchain() -> None:
     """`pip install` the owned pip toolchain into the CURRENT interpreter
     (never a different one -- doctor repairs the interpreter it is itself
     running under)."""
-    # noqa justification (S603): `sys.executable` is this process's own
+    # S603 justification: `sys.executable` is this process's own
     # interpreter path and OWNED_PIP_TOOLCHAIN is the hardcoded tuple
     # ("ruff", "semgrep", "pip-audit") declared above -- no external input
     # reaches this argv. `pip install`-ing aramid's own owned toolchain is
@@ -387,7 +387,7 @@ def _fix_gitleaks() -> bool:
     url = GITLEAKS_RELEASE_URL.format(asset=asset)
 
     try:
-        # noqa justification (S310): `url` is built a few lines above from
+        # S310 justification: `url` is built a few lines above from
         # GITLEAKS_RELEASE_URL (a hardcoded "https://github.com/..." format
         # string), GITLEAKS_VERSION (a pinned constant), and `key`/`asset`
         # derived from `_gitleaks_platform_key()`'s small fixed set of

@@ -58,7 +58,7 @@ def win_sh_path(p: Path) -> str:
 
 def _git_config(root: Path, key: str) -> str | None:
     try:
-        # noqa justification (S603/S607): "git" is a fixed literal and `key`
+        # S603/S607 justification: "git" is a fixed literal and `key`
         # is always a hardcoded config key passed by this module's own
         # callers (currently only "core.hooksPath") -- never external input.
         # Relying on PATH to resolve "git" matches every other git invoker.

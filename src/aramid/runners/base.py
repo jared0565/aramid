@@ -142,7 +142,7 @@ _POST_KILL_DRAIN_S = 5.0   # cap on the post-_kill_tree reap wait (test seam)
 def _kill_tree(proc: subprocess.Popen):
     try:
         if _WIN:
-            # noqa justification (S603/S607): fixed argv killing a process
+            # S603/S607 justification: fixed argv killing a process
             # tree aramid itself spawned via subprocess.Popen above -- proc.pid
             # is our own child's PID, not attacker-controlled, and "taskkill"
             # resolving via PATH is standard on every Windows host.
@@ -169,7 +169,7 @@ def run_subprocess(argv, cwd: Path, timeout_s: float, env=None) -> RunnerResult:
     kwargs = {"creationflags": subprocess.CREATE_NEW_PROCESS_GROUP} if _WIN \
              else {"start_new_session": True}
     start = time.monotonic()
-    # noqa justification (S603): this is aramid's single generic subprocess
+    # S603 justification: this is aramid's single generic subprocess
     # launcher -- invoking external static-analysis tools (ruff, semgrep,
     # gitleaks, pip-audit, npm/pnpm/yarn, eslint, tsc, pytest...) is the
     # entire purpose of this function, not attacker-controlled input. Every

@@ -43,6 +43,27 @@ runner at `[timeouts].pre_push` regardless -- so raise both if you need a
 longer run. `enabled = false` removes the gate entirely. Subsetting narrows
 what the push gate covers, so keep the full suite running in CI.
 
+**Suite not recognized?** Detection is literal: a real `test_*.py`,
+`*_test.py`, or `conftest.py` file, or a `package.json` `scripts.test`
+entry -- nothing more. A custom pytest `python_files` pattern,
+unittest-style `testfoo.py` naming, or a doctest-only suite are all
+invisible to it. If that's this repo's suite, the tests runner is never
+*selected* at all (not degraded, just absent), so the gate can exit clean
+without ever running it. aramid prints a stderr notice when a plausible
+test setup exists but nothing was recognized in it -- if you see it, set
+`[tests].command` to point aramid at your suite explicitly.
+
+**Dual-stack repo?** If this repo has both a real Python test file
+(`test_*.py`, `*_test.py`, or `conftest.py`) and a `package.json`
+`scripts.test` entry, aramid runs **both** suites at pre-push and blocks
+unless both pass -- not just whichever one it finds first. The npm side
+only joins the run when a JS lockfile (`package-lock.json`,
+`pnpm-lock.yaml`, or `yarn.lock`) is present; without one, aramid runs
+pytest only and prints a notice rather than silently dropping the npm
+suite. If either suite's own tool binary can't be found at all, the push
+blocks with an explicit `tests-tool-missing` finding instead of an
+unexplained failure.
+
 A **two-week WARN-only bake** is in effect for semgrep on this repo (see
 `aramid.toml`'s `bake_started` / `semgrep_block_armed`). While unarmed,
 semgrep BLOCK-tier findings report as WARN so the operator can demote noisy

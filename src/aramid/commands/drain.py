@@ -45,7 +45,7 @@ def _lock_path() -> Path:
 
 def _pid_alive(pid: int) -> bool:
     if sys.platform == "win32":
-        # noqa justification (S603/S607): fixed argv querying our own recorded
+        # S603/S607 justification: fixed argv querying our own recorded
         # PID via the standard Windows tasklist binary.
         # errors="replace" only -- tasklist emits the console/ANSI codepage,
         # NOT UTF-8; the str(pid) containment check below is pure ASCII, which

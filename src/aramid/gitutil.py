@@ -5,7 +5,7 @@ from pathlib import Path
 class NotARepo(Exception): ...
 
 def _run(root: Path, *args: str) -> subprocess.CompletedProcess:
-    # noqa justification (S603/S607): aramid's single git wrapper -- "git" is
+    # S603/S607 justification: aramid's single git wrapper -- "git" is
     # a fixed literal (never derived from *args) and every call site passes
     # fixed subcommands (rev-parse, show, rev-list, diff, ls-files, log,
     # merge-base, symbolic-ref); relying on PATH to resolve "git" is standard
