@@ -218,6 +218,41 @@ def test_mark_not_a_secret_refuses_open_finding_and_appends_nothing(tmp_path, ca
         ledger.close()
 
 
+def test_mark_not_a_secret_refuses_fixed_finding_generic_tail(tmp_path, capsys):
+    # Covers the "anything else" branch (status neither open, not_a_secret,
+    # nor rotated) -- the one any future/unexpected status silently lands in.
+    # A "fixed" finding gets here: detect it open, then re-run with the same
+    # tool/file in scope but the finding absent, which resolves it to fixed.
+    root: Path = tmp_path
+    ledger = _ledger(root)
+    ledger.record_run("r1", "t1", "pre-push", {"gitleaks"}, {"a.py"},
+                       [_f("f1", tool="gitleaks", verdict=Verdict.BLOCK, historical=False)])
+    ledger.record_run("r2", "t2", "pre-push", {"gitleaks"}, {"a.py"}, [])
+    assert ledger.open_findings()["f1"]["status"] == "fixed"
+    events_before = len(ledger.events())
+    ledger.close()
+
+    rc = cmd_ledger_mark_not_a_secret(root, "f1", "trying to mark a fixed finding")
+    err = capsys.readouterr().err
+
+    assert rc == 3
+    assert ("mark-not-a-secret only applies to historical secrets from "
+            "init's full-history scan.") in err
+    # Discriminate from the `open`-specific tail, which starts with the same
+    # sentence but continues with suppression-path guidance -- if the
+    # "else" branch ever fell through to (or was merged with) the `open`
+    # branch, this would catch it.
+    assert "aramid override" not in err
+    assert ".aramid-suppressions.toml" not in err
+
+    ledger = _ledger(root)
+    try:
+        assert len(ledger.events()) == events_before
+        assert ledger.open_findings()["f1"]["status"] == "fixed"
+    finally:
+        ledger.close()
+
+
 def test_mark_not_a_secret_unknown_id_errors(tmp_path, capsys):
     root: Path = tmp_path
     rc = cmd_ledger_mark_not_a_secret(root, "nope", "some reason")
@@ -245,13 +280,21 @@ def test_mark_not_a_secret_requires_reason(tmp_path, capsys):
     assert "reason" in err_blank.lower()
 
 
-def test_mark_not_a_secret_missing_reason_flag_exits_3_via_argparse():
+def test_mark_not_a_secret_missing_reason_flag_exits_3_via_argparse(capsys):
     # Omitting --reason entirely is an argparse path (required=True raises
     # SystemExit(2), remapped to 3 by cli.main) -- distinct from the
     # empty/whitespace case above, which the command function handles itself.
     # Must go through cli.main, not a direct call to the command function.
+    # Asserting only rc == 3 is not enough: a regressed `required=False`
+    # would let argparse hand the function reason=None, which the function's
+    # OWN "if not reason: return 3" guard also satisfies with rc == 3 -- for
+    # the wrong reason, never touching the ledger. Assert on argparse's own
+    # error text so the two mechanisms are distinguishable.
     rc = cli.main(["ledger", "mark-not-a-secret", "hist1"])
+    err = capsys.readouterr().err
+
     assert rc == 3
+    assert "the following arguments are required" in err
 
 
 def test_mark_not_a_secret_twice_refuses_second_time(tmp_path, capsys):
