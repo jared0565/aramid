@@ -1,4 +1,4 @@
-<!-- graphite:managed version=6 -->
+<!-- graphite:managed version=9 -->
 # Graphite Development Context
 
 Graphite is the shared local code graph for this project. Codex, Claude Code, Gemini CLI, Antigravity, Visual Studio, and other coding agents should use the same graph instead of rebuilding separate mental maps.
@@ -26,7 +26,8 @@ Before non-trivial code changes:
 3. Run `python -m graphite impact <target-file>` before changing shared logic, APIs, data flow, auth, persistence, deployment behavior, or other high-risk paths.
 4. Use `python -m graphite search "<symbol, path, or concept>"` to locate nodes; use `python -m graphite query "stats"` when project structure is unclear.
 5. Discover supported commands, query verbs, and limits with `python -m graphite capabilities --json` — do not guess query verbs. `query` takes structured verbs; `query --natural "<question>"` accepts only the fixed deterministic grammar listed by capabilities (no inference — unmatched questions fall back to ranked search).
-6. Graph answers include a resolution-health signal. If a result says INCONCLUSIVE (or JSON has `"inconclusive": true`), the graph could not bind enough edges to answer — treat empty as unknown, not safe, and verify with grep. `python -m graphite query "stats"` shows the ratios.
+6. Graph answers carry an `answer` block: `grade: decision_grade` means this answer's own relations/languages are healthy (an empty result is a trustworthy absence, subject to `caveats`); `advisory` means verify with grep and say so; `inconclusive` (also the legacy `"inconclusive": true`) means unknown, not safe. Check `known limits`/`caveats` before trusting empties.
+7. `python -m graphite incidents list` shows recorded failures (build errors, malformed artifacts, inconclusive queries). Check it when a graph answer looks wrong; recurring incidents belong in a governed round.
 
 After edits:
 
