@@ -3,9 +3,9 @@ import uuid
 from aramid.ledger import Ledger
 from aramid.models import Event, EventType, Finding, Severity, Verdict, Gate
 
-def _f(fid, tool="ruff", file="a.py"):
+def _f(fid, tool="ruff", file="a.py", historical=False):
     return Finding(fid, tool, "S102", "high", Severity.HIGH, Verdict.WARN,
-                   file, 1, "m", "e", Gate.PRE_PUSH)
+                   file, 1, "m", "e", Gate.PRE_PUSH, historical=historical)
 
 def test_absent_finding_resolved_only_when_in_scope(tmp_path):
     led = Ledger(tmp_path / "l.db")
@@ -60,6 +60,27 @@ def test_redetect_after_override_clears_reason(tmp_path):
     rec = led.open_findings()["id1"]
     assert rec["status"] == "open"
     assert "reason" not in rec
+
+def test_not_a_secret_materializes_from_historical(tmp_path):
+    led = Ledger(tmp_path / "l.db")
+    led.record_run("r1", "t", "historical-scan", {"gitleaks"}, set(),
+                   [_f("hist1", tool="gitleaks", historical=True)])
+    assert led.open_findings()["hist1"]["status"] == "historical"
+    led.append(Event(EventType.FINDING_NOT_A_SECRET, uuid.uuid4().hex, "t2",
+                     finding_id="hist1", payload={"reason": "public shopify client id"}))
+    rec = led.open_findings()["hist1"]
+    assert rec["status"] == "not_a_secret"
+    assert rec["reason"] == "public shopify client id"
+
+def test_not_a_secret_without_prior_detect_is_ignored(tmp_path):
+    # matches the `if e.finding_id in state` guard: no detect ever happened
+    # for "ghost", so the event must be a no-op -- no KeyError, no phantom
+    # entry conjured into open_findings().
+    led = Ledger(tmp_path / "l.db")
+    led.append(Event(EventType.FINDING_NOT_A_SECRET, uuid.uuid4().hex, "t1",
+                     finding_id="ghost", payload={"reason": "no prior detect"}))
+    state = led.open_findings()
+    assert "ghost" not in state
 
 def test_new_ids_returned_for_ratchet(tmp_path):
     led = Ledger(tmp_path / "l.db")

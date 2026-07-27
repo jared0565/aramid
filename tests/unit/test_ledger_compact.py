@@ -5,9 +5,9 @@ from aramid.models import Finding, Severity, Verdict, Gate
 from aramid import queue
 from aramid.models import Event, EventType
 
-def _f(fid, tool="ruff", file="a.py"):
+def _f(fid, tool="ruff", file="a.py", historical=False):
     return Finding(fid, tool, "S102", "high", Severity.HIGH, Verdict.WARN,
-                   file, 1, "m", "e", Gate.PRE_PUSH)
+                   file, 1, "m", "e", Gate.PRE_PUSH, historical=historical)
 
 def test_compact_preserves_open_findings_and_drops_rows(tmp_path):
     led = Ledger(tmp_path / "l.db")
@@ -45,6 +45,23 @@ def test_compact_preserves_override_reason(tmp_path):
     led.compact()
     rec = led.open_findings()["id1"]
     assert rec["status"] == "overridden"
+    assert rec["reason"] == "keep me"
+    led.close()
+
+
+def test_compact_preserves_not_a_secret_status(tmp_path):
+    # Constraint 6 guard: FINDING_NOT_A_SECRET must be in compact()'s
+    # terminal_types set. If it is missing, compact() treats the event as
+    # non-terminal, drops it from `keep`, and deletes it -- silently
+    # reverting the status from "not_a_secret" back to "historical".
+    led = Ledger(tmp_path / "l.db")
+    led.record_run("r1", "t", "historical-scan", {"gitleaks"}, set(),
+                   [_f("id1", tool="gitleaks", historical=True)])
+    led.append(Event(EventType.FINDING_NOT_A_SECRET, uuid.uuid4().hex, "t2",
+                     finding_id="id1", payload={"reason": "keep me"}))
+    led.compact()
+    rec = led.open_findings()["id1"]
+    assert rec["status"] == "not_a_secret"
     assert rec["reason"] == "keep me"
     led.close()
 

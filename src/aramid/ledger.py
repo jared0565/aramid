@@ -37,6 +37,10 @@ def _materialize(events):
         elif e.type.value == "finding_rotated":
             if e.finding_id in state:
                 state[e.finding_id]["status"] = "rotated"
+        elif e.type.value == "finding_not_a_secret":
+            if e.finding_id in state:
+                state[e.finding_id]["status"] = "not_a_secret"
+                state[e.finding_id]["reason"] = e.payload.get("reason", "")
     return state, seen
 
 
@@ -131,7 +135,8 @@ class Ledger:
         # been overwritten by the re-detect and is redundant.
         terminal_types = {EventType.FINDING_RESOLVED.value,
                            EventType.FINDING_OVERRIDDEN.value,
-                           EventType.FINDING_ROTATED.value}
+                           EventType.FINDING_ROTATED.value,
+                           EventType.FINDING_NOT_A_SECRET.value}
         last_terminal: dict[str, int] = {}
         for seq, type_, finding_id, _payload in rows:
             if type_ in terminal_types and finding_id and finding_id in last_detect \

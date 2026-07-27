@@ -17,6 +17,10 @@ class Status(StrEnum):
     OVERRIDDEN = "overridden"
     HISTORICAL = "historical"
     ROTATED = "rotated"
+    # noqa justification (S105): this is a StrEnum member name/value for a
+    # ledger status, not a credential -- ruff's hardcoded-password heuristic
+    # matches the substring "SECRET" in the identifier, nothing else.
+    NOT_A_SECRET = "not_a_secret"  # noqa: S105
 class Gate(StrEnum):
     PRE_COMMIT = "pre-commit"
     PRE_PUSH = "pre-push"
@@ -31,6 +35,9 @@ class EventType(StrEnum):
     FINDING_RESOLVED = "finding_resolved"
     FINDING_OVERRIDDEN = "finding_overridden"
     FINDING_ROTATED = "finding_rotated"
+    # noqa justification (S105): same as Status.NOT_A_SECRET above -- an
+    # EventType member name/value, not a credential.
+    FINDING_NOT_A_SECRET = "finding_not_a_secret"  # noqa: S105
     INFRASTRUCTURE_BYPASS = "infrastructure_bypass"
     BASELINE_SNAPSHOT = "baseline_snapshot"
 
