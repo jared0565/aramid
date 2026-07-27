@@ -189,6 +189,17 @@ def test_ledger_mark_rotated_dispatch(monkeypatch):
     assert captured["reason"] == "rotated in AWS"
 
 
+def test_ledger_mark_not_a_secret_dispatch(monkeypatch):
+    captured = {}
+    monkeypatch.setattr(cli, "cmd_ledger_mark_not_a_secret",
+                         lambda root, id, reason: captured.update(id=id, reason=reason) or 0)
+
+    cli.main(["ledger", "mark-not-a-secret", "abc123", "--reason", "public client id"])
+
+    assert captured["id"] == "abc123"
+    assert captured["reason"] == "public client id"
+
+
 def test_ledger_no_subcommand_returns_3(capsys):
     rc = cli.main(["ledger"])
     err = capsys.readouterr().err
