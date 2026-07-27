@@ -231,7 +231,7 @@ A read-only snapshot — never mutates anything:
 aramid status
 ```
 
-Reports: last run summary; open/historical/not-a-secret/overridden finding counts; count of findings new since the baseline; count of findings aging past 30 days open; per-tool skip streaks; unrotated historical secrets (with a hint to use `ledger mark-rotated`); while `semgrep_block_armed` is still `false`, the bake day-count and per-rule semgrep hit counts (so you can spot noisy rules before arming); an LLM review status line (open/confirmed-critical counts, armed/baking state, OpenRouter monthly spend vs. cap, ladder tiers) plus an autolearn line; queue status (queued count/score/age, drained/expired counts); last drain timestamp; whether the repo is registered; whether scheduled drain is installed.
+Reports: last run summary; open/historical/not-a-secret/overridden finding counts; count of findings new since the baseline; count of findings aging past 30 days open; per-tool skip streaks; unrotated historical secrets (with a hint naming both retirement exits: `ledger mark-rotated` for a real leak, `ledger mark-not-a-secret` for a false positive); while `semgrep_block_armed` is still `false`, the bake day-count and per-rule semgrep hit counts (so you can spot noisy rules before arming); an LLM review status line (open/confirmed-critical counts, armed/baking state, OpenRouter monthly spend vs. cap, ladder tiers) plus an autolearn line; queue status (queued count/score/age, drained/expired counts); last drain timestamp; whether the repo is registered; whether scheduled drain is installed.
 
 ### The ledger
 

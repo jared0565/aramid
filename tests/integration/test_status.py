@@ -219,7 +219,32 @@ def test_status_lists_unrotated_historical_secrets(tmp_path, monkeypatch, capsys
 
     assert rc == 0
     assert "hist1" in out
-    assert "rotate" in out.lower()
+    assert "real leak? rotate the credential" in out
+    assert "aramid ledger mark-rotated hist1 --reason ..." in out
+
+
+def test_status_unrotated_historical_hint_names_both_retirement_exits(
+        tmp_path, monkeypatch, capsys):
+    """Task 5: the nag is the one place a user sees the problem, so it must
+    name BOTH retirement commands, not just `mark-rotated` -- otherwise a
+    false positive (this repo's gitleaks generic-api-key hits were 3-for-3)
+    has no discoverable way out short of reading the docs."""
+    root = _repo(tmp_path)
+    _no_user_config(tmp_path, monkeypatch)
+    _write_toml(root, armed=True, bake_started=None)
+
+    ledger = Ledger(root / ".aramid" / "ledger.db")
+    ledger.record_run("run1", "2026-01-01T00:00:00+00:00", "historical-scan", {"gitleaks"},
+                       set(), [_f("hist1", tool="gitleaks", rule="generic-api-key",
+                                   verdict=Verdict.BLOCK, historical=True)])
+    ledger.close()
+
+    rc = cmd_status(root)
+    out = capsys.readouterr().out
+
+    assert rc == 0
+    assert "aramid ledger mark-rotated hist1 --reason ..." in out
+    assert "aramid ledger mark-not-a-secret hist1 --reason ..." in out
 
 
 def test_status_rotated_secret_not_listed_as_unrotated(tmp_path, monkeypatch, capsys):

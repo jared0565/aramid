@@ -107,7 +107,9 @@ def _unrotated_historical_lines(state: dict) -> list[str]:
         if rec.get("historical") and rec.get("status") == "historical":
             lines.append(
                 f"  {fid} {rec.get('tool')}:{rec.get('rule')} {rec.get('file')} -- "
-                f"rotate the credential, then `aramid ledger mark-rotated {fid} --reason ...`")
+                f"real leak? rotate the credential, then "
+                f"`aramid ledger mark-rotated {fid} --reason ...`. "
+                f"false positive? `aramid ledger mark-not-a-secret {fid} --reason ...`")
     return lines
 
 
