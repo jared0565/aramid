@@ -242,6 +242,34 @@ def test_status_rotated_secret_not_listed_as_unrotated(tmp_path, monkeypatch, ca
     assert "hist1" not in out
 
 
+def test_status_not_a_secret_counted_and_removed_from_unrotated_listing(
+        tmp_path, monkeypatch, capsys):
+    """A finding marked not-a-secret (Task 2's `mark-not-a-secret`) is counted
+    under the new `not-a-secret` bucket on the open-counts line, and -- same
+    inherited filter as the mark-rotated case above -- drops out of the
+    "unrotated historical secrets" listing because its status is no longer
+    "historical"."""
+    root = _repo(tmp_path)
+    _no_user_config(tmp_path, monkeypatch)
+    _write_toml(root, armed=True, bake_started=None)
+
+    ledger = Ledger(root / ".aramid" / "ledger.db")
+    ledger.record_run("run1", "2026-01-01T00:00:00+00:00", "historical-scan", {"gitleaks"},
+                       set(), [_f("hist1", tool="gitleaks", rule="aws-key", verdict=Verdict.BLOCK,
+                                   historical=True)])
+    ledger.append(Event(EventType.FINDING_NOT_A_SECRET, "run2", "2026-01-02T00:00:00+00:00",
+                         finding_id="hist1", payload={"reason": "test fixture value"}))
+    ledger.close()
+
+    rc = cmd_status(root)
+    out = capsys.readouterr().out
+
+    assert rc == 0
+    assert "not-a-secret: 1" in out
+    assert "unrotated historical secrets" not in out
+    assert "hist1" not in out
+
+
 # ------------------------------------------------ queue / drain / registry --
 
 def test_status_shows_queue_and_drain_sections(tmp_path, capsys, monkeypatch):

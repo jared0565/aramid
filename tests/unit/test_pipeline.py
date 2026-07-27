@@ -1378,6 +1378,28 @@ def test_overrides_from_ledger_carries_reason(tmp_path):
     assert records[0].reason == "audit trail"
 
 
+def test_not_a_secret_is_not_an_override_at_gate_time(tmp_path):
+    """Gate-inertness guard (not-a-secret sub-project, Constraint 4): a
+    historical gitleaks finding marked not-a-secret must NEVER produce an
+    OverrideRecord. mark-not-a-secret is a reporting-only reclassification
+    of an already-inert historical finding -- it must never become a second,
+    uncommitted BLOCK-suppression path that bypasses
+    .aramid-suppressions.toml."""
+    import uuid
+
+    from aramid.models import Event, Finding, Severity
+
+    led = _ledger(tmp_path)
+    f = Finding("id2", "gitleaks", "aws-key", "high", Severity.HIGH, Verdict.BLOCK,
+                "a.py", 1, "m", "e", Gate.PRE_PUSH, historical=True)
+    led.record_run("r1", "t", "historical-scan", {"gitleaks"}, set(), [f])
+    led.append(Event(EventType.FINDING_NOT_A_SECRET, uuid.uuid4().hex, "t2",
+                     finding_id="id2", payload={"reason": "test fixture value"}))
+    records = pipeline._overrides_from_ledger(led)
+    led.close()
+    assert records == []
+
+
 # ------------------------------------------------------- (tdd) pre-push ----
 
 def test_tdd_disarmed_warns_and_is_ratchet_exempt(tmp_path, monkeypatch):

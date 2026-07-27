@@ -38,7 +38,9 @@ def _last_run_line(ledger: Ledger) -> str:
 def _open_counts_line(state: dict) -> str:
     counts = Counter(rec.get("status") for rec in state.values())
     return (f"open findings: {counts.get('open', 0)} "
-            f"(historical: {counts.get('historical', 0)}, overridden: {counts.get('overridden', 0)})")
+            f"(historical: {counts.get('historical', 0)}, "
+            f"not-a-secret: {counts.get('not_a_secret', 0)}, "
+            f"overridden: {counts.get('overridden', 0)})")
 
 
 def _new_since_baseline_line(ledger: Ledger, state: dict) -> str:
