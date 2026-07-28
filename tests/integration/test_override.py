@@ -153,3 +153,26 @@ def test_missing_reason_errors(tmp_path, capsys):
 
     assert rc == 3
     assert "reason" in err.lower()
+
+
+def test_unreachable_finding_is_refused(tmp_path, capsys):
+    from aramid.models import Event, EventType
+    root: Path = tmp_path
+    ledger = _ledger(root)
+    ledger.record_run("r1", "t1", "pre-push", {"ruff"}, {"a.py"}, [_f("f1", tool="ruff")])
+    ledger.append(Event(EventType.FINDING_UNREACHABLE, "r2", "t2",
+                        finding_id="f1", payload={"reason": "ruff not selected"}))
+    ledger.close()
+
+    rc = cmd_override(root, "f1", "let me override it anyway")
+    err = capsys.readouterr().err
+
+    assert rc == 3
+    assert "unreachable" in err
+    ledger = _ledger(root)
+    try:
+        assert ledger.open_findings()["f1"]["status"] == "unreachable"
+        events = [e for e in ledger.events() if e.type.value == "finding_overridden"]
+        assert events == []
+    finally:
+        ledger.close()

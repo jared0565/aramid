@@ -56,6 +56,16 @@ def cmd_override(root, finding_id: str, reason: str) -> int:
             print(f"aramid: override: unknown finding id {finding_id}", file=sys.stderr)
             return 3
 
+        # T-8 section 7.1: override gates on verdict/LLM-confirmed-critical
+        # only, never on status -- so open -> unreachable -> override was
+        # reachable, granting no NEW capability (anything reachable this
+        # way was already overridable directly while open) but costing the
+        # resurrection guarantee (overridden findings never re-detect).
+        if rec.get("status") == "unreachable":
+            print(f"aramid: override: {finding_id} is unreachable -- its tool does not "
+                  f"run in this repo, so there is nothing to override", file=sys.stderr)
+            return 3
+
         is_llm_confirmed_critical = review.is_confirmed_critical_llm(rec)
         if rec.get("verdict") == "block" or is_llm_confirmed_critical:
             print(f"aramid: override: {finding_id} is a BLOCK-tier finding -- a local "
