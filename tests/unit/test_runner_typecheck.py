@@ -102,6 +102,58 @@ def test_run_dispatches_to_tsc_when_tsconfig_present(tmp_path, monkeypatch):
     assert result.state is ToolState.OK
 
 
+def test_run_tsc_relabels_windows_cmd_suffix_so_parse_still_finds_the_error(
+        tmp_path, monkeypatch):
+    """T-8 section 11 (corrects the spec's own section 11.1, which framed
+    this as resolve-only). run_subprocess derives RunnerResult.tool from
+    argv[0]'s basename ("tsc.cmd" on win32, via _tsc_bin). typecheck.parse()
+    dispatches on `result.tool == NAME_TSC` ("tsc") -- so an UNRELABELED
+    Windows-shaped result makes parse_tsc unreachable and a real TS error is
+    silently dropped, not merely stranded in the ledger.
+
+    Proven by mocking run_subprocess to return EXACTLY the shape it produces
+    on win32 (tool="tsc.cmd") regardless of the host platform actually
+    running this test -- so it fails on every CI leg pre-fix, not only a
+    Windows one, and it exercises run_tsc's REAL relabeling logic rather
+    than a hand-built RunnerResult that would trivially agree either way."""
+    _repo(tmp_path, tsconfig=True)
+    bin_dir = tmp_path / "node_modules" / ".bin"
+    bin_dir.mkdir(parents=True)
+    typecheck._tsc_bin(tmp_path).write_text("#!/bin/sh\n")
+    real_ts_error = ("src/app.ts(10,5): error TS2322: Type 'string' is not "
+                      "assignable to type 'number'.\n")
+    monkeypatch.setattr(
+        typecheck, "run_subprocess",
+        lambda argv, cwd, timeout_s, env=None: RunnerResult(
+            tool="tsc.cmd", state=ToolState.OK, raw=real_ts_error, returncode=2),
+    )
+
+    result = typecheck.run_tsc(RunContext(root=tmp_path))
+    findings = typecheck.parse(result, RunContext(root=tmp_path))
+
+    assert result.tool == typecheck.NAME_TSC, (
+        "run_tsc must relabel to NAME_TSC regardless of argv[0]'s basename")
+    assert len(findings) == 1
+    assert findings[0].rule == "TS2322"
+    assert findings[0].file == "src/app.ts"
+
+
+def test_run_tsc_relabels_even_on_timeout(tmp_path, monkeypatch):
+    """The relabel must be unconditional -- run_subprocess's TIMEOUT path
+    ALSO carries argv[0]'s basename, not just the OK path."""
+    _repo(tmp_path, tsconfig=True)
+    bin_dir = tmp_path / "node_modules" / ".bin"
+    bin_dir.mkdir(parents=True)
+    typecheck._tsc_bin(tmp_path).write_text("#!/bin/sh\n")
+    monkeypatch.setattr(
+        typecheck, "run_subprocess",
+        lambda argv, cwd, timeout_s, env=None: RunnerResult(tool="tsc.cmd", state=ToolState.TIMEOUT),
+    )
+    result = typecheck.run_tsc(RunContext(root=tmp_path))
+    assert result.tool == typecheck.NAME_TSC
+    assert result.state is ToolState.TIMEOUT
+
+
 def test_run_dispatches_to_mypy_when_no_tsconfig_but_mypy_configured(tmp_path, monkeypatch):
     _repo(tmp_path, mypy_ini=True)
     monkeypatch.setattr(

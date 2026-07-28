@@ -11,6 +11,7 @@ never a global fallback). mypy only runs when a mypy config
 ([tool.mypy] in pyproject.toml, or mypy.ini) is present, and is looked up
 on PATH (it isn't part of aramid's own owned/vendored toolchain).
 """
+import dataclasses
 import re
 import sys
 import tomllib
@@ -65,7 +66,15 @@ def run_tsc(ctx) -> RunnerResult:
     binp = _tsc_bin(ctx.root)
     if not binp.exists():
         return RunnerResult(NAME_TSC, ToolState.MISSING)
-    return run_subprocess([str(binp), "--noEmit"], ctx.root, TIMEOUT_S)
+    result = run_subprocess([str(binp), "--noEmit"], ctx.root, TIMEOUT_S)
+    # T-8 section 11: run_subprocess labels RunnerResult.tool from argv[0]'s
+    # basename ("tsc.cmd" on win32), which both mismatches parse_tsc's
+    # stamped tool AND makes typecheck.parse()'s own dispatch (`if
+    # result.tool == NAME_TSC`) miss entirely -- not just a
+    # ledger-resolution gap, a total detection gap. Relabel unconditionally
+    # (not just the OK branch): run_subprocess's own TIMEOUT path also
+    # carries the wrong name. Mirrors eslint.py's json_or_crashed relabel.
+    return dataclasses.replace(result, tool=NAME_TSC)
 
 
 def run_mypy(ctx) -> RunnerResult:
