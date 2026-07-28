@@ -21,6 +21,7 @@ class Status(StrEnum):
     # ledger status, not a credential -- ruff's hardcoded-password heuristic
     # matches the substring "SECRET" in the identifier, nothing else.
     NOT_A_SECRET = "not_a_secret"  # noqa: S105
+    UNREACHABLE = "unreachable"
 class Gate(StrEnum):
     PRE_COMMIT = "pre-commit"
     PRE_PUSH = "pre-push"
@@ -38,6 +39,7 @@ class EventType(StrEnum):
     # S105 justification: same as Status.NOT_A_SECRET above -- an
     # EventType member name/value, not a credential.
     FINDING_NOT_A_SECRET = "finding_not_a_secret"  # noqa: S105
+    FINDING_UNREACHABLE = "finding_unreachable"
     INFRASTRUCTURE_BYPASS = "infrastructure_bypass"
     BASELINE_SNAPSHOT = "baseline_snapshot"
 

@@ -88,3 +88,39 @@ def test_new_ids_returned_for_ratchet(tmp_path):
     assert new == ["id1"]
     again = led.record_run("r2","t","pre-push",{"ruff"},{"a.py"},[_f("id1")])
     assert again == []   # already seen
+
+
+def test_unreachable_finding_reopens_when_re_detected(tmp_path):
+    led = Ledger(tmp_path / "l.db")
+    f = _f("id1", tool="ruff")
+    led.record_run("r1", "t1", "pre-push", {"ruff"}, {"a.py"}, [f])
+    led.append(Event(EventType.FINDING_UNREACHABLE, "r2", "t2",
+                     finding_id="id1", payload={"reason": "ruff not selected"}))
+    assert led.open_findings()["id1"]["status"] == "unreachable"
+
+    led.record_run("r3", "t3", "pre-push", {"ruff"}, {"a.py"}, [f])  # tool returns
+    assert led.open_findings()["id1"]["status"] == "open"
+    led.close()
+
+
+def test_overridden_rotated_not_a_secret_do_not_reopen_on_redetect(tmp_path):
+    """Mirror of the resurrection test above -- spec section 10 item 3.
+    Only "fixed"/"unreachable" re-detect; the three human-assertion
+    statuses must stay sticky."""
+    for i, status_event in enumerate((
+        EventType.FINDING_OVERRIDDEN,
+        EventType.FINDING_ROTATED,
+        EventType.FINDING_NOT_A_SECRET,
+    )):
+        led = Ledger(tmp_path / f"l-{i}.db")
+        historical = status_event != EventType.FINDING_OVERRIDDEN
+        f = _f("id1", tool="gitleaks", historical=historical)
+        led.record_run("r1", "t1", "historical-scan" if historical else "pre-push",
+                       {"gitleaks"}, set() if historical else {"a.py"}, [f])
+        led.append(Event(status_event, "r2", "t2", finding_id="id1", payload={"reason": "x"}))
+        before = led.open_findings()["id1"]["status"]
+
+        led.record_run("r3", "t3", "pre-push", {"gitleaks"}, {"a.py"}, [f])
+
+        assert led.open_findings()["id1"]["status"] == before, status_event
+        led.close()

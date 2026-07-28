@@ -34,3 +34,25 @@ def test_refuted_flag_materializes_through_open_findings(tmp_path):
     led.close()
     assert state["f-refuted"]["refuted"] is True
     assert state["f-plain"].get("refuted", False) is False
+
+
+def test_finding_unreachable_transitions_status(tmp_path):
+    from aramid.models import Finding, Gate, Severity, Verdict
+    led = Ledger(tmp_path / "l.db")
+    f = Finding("id1", "ruff", "F401", "medium", Severity.MEDIUM, Verdict.WARN,
+                "a.py", 1, "m", "e", Gate.PRE_PUSH)
+    led.record_run("r1", "t1", "pre-push", {"ruff"}, {"a.py"}, [f])
+    led.append(Event(EventType.FINDING_UNREACHABLE, "r2", "t2",
+                     finding_id="id1", payload={"reason": "ruff no longer selected"}))
+    rec = led.open_findings()["id1"]
+    assert rec["status"] == "unreachable"
+    assert rec["reason"] == "ruff no longer selected"
+    led.close()
+
+
+def test_finding_unreachable_for_unknown_id_is_ignored_no_phantom_entry(tmp_path):
+    led = Ledger(tmp_path / "l.db")
+    led.append(Event(EventType.FINDING_UNREACHABLE, "r1", "t1",
+                     finding_id="ghost-id", payload={"reason": "x"}))
+    assert led.open_findings() == {}
+    led.close()

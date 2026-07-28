@@ -41,6 +41,10 @@ def _materialize(events):
             if e.finding_id in state:
                 state[e.finding_id]["status"] = "not_a_secret"
                 state[e.finding_id]["reason"] = e.payload.get("reason", "")
+        elif e.type.value == "finding_unreachable":
+            if e.finding_id in state:
+                state[e.finding_id]["status"] = "unreachable"
+                state[e.finding_id]["reason"] = e.payload.get("reason", "")
     return state, seen
 
 
@@ -77,7 +81,7 @@ class Ledger:
                           payload={"gate": gate, "tools": sorted(scope_tools)}))
         new_ids = []
         for f in findings:
-            if f.id not in state or state[f.id]["status"] in ("fixed",):
+            if f.id not in state or state[f.id]["status"] in ("fixed", "unreachable"):
                 self.append(Event(EventType.FINDING_DETECTED, run_id, at,
                                   finding_id=f.id, payload=_detect_payload(f)))
             if f.id not in seen:
@@ -136,7 +140,8 @@ class Ledger:
         terminal_types = {EventType.FINDING_RESOLVED.value,
                            EventType.FINDING_OVERRIDDEN.value,
                            EventType.FINDING_ROTATED.value,
-                           EventType.FINDING_NOT_A_SECRET.value}
+                           EventType.FINDING_NOT_A_SECRET.value,
+                           EventType.FINDING_UNREACHABLE.value}
         last_terminal: dict[str, int] = {}
         for seq, type_, finding_id, _payload in rows:
             if type_ in terminal_types and finding_id and finding_id in last_detect \

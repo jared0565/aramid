@@ -66,6 +66,21 @@ def test_compact_preserves_not_a_secret_status(tmp_path):
     led.close()
 
 
+def test_compact_preserves_unreachable_status(tmp_path):
+    # T-8: FINDING_UNREACHABLE must be in compact()'s terminal_types set. If
+    # missing, compact() drops it from `keep` and deletes it, silently
+    # reverting the status from "unreachable" back to "open".
+    led = Ledger(tmp_path / "l.db")
+    led.record_run("r1", "t", "pre-push", {"ruff"}, {"a.py"}, [_f("id1")])
+    led.append(Event(EventType.FINDING_UNREACHABLE, uuid.uuid4().hex, "t2",
+                     finding_id="id1", payload={"reason": "keep me"}))
+    led.compact()
+    rec = led.open_findings()["id1"]
+    assert rec["status"] == "unreachable"
+    assert rec["reason"] == "keep me"
+    led.close()
+
+
 def test_compact_keeps_queued_item_events_and_latest_triage(tmp_path):
     led = Ledger(tmp_path / "l.db")
     queue.record_triage(led, "2026-07-13T10:00:00+00:00", None, "aaa", 10, False, ["x.py"])
