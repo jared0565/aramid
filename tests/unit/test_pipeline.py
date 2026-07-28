@@ -69,6 +69,23 @@ def test_all_clean_exits_zero(tmp_path, monkeypatch):
     assert result.exit_code == 0
     assert result.findings == []
     assert result.degraded == []
+
+
+def test_run_gate_records_selected_tools_on_run_started(tmp_path, monkeypatch):
+    root = _repo(tmp_path)
+    cfg = _cfg(root, tmp_path, monkeypatch)
+    ledger = _ledger(tmp_path)
+
+    monkeypatch.setitem(pipeline.RUNNERS, "gitleaks",
+                        _fake(RunnerResult(tool="gitleaks", state=ToolState.OK, raw="[]")))
+
+    pipeline.run_gate(root, Gate.PRE_COMMIT, "staged", cfg, ledger, run_id="run-sel")
+
+    run_started = [e for e in ledger.events() if e.type is EventType.RUN_STARTED][0]
+    assert "selected" in run_started.payload
+    # gitleaks has no stack condition (pipeline._is_applicable's catch-all
+    # True) -- always selected, in any repo, any gate.
+    assert "gitleaks" in run_started.payload["selected"]
     ledger.close()
 
 

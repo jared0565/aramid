@@ -74,11 +74,14 @@ class Ledger:
         state, _ = _materialize(self.events())
         return state
 
-    def record_run(self, run_id, at, gate, scope_tools, scope_files, findings):
+    def record_run(self, run_id, at, gate, scope_tools, scope_files, findings, *,
+                   selected_tools: set[str] | None = None):
         state, seen = _materialize(self.events())
         present = {f.id for f in findings}
-        self.append(Event(EventType.RUN_STARTED, run_id, at,
-                          payload={"gate": gate, "tools": sorted(scope_tools)}))
+        payload = {"gate": gate, "tools": sorted(scope_tools)}
+        if selected_tools is not None:
+            payload["selected"] = sorted(selected_tools)
+        self.append(Event(EventType.RUN_STARTED, run_id, at, payload=payload))
         new_ids = []
         for f in findings:
             if f.id not in state or state[f.id]["status"] in ("fixed", "unreachable"):

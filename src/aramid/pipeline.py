@@ -523,7 +523,14 @@ def run_gate(root: Path, gate: Gate, mode: str, cfg: config_mod.Config, ledger: 
     # 7. record this run; enforce the pre-push no-new-warnings ratchet.
     scope_tools = {r.tool for r in flat_results if r.state is ToolState.OK}
     scope_files = set(files)
-    new_ids = ledger.record_run(run_id, at, str(gate), scope_tools, scope_files, findings)
+    # Local import: toolset.py imports pipeline.GATE_RUNNER_KEYS/_is_applicable
+    # at module scope, so importing it here at module scope would be
+    # circular (mirrors ledger.compact()'s identical fix for the
+    # queue.py/ledger.py cycle, ledger.py:155).
+    from aramid import toolset
+    selected_tools = toolset.selected_tool_names(root, cfg)
+    new_ids = ledger.record_run(run_id, at, str(gate), scope_tools, scope_files, findings,
+                                selected_tools=selected_tools)
 
     if gate is Gate.PRE_PUSH:
         findings = [

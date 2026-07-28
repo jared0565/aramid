@@ -56,3 +56,24 @@ def test_finding_unreachable_for_unknown_id_is_ignored_no_phantom_entry(tmp_path
                      finding_id="ghost-id", payload={"reason": "x"}))
     assert led.open_findings() == {}
     led.close()
+
+
+def test_record_run_selected_tools_recorded_when_passed(tmp_path):
+    led = Ledger(tmp_path / "l.db")
+    led.record_run("r1", "t1", "pre-push", {"ruff"}, {"a.py"}, [],
+                   selected_tools={"ruff", "gitleaks"})
+    run_started = [e for e in led.events() if e.type is EventType.RUN_STARTED][0]
+    assert run_started.payload["selected"] == ["gitleaks", "ruff"]
+    led.close()
+
+
+def test_record_run_selected_key_absent_when_not_passed(tmp_path):
+    """T-8 section 8: 'key absent = no information' is a live state -- drain
+    and init never pass selected_tools. payload.get("selected", []) would
+    collapse "unknown" into "nothing selected"; assert the KEY is missing,
+    not merely empty."""
+    led = Ledger(tmp_path / "l.db")
+    led.record_run("r1", "t1", "drain", set(), set(), [])
+    run_started = [e for e in led.events() if e.type is EventType.RUN_STARTED][0]
+    assert "selected" not in run_started.payload
+    led.close()
