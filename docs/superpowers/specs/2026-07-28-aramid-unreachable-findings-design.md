@@ -409,11 +409,22 @@ Then:
 8. **End-to-end**: build a repo whose detection strands a real finding, prove `status` names it as a
    candidate, retire it, prove it leaves the open count and the nag, then restore detection and prove it
    comes back open.
-9. **Cross-runner label agreement** (§11): for every runner, the `RunnerResult.tool` it returns on the
-   OK path equals the tool name its parser stamps on findings. This is the test that catches the next
-   instance of case 5 mechanically, on whatever platform introduces it. It must be written so it
-   **fails on Windows against the pre-fix tree** — a version that passes before the fix is not a test of
-   anything.
+9. **Two tests, per the corrected §11.1, not one:**
+   * **Behavioral, this instance:** feed `typecheck.parse()` a Windows-shaped
+     `RunnerResult(tool="tsc.cmd", state=OK, raw=<a real TS-error line>)` directly — no `tsc` binary, no
+     platform skip, runs on every CI leg. Pre-fix: `[]`. Post-fix: the expected `RawFinding`. This is
+     strictly stronger evidence than a live Windows `tsc.cmd` run, and is what actually caught the bug
+     (§11.1's correction).
+   * **Structural, next instance — cross-runner label agreement:** for every runner, the tool name its
+     *run path* would actually attach to a real `RunnerResult` must equal the tool name its *parser*
+     stamps on findings. **Do not construct the `RunnerResult`s by hand for this comparison** — a
+     hand-built pair trivially agrees, because the real bug lives in how `run_subprocess` derives
+     `tool = Path(argv[0]).name` from each runner's own `argv[0]`. For `typecheck`, compare
+     `Path(str(typecheck._tsc_bin(<some root>))).name` (what the run path produces) against `NAME_TSC`
+     (what `parse_tsc` stamps) — this must **fail on Windows against the pre-fix tree** (`"tsc.cmd" !=
+     "tsc"`) and pass on POSIX pre-fix and on both platforms post-fix. Generalize the same shape (derive
+     the run-path label from the same construction the real runner uses, not a re-typed literal) to every
+     other runner so the next instance of this defect class fails the same way, mechanically.
 
 Every test above must be **proven to fail** against the pre-change tree before being accepted. The
 project's own ledger records a cache change that silently invalidated a regression guard, a docstring
@@ -449,8 +460,38 @@ compares `"tsc"` against it and never matches. **A Windows repo's `tsc` findings
 though the tool ran and passed.** On POSIX the basename is `"tsc"` and everything matches, which is why
 the CI matrix's Linux and macOS legs would never surface it.
 
-**Evidence grade: read, not executed.** This was derived by reading the four functions above. It must be
-confirmed live on Windows before the fix is written — a failing test first, per §10's standing rule.
+**CORRECTION (superseding the paragraph above and the "read, not executed" line below), found while
+writing the plan, by execution not reading:** the resolve-side framing above understates the defect.
+`typecheck.parse:116-121` dispatches on the SAME mismatched label:
+
+```python
+def parse(result: RunnerResult, ctx) -> list[RawFinding]:
+    if result.tool == NAME_TSC:
+        return parse_tsc(result, ctx)
+```
+
+`parse_tsc` is only ever reached through this dispatch (confirmed via `graphite query "callers
+parse_tsc"`, `decision_grade`: its only non-test caller is `typecheck.parse` itself). On Windows,
+`result.tool == "tsc.cmd"`, so `result.tool == NAME_TSC` is **False** and `parse_tsc` is never called at
+all — not "stamps a mismatched label", but **zero `RawFinding`s are produced, full stop.** Verified by
+executing `typecheck.parse()` directly against a Windows-shaped `RunnerResult(tool="tsc.cmd", state=OK,
+raw=<a real TS2322 diagnostic line>)`: returns `[]`. The identical POSIX-shaped input (`tool="tsc"`)
+returns the expected `RawFinding`. So the live claim is: **on Windows, a real `tsc` type error is silently
+dropped from every gate run, today** — not a stale ledger row that can't resolve, but a total detection
+blind spot for the WARN-tier tsc check on any Windows repo with a `tsconfig.json` (the precondition
+`typecheck.run():77` gates on). The one-line fix in §11.2 (relabel at `typecheck.run()`'s return) closes
+both consequences at once, because both `parse()`'s dispatch and `pipeline.py:524`'s `scope_tools` read
+the same `RunnerResult.tool`.
+
+This does **not** change §3/§9: `selected_tool_names` derives "is tsc selected here" structurally, from
+`typecheck.has_tsconfig(root)`, never from whether `parse()` actually produced a `"tsc"`-tool finding — so
+`tsc` stays correctly outside `ghost_candidates` regardless of this correction, and `mark-unreachable`
+still correctly refuses it (§11.3, unchanged).
+
+**Evidence grade: executed, not merely read** (the correction above; the original resolve-side claim
+below it remains read-only and still needs the live-Windows confirmation §10 originally called for — the
+CI-seeded-then-run-on-Windows scenario it describes is real but distinct from the detection gap above).
+A failing test first, per §10's standing rule, and see §10 item 9's revised design below.
 
 ### 11.2 The fix
 
