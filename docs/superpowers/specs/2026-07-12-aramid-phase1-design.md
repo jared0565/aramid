@@ -84,8 +84,8 @@ per-repo onboarding via `init`, per-repo config and state.
 | `aramid init <path>` | Onboard a repo: resolve root, detect stack, run doctor, **refuse to arm hooks until BLOCK-tier tools pass doctor**, chain existing hooks, write `aramid.toml` stub + `ARAMID.md` + gitignore entries, full-history secret scan, validate the hook fires through git's real dispatch. Idempotent (contract in §7). |
 | `aramid check [--gate pre-commit\|pre-push] [--staged\|--range\|--all] [--strict] [--json] [--accept-degraded --reason "…"]` | Run the pipeline. `--strict` treats degraded/error as failure (CI mode). |
 | `aramid doctor` | Verify/repair toolchain and shim interpreter; install pinned gitleaks into the managed tools dir. |
-| `aramid status` | Last run, open findings, NEW-since-baseline, aging ("12 medium findings open >30 days"), skip-visibility ("semgrep: skipped last N runs"), unrotated historical secrets. |
-| `aramid ledger [list\|show\|filter\|mark-rotated <id>\|mark-not-a-secret <id>]` | Query findings; a `historical` secret finding has two exits: `mark-rotated` transitions it to `rotated` for a real leak (writes a `finding_rotated` event, requires `--reason`), `mark-not-a-secret` transitions it to `not_a_secret` for a false positive (writes a `finding_not_a_secret` event, requires `--reason`). `mark-rotated` also accepts a finding already `not_a_secret`; there is no reverse transition. |
+| `aramid status` | Last run, open findings, NEW-since-baseline, aging ("12 medium findings open >30 days"), skip-visibility ("semgrep: skipped last N runs"), unrotated historical secrets, unreachable candidates (T-8). |
+| `aramid ledger [list\|show\|filter\|mark-rotated <id>\|mark-not-a-secret <id>\|mark-unreachable <id>]` | Query findings; a `historical` secret finding has two exits: `mark-rotated` transitions it to `rotated` for a real leak (writes a `finding_rotated` event, requires `--reason`), `mark-not-a-secret` transitions it to `not_a_secret` for a false positive (writes a `finding_not_a_secret` event, requires `--reason`). `mark-rotated` also accepts a finding already `not_a_secret`; there is no reverse transition. An `open` finding whose tool has left this repo's live selection has its own exit (T-8): `mark-unreachable` transitions it to `unreachable` (writes a `finding_unreachable` event, requires `--reason`) — the one status besides `fixed` that automatically re-opens if the tool ever returns and re-detects the same finding. |
 | `aramid override <id> --reason "…"` | Suppress a WARN finding (ledger-logged). BLOCK findings require the committed allowlist instead (§6). Re-running it re-affirms a stale override (§4). |
 | `aramid arm` | End the per-repo WARN-only bake: sets `semgrep_block_armed = true` in `aramid.toml` (§8). Arming is always manual — no timer state. |
 | `aramid update-rules` | Refresh the vendored semgrep ruleset explicitly. Never happens at commit time. |
@@ -248,13 +248,24 @@ SQLite at `.aramid/ledger.db`, **gitignored**, event-sourced:
 
 - Events: `run_started`, `run_finished`, `finding_detected` (carries
   `historical: true` when produced by init's full-history scan), `finding_resolved`,
-  `finding_overridden`, `finding_rotated`, `finding_not_a_secret`,
-  `infrastructure_bypass`, `baseline_snapshot`. Each carries `run_id` and the run's
+  `finding_overridden`, `finding_rotated`, `finding_not_a_secret`, `finding_unreachable`
+  (T-8), `infrastructure_bypass`, `baseline_snapshot`. Each carries `run_id` and the run's
   **scan scope** (files × tools actually evaluated).
 - Current finding state is a materialized view over events.
 - **Scope-aware resolution:** `open → fixed` only when a run whose scope covered that
   finding's file with that finding's tool no longer reports it. A scoped pre-commit run
   can never "fix" findings in files it didn't scan.
+- **Unreachable findings (T-8):** the scope-aware resolution rule above has a
+  consequence it doesn't itself resolve — a tool that stops running (de-selected,
+  disabled, removed) strands every open finding it produced, permanently, because
+  resolution requires the tool to run and it never will again. `aramid.toolset`
+  answers "which tool names would this repo produce findings under right now" as a
+  live predicate (not from run history), and an open finding whose tool has left
+  that set is auto-detected as a candidate in `status` and retired manually via
+  `aramid ledger mark-unreachable <id> --reason "…"` (writes a `finding_unreachable`
+  event; status becomes `unreachable`). Unlike every other terminal status except
+  `fixed`, it re-detects: if the tool returns and re-finds the same finding, it
+  reopens automatically, rather than permanently laundering it.
 - SQLite over JSONL: atomic writes on Windows, safe concurrent hook+manual runs,
   crash-safety, free querying for `ledger`/`status`.
 

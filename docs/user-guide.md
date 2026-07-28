@@ -231,7 +231,7 @@ A read-only snapshot — never mutates anything:
 aramid status
 ```
 
-Reports: last run summary; open/historical/not-a-secret/overridden finding counts; count of findings new since the baseline; count of findings aging past 30 days open; per-tool skip streaks; unrotated historical secrets (with a hint naming both retirement exits: `ledger mark-rotated` for a real leak, `ledger mark-not-a-secret` for a false positive); while `semgrep_block_armed` is still `false`, the bake day-count and per-rule semgrep hit counts (so you can spot noisy rules before arming); an LLM review status line (open/confirmed-critical counts, armed/baking state, OpenRouter monthly spend vs. cap, ladder tiers) plus an autolearn line; queue status (queued count/score/age, drained/expired counts); last drain timestamp; whether the repo is registered; whether scheduled drain is installed.
+Reports: last run summary; open/historical/not-a-secret/overridden/unreachable/fixed/rotated finding counts; count of findings new since the baseline; count of findings aging past 30 days open; per-tool skip streaks; unrotated historical secrets (with a hint naming both retirement exits: `ledger mark-rotated` for a real leak, `ledger mark-not-a-secret` for a false positive); unreachable candidates (open findings whose tool no longer runs in this repo, with the exact `ledger mark-unreachable` command to retire each); while `semgrep_block_armed` is still `false`, the bake day-count and per-rule semgrep hit counts (so you can spot noisy rules before arming); an LLM review status line (open/confirmed-critical counts, armed/baking state, OpenRouter monthly spend vs. cap, ladder tiers) plus an autolearn line; queue status (queued count/score/age, drained/expired counts); last drain timestamp; whether the repo is registered; whether scheduled drain is installed.
 
 ### The ledger
 
@@ -260,6 +260,16 @@ aramid ledger mark-not-a-secret <id> --reason "public Shopify client ID, publish
 ```
 
 `--reason` is required for both commands. `mark-not-a-secret` refuses (exit `3`) for any status other than exactly `historical`, rather than silently no-op'ing — for a live `open` finding it points you at a committed `.aramid-suppressions.toml` entry for a BLOCK, or `aramid override` for a WARN, since those are that finding's real suppression paths; for a finding that's already `rotated`, already `not_a_secret`, or otherwise resolved (e.g. `fixed`), it just refuses. That restriction matters because `not_a_secret`, like `historical`, is inert at gate time — a finding re-fires at its normal severity if it's ever re-detected in the working tree, regardless of ledger status. So loosening the guard would not open a gate bypass; it would open a **reporting** bypass — an uncommitted way to drop an open BLOCK finding out of `status`'s counts, sidestepping the committed, reviewable `.aramid-suppressions.toml` that BLOCK-tier suppression deliberately requires. `mark-rotated`, by contrast, accepts a `historical` finding OR one already marked `not_a_secret`: discovering that a supposed false positive is in fact a real credential, and rotating it, only adds caution, so that direction is never blocked. Neither mark can ever be undone — the ledger is append-only, and there is no path back from `rotated` to `not_a_secret`.
+
+### Retiring a finding whose tool no longer runs
+
+A repo's stack can change: a test file gets removed, `[tests].enabled` gets set to `false`, a `tsconfig.json` disappears. When that happens, any OPEN finding that tool produced is stranded — no future run can ever resolve it the normal way, because resolution requires the tool to run, and it never will again. `aramid status` auto-detects these under an "unreachable candidates" section and names the exact command:
+
+```powershell
+aramid ledger mark-unreachable <id> --reason "no python stack in this repo anymore"
+```
+
+`--reason` is required. The command refuses (exit `3`) for: an unknown id; a finding whose tool is a producer/consumer (`tdd`, `red-proof`, `mutation`, `mutation-score`, `llm-review`, `js-mutation`, `fuzz`, `dast`) — those resolve through their own producer's mechanism, never by hand; a finding whose status isn't exactly `open` (a historical secret is redirected to `mark-rotated`/`mark-not-a-secret` instead); or a finding whose tool still runs here — that is a broken-toolchain problem (`aramid doctor`), not a ghost, and retiring it would hide a real gap rather than an obsolete one. Unlike `mark-not-a-secret`, this transition **does** resurrect: if the tool ever comes back and re-detects the same finding, it automatically re-opens — a repo that flips detection off and back on cannot permanently launder an open finding this way.
 
 ### Overriding a WARN finding
 

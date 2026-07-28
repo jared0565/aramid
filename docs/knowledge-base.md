@@ -408,12 +408,13 @@ Sweep registered repos, catch-up-triage, pop the highest-scored queued item(s), 
 - `--dry-run` — read-only preview, no lock, no mutation.
 - `--max-items N` (int, default `None`) — caps items drained this run.
 
-### `aramid ledger list|show <id>|filter [--tool] [--rule] [--status] [--severity]|mark-rotated <id> --reason REASON|mark-not-a-secret <id> --reason REASON`
+### `aramid ledger list|show <id>|filter [--tool] [--rule] [--status] [--severity]|mark-rotated <id> --reason REASON|mark-not-a-secret <id> --reason REASON|mark-unreachable <id> --reason REASON`
 - `list` — every open/known finding, one line each.
 - `show <id>` — full record fields plus every ledger event tied to that id (exit 3 if id unknown).
 - `filter [--tool] [--rule] [--status] [--severity]` — all optional/AND-combined. `--status` takes the underlying status string with underscores (`not_a_secret`), which differs from the hyphenated `not-a-secret` label `aramid status` displays.
 - `mark-rotated <id> --reason REASON` — `--reason` required; valid when the finding's status is `historical` OR `not_a_secret`, else refuses with exit 3. Accepting `not_a_secret` too is deliberate: a supposed false positive later found to be a real credential can still be rotated — transitions only ever move toward more caution.
 - `mark-not-a-secret <id> --reason REASON` — `--reason` required; valid only when the finding's status is exactly `historical` (never a live `open` finding), else refuses with exit 3. Retires a false-positive historical hit (status becomes `not_a_secret`) without asserting a rotation that never happened. Reporting-only and inert at gate time: a re-detected instance still classifies exactly as before, so this is not a gate-bypass path. Neither mark can be undone.
+- `mark-unreachable <id> --reason REASON` — `--reason` required; valid only when the finding's status is exactly `open` AND its tool is in the retireable universe (runner-produced, never a producer/consumer tool like `tdd`/`mutation`/`llm-review`) AND not currently selected for this repo, else refuses with exit 3 (unknown id; a producer-tool finding; a non-open status, each with its own message; or a tool that still runs here — that's `aramid doctor`'s problem, not this command's). Retires a finding whose tool has left this repo's live selection (de-selected, disabled, or genuinely removed) so no future run can ever resolve it the normal way. If the tool later returns and re-detects the same finding, it re-opens automatically — the one status besides `fixed` that resurrects. `aramid status`'s "unreachable candidates" section names exactly which open findings currently qualify.
 - Bare `aramid ledger` — usage line, exit 3.
 
 ### `aramid override <id> --reason REASON`
@@ -490,7 +491,8 @@ Register/remove/query a Windows Task Scheduler job running `<interpreter> -m ara
 | `aramid ledger show <id>` | `3` if id unknown |
 | `aramid ledger mark-rotated` | `3` if id unknown, or finding's status is neither `historical` nor `not_a_secret` |
 | `aramid ledger mark-not-a-secret` | `3` if id unknown, or finding's status is not exactly `historical` |
-| `aramid override` | `3` if the finding is BLOCK-tier (refused) |
+| `aramid ledger mark-unreachable` | `3` if id unknown, tool is a producer/consumer, status isn't exactly `open`, or the tool is still selected for this repo |
+| `aramid override` | `3` if the finding is BLOCK-tier (refused), or the finding is `unreachable` (nothing to override) |
 | `aramid pack` (bare) | `3` (usage line) |
 | `aramid ledger` (bare) | `3` (usage line) |
 | `aramid arm` | `3` if `aramid.toml` doesn't exist yet |

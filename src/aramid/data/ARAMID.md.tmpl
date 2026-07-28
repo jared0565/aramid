@@ -92,9 +92,10 @@ territory. Don't mistake a clean `aramid check` for full security coverage.
 ## Commands
 
 - `aramid check [--gate pre-commit|pre-push] [--staged|--range|--all]` -- run the gate manually.
-- `aramid status` -- open findings, new-since-baseline, unrotated historical secrets (see `ledger mark-rotated` / `mark-not-a-secret` below).
+- `aramid status` -- open findings, new-since-baseline, unrotated historical secrets, unreachable candidates (see `ledger mark-rotated` / `mark-not-a-secret` / `mark-unreachable` below).
 - `aramid doctor [--fix]` -- verify/repair the toolchain and the installed hook's interpreter.
 - `aramid override <id> --reason "..."` -- suppress a WARN finding (ledger-logged).
+- `aramid ledger mark-unreachable <id> --reason "..."` -- retire a finding whose tool no longer runs in this repo (de-selected, disabled, or removed) -- see `aramid status`'s "unreachable candidates" section for which ids qualify.
 - `aramid arm` -- end the semgrep WARN-only bake.
 - `aramid arm --llm` -- end the LLM bake: confirmed-critical LLM findings block at pre-push.
 - `aramid uninstall` -- remove aramid's hooks/ARAMID.md/gitignore entries (ledger kept).
