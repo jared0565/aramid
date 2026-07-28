@@ -131,6 +131,48 @@ def test_status_reports_open_finding_count(tmp_path, monkeypatch, capsys):
     assert "open findings: 2" in out
 
 
+def test_open_counts_line_names_every_status_member():
+    """T-8 section 6: the printed buckets must enumerate every Status
+    member -- not just the ones known when this line was last touched --
+    so the NEXT status added fails this test instead of silently dropping
+    out of the printed total (the T-11 move: make the failure mode
+    mechanical, not dependent on someone noticing).
+
+    This test is proven to fail against the PRE-T-8 tree for a DIFFERENT
+    reason than the one this task fixes: "fixed" and "rotated" are ALSO
+    absent from the current line, independent of "unreachable"."""
+    from aramid.commands import status as status_mod
+    from aramid.models import Status
+    line = status_mod._open_counts_line({})
+    for member in Status:
+        if member is Status.OPEN:
+            continue  # the leading bare count IS Status.OPEN; not a named bucket
+        label = member.value.replace("_", "-")
+        assert label in line, (
+            f"Status.{member.name} ({member.value!r}) has no bucket in "
+            f"_open_counts_line -- it would silently vanish from the printed total")
+
+
+def test_status_reports_unreachable_count_in_open_counts_line(tmp_path, monkeypatch, capsys):
+    root = _repo(tmp_path)
+    _no_user_config(tmp_path, monkeypatch)
+    _write_toml(root, armed=True, bake_started=None)
+
+    ledger = Ledger(root / ".aramid" / "ledger.db")
+    ledger.record_run("run1", "2026-01-01T00:00:00+00:00", "pre-push", {"ruff"},
+                       {"a.py"}, [_f("f1", tool="ruff")])
+    ledger.append(Event(EventType.FINDING_UNREACHABLE, "run2", "2026-01-02T00:00:00+00:00",
+                        finding_id="f1", payload={"reason": "ruff not selected"}))
+    ledger.close()
+
+    rc = cmd_status(root)
+    out = capsys.readouterr().out
+
+    assert rc == 0
+    assert "unreachable: 1" in out
+    assert "unreachable candidates" not in out  # already retired, no longer a candidate
+
+
 # ------------------------------------------------------ NEW since baseline --
 
 def test_status_reports_new_since_baseline(tmp_path, monkeypatch, capsys):
@@ -265,6 +307,49 @@ def test_status_rotated_secret_not_listed_as_unrotated(tmp_path, monkeypatch, ca
 
     assert rc == 0
     assert "hist1" not in out
+
+
+def test_status_lists_unreachable_candidate_and_the_exact_retire_command(
+        tmp_path, monkeypatch, capsys):
+    # A repo with NO .py files at all -- detect_stacks finds no "python"
+    # stack, so ruff is never selected (unlike this file's own _repo()
+    # fixture, which writes a.py and therefore keeps ruff selected).
+    root = tmp_path / "r"
+    root.mkdir()
+    _git(root, "init", "-q", "-b", "main")
+    _git(root, "config", "user.email", "t@t")
+    _git(root, "config", "user.name", "t")
+    (root / "README.md").write_text("hello\n", encoding="utf-8")
+    _git(root, "add", "README.md")
+    _git(root, "commit", "-q", "-m", "initial")
+    _no_user_config(tmp_path, monkeypatch)
+    _write_toml(root, armed=True, bake_started=None)
+
+    ledger = Ledger(root / ".aramid" / "ledger.db")
+    ledger.record_run("run1", "2026-01-01T00:00:00+00:00", "pre-push", {"ruff"},
+                       {"a.py"}, [_f("f1", tool="ruff", rule="F401")])
+    ledger.close()
+
+    rc = cmd_status(root)
+    out = capsys.readouterr().out
+
+    assert rc == 0
+    assert "unreachable candidates:" in out
+    assert "f1" in out
+    assert "aramid ledger mark-unreachable f1 --reason ..." in out
+
+
+def test_status_omits_unreachable_section_when_no_candidates(tmp_path, monkeypatch, capsys):
+    root = _repo(tmp_path)
+    _no_user_config(tmp_path, monkeypatch)
+    _write_toml(root, armed=True, bake_started=None)
+    Ledger(root / ".aramid" / "ledger.db").close()
+
+    rc = cmd_status(root)
+    out = capsys.readouterr().out
+
+    assert rc == 0
+    assert "unreachable candidates" not in out
 
 
 def test_status_not_a_secret_counted_and_removed_from_unrotated_listing(

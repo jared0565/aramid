@@ -13,6 +13,7 @@ from pathlib import Path
 
 from aramid import config as config_mod
 from aramid import review
+from aramid import toolset
 from aramid.ledger import Ledger
 from aramid.models import EventType
 
@@ -40,7 +41,10 @@ def _open_counts_line(state: dict) -> str:
     return (f"open findings: {counts.get('open', 0)} "
             f"(historical: {counts.get('historical', 0)}, "
             f"not-a-secret: {counts.get('not_a_secret', 0)}, "
-            f"overridden: {counts.get('overridden', 0)})")
+            f"overridden: {counts.get('overridden', 0)}, "
+            f"unreachable: {counts.get('unreachable', 0)}, "
+            f"fixed: {counts.get('fixed', 0)}, "
+            f"rotated: {counts.get('rotated', 0)})")
 
 
 def _new_since_baseline_line(ledger: Ledger, state: dict) -> str:
@@ -111,6 +115,23 @@ def _unrotated_historical_lines(state: dict) -> list[str]:
                 f"`aramid ledger mark-rotated {fid} --reason ...`. "
                 f"false positive? `aramid ledger mark-not-a-secret {fid} --reason ...`")
     return lines
+
+
+def _unreachable_candidate_lines(root: Path, cfg, state: dict) -> list[str]:
+    """Auto-DETECTED ghost candidates (T-8 section 9 item 2 -- the user's
+    chosen auto-detect + manual-retire design): an open finding whose tool
+    is in the retireable universe but not currently selected. Mirrors
+    _unrotated_historical_lines's shape: one line per candidate, naming the
+    exact command. Without this the operator must already suspect a finding
+    is a ghost, reproducing the exact discoverability defect T-9 fixed."""
+    selected = toolset.selected_tool_names(root, cfg)
+    candidates = toolset.ghost_candidates(state, selected)
+    return [
+        f"  {fid} {rec.get('tool')}:{rec.get('rule')} {rec.get('file')} -- "
+        f"tool no longer runs in this repo? "
+        f"`aramid ledger mark-unreachable {fid} --reason ...`"
+        for fid, rec in candidates.items()
+    ]
 
 
 def _bake_lines(cfg: config_mod.Config, state: dict) -> list[str]:
@@ -280,6 +301,11 @@ def cmd_status(root) -> int:
         if historical:
             lines.append("  unrotated historical secrets:")
             lines.extend(historical)
+
+        unreachable_candidates = _unreachable_candidate_lines(root, cfg, state)
+        if unreachable_candidates:
+            lines.append("  unreachable candidates:")
+            lines.extend(unreachable_candidates)
 
         lines.extend(_bake_lines(cfg, state))
 
