@@ -43,7 +43,7 @@ pytest:tests-failed  "pytest exited 5"  verdict=block  status=open
 whose only event is a `finding_detected` from 2026-07-25. `detect_tests` now returns `{'npm'}` there, so
 `pytest` can never enter `scope_tools` again.
 
-### 1.2 It is the fourth consequence of one rule, and the first with no producer to fix it
+### 1.2 It is the fifth consequence of one rule, and the first with no producer to fix it
 
 The `tool in scope_tools` guard has now stranded findings four times. The first three were each closed by
 writing a bespoke resolver for the producer in question:
@@ -142,7 +142,7 @@ rather than being `set(_select_runners(...))`:
 
 | Runner key | Tool names it can attach to a finding |
 |---|---|
-| `tests` | `detect_tests(root)` → `pytest` / `npm`, plus the literal `tests`; the `[tests].command` case makes the runner applicable with **no** detection at all (`pipeline.py:175`) |
+| `tests` | `detect_tests(root)` → `pytest` / `npm`; **plus** `Path(argv[0]).name` of a configured `[tests].command`, which makes the runner applicable with no detection at all (`pipeline.py:175`). The literal `tests` is **not** included — see §3.1. |
 | `deps` | `detect_package_manager(root)` → `npm`/`pnpm`/`yarn`, plus `pip-audit` when `requirements*.txt` exists |
 | `typecheck` | `mypy` when `typecheck.has_mypy_config(root)`, `tsc` when `typecheck.has_tsconfig(root)` (`pipeline.py:159-160`) |
 | `ruff` `eslint` `gitleaks` `semgrep` | themselves |
@@ -151,6 +151,34 @@ rather than being `set(_select_runners(...))`:
 are gate surface (§7). They are not in `RUNNER_TOOL_NAMES`, so they can never be candidates and can never
 be retired — including by a future caller who never considers the question. That is strictly stronger
 than a guard clause someone can forget to write.
+
+### 3.1 Two tool names that are §11-class, not §3-class
+
+Reading `runners/tests.py` to build the expansion table above turned up two names that can **never**
+enter `scope_tools` on any path, which makes them the same dead end `tsc` was before §11 — stranded not
+because the tool left, but because the name never matches:
+
+* **`tests`** — every OK path relabels away from it. `run_pytest:264` and `run_npm_test:268` pass bare
+  `"pytest"` / `"npm"` as `argv[0]`; the dual path's `sub_results` are those two (`tests.py:292-293`).
+  `RunnerResult("tests", ...)` is constructed at only `:259` and `:344`, and **both are
+  `ToolState.MISSING`**, which `pipeline.py:524` excludes by construction. Yet `parse` stamps
+  `tool="tests"` on the `tests-tool-missing` finding (`tests.py:400-410`). So a `tests-tool-missing`
+  finding can never resolve, on any platform.
+* **a custom `[tests].command`** — `run_custom:258` returns `run_subprocess(argv, ...)` unrelabeled, so
+  the tool name is the *configured binary's* basename: `make test` → `make`, `npm run test:ci` → `npm`.
+  Self-consistent (findings carry `tool=result.tool`, `tests.py:412`), so these resolve fine — but the
+  name is unknowable from a fixed list, which is why `selected_tool_names` derives it from config.
+
+**Consequence for the universe.** `RUNNER_TOOL_NAMES` stays a fixed allowlist; an arbitrary custom-command
+basename is outside it and therefore never retireable. That is conservative in the safe direction — a
+custom-command repo gets no ghost retirement rather than an over-broad one — and it is why
+`selected_tool_names` must still derive the basename: so a coincidental match (`npm test` → `npm`) is
+correctly seen as *selected* rather than as a ghost.
+
+**`tests` is deferred to §11's fix set, not §3's.** §10's measurement task is therefore not merely "which
+name reaches `scope_tools`" — it is **"measure whether `tests` belongs in §11's fix set"**, with a stated
+disposition either way. Otherwise the implementer measures it, observes that `tests` never appears, and
+has no instruction for what that means.
 
 **Known conservative limitation, stated rather than fixed.** `npm` is emitted by two different runners:
 `deps.py:237` for the JS dependency audit and `tests.py` for the npm test suite. One string, two
@@ -219,6 +247,11 @@ assert something untrue.
 **This change is only half-verified without its mirror.** A test must prove `unreachable` re-opens on
 re-detect **and** a second must prove `overridden` / `rotated` / `not_a_secret` still do not.
 
+**It does not interact with the pre-push ratchet.** `record_run`'s `new_ids` is built from `seen`
+(`ledger.py:74,83`), which holds every id that ever had a `finding_detected` event. A resurrected
+finding is by definition already in `seen`, so it does not re-enter the ratchet as new and cannot be
+auto-escalated WARN→BLOCK by `pipeline.py:528-536`. Stated here so nobody has to re-derive it.
+
 ## 6. Two silent-failure sites fixed in the same change
 
 Both are instances of the class this project's ledger has now recorded four times: *a check whose passing
@@ -261,6 +294,33 @@ would return through a different door.
 Findings whose tool *is* still selected but is failing every run are explicitly **not** retireable. That
 is a broken-toolchain problem and `aramid doctor` is its diagnostic.
 
+### 7.1 Escape paths — every mutating command, walked
+
+T-9's whole-branch review found an escape path that all prior analysis had missed: the third mutating
+command, `aramid override`. It came out benign only because `policy.py:86-87` returns BLOCK for gitleaks
+unconditionally. **That accident does not repeat here** — `ruff`, `eslint`, `tsc`, and `mypy` findings can
+be WARN tier, and `override` accepts WARN. So the walk is done here, in the spec, rather than left to the
+review.
+
+| Command | Gates on status? | Reachable from `unreachable`? |
+|---|---|---|
+| `ledger mark-rotated` | yes — `ledger_cmd.py:117` requires `historical` or `not_a_secret` | no, refuses |
+| `ledger mark-not-a-secret` | yes — `ledger_cmd.py:150` requires exactly `historical` | no, refuses |
+| `rebaseline` | n/a — re-snapshots the baseline id set; never transitions a status | no |
+| **`override`** | **no** — `override.py:44-64` gates on `verdict == "block"` and the LLM confirmed-critical test **only**. Status is never consulted. | **yes** |
+
+**The chain `open → unreachable → override → overridden` is reachable, and grants no new capability.**
+Because `override`'s guard is orthogonal to status, any finding reachable through the chain could have
+been overridden directly while `open`; passing through `unreachable` neither unlocks nor blocks anything.
+BLOCK-tier findings stay refused either way. `pipeline._overrides_from_ledger` is real gate surface, but
+nothing new reaches it.
+
+**It does cost the §5 resurrection property, so the spec closes it anyway.** `overridden` is not in the
+re-detect set, so chaining would make a finding permanently sticky and immune to the returning-tool
+re-open that §5 exists to guarantee. `cmd_override` therefore gains one refusal: an `unreachable` finding
+cannot be overridden — the tool does not run in this repo, so there is nothing to override. This is
+additive (no existing status becomes un-overridable) and preserves the directional rule.
+
 ## 8. `RUN_STARTED.selected` (C)
 
 `Ledger.record_run` gains a keyword-only `selected_tools: set[str] | None = None`, recorded as
@@ -300,6 +360,19 @@ reproduced.
 
 **`aramid ledger mark-unreachable`** — CLI wiring mirroring `mark-not-a-secret` (`cli.py`, `ledger_cmd.py`).
 
+**Two other ledger-state readers were checked and deliberately need no change.** Both were found in the
+graphite caller list for `open_findings` (18 `src/` callers, `decision_grade`), and the reason each is
+exempt is recorded here so a reviewer does not have to re-derive it:
+
+* `reporter._open_count_line:26-37` prints a single number — `sum(1 for rec in ... if status == "open")`
+  — with no buckets. An `unreachable` finding correctly leaves that count, and there is no second bucket
+  that could fall out of sync. This is the opposite of `status._open_counts_line` (§6), whose *named
+  buckets* are what stop summing. No change.
+* `pack_cmd.cmd_pack_compile:58-72` iterates every materialized finding and **never filters on status at
+  all** — it already compiles `fixed`, `overridden`, `rotated`, and `not_a_secret` rows alike. So
+  `unreachable` behaves exactly as `open` did there. That status-blindness is pre-existing and is not
+  this spec's to change; noted rather than fixed.
+
 **Docs** — the implementer enumerates the set by following T-9's own doc commits rather than trusting a
 count here. Two are known: `src/aramid/data/ARAMID.md.tmpl`, and therefore the rendered repo-root
 `ARAMID.md`, which is now pinned by `tests/unit/test_aramid_md_template_sync.py` and **will fail** unless
@@ -310,11 +383,15 @@ it is regenerated through `_render_aramid_md` with the historical `Onboarded` da
 **The load-bearing test is empirical, not a hand-written list.** Run the real runners and producers over
 a fixture and assert every observed `finding.tool` falls in exactly one of `RUNNER_TOOL_NAMES` /
 `PRODUCER_TOOL_NAMES`, and that the two sets are disjoint. A hand-maintained registry will drift the
-first time someone adds a runner; this fails when it does. It also settles by measurement the one
-question §3 leaves open: whether the aggregate `tests` or the sub-names `pytest`/`npm` reach
-`scope_tools`, which depends on whether `sub_results` was populated (`runners/tests.py:311-312` — the
-dual-stack path populates it; the single-suite path does not). **That must be measured during
-implementation, not reasoned about.**
+first time someone adds a runner; this fails when it does.
+
+**It also discharges §3.1's measurement task, which is a decision, not just an observation.** Determine
+by execution — not by reading — whether the literal `tests` ever reaches `scope_tools` on any path. §3.1
+predicts it does not, because both of its construction sites are `ToolState.MISSING`. If that holds,
+`tests` joins §11's fix set (relabel, or stamp the sub-tool name on the `tests-tool-missing` finding) and
+the disposition is recorded in the plan. If it does not hold, `tests` stays in §3's universe. **Either
+way the implementer records which, with the evidence.** An unexplained "`tests` never appeared" is not a
+result.
 
 Then:
 
@@ -379,6 +456,10 @@ confirmed live on Windows before the fix is written — a failing test first, pe
 
 Re-label at `typecheck.run()`'s return so the `RunnerResult` carries `NAME_TSC`, matching what
 `parse_tsc` stamps. One line, mirroring what `eslint.py:49` already does.
+
+**`tests` is a candidate for the same fix set** (§3.1): its `tests-tool-missing` finding is stamped
+`tool="tests"`, a name no OK path can put into `scope_tools`. Whether it joins this section is settled by
+§10's measurement, not by this spec.
 
 **This changes gate behavior on Windows**: `tsc` findings begin resolving where they previously never
 did. That is the correct behavior and the whole point, but it is a behavioral change on a block-tier
