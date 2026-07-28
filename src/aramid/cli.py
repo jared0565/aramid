@@ -27,6 +27,7 @@ from aramid.commands.ledger_cmd import (
     cmd_ledger_list,
     cmd_ledger_mark_not_a_secret,
     cmd_ledger_mark_rotated,
+    cmd_ledger_mark_unreachable,
     cmd_ledger_show,
 )
 from aramid.commands.mutation_score import cmd_mutation_score
@@ -99,6 +100,9 @@ def build_parser() -> argparse.ArgumentParser:
     p_nas = ledger_sub.add_parser("mark-not-a-secret")
     p_nas.add_argument("id")
     p_nas.add_argument("--reason", required=True)
+    p_unreachable = ledger_sub.add_parser("mark-unreachable")
+    p_unreachable.add_argument("id")
+    p_unreachable.add_argument("--reason", required=True)
 
     p_override = sub.add_parser("override", help="suppress a WARN finding (ledger-logged)")
     p_override.add_argument("id")
@@ -210,8 +214,10 @@ def main(argv: list[str] | None = None) -> int:
             return cmd_ledger_mark_rotated(root, args.id, args.reason)
         if args.ledger_command == "mark-not-a-secret":
             return cmd_ledger_mark_not_a_secret(root, args.id, args.reason)
+        if args.ledger_command == "mark-unreachable":
+            return cmd_ledger_mark_unreachable(root, args.id, args.reason)
         print("aramid: ledger: a subcommand is required "
-              "(list|show|filter|mark-rotated|mark-not-a-secret)",
+              "(list|show|filter|mark-rotated|mark-not-a-secret|mark-unreachable)",
               file=sys.stderr)
         return 3
 

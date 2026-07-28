@@ -1,20 +1,28 @@
 """ledger_cmd -- query the findings ledger (`aramid ledger list|show|filter|
-mark-rotated|mark-not-a-secret`). `mark-rotated` and `mark-not-a-secret` are
-the two mutating subcommands: `mark-rotated` appends a `finding_rotated`
-event and requires the target finding's materialized status be `historical`
-OR `not_a_secret` (design doc section 6 -- rotation applies to init's
-full-history secret scan hits, and also to a finding previously marked
-not-a-secret that turned out to be a real credential after all).
-`mark-not-a-secret` appends a `finding_not_a_secret` event and requires
-status be EXACTLY `historical` -- a live (`open`) finding has its own
-suppression paths, and a `rotated` finding is a safety assertion that is
-never downgraded. Both guards error rather than silently no-op'ing;
-transitions only ever move toward more caution, and there is no un-mark."""
+mark-rotated|mark-not-a-secret|mark-unreachable`). `mark-rotated`,
+`mark-not-a-secret`, and `mark-unreachable` are the three mutating
+subcommands: `mark-rotated` appends a `finding_rotated` event and requires
+the target finding's materialized status be `historical` OR `not_a_secret`
+(design doc section 6 -- rotation applies to init's full-history secret
+scan hits, and also to a finding previously marked not-a-secret that
+turned out to be a real credential after all). `mark-not-a-secret` appends
+a `finding_not_a_secret` event and requires status be EXACTLY `historical`
+-- a live (`open`) finding has its own suppression paths, and a `rotated`
+finding is a safety assertion that is never downgraded. `mark-unreachable`
+(T-8) appends a `finding_unreachable` event and requires status be EXACTLY
+`open` AND the finding's tool be in `aramid.toolset.RUNNER_TOOL_NAMES` but
+NOT in `aramid.toolset.selected_tool_names(root, cfg)` -- a finding whose
+tool has left this repo's live selection (de-selected, disabled, or
+genuinely removed), so no future run can ever resolve it the normal way.
+All three guards error rather than silently no-op'ing; transitions only
+ever move toward more caution, and there is no un-mark."""
 import sys
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 
+from aramid import config as config_mod
+from aramid import toolset
 from aramid.ledger import Ledger
 from aramid.models import Event, EventType
 
@@ -168,6 +176,70 @@ def cmd_ledger_mark_not_a_secret(root, finding_id: str, reason: str) -> int:
         ledger.append(Event(EventType.FINDING_NOT_A_SECRET, uuid.uuid4().hex, _now(),
                              finding_id=finding_id, payload={"reason": reason}))
         print(f"aramid: ledger: {finding_id} marked not-a-secret ({reason})")
+        return 0
+    finally:
+        ledger.close()
+
+
+# ------------------------------------------------------- mark-unreachable ---
+
+def cmd_ledger_mark_unreachable(root, finding_id: str, reason: str) -> int:
+    root = Path(root)
+    reason = (reason or "").strip()
+    if not reason:
+        print("aramid: ledger mark-unreachable: --reason is required", file=sys.stderr)
+        return 3
+
+    try:
+        cfg = config_mod.load_config(root)
+    except Exception as exc:
+        print(f"aramid: ledger mark-unreachable: engine error: {exc}", file=sys.stderr)
+        return 3
+
+    ledger = Ledger(root / ".aramid" / "ledger.db")
+    try:
+        state = ledger.open_findings()
+        rec = state.get(finding_id)
+        if rec is None:
+            print(f"aramid: ledger mark-unreachable: unknown finding id {finding_id}",
+                  file=sys.stderr)
+            return 3
+
+        tool = rec.get("tool")
+        if tool not in toolset.RUNNER_TOOL_NAMES:
+            print(f"aramid: ledger mark-unreachable: {finding_id} is a {tool!r} finding "
+                  f"-- producer/consumer findings (tdd, red-proof, mutation, "
+                  f"mutation-score, llm-review, js-mutation, fuzz, dast) resolve "
+                  f"through their own producer's mechanism, never by hand",
+                  file=sys.stderr)
+            return 3
+
+        status = rec.get("status")
+        if status != "open":
+            tails = {
+                "unreachable": "already marked unreachable.",
+                "fixed": "already fixed -- nothing to retire.",
+                "historical": "a historical secret -- use `aramid ledger mark-rotated` "
+                              "or `mark-not-a-secret` instead.",
+                "overridden": "already overridden.",
+                "rotated": "already retired by rotation.",
+                "not_a_secret": "already marked not-a-secret.",
+            }
+            tail = tails.get(status, "mark-unreachable only applies to an open finding.")
+            print(f"aramid: ledger mark-unreachable: {finding_id} is not open "
+                  f"(status={status}) -- {tail}", file=sys.stderr)
+            return 3
+
+        selected = toolset.selected_tool_names(root, cfg)
+        if tool in selected:
+            print(f"aramid: ledger mark-unreachable: {finding_id}'s tool ({tool}) still "
+                  f"runs in this repo -- not a ghost. If it fails every run, that is "
+                  f"`aramid doctor`'s problem, not mark-unreachable's", file=sys.stderr)
+            return 3
+
+        ledger.append(Event(EventType.FINDING_UNREACHABLE, uuid.uuid4().hex, _now(),
+                             finding_id=finding_id, payload={"reason": reason}))
+        print(f"aramid: ledger: {finding_id} marked unreachable ({reason})")
         return 0
     finally:
         ledger.close()

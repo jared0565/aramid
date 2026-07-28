@@ -1,4 +1,5 @@
-"""integration: `aramid ledger list|show|filter|mark-rotated|mark-not-a-secret`."""
+"""integration: `aramid ledger list|show|filter|mark-rotated|mark-not-a-secret|
+mark-unreachable`."""
 from pathlib import Path
 
 from aramid import cli
@@ -7,6 +8,7 @@ from aramid.commands.ledger_cmd import (
     cmd_ledger_list,
     cmd_ledger_mark_not_a_secret,
     cmd_ledger_mark_rotated,
+    cmd_ledger_mark_unreachable,
     cmd_ledger_show,
 )
 from aramid.ledger import Ledger
@@ -378,3 +380,170 @@ def test_show_prints_reason_for_not_a_secret_finding(tmp_path, capsys):
 
     assert rc == 0
     assert "public shopify client id" in out
+
+
+# ----------------------------------------------------- mark-unreachable ---
+
+def test_mark_unreachable_transitions_open_finding_whose_tool_left_selection(
+        tmp_path, capsys, monkeypatch):
+    from aramid import config as config_mod
+    root: Path = tmp_path
+    monkeypatch.setattr(config_mod, "_user_config_path", lambda: tmp_path / "no-user.toml")
+    ledger = _ledger(root)
+    ledger.record_run("r1", "t1", "pre-push", {"ruff"}, {"a.py"}, [_f("f1", tool="ruff")])
+    ledger.close()
+
+    rc = cmd_ledger_mark_unreachable(root, "f1", "ruff no longer selected for this repo")
+
+    assert rc == 0
+    ledger = _ledger(root)
+    try:
+        assert ledger.open_findings()["f1"]["status"] == "unreachable"
+        events = [e for e in ledger.events() if e.type.value == "finding_unreachable"]
+        assert len(events) == 1
+        assert events[0].payload["reason"] == "ruff no longer selected for this repo"
+    finally:
+        ledger.close()
+
+
+def test_mark_unreachable_refuses_when_tool_still_selected(tmp_path, capsys, monkeypatch):
+    from aramid import config as config_mod
+    root: Path = tmp_path
+    monkeypatch.setattr(config_mod, "_user_config_path", lambda: tmp_path / "no-user.toml")
+    (root / "pyproject.toml").write_text("[tool.x]\n", encoding="utf-8")  # keeps ruff selected
+    ledger = _ledger(root)
+    ledger.record_run("r1", "t1", "pre-push", {"ruff"}, {"a.py"}, [_f("f1", tool="ruff")])
+    ledger.close()
+
+    rc = cmd_ledger_mark_unreachable(root, "f1", "trying anyway")
+    err = capsys.readouterr().err
+
+    assert rc == 3
+    assert "still runs in this repo" in err
+    ledger = _ledger(root)
+    try:
+        assert ledger.open_findings()["f1"]["status"] == "open"
+    finally:
+        ledger.close()
+
+
+def test_mark_unreachable_refuses_producer_tool_finding(tmp_path, capsys, monkeypatch):
+    """Spec section 10 item 6 requires BOTH an llm-review finding AND a
+    mutation finding to be attempted and refused -- these are the two
+    named gate-surface producers (review.llm_gate_findings,
+    mutation_gate.mutation_gate_findings) that materialize BLOCK-tier
+    findings straight from status=="open"; a silent retire on either would
+    drop a gate block."""
+    from aramid import config as config_mod
+    root: Path = tmp_path
+    monkeypatch.setattr(config_mod, "_user_config_path", lambda: tmp_path / "no-user.toml")
+    ledger = _ledger(root)
+    ledger.record_run("r1", "t1", "drain", set(), set(), [
+        _f("f1", tool="mutation"),
+        _f("f2", tool="llm-review"),
+    ])
+    ledger.close()
+
+    rc1 = cmd_ledger_mark_unreachable(root, "f1", "trying anyway")
+    err1 = capsys.readouterr().err
+    rc2 = cmd_ledger_mark_unreachable(root, "f2", "trying anyway")
+    err2 = capsys.readouterr().err
+
+    assert rc1 == 3
+    assert "never by hand" in err1
+    assert rc2 == 3
+    assert "never by hand" in err2
+    ledger = _ledger(root)
+    try:
+        assert ledger.open_findings()["f1"]["status"] == "open"
+        assert ledger.open_findings()["f2"]["status"] == "open"
+    finally:
+        ledger.close()
+
+
+def test_mark_unreachable_refuses_historical_finding_redirects_to_gitleaks_commands(
+        tmp_path, capsys, monkeypatch):
+    from aramid import config as config_mod
+    root: Path = tmp_path
+    monkeypatch.setattr(config_mod, "_user_config_path", lambda: tmp_path / "no-user.toml")
+    ledger = _ledger(root)
+    ledger.record_run("r1", "t1", "historical-scan", {"gitleaks"}, set(),
+                       [_f("hist1", tool="gitleaks", verdict=Verdict.BLOCK, historical=True)])
+    ledger.close()
+
+    rc = cmd_ledger_mark_unreachable(root, "hist1", "trying anyway")
+    err = capsys.readouterr().err
+
+    assert rc == 3
+    assert "mark-rotated" in err
+    assert "mark-not-a-secret" in err
+
+
+def test_mark_unreachable_unknown_id_errors(tmp_path, capsys, monkeypatch):
+    from aramid import config as config_mod
+    monkeypatch.setattr(config_mod, "_user_config_path", lambda: tmp_path / "no-user.toml")
+    rc = cmd_ledger_mark_unreachable(tmp_path, "nope", "some reason")
+    err = capsys.readouterr().err
+    assert rc == 3
+    assert "nope" in err
+
+
+def test_mark_unreachable_requires_reason(tmp_path, capsys):
+    rc = cmd_ledger_mark_unreachable(tmp_path, "hist1", "")
+    err = capsys.readouterr().err
+    assert rc == 3
+    assert "reason" in err.lower()
+
+
+def test_mark_unreachable_missing_reason_flag_exits_3_via_argparse(capsys):
+    # Mirrors test_mark_not_a_secret_missing_reason_flag_exits_3_via_argparse
+    # (:283-297) -- must go through cli.main, not a direct function call.
+    rc = cli.main(["ledger", "mark-unreachable", "hist1"])
+    err = capsys.readouterr().err
+    assert rc == 3
+    assert "the following arguments are required" in err
+
+
+def test_mark_unreachable_twice_refuses_second_time(tmp_path, capsys, monkeypatch):
+    from aramid import config as config_mod
+    root: Path = tmp_path
+    monkeypatch.setattr(config_mod, "_user_config_path", lambda: tmp_path / "no-user.toml")
+    ledger = _ledger(root)
+    ledger.record_run("r1", "t1", "pre-push", {"ruff"}, {"a.py"}, [_f("f1", tool="ruff")])
+    ledger.close()
+
+    rc1 = cmd_ledger_mark_unreachable(root, "f1", "first reason")
+    capsys.readouterr()
+    rc2 = cmd_ledger_mark_unreachable(root, "f1", "second reason")
+    err2 = capsys.readouterr().err
+
+    assert rc1 == 0
+    assert rc2 == 3
+    assert "already marked unreachable" in err2
+
+
+def test_unreachable_finding_reopens_when_tool_returns_via_real_dispatch(
+        tmp_path, capsys, monkeypatch):
+    """End-to-end through cli.main + record_run, not just the ledger unit
+    test in Task 2 -- proves the whole command chain, not just _materialize.
+    cli.main resolves `root` from Path.cwd(), so this must chdir into
+    tmp_path -- unlike the direct cmd_ledger_mark_unreachable(root, ...)
+    calls elsewhere in this file, which take root explicitly."""
+    from aramid import config as config_mod
+    root: Path = tmp_path
+    monkeypatch.setattr(config_mod, "_user_config_path", lambda: tmp_path / "no-user.toml")
+    monkeypatch.chdir(tmp_path)
+    ledger = _ledger(root)
+    ledger.record_run("r1", "t1", "pre-push", {"ruff"}, {"a.py"}, [_f("f1", tool="ruff")])
+    ledger.close()
+
+    rc = cli.main(["ledger", "mark-unreachable", "f1", "--reason", "ruff not selected"])
+    assert rc == 0
+    capsys.readouterr()
+
+    ledger = _ledger(root)
+    ledger.record_run("r2", "t2", "pre-push", {"ruff"}, {"a.py"}, [_f("f1", tool="ruff")])
+    try:
+        assert ledger.open_findings()["f1"]["status"] == "open"
+    finally:
+        ledger.close()
