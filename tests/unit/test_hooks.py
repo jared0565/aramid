@@ -248,6 +248,99 @@ def test_uninstall_does_not_clobber_live_foreign_hook_that_replaced_the_shim(tmp
     assert "foreign hook" in capsys.readouterr().err
 
 
+# --- foreign-MANAGED hook (another tool's own trampoline) ------------------
+#
+# A hook already carrying SOME tool's `# >>> <tool> managed >>>` marker is not
+# an ordinary foreign hook (a human's script, terminal once chained) -- it is
+# itself a live trampoline that calls onward. Chaining it the same way as a
+# plain foreign hook (rename-and-exec-first) means the OTHER tool's gate runs
+# via the chain AND aramid's own new shim runs its own check afterward --
+# double execution -- and later makes `uninstall()`'s restore put that live
+# trampoline back in the hook slot while reporting success, silently leaving
+# enforcement running. `install()` must refuse to chain a foreign-managed
+# hook instead.
+
+def test_install_refuses_to_chain_a_foreign_managed_hook(tmp_path, capsys):
+    r = _repo(tmp_path)
+    hdir = r / ".git" / "hooks"
+    hdir.mkdir(exist_ok=True)
+    other_tool_hook = (
+        b"#!/bin/sh\n# >>> graphite managed >>>\necho graphite-trampoline-ran\n"
+        b"# <<< graphite managed <<<\n"
+    )
+    (hdir / "pre-commit").write_bytes(other_tool_hook)
+
+    install(r, Path("C:/py/python.exe"))
+
+    assert (hdir / "pre-commit").read_bytes() == other_tool_hook, (
+        "a foreign-managed hook must be left completely untouched")
+    assert not (hdir / "pre-commit.aramid-chained").exists(), (
+        "must not chain (rename aside) a foreign-managed hook")
+    err = capsys.readouterr().err
+    assert "graphite" in err
+    assert "pre-commit" in err
+
+
+def test_install_refuses_to_chain_a_foreign_managed_post_commit_hook(tmp_path, capsys):
+    r = _repo(tmp_path)
+    hdir = r / ".git" / "hooks"
+    hdir.mkdir(exist_ok=True)
+    other_tool_hook = b"#!/bin/sh\n# >>> graphite managed >>>\necho gt\n# <<< graphite managed <<<\n"
+    (hdir / "post-commit").write_bytes(other_tool_hook)
+
+    install(r, Path("C:/py/python.exe"))
+
+    assert (hdir / "post-commit").read_bytes() == other_tool_hook
+    assert not (hdir / "post-commit.aramid-chained").exists()
+    assert "graphite" in capsys.readouterr().err
+
+
+def test_install_still_chains_a_genuinely_unmanaged_foreign_hook(tmp_path):
+    """Regression guard: the refusal above must be specific to a MANAGED
+    foreign hook (carries a marker) -- an ordinary foreign hook (no marker
+    at all, e.g. a human-authored script) must still be chained exactly as
+    before this fix."""
+    r = _repo(tmp_path)
+    hdir = r / ".git" / "hooks"
+    hdir.mkdir(exist_ok=True)
+    foreign_content = b"#!/bin/sh\necho plain-human-hook\n"
+    (hdir / "pre-commit").write_bytes(foreign_content)
+
+    install(r, Path("C:/py/python.exe"))
+
+    chained = hdir / "pre-commit.aramid-chained"
+    assert chained.exists()
+    assert chained.read_bytes() == foreign_content
+    assert MARKER_START.encode() in (hdir / "pre-commit").read_bytes()
+
+
+def test_uninstall_warns_when_restoring_a_foreign_managed_chained_original(tmp_path, capsys):
+    """Defense in depth for a repo that reached this state before the
+    install()-side guard existed (or via any other route): if the
+    `.aramid-chained` backup itself carries another tool's managed marker,
+    `uninstall()` must still restore it (deleting it instead would silently
+    break the OTHER tool's live hook) but must say out loud that it cannot
+    verify aramid's own gate is fully gone -- never claim a silent, clean
+    uninstall over a hook it does not fully understand."""
+    r = _repo(tmp_path)
+    hdir = r / ".git" / "hooks"
+    hdir.mkdir(exist_ok=True)
+    (hdir / "pre-push").write_bytes(render_shim(Gate.PRE_PUSH, Path("C:/py/python.exe")))
+    other_tool_hook = (
+        b"#!/bin/sh\n# >>> graphite managed >>>\necho gt\n# <<< graphite managed <<<\n"
+    )
+    (hdir / "pre-push.aramid-chained").write_bytes(other_tool_hook)
+
+    uninstall(r)
+
+    assert (hdir / "pre-push").read_bytes() == other_tool_hook, (
+        "the other tool's live hook must still end up back in the slot")
+    assert not (hdir / "pre-push.aramid-chained").exists()
+    err = capsys.readouterr().err
+    assert "graphite" in err
+    assert "pre-push" in err
+
+
 def test_hooks_dir_decodes_utf8_hooks_path(tmp_path):
     # git emits config values as UTF-8 regardless of host locale. Without
     # encoding="utf-8" in _git_config, cp1252 hosts mojibake a non-ASCII

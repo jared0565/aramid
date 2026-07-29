@@ -22,6 +22,7 @@ Hooks inherit the parent process' environment already (git does not
 sanitize it), so `ARAMID_ACCEPT_DEGRADED` reaches the engine with no
 special forwarding logic needed here.
 """
+import re
 import stat
 import subprocess
 import sys
@@ -270,6 +271,46 @@ def _is_aramid_shim(path: Path) -> bool:
         return False
 
 
+# Any tool's managed-hook marker, generalized from aramid's own
+# `# >>> aramid managed >>>` (MARKER_START). Other managing tools (e.g.
+# graphite, `docs/superpowers/specs/2026-07-28-autonomous-repo-hooks-design.md`
+# section "Shim rendering") follow the same "`# >>> <tool> managed >>>`"
+# convention deliberately, precisely so this pattern can recognize them.
+_MANAGED_MARKER_RE = re.compile(rb"# >>> (\S+) managed >>>")
+
+
+def _foreign_managed_tool(path: Path) -> str | None:
+    """The owning tool's name if `path` carries a `<tool> managed` marker for
+    some tool OTHER than aramid -- i.e. not a plain foreign (human-authored)
+    hook, but another managing tool's own trampoline that itself chains
+    onward. `install()` must refuse to chain such a file the way it chains an
+    ordinary foreign hook: rename-and-exec-first would run the OTHER tool's
+    gate via the chain AND aramid's own new shim a second time afterward
+    (double execution), and later make `uninstall()`'s restore put that live
+    trampoline back in the hook slot while reporting a clean uninstall --
+    silently leaving enforcement running. Returns None for a plain foreign
+    hook (no marker at all) or for aramid's own shim."""
+    if not path.exists():
+        return None
+    try:
+        data = path.read_bytes()
+    except OSError:
+        return None
+    m = _MANAGED_MARKER_RE.search(data)
+    if m is None:
+        return None
+    tool = m.group(1).decode("ascii", errors="replace")
+    return None if tool == "aramid" else tool
+
+
+def _warn_foreign_managed_conflict(hook: str, foreign_tool: str) -> None:
+    print(f"aramid: install: {hook}: already managed by '{foreign_tool}' -- "
+          f"refusing to chain another tool's managed hook (chaining it would "
+          f"silently double-run both tools' gates on every {hook}). Left "
+          f"'{foreign_tool}'s hook untouched; aramid's {hook} gate is NOT "
+          f"installed until this is resolved manually.", file=sys.stderr)
+
+
 def install(root: Path, interpreter: Path) -> None:
     """Install (or idempotently regenerate) the pre-commit/pre-push shims.
 
@@ -278,7 +319,14 @@ def install(root: Path, interpreter: Path) -> None:
     `render_shim`'s always-present chain-check block) -- never clobbered.
     Idempotent: marker detection means a second `install()` regenerates
     aramid's own shim in place and never double-chains (an aramid shim
-    already at `<hook>` is never itself treated as "foreign")."""
+    already at `<hook>` is never itself treated as "foreign").
+
+    A hook already carrying ANOTHER tool's `# >>> <tool> managed >>>` marker
+    is not an ordinary foreign hook -- chaining it (rename-and-exec-first)
+    would double-run both tools' gates, since a managed hook already forwards
+    onward itself. `install()` refuses instead: leaves that hook completely
+    untouched, skips installing aramid's shim for that one hook, and prints a
+    diagnostic naming the conflict (see `_foreign_managed_tool`)."""
     hdir = hooks_dir(root)
     hdir.mkdir(parents=True, exist_ok=True)
 
@@ -288,6 +336,11 @@ def install(root: Path, interpreter: Path) -> None:
         chained_path = hdir / f"{hook}{CHAINED_SUFFIX}"
 
         if shim_path.exists() and not _is_aramid_shim(shim_path):
+            foreign_tool = _foreign_managed_tool(shim_path)
+            if foreign_tool is not None:
+                _warn_foreign_managed_conflict(hook, foreign_tool)
+                continue
+
             # A real foreign hook (not ours) occupies this slot -- chain it.
             # If a stale .aramid-chained sibling exists too (e.g. a previous
             # uninstall didn't run to completion), the current foreign hook
@@ -303,19 +356,26 @@ def install(root: Path, interpreter: Path) -> None:
     hook = TRIAGE_HOOK
     shim_path = hdir / hook
     chained_path = hdir / f"{hook}{CHAINED_SUFFIX}"
+    skip_triage = False
 
     if shim_path.exists() and not _is_aramid_shim(shim_path):
-        # A real foreign hook (not ours) occupies this slot -- chain it.
-        # If a stale .aramid-chained sibling exists too (e.g. a previous
-        # uninstall didn't run to completion), the current foreign hook
-        # wins as the thing that gets chained.
-        if chained_path.exists():
-            chained_path.unlink()
-        shim_path.replace(chained_path)
-        _make_executable(chained_path)
+        foreign_tool = _foreign_managed_tool(shim_path)
+        if foreign_tool is not None:
+            _warn_foreign_managed_conflict(hook, foreign_tool)
+            skip_triage = True
+        else:
+            # A real foreign hook (not ours) occupies this slot -- chain it.
+            # If a stale .aramid-chained sibling exists too (e.g. a previous
+            # uninstall didn't run to completion), the current foreign hook
+            # wins as the thing that gets chained.
+            if chained_path.exists():
+                chained_path.unlink()
+            shim_path.replace(chained_path)
+            _make_executable(chained_path)
 
-    shim_path.write_bytes(render_triage_shim(interpreter))
-    _make_executable(shim_path)
+    if not skip_triage:
+        shim_path.write_bytes(render_triage_shim(interpreter))
+        _make_executable(shim_path)
 
 
 def uninstall(root: Path) -> None:
@@ -331,7 +391,15 @@ def uninstall(root: Path) -> None:
     `.aramid-chained` original over it would silently destroy that live
     hook. In that case the live foreign hook is left untouched and the
     now-orphaned `.aramid-chained` backup is discarded instead, with a
-    printed notice."""
+    printed notice.
+
+    If the `.aramid-chained` backup itself carries ANOTHER tool's managed
+    marker (a state `install()` now refuses to create, but which can still
+    predate this guard or arise from manual editing): still restore it --
+    discarding it instead would silently break that other tool's live hook
+    -- but print a diagnostic rather than claim a silent clean uninstall,
+    since aramid cannot verify whether its own gate is still reachable
+    through that hook's own internal chain."""
     hdir = hooks_dir(root)
     if not hdir.exists():
         return
@@ -348,6 +416,14 @@ def uninstall(root: Path) -> None:
             continue
 
         if was_ours or not shim_path.exists():
+            foreign_tool = _foreign_managed_tool(chained_path)
+            if foreign_tool is not None:
+                print(f"aramid: uninstall: {hook}: the chained original is "
+                      f"itself managed by '{foreign_tool}' -- restoring it "
+                      f"(discarding it would break '{foreign_tool}'s hook), "
+                      f"but aramid cannot verify its own gate is fully gone "
+                      f"from this hook's chain -- verify manually.",
+                      file=sys.stderr)
             chained_path.replace(shim_path)
             _make_executable(shim_path)
         else:
