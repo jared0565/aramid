@@ -27,6 +27,21 @@ that config -- a hardcoded number would silently drift out of date.
 Secrets (gitleaks) always **BLOCK**. Everything else is severity-tiered:
 security-relevant findings block, quality findings warn.
 
+**Noisy WARN-tier rule (e.g. ruff `S101` on test asserts)?** `aramid.toml`'s
+`block_rules` only demotes/promotes the BLOCK/WARN boundary -- it has nothing
+to say about a rule that was WARN-tier to begin with. `aramid override <id>
+--reason "..."` suppresses one finding at a time (ledger-logged) but doesn't
+scale to a rule that fires on every test file. For that, configure the tool
+itself -- e.g. ruff's own `per-file-ignores`:
+
+```toml
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["S101"]
+```
+
+aramid's own `--extend-select S` flag still respects this; it only adds
+rules to what ruff selects, it does not override the target repo's ignores.
+
 **Slow test suite?** `tests` is BLOCK-tier at pre-push, so a suite that
 overruns the budget blocks every push. Point the gate at a fast subset in
 `aramid.toml` rather than living on `--no-verify` (which disables gitleaks
