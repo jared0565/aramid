@@ -9,6 +9,7 @@ from aramid.hooks import (
     hooks_dir,
     install,
     render_shim,
+    render_triage_shim,
     uninstall,
     win_sh_path,
 )
@@ -293,6 +294,63 @@ def test_install_refuses_to_chain_a_foreign_managed_post_commit_hook(tmp_path, c
     assert (hdir / "post-commit").read_bytes() == other_tool_hook
     assert not (hdir / "post-commit.aramid-chained").exists()
     assert "graphite" in capsys.readouterr().err
+
+
+def test_install_softens_warning_when_a_chained_aramid_shim_survives(tmp_path, capsys):
+    """After a foreign tool RELOCATES aramid's own shim byte-identically
+    (e.g. graphite's `.local` convention: `.git/hooks/pre-commit` ->
+    `.githooks/pre-commit.local`, unchanged) rather than wrapping it, aramid's
+    own gate is still alive -- it just isn't refreshed in place. The stronger
+    "NOT installed ... resolve manually" wording is wrong for that case: there
+    is nothing to resolve. install() must detect the surviving sibling (by
+    marker content, not by hardcoding any other tool's suffix) and soften the
+    message instead of alarming over a fine situation."""
+    r = _repo(tmp_path)
+    hdir = r / ".git" / "hooks"
+    hdir.mkdir(exist_ok=True)
+    other_tool_hook = (
+        b"#!/bin/sh\n# >>> graphite managed >>>\necho graphite-trampoline-ran\n"
+        b"# <<< graphite managed <<<\n"
+    )
+    (hdir / "pre-commit").write_bytes(other_tool_hook)
+    # The byte-identical relocated original -- still aramid's own shim.
+    (hdir / "pre-commit.local").write_bytes(
+        render_shim(Gate.PRE_COMMIT, Path("C:/py/python.exe"))
+    )
+
+    install(r, Path("C:/py/python.exe"))
+
+    assert (hdir / "pre-commit").read_bytes() == other_tool_hook, (
+        "still must not touch the foreign-managed hook itself")
+    err = capsys.readouterr().err
+    assert "graphite" in err
+    assert "pre-commit" in err
+    assert "resolve manually" not in err.lower() and "resolved manually" not in err.lower(), (
+        "a surviving chained shim means there is nothing to manually resolve")
+    assert "pre-commit.local" in err, (
+        "should name the surviving sibling so the operator can confirm it")
+
+
+def test_install_softens_warning_for_post_commit_when_local_shim_survives(tmp_path, capsys):
+    """Same as above for TRIAGE_HOOK (post-commit) -- the one hook graphite's
+    trigger set actually contends for, so this is the case that fires on
+    every real graphite-migrated repo, not just a hypothetical."""
+    r = _repo(tmp_path)
+    hdir = r / ".git" / "hooks"
+    hdir.mkdir(exist_ok=True)
+    other_tool_hook = b"#!/bin/sh\n# >>> graphite managed >>>\necho gt\n# <<< graphite managed <<<\n"
+    (hdir / "post-commit").write_bytes(other_tool_hook)
+    (hdir / "post-commit.local").write_bytes(
+        render_triage_shim(Path("C:/py/python.exe"))
+    )
+
+    install(r, Path("C:/py/python.exe"))
+
+    assert (hdir / "post-commit").read_bytes() == other_tool_hook
+    err = capsys.readouterr().err
+    assert "graphite" in err
+    assert "resolve manually" not in err.lower() and "resolved manually" not in err.lower()
+    assert "post-commit.local" in err
 
 
 def test_install_still_chains_a_genuinely_unmanaged_foreign_hook(tmp_path):

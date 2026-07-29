@@ -303,7 +303,40 @@ def _foreign_managed_tool(path: Path) -> str | None:
     return None if tool == "aramid" else tool
 
 
-def _warn_foreign_managed_conflict(hook: str, foreign_tool: str) -> None:
+def _find_chained_aramid_shim(hdir: Path, hook: str) -> Path | None:
+    """A sibling of `hdir / hook` that still carries aramid's OWN marker --
+    e.g. another tool's byte-identical relocation of aramid's shim under its
+    own suffix convention (graphite's `.local`; a future tool may pick a
+    different one). Detected by marker content, not by hardcoding any other
+    tool's suffix, so this recognizes any such relocation generically.
+    Its existence means aramid's gate is not actually stopped by
+    `install()`'s foreign-managed refusal below -- the OTHER tool's
+    trampoline chains to this file, so aramid's shim keeps running; only
+    `install()`'s own regeneration of the `hook` slot is skipped. Returns
+    None if no such sibling exists, in which case the refusal may be a
+    genuine gap rather than a fail-open one."""
+    if not hdir.is_dir():
+        return None
+    for candidate in hdir.iterdir():
+        if candidate.name == hook or not candidate.name.startswith(hook):
+            continue
+        if candidate.is_file() and _is_aramid_shim(candidate):
+            return candidate
+    return None
+
+
+def _warn_foreign_managed_conflict(
+    hook: str, foreign_tool: str, chained_via: Path | None = None
+) -> None:
+    if chained_via is not None:
+        print(f"aramid: install: {hook}: already managed by '{foreign_tool}' -- "
+              f"refusing to chain another tool's managed hook (chaining it would "
+              f"silently double-run both tools' gates on every {hook}). aramid's "
+              f"own {hook} shim survives at '{chained_via.name}' and still runs "
+              f"via '{foreign_tool}'s chain -- not stale, nothing to resolve; "
+              f"only this slot's regeneration is skipped until '{foreign_tool}' "
+              f"no longer occupies it.", file=sys.stderr)
+        return
     print(f"aramid: install: {hook}: already managed by '{foreign_tool}' -- "
           f"refusing to chain another tool's managed hook (chaining it would "
           f"silently double-run both tools' gates on every {hook}). Left "
@@ -326,7 +359,13 @@ def install(root: Path, interpreter: Path) -> None:
     would double-run both tools' gates, since a managed hook already forwards
     onward itself. `install()` refuses instead: leaves that hook completely
     untouched, skips installing aramid's shim for that one hook, and prints a
-    diagnostic naming the conflict (see `_foreign_managed_tool`)."""
+    diagnostic naming the conflict (see `_foreign_managed_tool`). If the OTHER
+    tool relocated aramid's own shim byte-identically under its own suffix
+    (e.g. graphite's `.local`) rather than wrapping it, that sibling is still
+    aramid's live shim -- `_find_chained_aramid_shim` detects it by marker
+    content (no other tool's suffix is hardcoded) and the diagnostic is
+    softened accordingly, since nothing there actually needs manual
+    resolution."""
     hdir = hooks_dir(root)
     hdir.mkdir(parents=True, exist_ok=True)
 
@@ -338,7 +377,9 @@ def install(root: Path, interpreter: Path) -> None:
         if shim_path.exists() and not _is_aramid_shim(shim_path):
             foreign_tool = _foreign_managed_tool(shim_path)
             if foreign_tool is not None:
-                _warn_foreign_managed_conflict(hook, foreign_tool)
+                _warn_foreign_managed_conflict(
+                    hook, foreign_tool, _find_chained_aramid_shim(hdir, hook)
+                )
                 continue
 
             # A real foreign hook (not ours) occupies this slot -- chain it.
@@ -361,7 +402,9 @@ def install(root: Path, interpreter: Path) -> None:
     if shim_path.exists() and not _is_aramid_shim(shim_path):
         foreign_tool = _foreign_managed_tool(shim_path)
         if foreign_tool is not None:
-            _warn_foreign_managed_conflict(hook, foreign_tool)
+            _warn_foreign_managed_conflict(
+                hook, foreign_tool, _find_chained_aramid_shim(hdir, hook)
+            )
             skip_triage = True
         else:
             # A real foreign hook (not ours) occupies this slot -- chain it.
