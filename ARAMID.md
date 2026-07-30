@@ -42,6 +42,15 @@ itself -- e.g. ruff's own `per-file-ignores`:
 aramid's own `--extend-select S` flag still respects this; it only adds
 rules to what ruff selects, it does not override the target repo's ignores.
 
+**Demoting a BLOCK-tier rule?** Setting `block_rules.<tool>.block` in
+`aramid.toml` demotes those rule ids to WARN for this repo -- an intended
+escape hatch for a noisy BLOCK-tier rule, not a bug. Because the underlying
+merge replaces the list rather than adding to it, an incomplete list (or an
+empty one) silently drops every OTHER packaged BLOCK-tier rule for that tool
+too. aramid prints a stderr notice naming exactly which rule ids were
+dropped whenever this happens -- if you only meant to demote one rule, check
+that notice against `aramid.toml`'s `[block_rules.<tool>]` section.
+
 **Slow test suite?** `tests` is BLOCK-tier at pre-push, so a suite that
 overruns the budget blocks every push. Point the gate at a fast subset in
 `aramid.toml` rather than living on `--no-verify` (which disables gitleaks

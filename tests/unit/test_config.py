@@ -34,6 +34,53 @@ def test_user_and_repo_layers_both_land_and_builtin_ignores_always_present(tmp_p
         assert builtin in cfg.ignore_paths                      # never removable
 
 
+def test_repo_narrowing_block_rules_from_packaged_defaults_is_not_silent(tmp_path, monkeypatch, capsys):
+    """A repo's aramid.toml can legitimately demote a noisy BLOCK-tier rule
+    (block_rules.toml's own header documents this as intended) -- but
+    `_deep_merge` replaces a list-valued leaf wholesale rather than unioning
+    it, so a repo can also clear an ENTIRE tool's block list in one edit,
+    with no error, warning, or ledger trace (independently reproduced by
+    graphite's agent against a live repro, 2026-07-30). That capability
+    stays -- this is a visibility fix, not a floor -- but it must never be
+    silent: an operator pulling a repo with a narrowed aramid.toml should
+    see this in stderr, not discover it after an incident."""
+    monkeypatch.setattr(config, "_user_config_path", lambda: _no_user_config(tmp_path))
+    repo = tmp_path / "repo-narrows-block-rules"
+    repo.mkdir()
+    (repo / "aramid.toml").write_text(
+        '[block_rules.ruff]\nblock = []\n\n[block_rules.semgrep]\nblock = []\n',
+        encoding="utf-8",
+    )
+
+    cfg = config.load_config(repo)
+
+    assert cfg.block_rules["ruff"]["block"] == []       # capability preserved
+    assert cfg.block_rules["semgrep"]["block"] == []
+    err = capsys.readouterr().err
+    assert "block_rules.ruff" in err
+    assert "block_rules.semgrep" in err
+    assert "S102" in err, "must name what was actually removed, not just that something changed"
+
+
+def test_repo_only_adding_block_rules_prints_no_narrowing_warning(tmp_path, monkeypatch, capsys):
+    """Regression guard: promoting (adding) a rule is the normal, desired
+    direction and must not trigger the narrowing notice."""
+    monkeypatch.setattr(config, "_user_config_path", lambda: _no_user_config(tmp_path))
+    repo = tmp_path / "repo-only-adds"
+    repo.mkdir()
+    (repo / "aramid.toml").write_text(
+        '[block_rules.ruff]\n'
+        'block = ["S102", "S105", "S106", "S107", "S608", "S301", "S302", "S110"]\n',
+        encoding="utf-8",
+    )
+
+    cfg = config.load_config(repo)
+
+    assert "S110" in cfg.block_rules["ruff"]["block"]
+    err = capsys.readouterr().err
+    assert "narrowed" not in err.lower()
+
+
 def test_defaults_only_when_no_user_or_repo_config(tmp_path, monkeypatch):
     monkeypatch.setattr(config, "_user_config_path", lambda: _no_user_config(tmp_path))
     repo = tmp_path / "repo2"

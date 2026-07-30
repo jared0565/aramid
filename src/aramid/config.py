@@ -76,6 +76,36 @@ def _deep_merge(base: dict, override: dict) -> dict:
     return result
 
 
+def _warn_if_repo_narrowed_block_rules(before: dict, after: dict) -> None:
+    """A repo's `aramid.toml` legitimately demoting a noisy BLOCK-tier rule is
+    an intended, documented capability (`block_rules.toml`'s own header:
+    "Repos demote noisy entries via aramid.toml"). But `_deep_merge` replaces
+    a list-valued leaf wholesale rather than unioning it, so the SAME
+    mechanism lets a repo silently clear an entire tool's block list in one
+    edit -- no error, warning, or ledger trace (independently reproduced
+    against a live repro, 2026-07-30). This does not stop that; the
+    capability stays. It only stops it from being silent, comparing against
+    `before` (defaults deep-merged with any user-level config) so a
+    pre-existing user-level narrowing doesn't also fire here."""
+    for tool, before_tool in before.items():
+        if not isinstance(before_tool, dict):
+            continue
+        after_tool = after.get(tool, {})
+        if not isinstance(after_tool, dict):
+            after_tool = {}
+        for key, before_value in before_tool.items():
+            if not isinstance(before_value, list):
+                continue
+            after_value = after_tool.get(key, [])
+            removed = [item for item in before_value if item not in after_value]
+            if removed:
+                print(f"aramid: config: aramid.toml narrowed block_rules.{tool}.{key} -- "
+                      f"removed {removed!r} (was {before_value!r}, now {after_value!r}). "
+                      f"This demotes those rules from BLOCK to WARN for this repo; if "
+                      f"unintended, check aramid.toml's [block_rules.{tool}] section.",
+                      file=sys.stderr)
+
+
 def load_config(root: Path) -> Config:
     merged = _read_data_toml("defaults.toml")
     merged["block_rules"] = load_block_rules()
@@ -89,7 +119,9 @@ def load_config(root: Path) -> Config:
     if repo_path.exists():
         repo_toml = _read_toml_file(repo_path)
         repo_schema_version = repo_toml.get("schema_version")
+        pre_repo_block_rules = merged.get("block_rules", {})
         merged = _deep_merge(merged, repo_toml)
+        _warn_if_repo_narrowed_block_rules(pre_repo_block_rules, merged.get("block_rules", {}))
 
     if repo_schema_version is not None and repo_schema_version != CURRENT_SCHEMA_VERSION:
         print(f"aramid: config schema v{repo_schema_version}→v{CURRENT_SCHEMA_VERSION}; "
