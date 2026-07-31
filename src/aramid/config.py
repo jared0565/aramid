@@ -76,34 +76,55 @@ def _deep_merge(base: dict, override: dict) -> dict:
     return result
 
 
-def _warn_if_repo_narrowed_block_rules(before: dict, after: dict) -> None:
+def _enforce_block_rules_floor(floor: dict, merged: dict) -> dict:
     """A repo's `aramid.toml` legitimately demoting a noisy BLOCK-tier rule is
     an intended, documented capability (`block_rules.toml`'s own header:
     "Repos demote noisy entries via aramid.toml"). But `_deep_merge` replaces
     a list-valued leaf wholesale rather than unioning it, so the SAME
-    mechanism lets a repo silently clear an entire tool's block list in one
-    edit -- no error, warning, or ledger trace (independently reproduced
-    against a live repro, 2026-07-30). This does not stop that; the
-    capability stays. It only stops it from being silent, comparing against
-    `before` (defaults deep-merged with any user-level config) so a
-    pre-existing user-level narrowing doesn't also fire here."""
-    for tool, before_tool in before.items():
-        if not isinstance(before_tool, dict):
+    mechanism let a repo silently clear an entire tool's block list in one
+    edit. First fixed (87d302f) as a stderr-only notice; reported again,
+    independently, by Operation Firewall's own coding agent once aramid was
+    actually running as a real gate on their repo -- a notice is not a
+    floor, and their threat model names "a malicious repository" as an
+    actor: an adversarial contributor to the SAME repo, who can also edit
+    or silence stderr, is exactly what a notice does not stop.
+
+    `floor` is the block_rules state AFTER defaults+user-config merge but
+    BEFORE the repo layer touches it -- whatever the operator's own machine
+    already established, including any of THEIR OWN demotions. `merged` is
+    the state after the repo layer's aramid.toml was merged in. Returns
+    `merged` with every entry from `floor` unioned back in: the repo layer
+    may only ADD block-tier rule ids relative to `floor`, never remove one.
+    User-level (`~/.aramid/config.toml`) demotion is deliberately NOT
+    floored here -- it already lives inside `floor` itself, so it is
+    preserved automatically; only the repo layer, the one an outside
+    contributor can commit to, is constrained. Prints a stderr notice
+    naming exactly what a repo's aramid.toml attempted to remove and was
+    restored -- an attempt is still visible even though it can no longer
+    succeed."""
+    enforced = deepcopy(merged)
+    for tool, floor_tool in floor.items():
+        if not isinstance(floor_tool, dict):
             continue
-        after_tool = after.get(tool, {})
-        if not isinstance(after_tool, dict):
-            after_tool = {}
-        for key, before_value in before_tool.items():
-            if not isinstance(before_value, list):
+        merged_tool = enforced.get(tool)
+        if not isinstance(merged_tool, dict):
+            merged_tool = {}
+            enforced[tool] = merged_tool
+        for key, floor_value in floor_tool.items():
+            if not isinstance(floor_value, list):
                 continue
-            after_value = after_tool.get(key, [])
-            removed = [item for item in before_value if item not in after_value]
-            if removed:
+            merged_value = merged_tool.get(key, [])
+            if not isinstance(merged_value, list):
+                merged_value = []
+            missing = [item for item in floor_value if item not in merged_value]
+            if missing:
+                merged_tool[key] = merged_value + missing
                 print(f"aramid: config: aramid.toml narrowed block_rules.{tool}.{key} -- "
-                      f"removed {removed!r} (was {before_value!r}, now {after_value!r}). "
-                      f"This demotes those rules from BLOCK to WARN for this repo; if "
-                      f"unintended, check aramid.toml's [block_rules.{tool}] section.",
+                      f"restored {missing!r} (a repo's own aramid.toml cannot remove a "
+                      f"rule the operator's config already established; demote it in "
+                      f"~/.aramid/config.toml instead if that's genuinely wanted).",
                       file=sys.stderr)
+    return enforced
 
 
 def load_config(root: Path) -> Config:
@@ -121,7 +142,8 @@ def load_config(root: Path) -> Config:
         repo_schema_version = repo_toml.get("schema_version")
         pre_repo_block_rules = merged.get("block_rules", {})
         merged = _deep_merge(merged, repo_toml)
-        _warn_if_repo_narrowed_block_rules(pre_repo_block_rules, merged.get("block_rules", {}))
+        merged["block_rules"] = _enforce_block_rules_floor(
+            pre_repo_block_rules, merged.get("block_rules", {}))
 
     if repo_schema_version is not None and repo_schema_version != CURRENT_SCHEMA_VERSION:
         print(f"aramid: config schema v{repo_schema_version}→v{CURRENT_SCHEMA_VERSION}; "

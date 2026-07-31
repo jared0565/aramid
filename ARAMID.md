@@ -43,13 +43,15 @@ aramid's own `--extend-select S` flag still respects this; it only adds
 rules to what ruff selects, it does not override the target repo's ignores.
 
 **Demoting a BLOCK-tier rule?** Setting `block_rules.<tool>.block` in
-`aramid.toml` demotes those rule ids to WARN for this repo -- an intended
-escape hatch for a noisy BLOCK-tier rule, not a bug. Because the underlying
-merge replaces the list rather than adding to it, an incomplete list (or an
-empty one) silently drops every OTHER packaged BLOCK-tier rule for that tool
-too. aramid prints a stderr notice naming exactly which rule ids were
-dropped whenever this happens -- if you only meant to demote one rule, check
-that notice against `aramid.toml`'s `[block_rules.<tool>]` section.
+`aramid.toml` can only ADD to what your own machine's config (packaged
+defaults plus `~/.aramid/config.toml`) already established -- an incomplete
+or empty list in a repo's `aramid.toml` no longer drops any OTHER rule, and
+aramid prints a stderr notice naming exactly which rule ids it restored when
+this happens. This is deliberate: a repo you clone (or a contributor's PR
+inside one) cannot silently weaken your BLOCK-tier coverage for everyone who
+uses it. To genuinely demote a rule, do it in `~/.aramid/config.toml` on
+your own machine -- that layer is the actual floor, and repo config can no
+longer remove anything from it.
 
 **Slow test suite?** `tests` is BLOCK-tier at pre-push, so a suite that
 overruns the budget blocks every push. Point the gate at a fast subset in

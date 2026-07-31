@@ -34,16 +34,21 @@ def test_user_and_repo_layers_both_land_and_builtin_ignores_always_present(tmp_p
         assert builtin in cfg.ignore_paths                      # never removable
 
 
-def test_repo_narrowing_block_rules_from_packaged_defaults_is_not_silent(tmp_path, monkeypatch, capsys):
+def test_repo_cannot_actually_narrow_block_rules_below_the_floor(tmp_path, monkeypatch, capsys):
     """A repo's aramid.toml can legitimately demote a noisy BLOCK-tier rule
     (block_rules.toml's own header documents this as intended) -- but
     `_deep_merge` replaces a list-valued leaf wholesale rather than unioning
-    it, so a repo can also clear an ENTIRE tool's block list in one edit,
-    with no error, warning, or ledger trace (independently reproduced by
-    graphite's agent against a live repro, 2026-07-30). That capability
-    stays -- this is a visibility fix, not a floor -- but it must never be
-    silent: an operator pulling a repo with a narrowed aramid.toml should
-    see this in stderr, not discover it after an incident."""
+    it, so a repo could also clear an ENTIRE tool's block list in one edit.
+    First fixed (87d302f) as a stderr-only notice; that was correctly
+    reported as insufficient by Operation Firewall's own coding agent once
+    aramid was running as a real gate on their repo: a notice is not a
+    floor, and their threat model explicitly names "a malicious repository"
+    as an actor -- an adversarial contributor to the SAME repo, who can
+    also edit or silence stderr, is exactly what a notice does not stop.
+    Superseding fix: the repo layer can no longer actually remove a rule
+    the operator's own config (defaults + ~/.aramid/config.toml) already
+    established -- it is unioned back in -- while the demote capability
+    itself survives for genuine promotion/demotion the repo DOES control."""
     monkeypatch.setattr(config, "_user_config_path", lambda: _no_user_config(tmp_path))
     repo = tmp_path / "repo-narrows-block-rules"
     repo.mkdir()
@@ -54,12 +59,63 @@ def test_repo_narrowing_block_rules_from_packaged_defaults_is_not_silent(tmp_pat
 
     cfg = config.load_config(repo)
 
-    assert cfg.block_rules["ruff"]["block"] == []       # capability preserved
-    assert cfg.block_rules["semgrep"]["block"] == []
+    assert set(cfg.block_rules["ruff"]["block"]) == {
+        "S102", "S105", "S106", "S107", "S608", "S301", "S302"}, (
+        "the floor must restore every packaged rule the repo tried to drop")
+    assert set(cfg.block_rules["semgrep"]["block"]) == {
+        "owasp-top-ten.*", "*sqli*", "*deserialization*",
+        "*command-injection*", "aramid-regression.block.*"}
     err = capsys.readouterr().err
     assert "block_rules.ruff" in err
     assert "block_rules.semgrep" in err
-    assert "S102" in err, "must name what was actually removed, not just that something changed"
+    assert "S102" in err, "must name what was actually restored, not just that something was attempted"
+
+
+def test_repo_narrowing_cannot_be_forced_through_by_repeated_init(tmp_path, monkeypatch, capsys):
+    """The floor must hold on every load, not just the first -- a repo
+    author retrying with an even more aggressive aramid.toml (or aramid
+    itself re-reading config on a later run) must not eventually wear the
+    floor down."""
+    monkeypatch.setattr(config, "_user_config_path", lambda: _no_user_config(tmp_path))
+    repo = tmp_path / "repo-retries-narrowing"
+    repo.mkdir()
+    (repo / "aramid.toml").write_text('[block_rules.ruff]\nblock = []\n', encoding="utf-8")
+
+    first = config.load_config(repo)
+    capsys.readouterr()
+    second = config.load_config(repo)
+
+    assert set(first.block_rules["ruff"]["block"]) == set(second.block_rules["ruff"]["block"])
+    assert "S102" in second.block_rules["ruff"]["block"]
+
+
+def test_user_level_demotion_is_respected_and_not_re_floored_by_repo_layer(tmp_path, monkeypatch, capsys):
+    """The floor protects the OPERATOR's own config from the repo layer --
+    it must not fight the operator's own choice. A user demoting S102
+    themselves (~/.aramid/config.toml, their own machine, not the
+    "malicious repository" threat this closes) must stay demoted even
+    though the repo's aramid.toml separately (and unrelatedly) narrows a
+    DIFFERENT rule -- restoring S102 here would be the floor overriding the
+    operator instead of protecting them."""
+    user_cfg = tmp_path / "user" / "config.toml"
+    user_cfg.parent.mkdir(parents=True)
+    user_cfg.write_text(
+        '[block_rules.ruff]\nblock = ["S105", "S106", "S107", "S608", "S301", "S302"]\n',
+        encoding="utf-8")  # S102 deliberately dropped -- the operator's own choice
+    monkeypatch.setattr(config, "_user_config_path", lambda: user_cfg)
+
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "aramid.toml").write_text('[block_rules.semgrep]\nblock = []\n', encoding="utf-8")
+
+    cfg = config.load_config(repo)
+
+    assert "S102" not in cfg.block_rules["ruff"]["block"], (
+        "the operator's own user-level demotion must not be re-floored")
+    assert set(cfg.block_rules["semgrep"]["block"]) == {
+        "owasp-top-ten.*", "*sqli*", "*deserialization*",
+        "*command-injection*", "aramid-regression.block.*"}, (
+        "the repo layer's attempted narrowing of a DIFFERENT tool is still floored")
 
 
 def test_repo_only_adding_block_rules_prints_no_narrowing_warning(tmp_path, monkeypatch, capsys):
