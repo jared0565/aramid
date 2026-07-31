@@ -15,7 +15,7 @@ from pathlib import Path
 
 from aramid.detectors import detect_package_manager, detect_stacks, detect_tests
 from aramid.pipeline import GATE_RUNNER_KEYS, _is_applicable
-from aramid.runners import deps, typecheck
+from aramid.runners import clippy, deps, typecheck
 from aramid.runners import tests as tests_runner
 from aramid.runners.base import RunContext
 
@@ -30,7 +30,7 @@ from aramid.runners.base import RunContext
 # derive from a sub-tool's own applicability check alone; it tracks the
 # "tests" runner key's OWN applicability instead.
 RUNNER_TOOL_NAMES = frozenset({
-    "gitleaks", "semgrep", "ruff", "eslint",
+    "gitleaks", "semgrep", "ruff", "eslint", clippy.NAME,
     typecheck.NAME_TSC, typecheck.NAME_MYPY,
     deps.NAME_PIP_AUDIT, deps.NAME_CARGO_AUDIT, "npm", "pnpm", "yarn",
     "pytest", "tests",
@@ -96,7 +96,7 @@ def selected_tool_names(root: Path, cfg) -> set[str]:
 
     names: set[str] = set()
     for key in applicable:
-        if key in ("gitleaks", "semgrep", "ruff", "eslint"):
+        if key in ("gitleaks", "semgrep", "ruff", "eslint", clippy.NAME):
             names.add(key)
         elif key == "typecheck":
             # Both can be added independently of each other -- see the T-8

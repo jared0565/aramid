@@ -37,7 +37,7 @@ from aramid.models import Event, EventType, Finding, Gate, Verdict
 from aramid.normalizer import RawFinding, normalize
 from aramid.pack import RULES_REL_PATH
 from aramid.policy import OverrideRecord
-from aramid.runners import deps, eslint, gitleaks, ruff, semgrep, tests, typecheck
+from aramid.runners import clippy, deps, eslint, gitleaks, ruff, semgrep, tests, typecheck
 from aramid.runners.base import RunContext, RunnerResult, ToolState
 
 # --------------------------------------------------------------- registry ----
@@ -49,6 +49,7 @@ RUNNERS: dict[str, object] = {
     "ruff": ruff,
     "semgrep": semgrep,
     "eslint": eslint,
+    "clippy": clippy,
     "typecheck": typecheck,
     "deps": deps,
     "tests": tests,
@@ -56,10 +57,10 @@ RUNNERS: dict[str, object] = {
 
 GATE_RUNNER_KEYS: dict[Gate, list[str]] = {
     Gate.PRE_COMMIT: ["gitleaks", "ruff"],
-    Gate.PRE_PUSH: ["gitleaks", "semgrep", "eslint", "typecheck", "deps", "tests"],
+    Gate.PRE_PUSH: ["gitleaks", "semgrep", "eslint", "clippy", "typecheck", "deps", "tests"],
     # Gate.ALL isn't specified by the brief's runner-selection table; the
     # comprehensive (pre-push) set is the reasonable default for a full scan.
-    Gate.ALL: ["gitleaks", "semgrep", "eslint", "typecheck", "deps", "tests"],
+    Gate.ALL: ["gitleaks", "semgrep", "eslint", "clippy", "typecheck", "deps", "tests"],
 }
 
 # Tool keys whose degradation (MISSING/CRASHED/TIMEOUT) drives the pre-push
@@ -156,6 +157,8 @@ def _is_applicable(key: str, ctx: RunContext) -> bool:
         return "python" in ctx.stacks
     if key == "eslint":
         return "js" in ctx.stacks
+    if key == "clippy":
+        return "rust" in ctx.stacks
     if key == "typecheck":
         return typecheck.has_tsconfig(ctx.root) or typecheck.has_mypy_config(ctx.root)
     if key == "deps":

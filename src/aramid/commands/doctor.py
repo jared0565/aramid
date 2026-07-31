@@ -38,6 +38,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from aramid import toolpath
+from aramid.runners import clippy as clippy_runner
 from aramid.runners import deps as deps_runner
 
 # T-2: `doctor` also probes the repo's TEST toolchain (`probe_tests` below).
@@ -227,16 +228,30 @@ def probe_deps(root: Path) -> list[ToolStatus]:
     can never fail a gate, and doctor inventing a failure the gate would
     never produce is its own kind of lie. Report, do not block.
     """
-    if not (root / "Cargo.lock").exists():
-        return []
-    resolved = toolpath.resolve(deps_runner.NAME_CARGO_AUDIT)
-    if resolved is None:
-        return [ToolStatus(
-            deps_runner.NAME_CARGO_AUDIT, False,
-            detail="not installed -- Rust dependency advisories are NOT being "
-                   "checked on this repo; `cargo install cargo-audit` to enable "
-                   "(non-blocking: deps is not a BLOCK-tier gate)")]
-    return [ToolStatus(deps_runner.NAME_CARGO_AUDIT, True, detail=str(resolved))]
+    statuses: list[ToolStatus] = []
+    if (root / "Cargo.lock").exists():
+        resolved = toolpath.resolve(deps_runner.NAME_CARGO_AUDIT)
+        statuses.append(
+            ToolStatus(deps_runner.NAME_CARGO_AUDIT, True, detail=str(resolved))
+            if resolved is not None else
+            ToolStatus(
+                deps_runner.NAME_CARGO_AUDIT, False,
+                detail="not installed -- Rust dependency advisories are NOT being "
+                       "checked on this repo; `cargo install cargo-audit` to enable "
+                       "(non-blocking: deps is not a BLOCK-tier gate)"))
+    # clippy keys off Cargo.toml, not Cargo.lock: the runner analyses the
+    # crate, which exists whether or not a lockfile has been generated.
+    if (root / "Cargo.toml").exists():
+        resolved = toolpath.resolve(clippy_runner.CLIPPY_BIN)
+        statuses.append(
+            ToolStatus(clippy_runner.NAME, True, detail=str(resolved))
+            if resolved is not None else
+            ToolStatus(
+                clippy_runner.NAME, False,
+                detail="not installed -- Rust lint is NOT being checked on this "
+                       "repo; `rustup component add clippy` to enable "
+                       "(non-blocking: clippy is not a BLOCK-tier gate)"))
+    return statuses
 
 
 def _tests_section(cfg) -> dict:
