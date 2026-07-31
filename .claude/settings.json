@@ -6,7 +6,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python -m graphite agent-hook pre-tool-use --mode remind"
+            "command": "python -m graphite agent-hook pre-tool-use --mode strict"
           }
         ]
       }
