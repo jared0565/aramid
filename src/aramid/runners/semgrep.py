@@ -40,6 +40,18 @@ VENDORED_RULES_PATH = Path(__file__).resolve().parent.parent / "rules" / "owasp.
 # intended BLOCK). See Task 81b.
 _CANONICAL_RULE_PREFIX = "owasp-top-ten."
 
+# Every namespace the VENDORED ruleset ships. The semgrep tier is rule-id
+# driven -- block_rules.toml blocks "owasp-top-ten.*" wholesale -- so a rule
+# that should NOT block by default has to live under a different namespace.
+# Rust memory-safety lints (transmute, get_unchecked, set_len) are that case:
+# worth surfacing, but legitimate in FFI and perf-critical code, so blocking
+# a push on them by default would be exactly the noisy-BLOCK trap ARAMID.md
+# warns about. An operator promotes them via block_rules if they want that.
+# Each namespace must be listed here or `_canonical_rule_id` leaves the
+# config-path prefix attached, and that path is machine-dependent -- which
+# would make fingerprints, overrides and suppressions differ per checkout.
+VENDORED_RULE_PREFIXES = (_CANONICAL_RULE_PREFIX, "rust-memory-safety.")
+
 # The regression pack (aramid.pack, Task 13/15, spec §5) is a second
 # `--config` file replayed alongside the vendored OWASP ruleset -- its rule
 # ids are namespaced "aramid-regression.<block|warn>.<finding-id[:8]>".
@@ -54,8 +66,8 @@ def _canonical_rule_id(check_id: str) -> str:
     """Strip semgrep's config-path prefix back to the canonical vendored
     rule id (block_rules.toml, and every override/suppression keyed by
     `rule`, is written against the canonical form). Finds the RIGHTMOST
-    occurrence of `_CANONICAL_RULE_PREFIX` (or, failing that,
-    `_PACK_RULE_PREFIX`) and keeps everything from there onward -- every
+    occurrence of any `VENDORED_RULE_PREFIXES` entry (or, failing
+    that, `_PACK_RULE_PREFIX`) and keeps everything from there onward -- every
     vendored/pack rule id starts with one of these, so this recovers the
     exact `id:` even when the repo checkout path itself embeds the literal
     prefix (leftmost `.find` would truncate the id early). Falls
@@ -65,7 +77,7 @@ def _canonical_rule_id(check_id: str) -> str:
     tests/fixtures/semgrep.json) -- there is no vendored-prefix convention
     to strip for those, and returning them unchanged preserves today's
     behavior exactly."""
-    for prefix in (_CANONICAL_RULE_PREFIX, _PACK_RULE_PREFIX):
+    for prefix in (*VENDORED_RULE_PREFIXES, _PACK_RULE_PREFIX):
         idx = check_id.rfind(prefix)
         if idx != -1:
             return check_id[idx:]

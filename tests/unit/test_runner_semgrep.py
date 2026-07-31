@@ -167,3 +167,35 @@ def test_canonical_rule_id_uses_rightmost_prefix_occurrence():
     # the id early -- the REAL canonical id is the rightmost occurrence.
     cid = f"/src/{_CANONICAL_RULE_PREFIX}junk/config/{_CANONICAL_RULE_PREFIX}sqli"
     assert _canonical_rule_id(cid) == f"{_CANONICAL_RULE_PREFIX}sqli"
+
+
+# --- vendored rule namespaces beyond owasp-top-ten --------------------------
+#
+# The semgrep tier is rule-id driven: `block_rules.toml`'s
+# `[semgrep] block = ["owasp-top-ten.*", ...]` means EVERY id under that
+# namespace blocks. Rust memory-safety lints (transmute, get_unchecked,
+# set_len) are worth surfacing but have legitimate uses and must not block a
+# push by default, so they need a namespace outside the block list. That only
+# works if `_canonical_rule_id` also strips the config-path prefix off them --
+# otherwise the id keeps a machine-dependent absolute path, which would make
+# fingerprints, overrides and suppressions differ per checkout.
+
+def test_canonical_rule_id_strips_every_vendored_namespace():
+    from aramid.runners.semgrep import VENDORED_RULE_PREFIXES, _canonical_rule_id
+
+    assert "owasp-top-ten." in VENDORED_RULE_PREFIXES
+    assert "rust-memory-safety." in VENDORED_RULE_PREFIXES
+
+    for prefix in VENDORED_RULE_PREFIXES:
+        live = f"F.Projects.aramid.src.aramid.rules.{prefix}some-rule"
+        assert _canonical_rule_id(live) == f"{prefix}some-rule", (
+            f"{prefix} must normalise, or its findings carry a per-machine id")
+
+
+def test_canonical_rule_id_still_prefers_the_rightmost_occurrence():
+    """Unchanged guarantee: a checkout path that itself embeds a namespace
+    literal must not truncate the real id early."""
+    from aramid.runners.semgrep import _canonical_rule_id
+
+    cid = "/src/rust-memory-safety.junk/config/rust-memory-safety.transmute"
+    assert _canonical_rule_id(cid) == "rust-memory-safety.transmute"

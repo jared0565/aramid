@@ -241,3 +241,115 @@ def test_live_scan_eval_tainted_arg_still_fires(tmp_path, semgrep_path_env):
     eval_untrusted = [f for f in findings if "eval-untrusted-data" in f.rule]
     assert eval_untrusted, findings
     assert all(f.severity_raw == "ERROR" for f in eval_untrusted)
+
+
+# --- Rust security rules ----------------------------------------------------
+#
+# Closes the gap round 16 left explicitly open: clippy gave Rust *lint*
+# coverage, but the vendored ruleset carried 13 rules across javascript,
+# typescript and python and ZERO for Rust, so semgrep scanned Rust code and
+# could never match anything -- independent of `semgrep_block_armed`.
+#
+# Rust's memory safety does not extend to what it hands an interpreter: a
+# shell or a SQL engine parses attacker-controlled text exactly as unsafely
+# as it does from Python. Those two rules are therefore BLOCK-tier under
+# `owasp-top-ten.`, matching the Python/JS rules one-for-one. The
+# memory-safety lints live under `rust-memory-safety.` precisely so they do
+# NOT block by default -- see semgrep.VENDORED_RULE_PREFIXES.
+
+_RUST_CMD_INJECTION_SRC = '''
+use std::process::Command;
+pub fn run(user: &str) {
+    let _ = Command::new("sh").arg("-c").arg(user).output();
+}
+'''
+
+_RUST_CMD_SAFE_SRC = '''
+use std::process::Command;
+pub fn run(user: &str) {
+    let _ = Command::new("sh").arg("-c").arg("ls -la").output();
+    let _ = Command::new("ls").arg(user).output();
+}
+'''
+
+_RUST_UNSAFE_SRC = '''
+pub unsafe fn f(bytes: &[u8], v: &mut Vec<u8>, x: &u64) {
+    let _: &i64 = std::mem::transmute(x);
+    let _ = std::str::from_utf8_unchecked(bytes);
+    let _ = bytes.get_unchecked(99);
+    v.set_len(1024);
+}
+'''
+
+
+def test_ruleset_covers_rust_at_all():
+    """Never skips: the point of the gap was that Rust had no rules, so the
+    minimum bar is checkable without a semgrep binary."""
+    doc = yaml.safe_load(semgrep_runner.VENDORED_RULES_PATH.read_text(encoding="utf-8"))
+    rust_rules = [r for r in doc["rules"] if "rust" in r.get("languages", [])]
+    assert rust_rules, "the vendored ruleset must carry Rust rules"
+
+    from aramid.runners.semgrep import VENDORED_RULE_PREFIXES
+    for rule in rust_rules:
+        assert rule["id"].startswith(VENDORED_RULE_PREFIXES), (
+            f"{rule['id']} is in no vendored namespace, so `_canonical_rule_id` "
+            f"would leave a machine-dependent config path attached to it")
+
+
+def test_rust_memory_safety_rules_are_outside_the_block_namespace():
+    """The semgrep tier is rule-id driven. These lints have legitimate uses
+    in FFI and perf-critical code, so shipping them inside `owasp-top-ten.`
+    would make every `transmute` in a codebase block a push by default."""
+    doc = yaml.safe_load(semgrep_runner.VENDORED_RULES_PATH.read_text(encoding="utf-8"))
+    memory = [r["id"] for r in doc["rules"] if r["id"].startswith("rust-memory-safety.")]
+    assert memory, "expected the Rust memory-safety lints"
+    assert not any(r.startswith("owasp-top-ten.") for r in memory)
+
+
+@pytest.mark.skipif(_SEMGREP_BIN is None, reason=_SKIP_REASON)
+def test_live_scan_rust_command_injection_fires(tmp_path, semgrep_path_env):
+    (tmp_path / "vuln.rs").write_text(_RUST_CMD_INJECTION_SRC, encoding="utf-8")
+    ctx = RunContext(root=tmp_path, files=["vuln.rs"])
+
+    result = semgrep_runner.run(ctx)
+    assert result.state is ToolState.OK, (result.state, result.stderr)
+
+    findings = semgrep_runner.parse(result, ctx)
+    hits = [f for f in findings if "rust-command-injection" in f.rule]
+    assert hits, findings
+    assert all(f.severity_raw == "ERROR" for f in hits)
+
+
+@pytest.mark.skipif(_SEMGREP_BIN is None, reason=_SKIP_REASON)
+def test_live_scan_rust_literal_shell_and_direct_argv_do_not_fire(tmp_path, semgrep_path_env):
+    """An all-literal shell string is not injectable, and passing user data
+    as its own argv entry never reaches a shell parser. Both must stay
+    silent or the rule is unusable noise on real codebases."""
+    (tmp_path / "safe.rs").write_text(_RUST_CMD_SAFE_SRC, encoding="utf-8")
+    ctx = RunContext(root=tmp_path, files=["safe.rs"])
+
+    result = semgrep_runner.run(ctx)
+    assert result.state is ToolState.OK, (result.state, result.stderr)
+    assert [f for f in semgrep_runner.parse(result, ctx)
+            if "rust-command-injection" in f.rule] == []
+
+
+@pytest.mark.skipif(_SEMGREP_BIN is None, reason=_SKIP_REASON)
+def test_live_scan_rust_memory_safety_lints_fire_at_warn_tier(tmp_path, semgrep_path_env):
+    (tmp_path / "unsafe.rs").write_text(_RUST_UNSAFE_SRC, encoding="utf-8")
+    ctx = RunContext(root=tmp_path, files=["unsafe.rs"])
+
+    result = semgrep_runner.run(ctx)
+    assert result.state is ToolState.OK, (result.state, result.stderr)
+
+    findings = semgrep_runner.parse(result, ctx)
+    rules = {f.rule for f in findings}
+    for expected in ("rust-memory-safety.transmute",
+                     "rust-memory-safety.from-utf8-unchecked",
+                     "rust-memory-safety.get-unchecked",
+                     "rust-memory-safety.set-len"):
+        assert expected in rules, (expected, rules)
+    # Canonicalised, not carrying the config path -- otherwise the rule id,
+    # and every fingerprint built from it, differs per machine.
+    assert all(not f.rule.startswith("/") and "aramid" not in f.rule.split(".")[0]
+               for f in findings if f.rule.startswith("rust-memory-safety."))

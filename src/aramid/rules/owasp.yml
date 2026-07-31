@@ -235,3 +235,128 @@ rules:
       - pattern: Fernet("...")
       - pattern: AES.new(b"...", ...)
       - pattern: AES.new("...", ...)
+
+  # --- A03:2021 Injection -- Rust ---------------------------------------------
+  # Rust's memory safety does not extend to what it hands an interpreter: a
+  # shell or a SQL engine parses attacker-controlled text exactly as unsafely
+  # as it does from Python or JS. These mirror the Python/JS injection rules
+  # above one-for-one, and are BLOCK-tier for the same reason they are.
+  - id: owasp-top-ten.a03-injection.rust-command-injection-shell-spawn
+    languages: [rust]
+    severity: ERROR
+    message: >-
+      A shell is spawned with a dynamically-built `-c` argument. The shell
+      parses that string, so any attacker-controlled data in it is command
+      injection. Invoke the target program directly --
+      `Command::new("prog").arg(value)` passes `value` as one argv entry and
+      never reaches a shell parser.
+    metadata:
+      confidence: HIGH
+      cwe: "CWE-78: Improper Neutralization of Special Elements used in an OS Command"
+      owasp: "A03:2021 - Injection"
+    patterns:
+      - pattern-either:
+          - pattern: Command::new("sh").arg("-c").arg($X)
+          - pattern: Command::new("bash").arg("-c").arg($X)
+          - pattern: Command::new("/bin/sh").arg("-c").arg($X)
+          - pattern: Command::new("/bin/bash").arg("-c").arg($X)
+          - pattern: Command::new("cmd").arg("/C").arg($X)
+          - pattern: Command::new("powershell").arg("-Command").arg($X)
+          - pattern: std::process::Command::new("sh").arg("-c").arg($X)
+          - pattern: std::process::Command::new("bash").arg("-c").arg($X)
+      - pattern-not: Command::new("...").arg("...").arg("...")
+
+  - id: owasp-top-ten.a03-injection.rust-sqli-format-string
+    languages: [rust]
+    severity: ERROR
+    message: >-
+      A SQL statement is built with `format!` and handed to a query call.
+      Rust's type system does not sanitise SQL, so interpolated values are
+      injectable. Use bound parameters instead -- sqlx `query("... ?")` with
+      `.bind(value)`, or diesel's typed query builder.
+    metadata:
+      confidence: HIGH
+      cwe: "CWE-89: Improper Neutralization of Special Elements used in an SQL Command"
+      owasp: "A03:2021 - Injection"
+    patterns:
+      - pattern-either:
+          - pattern: sqlx::query(&format!(...))
+          - pattern: sqlx::query(format!(...))
+          - pattern: sqlx::query_as(&format!(...))
+          - pattern: sqlx::query_scalar(&format!(...))
+          - pattern: diesel::sql_query(format!(...))
+          - pattern: diesel::sql_query(&format!(...))
+          - pattern: $CONN.execute(&format!(...), ...)
+          - pattern: $CONN.query(&format!(...), ...)
+          - pattern: $CONN.prepare(&format!(...))
+
+  # --- Rust memory safety (WARN tier -- see VENDORED_RULE_PREFIXES) ------------
+  # Deliberately OUTSIDE the "owasp-top-ten." namespace: block_rules.toml
+  # blocks that namespace wholesale, and every lint below has legitimate uses
+  # in FFI and perf-critical code. They are the closest Rust analogue to
+  # ruff's bandit S-rules -- operations that opt out of the guarantees the
+  # rest of the language provides -- so they are worth surfacing on every
+  # push, and worth an operator's explicit decision before they block one.
+  - id: rust-memory-safety.transmute
+    languages: [rust]
+    severity: WARNING
+    message: >-
+      `transmute` reinterprets bytes as another type with no check that the
+      result is valid for it. An invalid value is instant undefined
+      behaviour, not a runtime error. Prefer a typed conversion (`as`,
+      `From`/`TryFrom`, `to_ne_bytes`, or `bytemuck` for POD casts).
+    metadata:
+      confidence: HIGH
+      cwe: "CWE-704: Incorrect Type Conversion or Cast"
+    patterns:
+      - pattern-either:
+          - pattern: std::mem::transmute(...)
+          - pattern: mem::transmute(...)
+          - pattern: transmute(...)
+
+  - id: rust-memory-safety.from-utf8-unchecked
+    languages: [rust]
+    severity: WARNING
+    message: >-
+      `from_utf8_unchecked` skips UTF-8 validation. If the bytes are not
+      valid UTF-8 the resulting `str` is undefined behaviour, and callers
+      downstream may read out of bounds. Use `std::str::from_utf8` and handle
+      the error unless the invariant is locally proven.
+    metadata:
+      confidence: HIGH
+      cwe: "CWE-119: Improper Restriction of Operations within the Bounds of a Memory Buffer"
+    patterns:
+      - pattern-either:
+          - pattern: std::str::from_utf8_unchecked(...)
+          - pattern: str::from_utf8_unchecked(...)
+          - pattern: String::from_utf8_unchecked(...)
+
+  - id: rust-memory-safety.get-unchecked
+    languages: [rust]
+    severity: WARNING
+    message: >-
+      `get_unchecked`/`get_unchecked_mut` skips bounds checking. An index at
+      or past the length reads or writes out of bounds -- the exact class of
+      bug Rust's indexing exists to prevent. Use `get()` and handle `None`,
+      or normal indexing, unless the bound is locally proven.
+    metadata:
+      confidence: HIGH
+      cwe: "CWE-125: Out-of-bounds Read"
+    patterns:
+      - pattern-either:
+          - pattern: $X.get_unchecked(...)
+          - pattern: $X.get_unchecked_mut(...)
+
+  - id: rust-memory-safety.set-len
+    languages: [rust]
+    severity: WARNING
+    message: >-
+      `Vec::set_len` changes the length without initialising the elements it
+      exposes. Reading the new region observes uninitialised memory, which
+      can leak previously-freed heap contents. Use `resize`, `extend`, or
+      `spare_capacity_mut` with explicit initialisation.
+    metadata:
+      confidence: HIGH
+      cwe: "CWE-908: Use of Uninitialized Resource"
+    patterns:
+      - pattern: $V.set_len(...)
