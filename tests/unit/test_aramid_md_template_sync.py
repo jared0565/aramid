@@ -1,7 +1,15 @@
 """ARAMID.md at the repo root is a TRACKED, rendered artifact of
-`src/aramid/data/ARAMID.md.tmpl`, and nothing regenerates it when the template
-changes -- `aramid init` is the only generator, and it mutates machine state, so
-it is not something anyone runs casually on this repo.
+`src/aramid/data/ARAMID.md.tmpl`, and nothing regenerates it automatically when
+the template changes -- `aramid init` is the only end-to-end generator, and it
+mutates machine state (hooks, gitignore, ledger), so it is not something anyone
+runs casually on this repo.
+
+The sanctioned regeneration is therefore `init._write_aramid_md` on its own,
+which touches nothing but the file -- see REGEN_CMD below, which the failure
+message quotes verbatim. That entry point exists as the safe path precisely
+because the alternative (calling `_render_aramid_md` and hand-restoring the
+date) is what silently rewrote a consumer repo's onboarding date; it now
+preserves that date itself.
 
 It has now drifted silently TWICE (ticket T-11). The detector-fix branch updated
 the template and left ARAMID.md missing a 21-line block, and nobody noticed. The
@@ -20,6 +28,21 @@ from pathlib import Path
 from aramid.commands.init import _render_aramid_md
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
+
+# The one sanctioned way to regenerate ARAMID.md in THIS repo. Quoted in the
+# drift failure below so whoever hits it is handed the safe path instead of
+# inventing one -- inventing one is how the date-rewrite bug happened.
+# `_write_aramid_md` preserves the recorded Onboarded date; `_render_aramid_md`
+# on its own does not, and is not the entry point to use here.
+REGEN_CMD = (
+    'python -c "'
+    "from pathlib import Path; "
+    "from aramid.commands.init import _write_aramid_md; "
+    "from aramid.detectors import detect_stacks, detect_package_manager; "
+    "r=Path('.'); "
+    "_write_aramid_md(r, detect_stacks(r, r), detect_package_manager(r))"
+    '"'
+)
 
 # `_render_aramid_md` stamps __DATE__ with date.today(), but the rendered file's
 # "Onboarded" line records when aramid was onboarded HERE (a fixed past date).
@@ -40,6 +63,14 @@ def _header_value(text: str, label: str) -> str:
 # date would silently rewrite history and still pass. Hence this pin: if it fails,
 # either restore the date or, if aramid was genuinely re-onboarded, change it here
 # deliberately.
+#
+# What this guards, now that `init._write_aramid_md` preserves the date itself:
+# NOT the sanctioned path (REGEN_CMD is safe by construction), but every
+# unsanctioned one -- a `_render_aramid_md` call, a hand-edit, a merge that
+# resolves this line wrongly. It is a second line of defence rather than the
+# only one, which is what it should always have been: a test in THIS repo can
+# only ever guard THIS repo, and the same defect was live in every consumer
+# until `init` was fixed (operation-firewall round 25).
 ONBOARDED_DATE = "2026-07-25"
 
 
@@ -95,7 +126,11 @@ def test_aramid_md_is_in_sync_with_its_template():
                        f"(hand-edited?):\n  " + "\n  ".join(extra[:5]))
         raise AssertionError(
             "ARAMID.md has drifted from src/aramid/data/ARAMID.md.tmpl. "
-            "The template is the source of truth; regenerate the rendered file "
-            "(preserving its Onboarded date) rather than hand-editing one of them."
+            "The template is the source of truth -- regenerate the rendered "
+            "file rather than hand-editing either one, by running this from "
+            f"the repo root:\n\n  {REGEN_CMD}\n\n"
+            "That entry point preserves the recorded Onboarded date; calling "
+            "_render_aramid_md yourself does NOT, and restamping it rewrites a "
+            "historical fact."
             + detail
         )

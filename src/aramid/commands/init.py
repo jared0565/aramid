@@ -27,6 +27,7 @@ refusal paths (non-repo, doctor-gate-fail) rather than special-casing it.
 """
 import dataclasses
 import functools
+import re
 import sys
 import uuid
 from collections import defaultdict, deque
@@ -77,8 +78,60 @@ def _render_aramid_md(stack: set[str], pkg_mgr: str | None) -> str:
             .replace("__DATE__", date.today().isoformat()))
 
 
+# Horizontal-whitespace-only trailing class ([^\S\n], NOT \s), for the reason
+# aramid.commands.arm's own key-rewrite family documents: `\s` matches newlines,
+# so `\s*$` under MULTILINE runs past the end of this line and swallows the
+# blank line separating the header block from the next section -- and `sub`
+# then deletes it. Caught by regenerating ARAMID.md and diffing, not by the
+# date assertions, which were all still green with the separator gone.
+_ONBOARDED_RE = re.compile(r"(?m)^- \*\*Onboarded:\*\* (\d{4}-\d{2}-\d{2})[^\S\n]*$")
+
+
+def _existing_onboarded(path: Path) -> str | None:
+    """The onboarding date already recorded in ARAMID.md, if any.
+
+    "Onboarded" is a HISTORICAL FACT -- the day aramid was first armed in
+    this repo -- but `_render_aramid_md` stamps `date.today()` and
+    ARAMID.md is ALWAYS regenerated, so every later `init` re-run used to
+    overwrite that fact with a build stamp. Silent, and unrecoverable from
+    the file itself once done.
+
+    Found in a consumer repo (operation-firewall interop round 24): a
+    re-run moved its date forward a day, and only the ledger's earliest
+    event could still prove the original. aramid's own repo had pinned its
+    date with a unit test since the same thing happened here twice -- but a
+    test in THIS repo guards only this repo, which is the local-workaround
+    trap: it removed the symptom that would have driven the fix while every
+    consumer stayed exposed.
+
+    Returns None when there is no file, no parseable date, or the file was
+    hand-mangled -- in all of which there is no history to preserve and
+    today is the honest answer.
+
+    A GENUINE re-onboarding still gets a fresh date with no extra flag:
+    `aramid uninstall` removes ARAMID.md, so uninstall-then-init takes the
+    no-file branch above. Preservation therefore applies only to re-running
+    `init` on a repo that is still armed, which is the case that was
+    rewriting history.
+    """
+    try:
+        text = path.read_text(encoding="utf-8")
+    except OSError:
+        return None
+    m = _ONBOARDED_RE.search(text)
+    return m.group(1) if m else None
+
+
 def _write_aramid_md(root: Path, stack: set[str], pkg_mgr: str | None) -> None:
-    (root / "ARAMID.md").write_text(_render_aramid_md(stack, pkg_mgr), encoding="utf-8")
+    path = root / "ARAMID.md"
+    rendered = _render_aramid_md(stack, pkg_mgr)
+    # Regeneration stays wholesale (hand-edits to an aramid-owned file are
+    # still discarded, as the docstring at the top of this module promises);
+    # only the recorded onboarding date survives it.
+    previous = _existing_onboarded(path)
+    if previous is not None:
+        rendered = _ONBOARDED_RE.sub(f"- **Onboarded:** {previous}", rendered, count=1)
+    path.write_text(rendered, encoding="utf-8")
 
 
 # --------------------------------------------------------------- gitignore ---

@@ -450,3 +450,106 @@ def test_init_installs_hooks_on_a_configured_but_unenforced_repo(tmp_path, monke
     assert rc != 3, "init refused on the very state it exists to fix"
     assert (hooks.hooks_dir(r) / "pre-commit").exists()
     assert (hooks.hooks_dir(r) / "pre-push").exists()
+
+
+# --- onboarding date is a historical fact, not a build stamp ----------------
+
+def _onboarded(root: Path) -> str:
+    import re
+    m = re.search(r"^- \*\*Onboarded:\*\* (.+)$",
+                  (root / "ARAMID.md").read_text(encoding="utf-8"), re.M)
+    assert m is not None, "ARAMID.md has no Onboarded line"
+    return m.group(1).strip()
+
+
+def test_reinit_preserves_the_original_onboarding_date(tmp_path, monkeypatch):
+    """`_render_aramid_md` stamps `date.today()`, and ARAMID.md is ALWAYS
+    regenerated -- so every later `init` re-run silently overwrote a
+    historical fact with a build stamp.
+
+    Found in a consumer repo (operation-firewall), where a re-run moved
+    "Onboarded" from 2026-07-30 to 2026-07-31; the ledger's earliest event
+    proved the original right. aramid's own repo had been pinning its date
+    with a unit test since it happened here twice -- but that test guards
+    THIS repo only, so every consumer stayed exposed. Fixing it in `init`
+    is the fix; that test becomes a second line of defence rather than the
+    only one.
+
+    Simulated by recording a past date and re-running, which is exactly the
+    state a repo onboarded on any earlier day is in.
+    """
+    monkeypatch.setattr(doctor, "probe_toolchain", _fake_present)
+    r = _repo(tmp_path)
+    assert init.cmd_init(r) == 0
+
+    md = r / "ARAMID.md"
+    md.write_text(md.read_text(encoding="utf-8").replace(
+        f"- **Onboarded:** {_onboarded(r)}", "- **Onboarded:** 2026-07-30"),
+        encoding="utf-8")
+
+    assert init.cmd_init(r) == 0
+
+    assert _onboarded(r) == "2026-07-30"
+    # ...and the file is still genuinely regenerated, not skipped.
+    assert "## What aramid checks" in md.read_text(encoding="utf-8")
+
+
+def test_first_init_stamps_today(tmp_path, monkeypatch):
+    """The other side: with no ARAMID.md there is no history to preserve, so
+    today IS the onboarding date. Without this, 'preserve' could be
+    implemented as 'never write a date at all' and still pass above."""
+    from datetime import date
+
+    monkeypatch.setattr(doctor, "probe_toolchain", _fake_present)
+    r = _repo(tmp_path)
+    assert init.cmd_init(r) == 0
+
+    assert _onboarded(r) == date.today().isoformat()
+
+
+def test_reinit_over_an_unparseable_aramid_md_falls_back_to_today(tmp_path, monkeypatch):
+    """A hand-mangled ARAMID.md carries no date to preserve. Falling back to
+    today is the only option, and it must not crash -- the existing
+    idempotency test overwrites ARAMID.md with prose for exactly this
+    reason."""
+    from datetime import date
+
+    monkeypatch.setattr(doctor, "probe_toolchain", _fake_present)
+    r = _repo(tmp_path)
+    assert init.cmd_init(r) == 0
+    (r / "ARAMID.md").write_text("stale hand-written notes\n", encoding="utf-8")
+
+    assert init.cmd_init(r) == 0
+    assert _onboarded(r) == date.today().isoformat()
+
+
+def test_preserving_the_date_changes_nothing_else(tmp_path, monkeypatch):
+    r"""The date substitution must rewrite the date and NOTHING else.
+
+    Regression guard with a specific history: the first version of
+    `_ONBOARDED_RE` ended `\s*$`, and `\s` matches newlines -- so under
+    MULTILINE it ran past the end of its own line and `sub` deleted the blank
+    line separating the header block from `## What aramid checks`. Every
+    date-value assertion above stayed green while the file was quietly losing
+    a line, which is why this asserts the SHAPE rather than the date.
+
+    `aramid.commands.arm`'s key-rewrite family documents the same trap and
+    solves it the same way ([^\S\n] instead of \s).
+    """
+    monkeypatch.setattr(doctor, "probe_toolchain", _fake_present)
+    r = _repo(tmp_path)
+    assert init.cmd_init(r) == 0
+
+    md = r / "ARAMID.md"
+    original = md.read_text(encoding="utf-8")
+    md.write_text(original.replace(f"- **Onboarded:** {_onboarded(r)}",
+                                   "- **Onboarded:** 2026-07-30"), encoding="utf-8")
+    assert init.cmd_init(r) == 0
+
+    before, after = original.splitlines(), md.read_text(encoding="utf-8").splitlines()
+    assert len(before) == len(after), (
+        f"line count changed ({len(before)} -> {len(after)}): the substitution "
+        "consumed something beyond its own line")
+    differing = [(a, b) for a, b in zip(before, after) if a != b]
+    assert len(differing) == 1, f"expected only the date line to change, got {differing}"
+    assert differing[0][1] == "- **Onboarded:** 2026-07-30"
