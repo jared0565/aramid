@@ -553,3 +553,60 @@ def test_preserving_the_date_changes_nothing_else(tmp_path, monkeypatch):
     differing = [(a, b) for a, b in zip(before, after) if a != b]
     assert len(differing) == 1, f"expected only the date line to change, got {differing}"
     assert differing[0][1] == "- **Onboarded:** 2026-07-30"
+
+
+# --- unrooted stacks: onboarding a repo whose gates cannot reach its code ---
+
+def test_init_warns_when_a_stack_lives_below_the_root(tmp_path, monkeypatch, capsys):
+    """Onboarding is where this matters most. detect_stacks keys "rust" off
+    a ROOT Cargo.toml, so a repo whose crate is in `backend/` is onboarded
+    with no rust stack at all -- ARAMID.md records that, aramid.toml is
+    written from it, and every subsequent run is silently clean for Rust.
+    The operator is standing right here when it happens; say so now rather
+    than only on stderr of some later CI run nobody reads."""
+    monkeypatch.setattr(doctor, "probe_toolchain", _fake_present)
+    _no_user_config(tmp_path, monkeypatch)
+    r = _repo(tmp_path)
+    crate = r / "backend"
+    crate.mkdir()
+    (crate / "Cargo.toml").write_text("[package]\nname = 'svc'\n", encoding="utf-8")
+
+    rc = init.cmd_init(r)
+
+    assert rc == 0                      # advisory only -- never blocks onboarding
+    err = capsys.readouterr().err
+    assert "backend/" in err
+    assert "clippy, cargo-audit" in err
+
+
+def test_init_is_quiet_for_an_ordinary_rooted_repo(tmp_path, monkeypatch, capsys):
+    """Control: onboarding a plain Python repo must not emit this."""
+    monkeypatch.setattr(doctor, "probe_toolchain", _fake_present)
+    _no_user_config(tmp_path, monkeypatch)
+    r = _repo(tmp_path)
+
+    assert init.cmd_init(r) == 0
+    assert "are NOT running for this repo" not in capsys.readouterr().err
+
+
+def test_reinit_still_warns_when_a_stack_lives_below_the_root(tmp_path, monkeypatch, capsys):
+    """The case transitive coverage misses. init only calls run_gate when no
+    baseline exists (step 7's `else`), so on a RE-init the notice printed by
+    run_gate never fires -- and re-init is exactly when this is most likely
+    to be new information, because the crate was probably added after the
+    repo was first onboarded. The warning has to come from init itself."""
+    monkeypatch.setattr(doctor, "probe_toolchain", _fake_present)
+    _no_user_config(tmp_path, monkeypatch)
+    r = _repo(tmp_path)
+    assert init.cmd_init(r) == 0                    # onboard while still pure Python
+    crate = r / "backend"
+    crate.mkdir()
+    (crate / "Cargo.toml").write_text("[package]\nname = 'svc'\n", encoding="utf-8")
+    capsys.readouterr()                             # discard the first init's output
+
+    rc = init.cmd_init(r)
+
+    assert rc == 0
+    out = capsys.readouterr()
+    assert "baseline already exists" in out.out      # sanity: run_gate really was skipped
+    assert "backend/" in out.err

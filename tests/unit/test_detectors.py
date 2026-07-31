@@ -313,3 +313,111 @@ def test_uppercase_py_suffix_not_detected_by_stack_walk(tmp_path):
     possible source of "python"."""
     (tmp_path / "BAR.PY").write_text("# uppercase suffix, not matched by design\n")
     assert "python" not in detectors.detect_stacks(tmp_path, tmp_path)
+
+
+# --- unrooted stacks: code aramid can see but structurally cannot gate ------
+#
+# detect_stacks gates "rust" on a ROOT Cargo.toml and "js" on a ROOT
+# package.json (python alone has a walk fallback). A repo whose Rust crate
+# lives in a subdirectory therefore reports no rust stack at all, so clippy
+# and cargo-audit are never selected -- zero Rust gating, reported
+# identically to a repo that has no Rust in it. These cover the detector
+# that makes that state *nameable*; the notice built on it lives in
+# test_pipeline / test_init.
+#
+# Deliberately NOT fixed by giving rust/js the walk fallback python has:
+# cargo/npm run with cwd=root, so selecting them without a root manifest
+# converts an ABSENT gate into a BROKEN one, which is strictly worse.
+
+
+def test_unrooted_rust_crate_is_reported(tmp_path):
+    """A nested Cargo.toml with no root counterpart is a real standalone
+    crate -- it cannot be a workspace member, because a workspace requires
+    the very root manifest whose absence puts us here."""
+    crate = tmp_path / "backend"
+    crate.mkdir()
+    (crate / "Cargo.toml").write_text("[package]\nname = 'svc'\n")
+    assert "rust" not in detectors.detect_stacks(tmp_path, tmp_path)
+    assert detectors.detect_unrooted_stacks(tmp_path) == {"rust": ["backend"]}
+
+
+def test_cargo_workspace_is_not_unrooted(tmp_path):
+    """The OF shape: root manifest + crates/*/Cargo.toml. The stack is
+    detected and gated normally, so nothing here is unrooted -- this is the
+    control that stops the check firing on every ordinary workspace."""
+    (tmp_path / "Cargo.toml").write_text("[workspace]\nmembers = ['crates/a']\n")
+    member = tmp_path / "crates" / "a"
+    member.mkdir(parents=True)
+    (member / "Cargo.toml").write_text("[package]\nname = 'a'\n")
+    assert "rust" in detectors.detect_stacks(tmp_path, tmp_path)
+    assert detectors.detect_unrooted_stacks(tmp_path) == {}
+
+
+def test_unrooted_js_needs_a_lockfile_beside_it(tmp_path):
+    """A bare nested package.json is NOT enough. A docs site, a widget, or
+    a fixture legitimately carries one that nobody wants npm-audited, and
+    telling an operator they are missing JS coverage there is the same
+    false-positive class as aramid running pytest on a TS repo. Require the
+    lockfile that proves a real installed project -- the same signal
+    detect_package_manager and runners/tests.py's C1 gate already use."""
+    site = tmp_path / "docs"
+    site.mkdir()
+    (site / "package.json").write_text('{"name":"docs"}')
+    assert detectors.detect_unrooted_stacks(tmp_path) == {}
+    (site / "package-lock.json").write_text("{}")
+    assert detectors.detect_unrooted_stacks(tmp_path) == {"js": ["docs"]}
+
+
+def test_unrooted_scan_skips_vendored_and_dot_dirs(tmp_path):
+    """Shares _iter_files' pruning, so a vendored manifest under
+    node_modules/ cannot manufacture a phantom ungated stack."""
+    vendored = tmp_path / "node_modules" / "left-pad"
+    vendored.mkdir(parents=True)
+    (vendored / "package.json").write_text('{"name":"left-pad"}')
+    (vendored / "package-lock.json").write_text("{}")
+    buried = tmp_path / ".cache" / "crate"
+    buried.mkdir(parents=True)
+    (buried / "Cargo.toml").write_text("[package]\nname = 'x'\n")
+    assert detectors.detect_unrooted_stacks(tmp_path) == {}
+
+
+def test_unrooted_both_stacks_and_multiple_dirs_sorted(tmp_path):
+    for name in ("svc-b", "svc-a"):
+        d = tmp_path / name
+        d.mkdir()
+        (d / "Cargo.toml").write_text("[package]\nname = 'x'\n")
+    web = tmp_path / "web"
+    web.mkdir()
+    (web / "package.json").write_text('{"name":"w"}')
+    (web / "yarn.lock").write_text("")
+    assert detectors.detect_unrooted_stacks(tmp_path) == {
+        "js": ["web"], "rust": ["svc-a", "svc-b"]}
+
+
+def test_aramid_own_repo_has_no_unrooted_stacks():
+    """Guards the notice against firing on every run of aramid's own gate."""
+    assert detectors.detect_unrooted_stacks(REPO_ROOT) == {}
+
+
+def test_every_tool_named_in_a_notice_is_a_real_runner():
+    """The notice tells an operator which gates are not covering them, so a
+    name that doesn't exist sends them looking for a tool aramid has never
+    had. This caught exactly that: the js entry originally read "npm-audit",
+    which is not a runner -- the dependency audit registers under the
+    package manager's own name (npm/pnpm/yarn).
+
+    detectors.py cannot import toolset (it is the bottom of the layering,
+    which is what lets pipeline.py and commands/init.py share this text
+    without a cycle), so the registry cross-check has to live out here."""
+    from aramid.toolset import RUNNER_TOOL_NAMES
+
+    for stack, (tools, _remedy) in detectors._ROOT_GATED_HELP.items():
+        named = {t for part in tools.split(",") for t in part.strip().split("/")}
+        unknown = named - set(RUNNER_TOOL_NAMES)
+        assert not unknown, f"{stack} notice names non-existent runner(s): {unknown}"
+
+
+def test_every_root_gated_stack_has_help_text():
+    """A stack added to one table and not the other would KeyError inside
+    the notice loop -- i.e. crash the gate, from a detector."""
+    assert set(detectors._ROOT_GATED_STACKS) == set(detectors._ROOT_GATED_HELP)

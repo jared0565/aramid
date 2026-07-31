@@ -1893,3 +1893,39 @@ def test_new_cargo_audit_warning_does_not_block_the_push(tmp_path, monkeypatch):
     assert found[0].verdict is Verdict.WARN     # NOT escalated by the ratchet
     assert result.exit_code == 0                # ...so the push survives
     ledger.close()
+
+
+# ---------------------- unrooted stacks: gates that structurally cannot run --
+
+def test_run_gate_prints_the_unrooted_stack_notice(tmp_path, monkeypatch, capsys):
+    """A subdirectory crate with no root Cargo.toml selects neither clippy
+    nor cargo-audit, so the run is clean for a reason indistinguishable from
+    "no Rust here". run_gate has to say so on stderr, same as it does for a
+    neutered [tests] gate."""
+    root = _repo(tmp_path)
+    crate = root / "backend"
+    crate.mkdir()
+    (crate / "Cargo.toml").write_text("[package]\nname = 'svc'\n", encoding="utf-8")
+    cfg = _cfg(root, tmp_path, monkeypatch)
+    ledger = _ledger(tmp_path)
+
+    pipeline.run_gate(root, Gate.PRE_PUSH, "range", cfg, ledger, run_id="run-unroot")
+
+    err = capsys.readouterr().err
+    assert "backend/" in err
+    assert "are NOT running for this repo" in err
+    ledger.close()
+
+
+def test_run_gate_stays_quiet_when_every_stack_is_rooted(tmp_path, monkeypatch, capsys):
+    """Control: the notice must not fire on an ordinary repo, or it becomes
+    noise every operator learns to scroll past."""
+    root = _repo(tmp_path)
+    (root / "Cargo.toml").write_text("[workspace]\nmembers = []\n", encoding="utf-8")
+    cfg = _cfg(root, tmp_path, monkeypatch)
+    ledger = _ledger(tmp_path)
+
+    pipeline.run_gate(root, Gate.PRE_PUSH, "range", cfg, ledger, run_id="run-rooted")
+
+    assert "are NOT running for this repo" not in capsys.readouterr().err
+    ledger.close()

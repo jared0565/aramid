@@ -30,7 +30,8 @@ from typing import Callable
 from aramid import config as config_mod
 from aramid import gitutil, mutation_gate, mutation_score_gate, policy, red_proof, redact, tdd
 from aramid import review as review_mod
-from aramid.detectors import detect_package_manager, detect_stacks, detect_tests
+from aramid.detectors import (detect_package_manager, detect_stacks, detect_tests,
+                              unrooted_stack_notices)
 from aramid.fingerprint import normalize_path
 from aramid.ledger import Ledger
 from aramid.models import Event, EventType, Finding, Gate, Verdict
@@ -480,7 +481,13 @@ def run_gate(root: Path, gate: Gate, mode: str, cfg: config_mod.Config, ledger: 
     selected = _select_runners(gate, ctx)
 
     # 3. run concurrently under the gate's wall-clock budget.
-    for notice in _tests_config_notices(gate, ctx, budget_s):
+    # Both notice sources answer the same question -- "is this gate reporting
+    # nothing because there is nothing, or because it never ran?" -- so they
+    # print together, before any runner does. unrooted_stack_notices walks,
+    # and does so AFTER gate_deadline is captured for the same single-origin
+    # reason detect_tests does: the walk must count against the budget.
+    for notice in (_tests_config_notices(gate, ctx, budget_s)
+                   + unrooted_stack_notices(root)):
         print(notice, file=sys.stderr)
     results = _run_selected(selected, ctx, budget_s)
     flat_results = _flatten(results)

@@ -117,6 +117,107 @@ def detect_tests(root: Path) -> set[str]:
             pass
     return out
 
+# Stacks that are gated ONLY by a root marker file, mapped to that marker
+# and to the sibling files (if any) required to believe a nested copy is a
+# real project. Python is deliberately absent: it alone has a walk fallback
+# in detect_stacks, so it cannot end up in the state this table describes.
+#
+# rust needs no corroborating file -- a nested Cargo.toml with no root
+# manifest CANNOT be a workspace member, because a workspace is declared by
+# the very root manifest whose absence puts us here. It is a standalone
+# crate every time.
+#
+# js does, and this asymmetry is the whole point. A bare nested
+# package.json is weak evidence: a docs site, a widget, or a test fixture
+# legitimately carries one that nobody wants npm-audited, and telling an
+# operator they have missing JS coverage there is the same false-positive
+# class as running pytest against a TS repo (the bug _EXCLUDED_DIRS above
+# exists to fix). A lockfile beside it is the "real installed project"
+# signal detect_package_manager and runners/tests.py's C1 gate already use.
+_ROOT_GATED_STACKS: dict[str, tuple[str, tuple[str, ...]]] = {
+    "rust": ("Cargo.toml", ()),
+    "js": ("package.json", ("package-lock.json", "pnpm-lock.yaml", "yarn.lock")),
+}
+
+# (tool list, remedy) per stack. Named here rather than derived from the
+# runner registry: detectors.py imports nothing from aramid (it is the bottom
+# of the layering, which is why both pipeline.py and commands/init.py can
+# share this text without a cycle), and these are display strings, not
+# dispatch keys.
+#
+# The remedies differ because only one of them is honest advice. A root
+# `[workspace]` manifest is the idiomatic way to own several crates, so
+# suggesting it to a Rust operator costs them nothing they wouldn't want
+# anyway. There is no equivalent for JS -- nobody should add a root
+# package.json merely to satisfy a linter -- so that side only offers the
+# remedy that is actually reasonable.
+_ROOT_GATED_HELP = {
+    "rust": ("clippy, cargo-audit",
+             "Add a root Cargo.toml declaring a [workspace] over these "
+             "crates, or run aramid from that subdirectory."),
+    "js": ("eslint, npm/pnpm/yarn",
+           "Run aramid from that subdirectory (onboard it as its own repo "
+           "with `aramid init <dir>`)."),
+}
+
+_MAX_DIRS_SHOWN = 3
+
+
+def detect_unrooted_stacks(root: Path) -> dict[str, list[str]]:
+    """Stacks whose marker manifest exists BELOW `root` but not AT it --
+    i.e. code aramid can see but structurally cannot gate.
+
+    detect_stacks keys "rust" and "js" off a ROOT manifest, so a repo whose
+    crate lives in `backend/` reports no rust stack, selects neither clippy
+    nor cargo-audit, and produces a clean run indistinguishable from a repo
+    with no Rust in it. That is the failure class this engine exists to
+    prevent, so the state at least has to be nameable.
+
+    Returns `{stack: [posix relative dirs]}`, sorted, empty when there is
+    nothing to say. Costs one walk, and only when a root marker is actually
+    missing -- a repo whose stacks are all rooted (the common case, and
+    every Cargo workspace) short-circuits before `_iter_files` is touched.
+    """
+    wanted = {name: spec for name, spec in _ROOT_GATED_STACKS.items()
+              if not (root / spec[0]).exists()}
+    if not wanted:
+        return {}
+    by_marker = {spec[0]: (name, spec[1]) for name, spec in wanted.items()}
+    found: dict[str, set[str]] = {}
+    # Shares _iter_files, so node_modules/ and dot-directories are pruned --
+    # a vendored manifest must never manufacture a phantom ungated stack.
+    for p in _iter_files(root):
+        entry = by_marker.get(p.name)
+        if entry is None:
+            continue
+        name, required = entry
+        if required and not any((p.parent / lock).exists() for lock in required):
+            continue
+        found.setdefault(name, set()).add(p.parent.relative_to(root).as_posix())
+    return {name: sorted(dirs) for name, dirs in sorted(found.items())}
+
+
+def unrooted_stack_notices(root: Path) -> list[str]:
+    """One operator-facing line per ungated stack. Phrased as what aramid is
+    NOT doing, never as an accusation that the layout is wrong -- a
+    subdirectory crate is a perfectly ordinary way to organize a repo, and
+    the actionable fact is simply that these gates are not covering it."""
+    notices = []
+    for stack, dirs in detect_unrooted_stacks(root).items():
+        shown = ", ".join(f"{d}/" for d in dirs[:_MAX_DIRS_SHOWN])
+        if len(dirs) > _MAX_DIRS_SHOWN:
+            shown += f" (+{len(dirs) - _MAX_DIRS_SHOWN} more)"
+        marker = _ROOT_GATED_STACKS[stack][0]
+        tools, remedy = _ROOT_GATED_HELP[stack]
+        notices.append(
+            f"aramid: {stack}: found {marker} under {shown} but none at the "
+            f"repository root -- aramid's {stack} gates ({tools}) are NOT "
+            f"running for this repo, because they execute from the root. A "
+            f"clean {stack} result here means 'not checked', not 'no "
+            f"findings'. {remedy}")
+    return notices
+
+
 def nested_git_dirs(root: Path) -> list[Path]:
     return [p.parent for p in root.rglob(".git")
             if p.parent.resolve() != root.resolve() and "node_modules" not in p.parts]

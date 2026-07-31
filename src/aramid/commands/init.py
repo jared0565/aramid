@@ -40,7 +40,8 @@ from aramid import config as config_mod
 from aramid import gitutil, hooks, policy, redact
 from aramid.commands import doctor as doctor_mod
 from aramid.commands.doctor import cmd_doctor
-from aramid.detectors import detect_package_manager, detect_stacks, nested_git_dirs
+from aramid.detectors import (detect_package_manager, detect_stacks, nested_git_dirs,
+                              unrooted_stack_notices)
 from aramid.ledger import Ledger
 from aramid.models import Gate
 from aramid.normalizer import normalize
@@ -373,6 +374,17 @@ def _init_one(target: Path) -> int:
     if extra_ignores:
         print(f"  nested repos excl: {', '.join(extra_ignores)}")
     print(f"  stack:             {', '.join(sorted(stack)) or 'unknown'}")
+    # Printed from init itself, NOT left to the run_gate above: step 7 only
+    # calls run_gate when no baseline exists, so on a re-init the notice
+    # run_gate emits never fires -- and re-init is precisely when this tends
+    # to be new information, because the subdirectory crate was usually added
+    # after the repo was first onboarded. Sits against the `stack:` line it
+    # qualifies: that line is what the operator reads, and ARAMID.md and
+    # aramid.toml were both just written from the same incomplete set.
+    # A fresh init therefore says this twice (once during the baseline gate);
+    # accepted, in exchange for a single shared string that cannot drift.
+    for notice in unrooted_stack_notices(root):
+        print(notice, file=sys.stderr)
     print(f"  hooks armed:       {'yes' if shim_ok else 'NO -- see warning above'}")
     print(f"  baseline findings: {baseline_count}")
     print(f"  historical secrets:{historical_count}")
