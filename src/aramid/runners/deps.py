@@ -432,16 +432,56 @@ def _cargo_shape_recognized(raw: str) -> bool:
     return isinstance(vulns, dict) and isinstance(vulns.get("list"), list)
 
 
-# Many RUSTSEC advisories carry no CVSS score at all (`cvss: null`), only
-# informational categories -- there is no reliable simple severity string to
-# parse, the same situation pip-audit's own JSON is in (see module
-# docstring). Same choice as pip-audit: a conservative constant rather than
-# false confidence from an uncertain/absent field. `deps.block_severity` in
-# aramid.toml can raise the effective threshold once this is verified
-# against real cargo-audit output; "medium" (rather than pip-audit's "low")
-# reflects that a RUSTSEC id is already a curated, confirmed advisory, not a
-# broad unconfirmed ecosystem scan hit.
+# Fallback severity for an advisory with no usable CVSS vector. "medium"
+# (rather than pip-audit's "low") reflects that a RUSTSEC id is already a
+# curated, confirmed advisory, not a broad unconfirmed scan hit. This is also
+# the FLOOR: `_cvss_severity` never returns anything below it, so parsing a
+# vector can only raise the severity, never quietly lower it.
+#
+# This constant used to be applied unconditionally, on the stated premise
+# that "many RUSTSEC advisories carry no CVSS score at all". That premise was
+# falsified the first time real `cargo audit --json` output was captured
+# (2026-07-31): both advisories in `tests/fixtures/cargo-audit-cvss.json`
+# carry full CVSS v3.1 vectors. The bug that hid behind it was not cosmetic
+# -- `deps.block_severity` defaults to "critical", so a flat "medium" meant a
+# network-reachable, no-privileges-required total-compromise advisory
+# (RUSTSEC-2021-0003, AV:N/AC:L/PR:N/UI:N/C:H/I:H/A:H) was reported as a WARN
+# and could never block a push, while the equivalent npm advisory does.
 _CARGO_AUDIT_SEVERITY_RAW = "medium"
+
+# CVSS v3.1 metric bands -> the five severity names policy._SEVERITY_ALIASES
+# accepts. Deliberately NOT a base-score calculation: the real formula is
+# exploitability/impact sub-scores with specific rounding, there is no oracle
+# for it in this repo, and a subtly wrong score is worse than a coarse band
+# because it looks authoritative. This reads only the metrics that decide the
+# band -- impact (C/I/A), reachability (AV) and friction (AC/PR/UI) -- plus
+# scope (S), where a changed scope escalates because CVSS treats it as
+# breaking out of the vulnerable component.
+def _cvss_severity(vector):
+    """Band a CVSS v3.1 vector string, or None when there is nothing usable
+    to band (absent, non-string, non-v3, or no High impact metric). Returning
+    None means "fall back to the constant" -- never a downgrade. Verified
+    against the only two real vectors available: the smallvec one bands
+    critical, the time one (local, availability-only) does not."""
+    if not isinstance(vector, str) or not vector.startswith("CVSS:3"):
+        return None
+    metrics = {}
+    for part in vector.split("/")[1:]:
+        key, _, value = part.partition(":")
+        if value:
+            metrics[key] = value
+    high = sum(1 for m in ("C", "I", "A") if metrics.get(m) == "H")
+    if high == 0:
+        # Only Low/None impacts: nothing here justifies exceeding the floor.
+        return None
+    reachable = metrics.get("AV") in ("N", "A")
+    unimpeded = (metrics.get("AC") == "L" and metrics.get("PR") == "N"
+                 and metrics.get("UI") == "N")
+    if reachable and unimpeded:
+        if high >= 2 or metrics.get("S") == "C":
+            return "critical"
+        return "high"
+    return "medium"
 
 
 def parse_cargo(result: RunnerResult, ctx) -> list[RawFinding]:
@@ -451,6 +491,12 @@ def parse_cargo(result: RunnerResult, ctx) -> list[RawFinding]:
         return [_shape_drift_finding(NAME_CARGO_AUDIT)]
     data = json.loads(result.raw or "{}")
     findings = []
+    # Only `vulnerabilities` is read. cargo-audit reports RUSTSEC
+    # *informational* advisories (unmaintained/yanked crates) under a separate
+    # top-level `warnings` object, keyed by warning kind. Those are project
+    # -health signals rather than exploitable defects, so this security gate
+    # deliberately ignores them -- noted because the key demonstrably exists
+    # in real output, not because it went unnoticed.
     for entry in data.get("vulnerabilities", {}).get("list", []):
         advisory = entry.get("advisory") or {}
         package = entry.get("package") or {}
@@ -458,10 +504,11 @@ def parse_cargo(result: RunnerResult, ctx) -> list[RawFinding]:
         pkg_name = package.get("name", "unknown")
         pkg_version = package.get("version", "")
         title = advisory.get("title") or adv_id
+        severity = _cvss_severity(advisory.get("cvss")) or _CARGO_AUDIT_SEVERITY_RAW
         findings.append(RawFinding(
             tool=NAME_CARGO_AUDIT,
             rule=adv_id,
-            severity_raw=_CARGO_AUDIT_SEVERITY_RAW,
+            severity_raw=severity,
             file=_CARGO_LOCKFILE,
             line=1,
             message=f"{pkg_name} {pkg_version}: {title}".strip(),

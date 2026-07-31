@@ -12,6 +12,7 @@ NPM_AUDIT = FIXTURES / "npm-audit.json"
 PNPM_AUDIT = FIXTURES / "pnpm-audit.json"
 YARN_AUDIT = FIXTURES / "yarn-audit.json"
 CARGO_AUDIT = FIXTURES / "cargo-audit.json"
+CARGO_AUDIT_CVSS = FIXTURES / "cargo-audit-cvss.json"
 
 
 # ---------------- parse() ----------------
@@ -73,6 +74,45 @@ def test_parse_cargo_audit(tmp_path):
     assert f.severity_raw == deps._CARGO_AUDIT_SEVERITY_RAW
     assert "chrono" in f.message
     assert f.file == "Cargo.lock"
+
+
+def test_parse_cargo_severity_banded_from_real_cvss_vectors(tmp_path):
+    # Oracles, not guesses: this fixture is a verbatim `cargo audit --json`
+    # capture (cargo-audit 0.22.2) from a crate pinned to two known-vulnerable
+    # deps. Both advisories carry full CVSS v3.1 vectors, which is what
+    # falsified the original "RUSTSEC has no usable severity" premise.
+    #   RUSTSEC-2021-0003 smallvec  AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H
+    #   RUSTSEC-2020-0071 time      AV:L/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H
+    result = RunnerResult(tool="cargo-audit", state=ToolState.OK,
+                          raw=CARGO_AUDIT_CVSS.read_text(), returncode=1)
+    findings = {f.rule: f for f in deps.parse(result, RunContext(root=tmp_path))}
+    assert set(findings) == {"RUSTSEC-2021-0003", "RUSTSEC-2020-0071"}
+    # Remotely reachable, no privileges/interaction, total C+I+A loss. Must
+    # reach "critical" or it never blocks: deps.block_severity defaults to
+    # "critical", so anything lower is a WARN no matter how severe.
+    assert findings["RUSTSEC-2021-0003"].severity_raw == "critical"
+    # Local-only, availability-only -- genuinely not critical.
+    assert findings["RUSTSEC-2020-0071"].severity_raw != "critical"
+
+
+def test_parse_cargo_falls_back_to_constant_when_cvss_absent(tmp_path):
+    # The hand-written fixture carries "cvss": null, which is normal RUSTSEC
+    # data, not shape drift. Absent CVSS must degrade to the conservative
+    # constant, never below it.
+    result = RunnerResult(tool="cargo-audit", state=ToolState.OK, raw=CARGO_AUDIT.read_text())
+    findings = deps.parse(result, RunContext(root=tmp_path))
+    assert findings[0].severity_raw == deps._CARGO_AUDIT_SEVERITY_RAW
+
+
+def test_cvss_severity_rejects_junk_rather_than_guessing(tmp_path):
+    for junk in (None, "", "not-a-vector", "CVSS:2.0/AV:N/AC:L/Au:N/C:P", 7.5, {}):
+        assert deps._cvss_severity(junk) is None
+
+
+def test_cargo_shape_check_does_not_require_cvss(tmp_path):
+    # A missing CVSS is data, not drift -- it must not trip the advisory.
+    raw = '{"vulnerabilities": {"found": true, "count": 1, "list": [{"advisory": {"id": "X"}}]}}'
+    assert deps._cargo_shape_recognized(raw) is True
 
 
 def test_parse_skips_non_ok_state(tmp_path):
