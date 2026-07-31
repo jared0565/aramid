@@ -40,6 +40,22 @@ Scope note: clippy analyses the whole crate, not `ctx.files`. Unlike
 ruff/eslint it takes no file list, so findings can name files outside the
 current diff. That is the same shape as deps/tests, and the ledger's
 baseline is what keeps pre-existing lint from blocking day one.
+
+`--all-targets` is deliberate, not incidental. Without it cargo lints the
+DEFAULT targets only, which silently excludes inline `#[cfg(test)]` modules
+(the cfg is active only when building the test target), integration tests
+under `tests/`, benches and examples. Measured on a throwaway crate: the
+same lint in library code, in a `#[cfg(test)]` module and in
+`tests/integration.rs` produced one finding by default and three with the
+flag. A security-adjacent linter that cannot see a repo's test code is
+missing real code, and test helpers are exactly where `unwrap`-heavy,
+shell-invoking scaffolding tends to live.
+
+Two costs, both accepted. It compiles more, so a cold cache is likelier to
+hit TIMEOUT_S -- honest degradation, and now correctly NAMED as clippy's
+(see `_ndjson_or_crashed`). And it makes cargo report a file's lints once
+per target that compiles it, which `parse` deduplicates; that dedupe is
+load-bearing rather than cosmetic, for the reason given there.
 """
 import dataclasses
 import json
@@ -116,8 +132,9 @@ def run(ctx) -> RunnerResult:
     # Probe BEFORE invoking cargo: see module docstring on 101's two meanings.
     if toolpath.resolve(CLIPPY_BIN) is None:
         return RunnerResult(NAME, ToolState.MISSING)
-    result = run_subprocess(["cargo", "clippy", "--message-format=json", "--quiet"],
-                            ctx.root, TIMEOUT_S)
+    result = run_subprocess(
+        ["cargo", "clippy", "--all-targets", "--message-format=json", "--quiet"],
+        ctx.root, TIMEOUT_S)
     return _ndjson_or_crashed(result)
 
 
@@ -125,6 +142,20 @@ def parse(result: RunnerResult, ctx) -> list[RawFinding]:
     if result.state is not ToolState.OK:
         return []
     findings = []
+    # `--all-targets` compiles a source file once PER TARGET, and each
+    # compilation re-reports the lints in it -- so a lint in lib.rs arrives
+    # twice, once for the lib target and once for the test target, naming the
+    # identical file and line. Nothing downstream would collapse them:
+    # `normalizer.normalize` gives gate callers a POSITIONAL occurrence index,
+    # so two identical raws become two findings with DIFFERENT ids. One real
+    # lint would be reported twice, tracked twice in the ledger, and -- both
+    # being new -- escalated to BLOCK twice by the pre-push ratchet.
+    #
+    # Keyed on (rule, file, line), which is as coarse as it can safely be: the
+    # same rule at the same source location IS the same lint, whichever target
+    # compiled it, while two rules on one line or one rule on two lines stay
+    # distinct.
+    seen: set[tuple[str, str, int]] = set()
     for line in (result.raw or "").splitlines():
         if not line.strip():
             continue
@@ -144,12 +175,19 @@ def parse(result: RunnerResult, ctx) -> list[RawFinding]:
         # it could never be triaged or suppressed -- permanent noise.
         if not code or primary is None:
             continue
+        rule = str(code)
+        file_ = relativize(primary.get("file_name", ""), ctx.root)
+        line_no = primary.get("line_start", 0) or 0
+        key = (rule, file_, line_no)
+        if key in seen:
+            continue
+        seen.add(key)
         findings.append(RawFinding(
             tool=NAME,
-            rule=str(code),
+            rule=rule,
             severity_raw=str(message.get("level") or "warning"),
-            file=relativize(primary.get("file_name", ""), ctx.root),
-            line=primary.get("line_start", 0) or 0,
+            file=file_,
+            line=line_no,
             message=message.get("message") or str(code),
         ))
     return findings

@@ -14,6 +14,7 @@ The fixture is a verbatim `cargo clippy --message-format=json` capture
 (cargo 1.x, this machine, 2026-07-31) with only the bulky `rendered`/
 `children` fields trimmed -- not a hand-written guess at the shape.
 """
+import json
 from pathlib import Path
 
 import pytest
@@ -194,3 +195,83 @@ def test_degraded_result_still_carries_the_runner_name(tmp_path, monkeypatch, st
     result = clippy.run(RunContext(root=tmp_path))
     assert result.state is state
     assert result.tool == clippy.NAME
+
+
+# ------------------------------------------------- --all-targets ------------
+
+CLIPPY_ALL_TARGETS = FIXTURES / "cargo-clippy-all-targets.jsonl"
+
+
+def test_run_lints_all_targets(tmp_path, monkeypatch):
+    """Without `--all-targets`, cargo lints the default targets only -- so
+    inline `#[cfg(test)]` modules, integration tests, benches and examples
+    are NOT linted at all.
+
+    Measured on a throwaway crate rather than assumed: the same
+    `clippy::ptr_arg` in ordinary library code, in a `#[cfg(test)]` module
+    and in `tests/integration.rs` yielded ONE finding by default and all
+    three with the flag. `#[cfg(test)]` code is invisible by default because
+    the cfg is only active when building the test target.
+
+    Reported by graphite (operation-firewall round 19), which noted this repo
+    has inline test modules -- real Rust the gate could not see.
+    """
+    _rust_repo(tmp_path)
+    monkeypatch.setattr(clippy.toolpath, "resolve", lambda name: f"/fake/{name}")
+    captured = {}
+
+    def fake(argv, cwd, timeout_s, env=None):
+        captured["argv"] = argv
+        return RunnerResult("cargo", ToolState.OK, raw="", returncode=0)
+
+    monkeypatch.setattr(clippy, "run_subprocess", fake)
+    clippy.run(RunContext(root=tmp_path))
+
+    assert "--all-targets" in captured["argv"]
+
+
+def test_parse_deduplicates_the_same_lint_reported_by_two_targets(tmp_path):
+    """`--all-targets` makes cargo compile a source file once per target, and
+    each compilation re-reports the lints in it. A lint in `lib.rs` therefore
+    arrives TWICE -- once for the lib target, once for the test target --
+    naming the identical file and line.
+
+    That must collapse to one finding, and the reason is not cosmetic.
+    `normalizer.normalize` gives gate callers a POSITIONAL occurrence index,
+    so two identical raws become two findings with DIFFERENT ids rather than
+    being deduplicated downstream. One real lint would be reported twice,
+    tracked twice in the ledger, and -- since both are new -- escalated to
+    BLOCK twice by the pre-push ratchet.
+
+    Fixture is a verbatim `cargo clippy --all-targets --message-format=json`
+    capture whose 4 compiler-message records contain a genuine 2x duplicate
+    of `src/lib.rs:1`.
+    """
+    raw = CLIPPY_ALL_TARGETS.read_text(encoding="utf-8")
+    result = RunnerResult(clippy.NAME, ToolState.OK, raw=raw)
+    findings = clippy.parse(result, RunContext(root=tmp_path))
+
+    locations = sorted((f.rule, f.file, f.line) for f in findings)
+    assert locations == [
+        ("clippy::ptr_arg", "src/lib.rs", 1),    # lib + test target -> ONE
+        ("clippy::ptr_arg", "src/lib.rs", 11),   # the #[cfg(test)] module
+        ("clippy::ptr_arg", "tests/integration.rs", 3),
+    ], locations
+
+
+def test_parse_keeps_distinct_lints_that_share_a_file(tmp_path):
+    """The dedupe key must not be so coarse it merges real findings: two
+    different rules on the same line, and the same rule on different lines,
+    both survive."""
+    raw = "\n".join(json.dumps({
+        "reason": "compiler-message",
+        "message": {"level": "warning", "code": {"code": code},
+                    "message": "m",
+                    "spans": [{"is_primary": True, "file_name": "src/lib.rs",
+                               "line_start": line}]},
+    }) for code, line in [("clippy::ptr_arg", 1), ("clippy::needless_range_loop", 1),
+                          ("clippy::ptr_arg", 2)])
+
+    findings = clippy.parse(RunnerResult(clippy.NAME, ToolState.OK, raw=raw),
+                            RunContext(root=tmp_path))
+    assert len(findings) == 3
