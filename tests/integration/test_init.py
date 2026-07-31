@@ -352,6 +352,60 @@ def test_validate_hook_shim_detects_missing_post_commit_triage_shim(tmp_path, mo
     assert init._validate_hook_shim(r) is False
 
 
+def test_validate_hook_shim_accepts_a_foreign_managed_slot_with_relocated_shim(
+        tmp_path, monkeypatch):
+    """Regression: `hooks armed: NO` on every graphite-managed repo.
+
+    Measured live against a real repo (operation-firewall, 2026-07-31) where
+    graphite owns `post-commit`. `install()` deliberately refuses to clobber
+    another tool's managed hook, relocates aramid's own shim to a sibling,
+    and says so: "not stale, nothing to resolve". `_validate_hook_shim` then
+    contradicted it three lines later, because it only checked whether the
+    CANONICAL slot carried aramid's marker -- which a foreign-managed slot
+    never does. Result: a fully-armed repo reported NOT armed, and the
+    obvious operator "fix" is to clobber the other tool's hook.
+
+    `hooks._find_chained_aramid_shim` already recognizes such a relocation
+    generically (by marker content, not by hardcoding any suffix); this
+    check simply has to consult it. The genuine-gap case must still fail --
+    that is the next test, which stays green.
+    """
+    monkeypatch.setattr(doctor, "probe_toolchain", _fake_present)
+    r = _repo(tmp_path)
+    assert init.cmd_init(r) == 0
+
+    hdir = hooks.hooks_dir(r)
+    slot = hdir / hooks.TRIAGE_HOOK
+    ours = slot.read_bytes()
+    assert hooks.MARKER_START.encode() in ours
+
+    # Exactly what graphite does: relocate aramid's shim under its own
+    # suffix, then take the slot with its own managed trampoline.
+    (hdir / f"{hooks.TRIAGE_HOOK}.local").write_bytes(ours)
+    slot.write_bytes(b"#!/bin/sh\n# >>> graphite managed >>>\nexit 0\n")
+
+    assert hooks._foreign_managed_tool(slot) == "graphite"
+    assert hooks._find_chained_aramid_shim(hdir, hooks.TRIAGE_HOOK) is not None
+    assert init._validate_hook_shim(r) is True
+
+
+def test_validate_hook_shim_still_fails_when_foreign_slot_has_no_relocation(
+        tmp_path, monkeypatch):
+    """The other half: a foreign-managed slot with NO surviving aramid shim
+    anywhere is a genuine gap, and must still report NOT armed. Without this,
+    the fix above would turn the warning off for real breakage too."""
+    monkeypatch.setattr(doctor, "probe_toolchain", _fake_present)
+    r = _repo(tmp_path)
+    assert init.cmd_init(r) == 0
+
+    hdir = hooks.hooks_dir(r)
+    slot = hdir / hooks.TRIAGE_HOOK
+    slot.write_bytes(b"#!/bin/sh\n# >>> graphite managed >>>\nexit 0\n")
+
+    assert hooks._find_chained_aramid_shim(hdir, hooks.TRIAGE_HOOK) is None
+    assert init._validate_hook_shim(r) is False
+
+
 def test_init_installs_hooks_on_a_configured_but_unenforced_repo(tmp_path, monkeypatch):
     """Regression: the fresh-clone deadlock.
 

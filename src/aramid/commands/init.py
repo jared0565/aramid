@@ -199,10 +199,28 @@ def _validate_hook_shim(root: Path) -> bool:
     ok = True
     for hook in [g.value for g in hooks.GATES] + [hooks.TRIAGE_HOOK]:
         shim = hdir / hook
-        if not shim.exists() or hooks.MARKER_START.encode() not in shim.read_bytes():
-            ok = False
-            print(f"aramid: init: WARNING -- {shim} missing or not aramid-managed "
-                  f"after install; hooks may not be armed", file=sys.stderr)
+        if shim.exists() and hooks.MARKER_START.encode() in shim.read_bytes():
+            continue
+        # A slot owned by ANOTHER managing tool is not a gap when aramid's
+        # own shim survives relocated beside it. `install()` refuses that
+        # slot deliberately (chaining a foreign trampoline would double-run
+        # both tools' gates) and reports "not stale, nothing to resolve" --
+        # this check used to contradict that three lines later, because a
+        # foreign-managed slot never carries aramid's marker. Every
+        # graphite-managed repo therefore printed "hooks armed: NO" while
+        # being fully armed, whose obvious "fix" is to clobber the other
+        # tool's hook. Measured against a live repo, 2026-07-31.
+        #
+        # Both halves are required. A foreign trampoline with no surviving
+        # relocation is a real gap, and so is a MISSING slot even when a
+        # relocated sibling exists -- with no trampoline in the slot, git
+        # never dispatches to that sibling at all.
+        if (hooks._foreign_managed_tool(shim) is not None
+                and hooks._find_chained_aramid_shim(hdir, hook) is not None):
+            continue
+        ok = False
+        print(f"aramid: init: WARNING -- {shim} missing or not aramid-managed "
+              f"after install; hooks may not be armed", file=sys.stderr)
     return ok
 
 
