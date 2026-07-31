@@ -48,6 +48,17 @@ Two consequences worth stating outright, because both surprise people:
   name, and the LLM and mutation gates structurally, by being appended after
   the ratchet runs. semgrep predates that pattern and was never added to it.
 
+The full exemption list, since "everything escalates" above is otherwise
+absolute: `tdd`, `red-proof`, the deps shape-drift advisory, and
+`cargo-audit-warnings`. That last one is the opt-in
+`[deps].cargo_audit_warnings`, which surfaces RUSTSEC's informational
+advisories (unmaintained/unsound/yanked crates). It is off by default, and
+when on it can never block by three independent mechanisms -- it sits outside
+the tunable `deps.block_severity` comparison, `policy.classify` returns WARN
+for it unconditionally ahead of any `block_rules` promotion, and it is exempt
+here. All three are needed: an unmaintained crate stays unmaintained, so a
+newly published advisory would otherwise fail a push with no fix available.
+
 **Noisy WARN-tier rule (e.g. ruff `S101` on test asserts)?** `aramid.toml`'s
 `block_rules` only demotes/promotes the BLOCK/WARN boundary -- it has nothing
 to say about a rule that was WARN-tier to begin with. `aramid override <id>

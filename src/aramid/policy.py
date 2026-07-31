@@ -18,6 +18,10 @@ import tomllib
 
 from aramid.fingerprint import normalize_path
 from aramid.models import Finding, Gate, Severity, Verdict
+# Safe at module scope: runners.deps imports detectors/normalizer/base/_util/
+# toolpath and none of them import policy, so this is not the pipeline<->
+# toolset cycle that forces a local import in pipeline.run_gate.
+from aramid.runners import deps as deps_runner
 
 # Tool names that report dependency-CVE findings (see runners/deps.py).
 _DEPS_TOOLS = {"pip-audit", "npm", "pnpm", "yarn", "cargo-audit"}
@@ -169,6 +173,19 @@ def classify(tool: str, rule: str, severity_raw: str, gate: Gate, cfg) -> tuple[
     # that never ran is exactly as actionable as one that ran and failed.
     if rule == "tests-tool-missing":
         return severity, Verdict.BLOCK
+
+    # Guarantee 2 of three for cargo-audit's informational warnings (interop
+    # round 20; see runners/deps._parse_cargo_warnings for all three). WARN
+    # UNCONDITIONALLY, and deliberately ahead of every promotion path --
+    # `block_rules` included -- because the feature's whole contract is
+    # "visible, never blocking". An operator who wants an unmaintained crate
+    # to block has cargo-audit's real advisory path for that.
+    #
+    # This tool is also absent from `_DEPS_TOOLS` below (guarantee 1), so the
+    # operator-tunable `block_severity` comparison cannot reach it either.
+    # Both are needed: the severity constant alone is not a guarantee.
+    if tool == deps_runner.NAME_CARGO_AUDIT_WARNINGS:
+        return severity, Verdict.WARN
 
     if tool in _DEPS_TOOLS:
         threshold = _map_severity(block_rules.get("deps", {}).get("block_severity", "critical"))

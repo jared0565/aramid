@@ -49,6 +49,7 @@ class Config:
     tdd: dict = field(default_factory=dict)
     red_proof: dict = field(default_factory=dict)
     tests: dict = field(default_factory=dict)
+    deps: dict = field(default_factory=dict)
 
 
 def _user_config_path() -> Path:
@@ -172,6 +173,7 @@ def load_config(root: Path) -> Config:
         tdd=merged.get("tdd", {}),
         red_proof=merged.get("red_proof", {}),
         tests=merged.get("tests", {}),
+        deps=merged.get("deps", {}),
     )
 
 

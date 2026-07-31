@@ -474,7 +474,9 @@ def run_gate(root: Path, gate: Gate, mode: str, cfg: config_mod.Config, ledger: 
                       test_timeout_s=tests_cfg.get("timeout_s"),
                       tests_enabled=tests_cfg.get("enabled", True),
                       gate_deadline=gate_deadline,
-                      detected_tests=detected_tests)
+                      detected_tests=detected_tests,
+                      cargo_audit_warnings=(cfg.deps or {}).get(
+                          "cargo_audit_warnings", False))
     selected = _select_runners(gate, ctx)
 
     # 3. run concurrently under the gate's wall-clock budget.
@@ -538,9 +540,19 @@ def run_gate(root: Path, gate: Gate, mode: str, cfg: config_mod.Config, ledger: 
     if gate is Gate.PRE_PUSH:
         findings = [
             replace(f, verdict=Verdict.BLOCK)
+            # Guarantee 3 of three for cargo-audit's informational warnings
+            # (interop round 20). Without it, guarantees 1 and 2 give a
+            # feature that is warn-tier by classification and blocking in
+            # practice on FIRST appearance -- which is the only appearance
+            # that matters, since after that it is baselined. A new RUSTSEC
+            # informational advisory is an upstream publication event: it
+            # arrives on a repo that changed nothing, usually with no fix
+            # available, so escalating it would fail a push with no exit but
+            # a suppression. Same reason DEPS_SHAPE_DRIFT_RULE is exempt.
             if (f.id in new_ids and f.verdict is Verdict.WARN
                 and f.rule != deps.DEPS_SHAPE_DRIFT_RULE
-                and f.tool not in ("tdd", "red-proof"))
+                and f.tool not in ("tdd", "red-proof",
+                                   deps.NAME_CARGO_AUDIT_WARNINGS))
             else f
             for f in findings
         ]

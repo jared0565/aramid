@@ -32,7 +32,8 @@ from aramid.runners.base import RunContext
 RUNNER_TOOL_NAMES = frozenset({
     "gitleaks", "semgrep", "ruff", "eslint", clippy.NAME,
     typecheck.NAME_TSC, typecheck.NAME_MYPY,
-    deps.NAME_PIP_AUDIT, deps.NAME_CARGO_AUDIT, "npm", "pnpm", "yarn",
+    deps.NAME_PIP_AUDIT, deps.NAME_CARGO_AUDIT,
+    deps.NAME_CARGO_AUDIT_WARNINGS, "npm", "pnpm", "yarn",
     "pytest", "tests",
 })
 
@@ -69,6 +70,8 @@ def _build_ctx(root: Path, cfg) -> RunContext:
         test_command=tests_cfg.get("command", cfg.test_command),
         tests_enabled=tests_cfg.get("enabled", True),
         detected_tests=detect_tests(root),
+        cargo_audit_warnings=(cfg.deps or {}).get("cargo_audit_warnings", False)
+        if isinstance(getattr(cfg, "deps", None), dict) else False,
     )
 
 
@@ -113,6 +116,12 @@ def selected_tool_names(root: Path, cfg) -> set[str]:
                 # are different names -- see runners/deps.py's _LOCKFILES
                 # comment for the same distinction.
                 names.add(deps.NAME_CARGO_AUDIT)
+                # Only selected while the opt-in is ON. That is deliberate:
+                # turning `[deps].cargo_audit_warnings` back off must let the
+                # findings it produced become ghost candidates and retire,
+                # rather than stranding them open forever with no producer.
+                if ctx.cargo_audit_warnings:
+                    names.add(deps.NAME_CARGO_AUDIT_WARNINGS)
             elif ctx.pkg_manager:
                 names.add(ctx.pkg_manager)
             if any(root.glob("requirements*.txt")):

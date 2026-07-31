@@ -157,3 +157,56 @@ def test_ghost_candidates_includes_open_finding_whose_tool_left_selection():
 def test_ghost_candidates_excludes_a_still_selected_tool():
     state = {"f1": {"status": "open", "tool": "ruff"}}
     assert toolset.ghost_candidates(state, selected={"ruff"}) == {}
+
+
+# ------------------ cargo-audit informational warnings (round 20) ----------
+
+def _cargo_repo(tmp_path):
+    (tmp_path / "Cargo.toml").write_text("[package]\nname = \"x\"\n")
+    (tmp_path / "Cargo.lock").write_text("[[package]]\nname = \"x\"\n")
+    return tmp_path
+
+
+def test_cargo_warnings_tool_is_selected_only_while_opted_in(tmp_path, monkeypatch):
+    """The opt-in has to reach `selected_tool_names`, not just the parser.
+
+    `ghost_candidates` retires an OPEN finding whose tool is in the
+    retireable universe but is NOT currently selected. So if this name were
+    selected unconditionally, turning `[deps].cargo_audit_warnings` back off
+    would strand every warning it had already written -- open forever, with
+    no producer left that could ever resolve them. Selection must track the
+    flag for the feature to be reversible.
+    """
+    root = _cargo_repo(tmp_path)
+    cfg = _cfg(tmp_path, monkeypatch, root)
+
+    cfg.deps = {"cargo_audit_warnings": False}
+    off = toolset.selected_tool_names(root, cfg)
+    cfg.deps = {"cargo_audit_warnings": True}
+    on = toolset.selected_tool_names(root, cfg)
+
+    # The real advisory path is unconditional either way -- only the
+    # informational one is gated.
+    assert deps.NAME_CARGO_AUDIT in off and deps.NAME_CARGO_AUDIT in on
+    assert deps.NAME_CARGO_AUDIT_WARNINGS not in off
+    assert deps.NAME_CARGO_AUDIT_WARNINGS in on
+
+
+def test_cargo_warnings_findings_become_ghosts_when_the_flag_is_turned_off(tmp_path, monkeypatch):
+    """The consequence of the above, asserted where an operator would feel
+    it: an existing open warning is offered for retirement once opted out."""
+    root = _cargo_repo(tmp_path)
+    cfg = _cfg(tmp_path, monkeypatch, root)
+    state = {"f1": {"tool": deps.NAME_CARGO_AUDIT_WARNINGS,
+                    "rule": "unmaintained/RUSTSEC-2021-0139", "status": "open"}}
+
+    cfg.deps = {"cargo_audit_warnings": True}
+    assert toolset.ghost_candidates(state, toolset.selected_tool_names(root, cfg)) == {}
+
+    cfg.deps = {"cargo_audit_warnings": False}
+    assert "f1" in toolset.ghost_candidates(state, toolset.selected_tool_names(root, cfg))
+
+
+def test_cargo_warnings_tool_is_in_the_retireable_universe():
+    assert deps.NAME_CARGO_AUDIT_WARNINGS in toolset.RUNNER_TOOL_NAMES
+    assert deps.NAME_CARGO_AUDIT_WARNINGS not in toolset.PRODUCER_TOOL_NAMES

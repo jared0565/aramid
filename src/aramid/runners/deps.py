@@ -62,6 +62,13 @@ from aramid.runners._util import json_or_crashed, relativize
 
 NAME_PIP_AUDIT = "pip-audit"
 NAME_CARGO_AUDIT = "cargo-audit"
+# A DISTINCT tool name, not a rule namespace under NAME_CARGO_AUDIT: keeping
+# it out of `policy._DEPS_TOOLS` is guarantee 1 of three (see
+# `_parse_cargo_warnings`), and a separate tool also keeps these findings'
+# fingerprints disjoint from the blocking advisory path, so a crate that is
+# unmaintained today and CVE'd tomorrow produces two distinct findings rather
+# than one mutating in place.
+NAME_CARGO_AUDIT_WARNINGS = "cargo-audit-warnings"
 TIMEOUT_S = 180.0
 CACHE_TTL_S = 24 * 3600
 
@@ -456,6 +463,12 @@ def _cargo_shape_recognized(raw: str) -> bool:
 # and could never block a push, while the equivalent npm advisory does.
 _CARGO_AUDIT_SEVERITY_RAW = "medium"
 
+# Informational warnings are stamped "info", but the severity is NOT what
+# keeps them out of the block path -- `block_rules.deps.block_severity` is
+# operator-tunable, so a severity constant is a preference, not a guarantee.
+# See `_parse_cargo_warnings` for the three mechanisms that are the guarantee.
+_CARGO_AUDIT_WARNING_SEVERITY_RAW = "info"
+
 # CVSS v3.1 metric bands -> the five severity names policy._SEVERITY_ALIASES
 # accepts. Deliberately NOT a base-score calculation: the real formula is
 # exploitability/impact sub-scores with specific rounding, there is no oracle
@@ -498,12 +511,6 @@ def parse_cargo(result: RunnerResult, ctx) -> list[RawFinding]:
         return [_shape_drift_finding(NAME_CARGO_AUDIT)]
     data = json.loads(result.raw or "{}")
     findings = []
-    # Only `vulnerabilities` is read. cargo-audit reports RUSTSEC
-    # *informational* advisories (unmaintained/yanked crates) under a separate
-    # top-level `warnings` object, keyed by warning kind. Those are project
-    # -health signals rather than exploitable defects, so this security gate
-    # deliberately ignores them -- noted because the key demonstrably exists
-    # in real output, not because it went unnoticed.
     for entry in data.get("vulnerabilities", {}).get("list", []):
         advisory = entry.get("advisory") or {}
         package = entry.get("package") or {}
@@ -520,6 +527,77 @@ def parse_cargo(result: RunnerResult, ctx) -> list[RawFinding]:
             line=1,
             message=f"{pkg_name} {pkg_version}: {title}".strip(),
         ))
+    findings.extend(_parse_cargo_warnings(data, ctx))
+    return findings
+
+
+def _parse_cargo_warnings(data: dict, ctx) -> list[RawFinding]:
+    """RUSTSEC's informational `warnings` -- unmaintained, unsound and yanked
+    crates -- as WARN-tier findings, opt-in via `[deps].cargo_audit_warnings`.
+
+    Requested by Operation Firewall (interop round 20) whose threat model
+    names supply-chain compromise: an unmaintained transitive crate is closer
+    to a live risk there than to hygiene. Off by default everywhere else,
+    because most of these have no fix -- an unmaintained crate stays
+    unmaintained -- so they would be a permanent, unactionable finding.
+
+    THREE separate things keep this out of the block path, and all three are
+    load-bearing rather than defence in depth (round 20's analysis):
+
+      1. `NAME_CARGO_AUDIT_WARNINGS` is deliberately NOT in
+         `policy._DEPS_TOOLS`, so the operator-tunable
+         `block_rules.deps.block_severity` comparison cannot reach it. A
+         severity constant alone would NOT do: lowering that threshold to
+         catch more real CVEs would start blocking on these too.
+      2. `policy.classify` returns WARN for this tool unconditionally, ahead
+         of every promotion path including `block_rules`.
+      3. It is exempt from the pre-push no-new-warnings ratchet. Without
+         this, 1 and 2 give a feature that is warn-tier by classification and
+         BLOCKING in practice on first appearance -- and first appearance is
+         the only appearance that matters, since after that it is baselined.
+         An upstream RUSTSEC publication event, on a repo that changed
+         nothing, would fail a push with no fix available and no exit but a
+         suppression.
+
+    The precedent for 3 is `DEPS_SHAPE_DRIFT_RULE`, already exempt from that
+    same list for the same reason.
+
+    Wire format from a verbatim capture (`tests/fixtures/cargo-audit-
+    warnings.json`, cargo-audit 0.22.2): `warnings` is an object keyed by
+    KIND ("unmaintained", "unsound", "yanked"), each value a LIST -- not a
+    flat list, and not keyed by advisory id. `advisory` is nullable: a yanked
+    crate has no RUSTSEC advisory behind it, so the kind is the only id
+    available and the rule falls back to it.
+    """
+    if not getattr(ctx, "cargo_audit_warnings", False):
+        return []
+    findings = []
+    warnings = data.get("warnings")
+    if not isinstance(warnings, dict):
+        return []
+    for kind, entries in sorted(warnings.items()):
+        for entry in entries or []:
+            if not isinstance(entry, dict):
+                continue
+            advisory = entry.get("advisory") or {}
+            package = entry.get("package") or {}
+            pkg_name = package.get("name", "unknown")
+            pkg_version = package.get("version", "")
+            adv_id = advisory.get("id")
+            # Namespaced by kind so a repo can target one class of warning
+            # (`unmaintained` vs `yanked`) in triage/overrides without
+            # matching real advisory ids, which share the RUSTSEC-* space
+            # with the blocking vulnerability path.
+            rule = f"{kind}/{adv_id}" if adv_id else str(kind)
+            title = advisory.get("title") or f"{pkg_name} is {kind}"
+            findings.append(RawFinding(
+                tool=NAME_CARGO_AUDIT_WARNINGS,
+                rule=rule,
+                severity_raw=_CARGO_AUDIT_WARNING_SEVERITY_RAW,
+                file=_CARGO_LOCKFILE,
+                line=1,
+                message=f"{pkg_name} {pkg_version}: {title}".strip(),
+            ))
     return findings
 
 

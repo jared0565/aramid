@@ -122,6 +122,13 @@ class RunContext:
       detect_tests(ctx.root)`), which is exactly today's uncached behavior
       for any RunContext built outside run_gate. Additive field: default
       None keeps every existing construction site valid unchanged.
+    cargo_audit_warnings: `[deps].cargo_audit_warnings`, default False --
+      opt in to RUSTSEC's informational `warnings` (unmaintained/unsound/
+      yanked crates) as findings alongside the real `vulnerabilities`.
+      Threaded onto ctx rather than read from cfg inside the runner because
+      `parse()` takes (result, ctx) and never sees a Config. Additive field:
+      default False keeps every existing construction site valid AND keeps
+      the feature off for every repo that has not asked for it.
     """
     root: Path
     files: list[str] = field(default_factory=list)
@@ -135,6 +142,7 @@ class RunContext:
     tests_enabled: bool = True
     gate_deadline: float | None = None
     detected_tests: set[str] | None = None
+    cargo_audit_warnings: bool = False
 
 _WIN = sys.platform == "win32"
 _POST_KILL_DRAIN_S = 5.0   # cap on the post-_kill_tree reap wait (test seam)

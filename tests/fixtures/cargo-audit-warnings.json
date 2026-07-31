@@ -1,0 +1,72 @@
+{
+ "database": {
+  "advisory-count": 1175,
+  "last-commit": "29b6c63d8edcc354b75d0c8895ea188208eb0e17",
+  "last-updated": "2026-07-31T14:11:10+02:00"
+ },
+ "lockfile": {
+  "dependency-count": 5
+ },
+ "settings": {
+  "target_arch": [],
+  "target_os": [],
+  "severity": null,
+  "ignore": [],
+  "informational_warnings": [
+   "unmaintained",
+   "unsound",
+   "notice"
+  ]
+ },
+ "vulnerabilities": {
+  "found": false,
+  "count": 0,
+  "list": []
+ },
+ "warnings": {
+  "unmaintained": [
+   {
+    "kind": "unmaintained",
+    "package": {
+     "name": "ansi_term",
+     "version": "0.12.1",
+     "source": "registry+https://github.com/rust-lang/crates.io-index",
+     "checksum": "d52a9bb7ec0cf484c551830a7ce27bd20d67eac647e1befb56b0be4ee39a55d2",
+     "dependencies": [
+      {
+       "name": "winapi",
+       "version": "0.3.9",
+       "source": "registry+https://github.com/rust-lang/crates.io-index"
+      }
+     ],
+     "replace": null
+    },
+    "advisory": {
+     "id": "RUSTSEC-2021-0139",
+     "package": "ansi_term",
+     "title": "ansi_term is Unmaintained",
+     "description": "The maintainer has advised that this crate is deprecated and will not receive any maintenance.",
+     "date": "2021-08-18",
+     "aliases": [],
+     "related": [],
+     "collection": "crates",
+     "categories": [],
+     "keywords": [],
+     "cvss": null,
+     "informational": "unmaintained",
+     "references": [],
+     "source": null,
+     "url": "https://github.com/ogham/rust-ansi-term/issues/72",
+     "withdrawn": null,
+     "license": "CC0-1.0",
+     "expect-deleted": false
+    },
+    "affected": null,
+    "versions": {
+     "patched": [],
+     "unaffected": []
+    }
+   }
+  ]
+ }
+}

@@ -1836,3 +1836,60 @@ def test_ratchet_escalates_a_natively_warn_finding_too(tmp_path, monkeypatch):
     assert sg[0].verdict is Verdict.BLOCK
     assert result.exit_code == 1
     ledger.close()
+
+
+class _WarningDeps:
+    """deps stand-in emitting one newly-appeared RUSTSEC informational
+    warning, the shape of an upstream publication event."""
+    @staticmethod
+    def run(ctx):
+        return RunnerResult("cargo-audit", ToolState.OK, raw="{}")
+
+    @staticmethod
+    def parse(result, ctx):
+        from aramid.runners import deps as deps_runner
+        return [RawFinding(tool=deps_runner.NAME_CARGO_AUDIT_WARNINGS,
+                           rule="unmaintained/RUSTSEC-2021-0139",
+                           severity_raw="info", file="Cargo.lock", line=1,
+                           message="ansi_term 0.12.1: ansi_term is Unmaintained")]
+
+
+def test_new_cargo_audit_warning_does_not_block_the_push(tmp_path, monkeypatch):
+    """Guarantee 3 of three (interop round 20), and the one that classification
+    -level assertions CANNOT observe -- which is exactly why round 20 asked for
+    it at gate level.
+
+    Guarantees 1 and 2 make this WARN. The pre-push ratchet escalates any NEW
+    WARN to BLOCK, and a finding under a new tool name satisfies both of the
+    old exemption conjuncts (it is not DEPS_SHAPE_DRIFT_RULE, and it is not
+    tdd/red-proof) -- so without the exemption this feature would be warn-tier
+    by classification and BLOCKING in practice on first appearance. First
+    appearance is the only one that matters: after it, the finding is
+    baselined.
+
+    The failure this prevents is unfixable-by-construction. A new RUSTSEC
+    informational advisory arrives on a repo that changed nothing, and an
+    unmaintained crate stays unmaintained -- so the developer's only exit
+    would be a suppression.
+
+    FALSIFIABLE, as round 20 asked. Verified by mutation: removing
+    `deps.NAME_CARGO_AUDIT_WARNINGS` from the exemption tuple at
+    pipeline.py:541-543 fails this test with exit_code 1, while the sibling
+    tests above (classification-level) all still pass.
+    """
+    root = _repo(tmp_path)
+    # deps is only selected when a package manager is detected (_is_applicable).
+    (root / "Cargo.lock").write_text("[[package]]\nname = \"ansi_term\"\n")
+    cfg = _cfg(root, tmp_path, monkeypatch)
+    ledger = _ledger(tmp_path)
+
+    monkeypatch.setitem(pipeline.RUNNERS, "deps", _WarningDeps)
+    monkeypatch.setitem(pipeline.GATE_RUNNER_KEYS, Gate.PRE_PUSH, ["deps"])
+
+    result = pipeline.run_gate(root, Gate.PRE_PUSH, "all", cfg, ledger, run_id="warn-ratchet")
+
+    found = [f for f in result.findings if f.tool == "cargo-audit-warnings"]
+    assert len(found) == 1
+    assert found[0].verdict is Verdict.WARN     # NOT escalated by the ratchet
+    assert result.exit_code == 0                # ...so the push survives
+    ledger.close()

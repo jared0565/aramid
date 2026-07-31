@@ -355,3 +355,55 @@ def test_red_proof_armed_is_block():
                                    Gate.PRE_PUSH, _rp_cfg(armed=True))
     assert sev is Severity.MEDIUM       # assert severity in BOTH (1a T2a lesson)
     assert verdict is Verdict.BLOCK
+
+
+# --- cargo-audit informational warnings: guarantees 1 and 2 (round 20) ------
+
+def test_cargo_audit_warnings_never_block_however_the_operator_tunes_deps():
+    """Guarantee 1: the warnings tool is deliberately absent from
+    `_DEPS_TOOLS`, so the operator-tunable `block_rules.deps.block_severity`
+    comparison cannot reach it.
+
+    The adversarial arm is the point. `block_severity` defaults to "critical",
+    which would make a low severity look safe for the wrong reason -- so this
+    drives it to the FLOOR ("info"), the setting a supply-chain-conscious
+    operator would actually choose to catch more real CVEs. cargo-audit
+    proper escalates under that setting; the warnings tool must not.
+    """
+    from aramid.runners import deps
+
+    cfg = _cfg(armed=True)
+    cfg.block_rules = {**cfg.block_rules, "deps": {"block_severity": "info"}}
+
+    _, real = policy.classify(deps.NAME_CARGO_AUDIT, "RUSTSEC-2021-0003",
+                              "info", Gate.PRE_PUSH, cfg)
+    _, warn = policy.classify(deps.NAME_CARGO_AUDIT_WARNINGS,
+                              "unmaintained/RUSTSEC-2021-0139",
+                              "info", Gate.PRE_PUSH, cfg)
+
+    assert real is Verdict.BLOCK      # the tunable reaches the real path...
+    assert warn is Verdict.WARN       # ...and cannot reach this one
+
+
+def test_cargo_audit_warnings_resist_block_rules_promotion():
+    """Guarantee 2: WARN is returned unconditionally, ahead of every
+    promotion path. Round 20 asked for these never to be in the block path
+    "ever, including via `block_rules` promotion" -- an operator who wants an
+    unmaintained crate to block has cargo-audit's real advisory path.
+
+    Driven at every severity, since a promotion bug would most likely show up
+    only at the high end.
+    """
+    from aramid.runners import deps
+
+    cfg = _cfg(armed=True)
+    cfg.block_rules = {
+        **cfg.block_rules,
+        "deps": {"block_severity": "info"},
+        deps.NAME_CARGO_AUDIT_WARNINGS: {"block": ["*", "unmaintained/*"]},
+    }
+    for severity_raw in ("info", "low", "medium", "high", "critical"):
+        _, verdict = policy.classify(deps.NAME_CARGO_AUDIT_WARNINGS,
+                                     "unmaintained/RUSTSEC-2021-0139",
+                                     severity_raw, Gate.PRE_PUSH, cfg)
+        assert verdict is Verdict.WARN, f"promoted at severity {severity_raw!r}"

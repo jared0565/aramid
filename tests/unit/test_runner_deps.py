@@ -724,3 +724,69 @@ def test_cargo_audit_timeout_still_carries_the_runner_name(tmp_path, monkeypatch
     result = deps.run_cargo(RunContext(root=tmp_path, force_refresh=True))
     assert result.state is ToolState.TIMEOUT
     assert result.tool == deps.NAME_CARGO_AUDIT
+
+
+# ---------------- cargo-audit informational warnings (interop round 20) ----
+
+CARGO_AUDIT_WARNINGS = FIXTURES / "cargo-audit-warnings.json"
+
+
+def _warn_result():
+    return RunnerResult(tool=deps.NAME_CARGO_AUDIT, state=ToolState.OK,
+                        raw=CARGO_AUDIT_WARNINGS.read_text())
+
+
+def test_cargo_warnings_are_off_by_default(tmp_path):
+    """Default-off is the whole reason this is opt-in: most informational
+    advisories have no fix, so on by default they are a permanent finding on
+    every Rust repo. A bare RunContext must therefore produce none."""
+    assert deps.parse_cargo(_warn_result(), RunContext(root=tmp_path)) == []
+
+
+def test_cargo_warnings_opt_in_yields_findings_under_a_distinct_tool(tmp_path):
+    """Verbatim `cargo audit --json` capture (cargo-audit 0.22.2) against a
+    crate depending on ansi_term 0.12.1, which carries RUSTSEC-2021-0139
+    (unmaintained). `warnings` is an object keyed by KIND whose values are
+    lists -- not a flat list -- so this pins the shape as well as the opt-in.
+    """
+    ctx = RunContext(root=tmp_path, cargo_audit_warnings=True)
+    findings = deps.parse_cargo(_warn_result(), ctx)
+
+    assert len(findings) == 1
+    f = findings[0]
+    # A DISTINCT tool, not a rule namespace under cargo-audit: this is what
+    # keeps it out of policy._DEPS_TOOLS (guarantee 1 of three).
+    assert f.tool == deps.NAME_CARGO_AUDIT_WARNINGS
+    assert f.tool != deps.NAME_CARGO_AUDIT
+    assert f.rule == "unmaintained/RUSTSEC-2021-0139"
+    assert f.severity_raw == "info"
+    assert "ansi_term" in f.message
+
+
+def test_cargo_warnings_do_not_disturb_the_vulnerability_path(tmp_path):
+    """The real advisory path must be byte-identical whether the opt-in is on
+    or off -- the feature adds findings, it never reclassifies existing ones.
+    """
+    result = RunnerResult(tool=deps.NAME_CARGO_AUDIT, state=ToolState.OK,
+                          raw=CARGO_AUDIT_CVSS.read_text())
+    off = deps.parse_cargo(result, RunContext(root=tmp_path))
+    on = deps.parse_cargo(result, RunContext(root=tmp_path, cargo_audit_warnings=True))
+    assert off == on
+    assert off and all(f.tool == deps.NAME_CARGO_AUDIT for f in off)
+
+
+def test_cargo_warning_without_an_advisory_falls_back_to_its_kind(tmp_path):
+    """`advisory` is nullable in this wire format: a YANKED crate has no
+    RUSTSEC advisory behind it, so there is no id to name the rule with. The
+    kind is then the only identifier available, and it must still fingerprint
+    to something stable rather than crash or produce a `None` rule."""
+    raw = json.dumps({"vulnerabilities": {"count": 0, "list": []},
+                      "warnings": {"yanked": [
+                          {"kind": "yanked", "advisory": None,
+                           "package": {"name": "ghostcrate", "version": "1.2.3"}}]}})
+    ctx = RunContext(root=tmp_path, cargo_audit_warnings=True)
+    findings = deps.parse_cargo(RunnerResult(deps.NAME_CARGO_AUDIT, ToolState.OK, raw=raw), ctx)
+
+    assert len(findings) == 1
+    assert findings[0].rule == "yanked"
+    assert findings[0].message == "ghostcrate 1.2.3: ghostcrate is yanked"

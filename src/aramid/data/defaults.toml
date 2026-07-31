@@ -192,3 +192,15 @@ paths = []               # extra paths to probe on top of the curated exposed se
 timeout_s = 10           # per-request timeout
 block_armed = false      # RESERVED: inert in 2c-3 (WARN-only); unit-4 wires the BLOCK branch
 # start_command = ""     # RESERVED for 2c-3b explicit-config auto-start; ignored here
+
+# --- cargo-audit informational warnings (operation-firewall round 20) ---
+# RUSTSEC publishes `warnings` (unmaintained / unsound / yanked crates)
+# alongside `vulnerabilities`. They are supply-chain signal, but most carry
+# no fix -- an unmaintained crate stays unmaintained -- so surfacing them by
+# default would be a permanent, unactionable finding on every Rust repo.
+# Off by default; a repo whose threat model names supply-chain compromise
+# opts in. They are WARN-tier by construction and can NEVER block: see
+# policy.classify's unconditional branch and the pre-push ratchet exemption
+# in pipeline.py, both of which are load-bearing rather than belt-and-braces.
+[deps]
+cargo_audit_warnings = false
