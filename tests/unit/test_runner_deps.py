@@ -701,3 +701,26 @@ def test_parse_known_good_fixtures_emit_no_drift_finding(tmp_path):
         findings = deps.parse(result, RunContext(root=tmp_path))
         assert len(findings) == n
         assert all(f.rule != deps.DEPS_SHAPE_DRIFT_RULE for f in findings)
+
+
+def test_cargo_audit_timeout_still_carries_the_runner_name(tmp_path, monkeypatch):
+    """`json_or_crashed` passed MISSING/TIMEOUT straight through, keeping the
+    name `run_subprocess` derived from argv[0] -- here "cargo", because the
+    runner shells out to `cargo audit`.
+
+    That is the same wrong name clippy's timeout produced, and the two
+    collide: `pipeline.degraded_tools` is a set comprehension over `r.tool`,
+    so two distinct degraded Rust gates report as one entry, and
+    `_write_logs` keys its filename on `r.tool`, so the second overwrites
+    the first. The run where both Rust gates failed is the run whose
+    evidence is half missing.
+    """
+    (tmp_path / "Cargo.lock").write_text("[[package]]\nname = \"x\"\n")
+    monkeypatch.setattr(deps.toolpath, "resolve", lambda name: f"/fake/{name}")
+    monkeypatch.setattr(
+        deps, "run_subprocess",
+        lambda argv, cwd, t, env=None: RunnerResult("cargo", ToolState.TIMEOUT))
+
+    result = deps.run_cargo(RunContext(root=tmp_path, force_refresh=True))
+    assert result.state is ToolState.TIMEOUT
+    assert result.tool == deps.NAME_CARGO_AUDIT

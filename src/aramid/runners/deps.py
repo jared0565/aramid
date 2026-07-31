@@ -48,6 +48,7 @@ A consumer that needs to gate on "did BOTH audits succeed" must inspect
 `.sub_results` directly (or call `run_python`/`run_js` independently, both
 still exported for exactly this reason).
 """
+import dataclasses
 import hashlib
 import json
 import time
@@ -218,8 +219,14 @@ def run_js(ctx) -> RunnerResult:
 
 
 def _ndjson_or_crashed(tool: str, result: RunnerResult, ok_returncodes: set[int]) -> RunnerResult:
+    # Restamps MISSING/TIMEOUT rather than returning them unchanged, for the
+    # reason `_util.json_or_crashed` documents at length: run_subprocess names
+    # results after argv[0], which is not the runner's name whenever the two
+    # differ. Kept in step with that helper deliberately -- yarn taking this
+    # branch while npm/pnpm take the JSON one must not mean the two disagree
+    # about what a degraded result is called.
     if result.state in (ToolState.MISSING, ToolState.TIMEOUT):
-        return result
+        return dataclasses.replace(result, tool=tool)
     if result.returncode not in ok_returncodes:
         return RunnerResult(tool, ToolState.CRASHED, result.raw, result.stderr,
                              result.duration_s, result.returncode)

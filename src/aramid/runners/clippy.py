@@ -41,6 +41,7 @@ ruff/eslint it takes no file list, so findings can name files outside the
 current diff. That is the same shape as deps/tests, and the ledger's
 baseline is what keeps pre-existing lint from blocking day one.
 """
+import dataclasses
 import json
 
 from aramid import toolpath
@@ -81,9 +82,18 @@ def _ndjson_or_crashed(result: RunnerResult) -> RunnerResult:
     for the same reason; this NDJSON variant must not forget to. (Caught by
     a live gate run, not by unit tests: the fakes returned a result already
     named "clippy" and so never exercised the real naming path.)
+
+    The restamp is UNCONDITIONAL. Gating it on OK was the first fix's own
+    blind spot -- a live gate run exercises the OK path, so that is the path
+    it was scoped to -- and it left the degraded results wrong. Those are the
+    ones that matter most here: `TIMEOUT_S` (240s) is under the 300s pre-push
+    budget, so a cold-cache crate trips *this* runner's timeout rather than
+    the pipeline's, taking the early return and reporting as "cargo" -- the
+    exact name cargo-audit's timeouts also carried, which collapsed both
+    gates into one `degraded_tools` entry and one overwritten log file.
     """
     if result.state is not ToolState.OK:
-        return result
+        return dataclasses.replace(result, tool=NAME)
     state = ToolState.OK
     if result.returncode not in _OK_RETURNCODES:
         state = ToolState.CRASHED

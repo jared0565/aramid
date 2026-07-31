@@ -165,3 +165,32 @@ def test_run_empty_output_is_ok_not_crashed(tmp_path, monkeypatch):
     result = clippy.run(RunContext(root=tmp_path))
     assert result.state is ToolState.OK
     assert clippy.parse(result, RunContext(root=tmp_path)) == []
+
+
+@pytest.mark.parametrize("state", [ToolState.TIMEOUT, ToolState.MISSING])
+def test_degraded_result_still_carries_the_runner_name(tmp_path, monkeypatch, state):
+    """The restamp must NOT be gated on the OK branch.
+
+    `run_subprocess` names every result it returns after `argv[0]` --
+    including the ones it builds itself on the TIMEOUT (base.py) and MISSING
+    paths, which never reach the runner's own early returns. Gating the
+    restamp on OK therefore leaves exactly the degraded results, the ones
+    whose whole purpose is diagnosis, labelled "cargo": a name absent from
+    `toolset.RUNNER_TOOL_NAMES` and shared with cargo-audit.
+
+    Reachable at stock defaults, and on the path this runner's own docstring
+    names as expected: `TIMEOUT_S` is 240s against a 300s pre-push budget,
+    so a cold-cache crate trips the runner's timeout, not the pipeline's.
+
+    `typecheck.run_tsc` already learned this (T-8 section 11) and relabels
+    unconditionally for the same reason.
+    """
+    _rust_repo(tmp_path)
+    monkeypatch.setattr(clippy.toolpath, "resolve", lambda name: f"/fake/{name}")
+    monkeypatch.setattr(
+        clippy, "run_subprocess",
+        lambda argv, cwd, t, env=None: RunnerResult("cargo", state))
+
+    result = clippy.run(RunContext(root=tmp_path))
+    assert result.state is state
+    assert result.tool == clippy.NAME

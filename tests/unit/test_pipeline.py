@@ -1705,3 +1705,134 @@ def test_range_mode_without_upstream_does_not_suppress_score_regression(
                    for f in got.findings)
     finally:
         led.close()
+
+
+def test_two_degraded_rust_gates_keep_separate_logs(tmp_path, monkeypatch):
+    """Regression guard on the CONSEQUENCE, not the mechanism.
+
+    `_write_logs` keys its filename on `r.tool` and `degraded_tools` is a
+    set comprehension over the same field, so any two runners that report
+    under one name lose an entry and a diagnostic log. clippy and
+    cargo-audit both shell out to `cargo`, and `run_subprocess` names
+    results after argv[0] -- so before the restamp fix a run where both
+    Rust gates timed out wrote a single `cargo-<run_id>.log`, and whichever
+    ran second silently overwrote the other's stderr.
+
+    Driven through the real runners rather than hand-built results, so it
+    fails if either restamp is gated on the OK branch again.
+    """
+    from aramid.runners import clippy, deps
+
+    root = tmp_path / "rust"
+    (root / "src").mkdir(parents=True)
+    (root / "Cargo.toml").write_text("[package]\nname = \"x\"\n")
+    (root / "Cargo.lock").write_text("[[package]]\nname = \"x\"\n")
+
+    monkeypatch.setattr(clippy.toolpath, "resolve", lambda name: f"/fake/{name}")
+    monkeypatch.setattr(deps.toolpath, "resolve", lambda name: f"/fake/{name}")
+    monkeypatch.setattr(clippy, "run_subprocess",
+                        lambda argv, cwd, t, env=None: RunnerResult(
+                            "cargo", ToolState.TIMEOUT, stderr="clippy evidence"))
+    monkeypatch.setattr(deps, "run_subprocess",
+                        lambda argv, cwd, t, env=None: RunnerResult(
+                            "cargo", ToolState.TIMEOUT, stderr="cargo-audit evidence"))
+
+    ctx = SimpleNamespace(root=root, files=[], force_refresh=True)
+    results = [clippy.run(ctx), deps.run_cargo(ctx)]
+
+    # Both gates are separately visible in the degraded report...
+    assert sorted({r.tool for r in results}) == ["cargo-audit", "clippy"]
+
+    # ...and neither one's evidence overwrites the other's.
+    pipeline._write_logs(root, "run1", results, [])
+    logs = {p.name: p.read_text(encoding="utf-8")
+            for p in (root / ".aramid" / "logs").glob("*.log")}
+    assert sorted(logs) == ["cargo-audit-run1.log", "clippy-run1.log"]
+    assert logs["clippy-run1.log"] == "clippy evidence"
+    assert logs["cargo-audit-run1.log"] == "cargo-audit evidence"
+
+
+class _OneFindingSemgrep:
+    """Minimal semgrep stand-in for the ratchet/bake characterization below."""
+    rule = "owasp-top-ten.a03-injection.rust-command-injection-shell-spawn"
+    severity_raw = "high"
+
+    @classmethod
+    def run(cls, ctx):
+        return RunnerResult("semgrep", ToolState.OK, raw="{}")
+
+    @classmethod
+    def parse(cls, result, ctx):
+        return [RawFinding(tool="semgrep", rule=cls.rule, severity_raw=cls.severity_raw,
+                           file="a.py", line=1, message="interpolated shell spawn")]
+
+
+def test_bake_disarmed_semgrep_is_not_ratchet_exempt(tmp_path, monkeypatch):
+    """CHARACTERIZATION -- records current behaviour, not a claim it is right.
+
+    `semgrep_block_armed = false` (the WARN-only bake) makes `policy.classify`
+    return WARN for a BLOCK-tier semgrep finding. The pre-push ratchet then
+    escalates any NEW WARN back to BLOCK, and semgrep is not on its exemption
+    list -- so the bake gives no protection against findings that are not
+    already in the ledger, which is every finding a developer is about to
+    write.
+
+    The asymmetry is why this is pinned rather than simply documented: every
+    OTHER bake-style producer was explicitly exempted as it shipped -- tdd in
+    `e97cab6` ("ratchet-exempt when disarmed"), red-proof in `2407f71`, and
+    the mutation gates structurally, by being appended after the ratchet.
+    semgrep's bake predates that pattern and was never added to it. Whether
+    that is an accretion gap to close or a deliberate "new findings always
+    block" stance is an OPERATOR decision, not one this test settles.
+
+    If that decision is ever made, change this test deliberately -- do not
+    treat a failure here as a regression.
+    """
+    root = _repo(tmp_path)
+    cfg = _cfg(root, tmp_path, monkeypatch)
+    cfg.semgrep_block_armed = False
+    ledger = _ledger(tmp_path)
+
+    monkeypatch.setitem(pipeline.RUNNERS, "semgrep", _OneFindingSemgrep)
+    monkeypatch.setitem(pipeline.GATE_RUNNER_KEYS, Gate.PRE_PUSH, ["semgrep"])
+
+    result = pipeline.run_gate(root, Gate.PRE_PUSH, "all", cfg, ledger, run_id="bake-ratchet")
+
+    sg = [f for f in result.findings if f.tool == "semgrep"]
+    assert len(sg) == 1
+    assert sg[0].verdict is Verdict.BLOCK      # bake disarmed it; the ratchet re-armed it
+    assert result.exit_code == 1
+    ledger.close()
+
+
+def test_ratchet_escalates_a_natively_warn_finding_too(tmp_path, monkeypatch):
+    """The companion to the above, and the one that fixes its interpretation.
+
+    A low-severity rule that no `block_rules` entry ever promoted -- never
+    BLOCK-tier, so the bake is not what made it WARN -- escalates just the
+    same. So the ratchet is not specifically undoing the bake: it escalates
+    every new WARN from every non-exempt tool, exactly as "no new warnings"
+    intends. The bake is simply not one of the exemptions.
+
+    Without this case the test above reads as "the bake is broken"; with it,
+    the accurate reading is "the bake was never a ratchet exemption."
+    """
+    root = _repo(tmp_path)
+    cfg = _cfg(root, tmp_path, monkeypatch)
+    cfg.semgrep_block_armed = False
+    ledger = _ledger(tmp_path)
+
+    class _Warnish(_OneFindingSemgrep):
+        rule = "javascript.lang.best-practice.no-console-log"
+        severity_raw = "low"
+
+    monkeypatch.setitem(pipeline.RUNNERS, "semgrep", _Warnish)
+    monkeypatch.setitem(pipeline.GATE_RUNNER_KEYS, Gate.PRE_PUSH, ["semgrep"])
+
+    result = pipeline.run_gate(root, Gate.PRE_PUSH, "all", cfg, ledger, run_id="bake-ratchet-warn")
+
+    sg = [f for f in result.findings if f.tool == "semgrep"]
+    assert sg[0].severity is Severity.LOW
+    assert sg[0].verdict is Verdict.BLOCK
+    assert result.exit_code == 1
+    ledger.close()

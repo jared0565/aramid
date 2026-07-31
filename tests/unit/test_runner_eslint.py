@@ -148,3 +148,25 @@ def test_run_empty_output_with_error_returncode_is_crashed(tmp_path, monkeypatch
     )
     result = eslint.run(RunContext(root=tmp_path, files=["a.js"]))
     assert result.state is ToolState.CRASHED
+
+
+def test_timeout_still_carries_the_runner_name(tmp_path, monkeypatch):
+    """On win32 the binary is `eslint.cmd`, so `run_subprocess` -- which
+    names results `Path(argv[0]).name` -- labels a timeout "eslint.cmd".
+
+    `json_or_crashed` returned MISSING/TIMEOUT unchanged, so that name
+    survived into the pipeline, where nothing matches it: it is not in
+    `toolset.RUNNER_TOOL_NAMES` and not the "eslint" every Finding carries.
+    The result is asserted here rather than the platform, so the win32 shape
+    is pinned wherever the suite runs.
+    """
+    binp = tmp_path / "node_modules" / ".bin"
+    binp.mkdir(parents=True)
+    (binp / ("eslint.cmd" if sys.platform == "win32" else "eslint")).write_text("")
+    monkeypatch.setattr(
+        eslint, "run_subprocess",
+        lambda argv, cwd, t, env=None: RunnerResult("eslint.cmd", ToolState.TIMEOUT))
+
+    result = eslint.run(RunContext(root=tmp_path, files=["src/app.js"]))
+    assert result.state is ToolState.TIMEOUT
+    assert result.tool == eslint.NAME

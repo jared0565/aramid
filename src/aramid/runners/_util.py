@@ -12,6 +12,7 @@ actually intercepts the call (a module-level helper calling its own
 same-module binding would silently bypass such a patch -- see
 aramid.gitutil.read_for_fingerprint / normalizer.py for the same convention).
 """
+import dataclasses
 import json
 from pathlib import Path
 
@@ -40,11 +41,26 @@ def json_or_crashed(tool: str, result: RunnerResult, ok_returncodes: set[int],
     """Validate an already-run subprocess result's stdout as JSON, gated by
     the tool's own known-good exit codes.
 
-    MISSING/TIMEOUT pass through unchanged (the process never ran to
-    completion, so there's no exit code to evaluate and no report to
-    distrust). A tool that runs to completion but finds issues typically
-    exits non-zero -- that alone is not a crash, which is why
-    `ok_returncodes` is a per-tool SET (e.g. {0, 1}), not just "== 0".
+    MISSING/TIMEOUT keep their state (the process never ran to completion,
+    so there's no exit code to evaluate and no report to distrust) but are
+    still RESTAMPED with `tool`. They used to return unchanged, and that
+    was a real defect: `run_subprocess` names every result -- including the
+    MISSING/TIMEOUT ones it builds itself -- after `Path(argv[0]).name`,
+    which is not the runner's name whenever the two differ. cargo-audit
+    shells out to `cargo` and eslint to `eslint.cmd` on win32, so exactly
+    the degraded results, the ones whose only purpose is diagnosis, reached
+    the pipeline under a name absent from `toolset.RUNNER_TOOL_NAMES`.
+    Worse, cargo-audit and clippy both collapsed onto `cargo`, and since
+    `pipeline.degraded_tools` is a set and `_write_logs` keys its filename
+    on `.tool`, a run where both Rust gates timed out lost one gate from
+    the report and silently overwrote one diagnostic log with the other.
+    Not evaluating an exit code never required keeping the wrong name.
+    (`typecheck.run_tsc` reached the same conclusion locally -- T-8
+    section 11 -- and relabels unconditionally for these same reasons.)
+
+    A tool that runs to completion but finds issues typically exits
+    non-zero -- that alone is not a crash, which is why `ok_returncodes` is
+    a per-tool SET (e.g. {0, 1}), not just "== 0".
 
     The returncode check runs BEFORE the JSON check and independently of
     it: empty stdout parses just as cleanly as "[]"/"{}" whether the tool
@@ -56,7 +72,7 @@ def json_or_crashed(tool: str, result: RunnerResult, ok_returncodes: set[int],
     to parse.
     """
     if result.state in (ToolState.MISSING, ToolState.TIMEOUT):
-        return result
+        return dataclasses.replace(result, tool=tool)
     if result.returncode not in ok_returncodes:
         return RunnerResult(tool, ToolState.CRASHED, result.raw, result.stderr,
                              result.duration_s, result.returncode)
