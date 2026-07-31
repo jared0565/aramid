@@ -108,6 +108,18 @@ def test_deps_moderate_maps_below_critical_threshold():
     assert v is Verdict.WARN
 
 
+def test_deps_cargo_audit_gets_same_threshold_treatment_as_other_deps_tools():
+    """cargo-audit findings use a constant "medium" severity_raw (see
+    runners/deps.py's _CARGO_AUDIT_SEVERITY_RAW docstring), so at the
+    default "critical" threshold they warn, not block -- same shape as
+    pip-audit's own constant-"low" severity never reaching the default
+    threshold either."""
+    _, v = policy.classify("cargo-audit", "RUSTSEC-2020-0071", "medium", Gate.PRE_PUSH, _cfg(armed=True))
+    assert v is Verdict.WARN
+    _, v = policy.classify("cargo-audit", "RUSTSEC-2020-0071", "critical", Gate.PRE_PUSH, _cfg(armed=True))
+    assert v is Verdict.BLOCK
+
+
 # --- classify: everything else warns ----------------------------------------
 
 def test_eslint_warns():

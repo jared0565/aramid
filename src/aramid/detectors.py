@@ -88,10 +88,13 @@ def detect_stacks(root: Path, scope: Path) -> set[str]:
         s.add("python")
     if (root / "package.json").exists():
         s.add("js")
+    if (root / "Cargo.toml").exists():
+        s.add("rust")
     return s
 
 def detect_package_manager(root: Path):
-    for f, name in (("package-lock.json", "npm"), ("pnpm-lock.yaml", "pnpm"), ("yarn.lock", "yarn")):
+    for f, name in (("package-lock.json", "npm"), ("pnpm-lock.yaml", "pnpm"),
+                     ("yarn.lock", "yarn"), ("Cargo.lock", "cargo")):
         if (root / f).exists():
             return name
     return None

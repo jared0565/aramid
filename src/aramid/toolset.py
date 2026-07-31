@@ -32,7 +32,7 @@ from aramid.runners.base import RunContext
 RUNNER_TOOL_NAMES = frozenset({
     "gitleaks", "semgrep", "ruff", "eslint",
     typecheck.NAME_TSC, typecheck.NAME_MYPY,
-    deps.NAME_PIP_AUDIT, "npm", "pnpm", "yarn",
+    deps.NAME_PIP_AUDIT, deps.NAME_CARGO_AUDIT, "npm", "pnpm", "yarn",
     "pytest", "tests",
 })
 
@@ -107,7 +107,13 @@ def selected_tool_names(root: Path, cfg) -> set[str]:
             if typecheck.has_tsconfig(root):
                 names.add(typecheck.NAME_TSC)
         elif key == "deps":
-            if ctx.pkg_manager:
+            if ctx.pkg_manager == "cargo":
+                # Unlike npm/pnpm/yarn, "cargo" (the package manager) and
+                # "cargo-audit" (the security tool that stamps Finding.tool)
+                # are different names -- see runners/deps.py's _LOCKFILES
+                # comment for the same distinction.
+                names.add(deps.NAME_CARGO_AUDIT)
+            elif ctx.pkg_manager:
                 names.add(ctx.pkg_manager)
             if any(root.glob("requirements*.txt")):
                 names.add(deps.NAME_PIP_AUDIT)

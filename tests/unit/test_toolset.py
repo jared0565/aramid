@@ -22,7 +22,7 @@ def test_universe_contains_every_real_runner_tool_constant():
     from aramid.runners import eslint, gitleaks, ruff, semgrep
     for name in (gitleaks.NAME, ruff.NAME, semgrep.NAME, eslint.NAME,
                  typecheck.NAME_TSC, typecheck.NAME_MYPY, deps.NAME_PIP_AUDIT,
-                 "npm", "pnpm", "yarn", "pytest", "tests"):
+                 deps.NAME_CARGO_AUDIT, "npm", "pnpm", "yarn", "pytest", "tests"):
         assert name in toolset.RUNNER_TOOL_NAMES, name
 
 
@@ -56,6 +56,28 @@ def test_ruff_selected_only_for_python_stack(tmp_path, monkeypatch):
     assert "ruff" not in toolset.selected_tool_names(tmp_path, cfg)
     (tmp_path / "pyproject.toml").write_text("[tool.x]\n", encoding="utf-8")
     assert "ruff" in toolset.selected_tool_names(tmp_path, cfg)
+
+
+def test_deps_npm_selected_by_its_own_package_manager_name(tmp_path, monkeypatch):
+    """Regression guard for the npm/pnpm/yarn case: tool name equals package
+    manager name there, unlike cargo below -- must not regress once cargo's
+    special case is added."""
+    cfg = _cfg(tmp_path, monkeypatch, tmp_path)
+    (tmp_path / "package-lock.json").write_text("{}", encoding="utf-8")
+    assert "npm" in toolset.selected_tool_names(tmp_path, cfg)
+
+
+def test_deps_cargo_selected_as_cargo_audit_not_as_cargo(tmp_path, monkeypatch):
+    """Unlike npm/pnpm/yarn, the package manager ("cargo") and the security
+    tool that actually stamps Finding.tool ("cargo-audit") are different
+    names -- selected_tool_names must add the TOOL name, or mark-unreachable
+    logic and ghost_candidates would never recognize a real cargo-audit
+    finding as selected."""
+    cfg = _cfg(tmp_path, monkeypatch, tmp_path)
+    (tmp_path / "Cargo.lock").write_text("version = 3\n", encoding="utf-8")
+    selected = toolset.selected_tool_names(tmp_path, cfg)
+    assert deps.NAME_CARGO_AUDIT in selected
+    assert "cargo" not in selected
 
 
 def test_tsc_selected_when_tsconfig_present(tmp_path, monkeypatch):

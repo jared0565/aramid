@@ -1,0 +1,32 @@
+{
+  "database": {"advisory-count": 600, "last-commit": "abc123"},
+  "lockfile": {"dependency-count": 42},
+  "settings": {"target_arch": null, "target_os": null, "severity": null, "ignore": [], "informational_warnings": []},
+  "vulnerabilities": {
+    "found": true,
+    "count": 1,
+    "list": [
+      {
+        "advisory": {
+          "id": "RUSTSEC-2020-0071",
+          "package": "chrono",
+          "title": "Potential segfault in `localtime_r` invocations",
+          "description": "Uses of the chrono::Local timezone that lack thread synchronization may cause a segfault.",
+          "date": "2020-11-10",
+          "aliases": ["CVE-2020-26235"],
+          "categories": ["memory-corruption"],
+          "keywords": ["segfault", "time"],
+          "cvss": null,
+          "informational": null,
+          "references": [],
+          "source": null,
+          "url": "https://rustsec.org/advisories/RUSTSEC-2020-0071"
+        },
+        "versions": {"patched": [">=0.4.20"], "unaffected": []},
+        "affected": null,
+        "package": {"name": "chrono", "version": "0.4.11", "source": "registry+https://github.com/rust-lang/crates.io-index"}
+      }
+    ]
+  },
+  "warnings": {}
+}

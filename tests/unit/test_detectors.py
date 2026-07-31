@@ -15,6 +15,45 @@ def test_stack_and_pm(tmp_path):
     assert "npm" in detectors.detect_tests(tmp_path)
 
 
+def test_rust_repo_detected_via_cargo_toml(tmp_path):
+    """A Cargo workspace must report stack "rust" and package manager
+    "cargo" -- previously reported (Round 9 feedback from Operation
+    Firewall's own coding agent, verified against live repo state): a real
+    Cargo workspace was detected as stack "python" / package manager "none",
+    because detect_stacks had no Cargo signal at all and fell back to its
+    permissive "any .py file anywhere" python heuristic."""
+    (tmp_path / "Cargo.toml").write_text('[workspace]\nmembers = ["crates/x"]\n')
+    (tmp_path / "Cargo.lock").write_text('version = 3\n')
+    assert "rust" in detectors.detect_stacks(tmp_path, tmp_path)
+    assert detectors.detect_package_manager(tmp_path) == "cargo"
+
+
+def test_rust_stack_detected_without_lockfile_but_no_package_manager(tmp_path):
+    """Cargo.toml alone is enough to know this is a Rust repo (mirrors
+    package.json alone being enough for "js"); Cargo.lock is required for
+    "cargo" as a package manager (mirrors the JS lockfile requirement) --
+    a workspace member checked out without its lock is still rust, but
+    aramid cannot point a dependency audit at a lockfile that isn't there."""
+    (tmp_path / "Cargo.toml").write_text('[package]\nname = "x"\n')
+    assert "rust" in detectors.detect_stacks(tmp_path, tmp_path)
+    assert detectors.detect_package_manager(tmp_path) is None
+
+
+def test_dual_stack_python_scripts_alongside_a_real_cargo_workspace(tmp_path):
+    """The exact shape of the reported repo: a Cargo workspace that also has
+    real, genuine .py utility scripts (not virtualenv/vendored noise) --
+    both "python" and "rust" are correct, not a detection bug; aramid
+    already treats python+js as a legitimate dual-stack case, and this is
+    the same relationship for python+rust."""
+    (tmp_path / "Cargo.toml").write_text('[workspace]\nmembers = []\n')
+    (tmp_path / "Cargo.lock").write_text('version = 3\n')
+    scripts = tmp_path / "scripts"
+    scripts.mkdir()
+    (scripts / "verify.py").write_text("print('ok')\n")
+    assert detectors.detect_stacks(tmp_path, tmp_path) == {"python", "rust"}
+    assert detectors.detect_package_manager(tmp_path) == "cargo"
+
+
 # --- task-1 brief fixture matrix (15 rows) ----------------------------------
 #
 # Each test below is named after its row in the brief's table. The brief's

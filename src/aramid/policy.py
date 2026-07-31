@@ -20,7 +20,7 @@ from aramid.fingerprint import normalize_path
 from aramid.models import Finding, Gate, Severity, Verdict
 
 # Tool names that report dependency-CVE findings (see runners/deps.py).
-_DEPS_TOOLS = {"pip-audit", "npm", "pnpm", "yarn"}
+_DEPS_TOOLS = {"pip-audit", "npm", "pnpm", "yarn", "cargo-audit"}
 
 # Regression pack block-tier rule ids (aramid.pack, Task 13/15, spec §5) are
 # namespaced "aramid-regression.block.<finding-id[:8]>". They ride their OWN

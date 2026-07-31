@@ -11,6 +11,7 @@ PIP_AUDIT = FIXTURES / "pip-audit.json"
 NPM_AUDIT = FIXTURES / "npm-audit.json"
 PNPM_AUDIT = FIXTURES / "pnpm-audit.json"
 YARN_AUDIT = FIXTURES / "yarn-audit.json"
+CARGO_AUDIT = FIXTURES / "cargo-audit.json"
 
 
 # ---------------- parse() ----------------
@@ -59,8 +60,23 @@ def test_parse_yarn_audit_ndjson(tmp_path):
     assert findings[1].severity_raw == "critical"
 
 
+def test_parse_cargo_audit(tmp_path):
+    result = RunnerResult(tool="cargo-audit", state=ToolState.OK, raw=CARGO_AUDIT.read_text())
+    findings = deps.parse(result, RunContext(root=tmp_path))
+    assert len(findings) == 1
+    f = findings[0]
+    assert f.tool == "cargo-audit"
+    assert f.rule == "RUSTSEC-2020-0071"
+    # cargo-audit advisories often carry no simple severity string (many
+    # RUSTSEC entries have no CVSS score at all) -- same constant-severity
+    # choice as pip-audit's own precedent, not a parsed value.
+    assert f.severity_raw == deps._CARGO_AUDIT_SEVERITY_RAW
+    assert "chrono" in f.message
+    assert f.file == "Cargo.lock"
+
+
 def test_parse_skips_non_ok_state(tmp_path):
-    for tool in ("pip-audit", "npm", "pnpm", "yarn"):
+    for tool in ("pip-audit", "npm", "pnpm", "yarn", "cargo-audit"):
         result = RunnerResult(tool=tool, state=ToolState.MISSING)
         assert deps.parse(result, RunContext(root=tmp_path)) == []
 
@@ -96,6 +112,57 @@ def test_run_python_invokes_pip_audit_with_dash_r_per_file(tmp_path, monkeypatch
     assert "-r" in argv
     assert str(tmp_path / "requirements.txt") in argv
     assert "-f" in argv and "json" in argv
+
+
+# ---------------- cargo: dispatch by Cargo.lock ----------------
+
+def test_run_cargo_missing_when_no_cargo_lock(tmp_path):
+    result = deps.run_cargo(RunContext(root=tmp_path))
+    assert result.state is ToolState.MISSING
+
+
+def test_run_cargo_invokes_cargo_audit_json(tmp_path, monkeypatch):
+    (tmp_path / "Cargo.lock").write_text("version = 3\n")
+    captured = {}
+
+    def fake_run_subprocess(argv, cwd, timeout_s, env=None):
+        captured["argv"] = argv
+        return RunnerResult(tool="cargo-audit", state=ToolState.OK, raw=CARGO_AUDIT.read_text())
+
+    monkeypatch.setattr(deps, "run_subprocess", fake_run_subprocess)
+    result = deps.run_cargo(RunContext(root=tmp_path))
+    assert result.state is ToolState.OK
+    assert captured["argv"] == ["cargo", "audit", "--json"]
+
+
+def test_run_cargo_unparseable_output_is_crashed(tmp_path, monkeypatch):
+    (tmp_path / "Cargo.lock").write_text("version = 3\n")
+    monkeypatch.setattr(
+        deps, "run_subprocess",
+        lambda argv, cwd, t, env=None: RunnerResult(
+            tool="cargo-audit", state=ToolState.OK, raw="not json", returncode=0))
+    result = deps.run_cargo(RunContext(root=tmp_path))
+    assert result.state is ToolState.CRASHED
+
+
+def test_run_cargo_vulnerabilities_found_returncode_1_is_still_ok(tmp_path, monkeypatch):
+    # cargo-audit exits 1 when it finds vulnerabilities -- a real report,
+    # not a crash, same 0/1 convention as every other deps tool here.
+    (tmp_path / "Cargo.lock").write_text("version = 3\n")
+    monkeypatch.setattr(
+        deps, "run_subprocess",
+        lambda argv, cwd, t, env=None: RunnerResult(
+            tool="cargo-audit", state=ToolState.OK, raw=CARGO_AUDIT.read_text(), returncode=1))
+    result = deps.run_cargo(RunContext(root=tmp_path))
+    assert result.state is ToolState.OK
+
+
+def test_parse_cargo_unrecognized_shape_emits_advisory_warn(tmp_path):
+    result = RunnerResult("cargo-audit", ToolState.OK, raw='{"summary":"format changed"}')
+    findings = deps.parse(result, RunContext(root=tmp_path))
+    assert len(findings) == 1
+    assert findings[0].rule == deps.DEPS_SHAPE_DRIFT_RULE
+    assert findings[0].tool == "cargo-audit"
 
 
 # ---------------- JS: dispatch by lockfile ----------------
@@ -178,6 +245,38 @@ def test_run_mixed_stack_merges_findings_from_both_audits(tmp_path, monkeypatch)
 
     assert {f.tool for f in findings} == {"pip-audit", "npm"}
     assert len(findings) == 2
+
+
+def test_run_falls_back_to_cargo_when_no_python_or_js_deps(tmp_path, monkeypatch):
+    (tmp_path / "Cargo.lock").write_text("version = 3\n")
+    monkeypatch.setattr(
+        deps, "run_subprocess",
+        lambda argv, cwd, timeout_s, env=None: RunnerResult(tool="cargo-audit", state=ToolState.OK, raw="{}"),
+    )
+    result = deps.run(RunContext(root=tmp_path))
+    assert result.tool == "cargo-audit"
+
+
+def test_run_mixed_python_and_cargo_runs_both_audits(tmp_path, monkeypatch):
+    """The exact shape of a repo with real Python utility scripts alongside
+    a Rust workspace (no requirements*.txt necessarily, but this covers the
+    case where both a Python deps file AND Cargo.lock are present) -- both
+    audits must run, mirroring the existing python+js guarantee."""
+    (tmp_path / "requirements.txt").write_text("a==1\n")
+    (tmp_path / "Cargo.lock").write_text("version = 3\n")
+    monkeypatch.setattr(deps, "run_python",
+                         lambda ctx: RunnerResult("pip-audit", ToolState.OK, raw=PIP_AUDIT.read_text()))
+    monkeypatch.setattr(deps, "run_cargo",
+                         lambda ctx: RunnerResult("cargo-audit", ToolState.OK, raw=CARGO_AUDIT.read_text()))
+
+    ctx = RunContext(root=tmp_path)
+    result = deps.run(ctx)
+    findings = deps.parse(result, ctx)
+
+    assert result.state is ToolState.OK
+    sub_tools = {sub.tool for sub in result.sub_results}
+    assert sub_tools == {"pip-audit", "cargo-audit"}
+    assert {f.tool for f in findings} == {"pip-audit", "cargo-audit"}
 
 
 def test_run_falls_back_to_js_when_no_python_deps(tmp_path, monkeypatch):
@@ -533,7 +632,7 @@ def test_parse_yarn_unrecognized_shape_emits_advisory_warn(tmp_path):
 def test_parse_known_good_fixtures_emit_no_drift_finding(tmp_path):
     # Regression-lock: the recognized fixtures parse to their real advisories
     # ONLY -- no spurious deps-audit-shape-unrecognized finding is added.
-    for tool, fixture, n in (("pnpm", PNPM_AUDIT, 1), ("yarn", YARN_AUDIT, 2)):
+    for tool, fixture, n in (("pnpm", PNPM_AUDIT, 1), ("yarn", YARN_AUDIT, 2), ("cargo-audit", CARGO_AUDIT, 1)):
         result = RunnerResult(tool, ToolState.OK, raw=fixture.read_text())
         findings = deps.parse(result, RunContext(root=tmp_path))
         assert len(findings) == n

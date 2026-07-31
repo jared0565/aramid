@@ -59,6 +59,7 @@ from aramid.runners.base import RunnerResult, ToolState, run_subprocess
 from aramid.runners._util import json_or_crashed, relativize
 
 NAME_PIP_AUDIT = "pip-audit"
+NAME_CARGO_AUDIT = "cargo-audit"
 TIMEOUT_S = 180.0
 CACHE_TTL_S = 24 * 3600
 
@@ -70,12 +71,21 @@ _PIP_AUDIT_SEVERITY_RAW = "low"
 # (pip-audit and all three JS audit tools share this 0/1 convention).
 _OK_RETURNCODES = frozenset({0, 1})
 
-_LOCKFILES = {"npm": "package-lock.json", "pnpm": "pnpm-lock.yaml", "yarn": "yarn.lock"}
+_LOCKFILES = {"npm": "package-lock.json", "pnpm": "pnpm-lock.yaml", "yarn": "yarn.lock",
+              # Not a package-manager key like the three above (cargo the
+              # package manager and cargo-audit the security tool are
+              # different names, unlike npm/pnpm/yarn where the audit
+              # subcommand shares its package manager's name) -- present
+              # here only so _shape_drift_finding(NAME_CARGO_AUDIT) resolves
+              # the right lockfile path, not for _lockfile_path's
+              # package-manager-keyed JS dispatch.
+              NAME_CARGO_AUDIT: "Cargo.lock"}
 _JS_AUDIT_ARGV = {
     "npm": ["npm", "audit", "--json"],
     "pnpm": ["pnpm", "audit", "--json"],
     "yarn": ["yarn", "npm", "audit", "--json"],
 }
+_CARGO_LOCKFILE = "Cargo.lock"
 
 
 # ---------------------------------------------------------------- cache ----
@@ -363,17 +373,95 @@ def _yarn_shape_recognized(raw: str) -> bool:
     return saw_recognized or not saw_line
 
 
+# ------------------------------------------------------------------ cargo ----
+
+def run_cargo(ctx) -> RunnerResult:
+    lockfile = ctx.root / _CARGO_LOCKFILE
+    if not lockfile.exists():
+        return RunnerResult(NAME_CARGO_AUDIT, ToolState.MISSING)
+
+    cache_path = _cache_path(ctx.root, lockfile.read_bytes())
+    if not getattr(ctx, "force_refresh", False):
+        cached = _read_cache(cache_path)
+        if cached is not None:
+            return RunnerResult(NAME_CARGO_AUDIT, ToolState.OK, raw=cached)
+
+    result = run_subprocess(["cargo", "audit", "--json"], ctx.root, TIMEOUT_S)
+    result = json_or_crashed(NAME_CARGO_AUDIT, result, _OK_RETURNCODES, empty="{}")
+    if result.state is ToolState.OK:
+        _write_cache(cache_path, result.raw)
+    return result
+
+
+def _cargo_shape_recognized(raw: str) -> bool:
+    """cargo-audit's `--json` report has a long-stable, documented top-level
+    shape: `{"vulnerabilities": {"found": bool, "count": int, "list": [...]}}`.
+    NOT a live capture -- cargo/cargo-audit are not installed on the machine
+    this was written on, so this is built from documented/community-known
+    output, same honesty convention as `_pnpm_shape_recognized`'s own
+    "reconstructed from documentation... flagged as an assumption to verify
+    in integration" precedent. Requires the container shape parse_cargo
+    actually reads (a dict `vulnerabilities` with a list `list`) to be
+    present; anything else degrades to the shape-drift advisory rather than
+    a crash or a silently empty result."""
+    try:
+        data = json.loads(raw or "{}")
+    except (ValueError, TypeError):
+        return True
+    if not isinstance(data, dict) or not data:
+        return True
+    vulns = data.get("vulnerabilities")
+    return isinstance(vulns, dict) and isinstance(vulns.get("list"), list)
+
+
+# Many RUSTSEC advisories carry no CVSS score at all (`cvss: null`), only
+# informational categories -- there is no reliable simple severity string to
+# parse, the same situation pip-audit's own JSON is in (see module
+# docstring). Same choice as pip-audit: a conservative constant rather than
+# false confidence from an uncertain/absent field. `deps.block_severity` in
+# aramid.toml can raise the effective threshold once this is verified
+# against real cargo-audit output; "medium" (rather than pip-audit's "low")
+# reflects that a RUSTSEC id is already a curated, confirmed advisory, not a
+# broad unconfirmed ecosystem scan hit.
+_CARGO_AUDIT_SEVERITY_RAW = "medium"
+
+
+def parse_cargo(result: RunnerResult, ctx) -> list[RawFinding]:
+    if result.state is not ToolState.OK:
+        return []
+    if not _cargo_shape_recognized(result.raw):
+        return [_shape_drift_finding(NAME_CARGO_AUDIT)]
+    data = json.loads(result.raw or "{}")
+    findings = []
+    for entry in data.get("vulnerabilities", {}).get("list", []):
+        advisory = entry.get("advisory") or {}
+        package = entry.get("package") or {}
+        adv_id = str(advisory.get("id") or "cargo-audit-advisory")
+        pkg_name = package.get("name", "unknown")
+        pkg_version = package.get("version", "")
+        title = advisory.get("title") or adv_id
+        findings.append(RawFinding(
+            tool=NAME_CARGO_AUDIT,
+            rule=adv_id,
+            severity_raw=_CARGO_AUDIT_SEVERITY_RAW,
+            file=_CARGO_LOCKFILE,
+            line=1,
+            message=f"{pkg_name} {pkg_version}: {title}".strip(),
+        ))
+    return findings
+
+
 # --------------------------------------------------------------- dispatch ----
 
-def _run_mixed(ctx) -> RunnerResult:
-    """Both a Python requirements*.txt AND a JS lockfile are present: run
-    BOTH audits and bundle their results (see module docstring for why
-    `.sub_results` rather than serializing into `.raw`)."""
-    py_result = run_python(ctx)
-    js_result = run_js(ctx)
-    ok = py_result.state is ToolState.OK or js_result.state is ToolState.OK
+def _run_combined(ctx, runners: list) -> RunnerResult:
+    """Two or more of {python, js, cargo} are applicable: run every one and
+    bundle results (see module docstring for why `.sub_results` rather than
+    serializing into `.raw`). Generalizes the former python+js-only
+    `_run_mixed` to any combination, now that a third ecosystem exists."""
+    results = [fn(ctx) for fn in runners]
+    ok = any(r.state is ToolState.OK for r in results)
     combined = RunnerResult("deps", ToolState.OK if ok else ToolState.MISSING)
-    combined.sub_results = [py_result, js_result]
+    combined.sub_results = results
     return combined
 
 
@@ -381,13 +469,20 @@ def run(ctx) -> RunnerResult:
     reqs = _find_requirements(ctx.root)
     pm = ctx.pkg_manager or detect_package_manager(ctx.root)
     has_js = pm is not None and _lockfile_path(ctx.root, pm) is not None
+    has_cargo = (ctx.root / _CARGO_LOCKFILE).exists()
 
-    if reqs and has_js:
-        return _run_mixed(ctx)
+    applicable = []
     if reqs:
-        return run_python(ctx)
-    if pm:
-        return run_js(ctx)
+        applicable.append(run_python)
+    if has_js:
+        applicable.append(run_js)
+    if has_cargo:
+        applicable.append(run_cargo)
+
+    if len(applicable) > 1:
+        return _run_combined(ctx, applicable)
+    if applicable:
+        return applicable[0](ctx)
     return RunnerResult("deps", ToolState.MISSING)
 
 
@@ -406,4 +501,6 @@ def parse(result: RunnerResult, ctx) -> list[RawFinding]:
         return parse_pnpm(result, ctx)
     if result.tool == "yarn":
         return parse_yarn(result, ctx)
+    if result.tool == NAME_CARGO_AUDIT:
+        return parse_cargo(result, ctx)
     return []
