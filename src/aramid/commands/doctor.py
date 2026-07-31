@@ -38,6 +38,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from aramid import toolpath
+from aramid.runners import deps as deps_runner
 
 # T-2: `doctor` also probes the repo's TEST toolchain (`probe_tests` below).
 # `tests` is BLOCK-tier in the gate (pipeline.BLOCK_TIER_KEYS), but neither
@@ -200,6 +201,42 @@ def probe_toolchain(root: Path) -> dict[str, ToolStatus]:
     statuses = {name: probe_tool(name) for name in ALL_TOOLS}
     statuses["interpreter"] = probe_interpreter(root)
     return statuses
+
+
+def probe_deps(root: Path) -> list[ToolStatus]:
+    """Probe the repo's dependency-audit toolchain for stacks whose audit
+    tool is NOT in `ALL_TOOLS`. Today that means cargo-audit.
+
+    Why this exists (graphite, round 14, 2026-07-31): `ALL_TOOLS` covers
+    gitleaks/semgrep/ruff/pip-audit, so on a Cargo workspace cargo-audit
+    could be selected by the gate, MISSING at run time, and doctor still
+    print a clean bill of health -- the only supply-chain gate on that repo
+    absent while the health command says all is well. Structurally the same
+    "control that looks like coverage and is not" failure as the flat
+    cargo-audit severity constant.
+
+    Two deliberate boundaries, both mirroring `probe_tests`:
+      - Kept OUT of `ALL_TOOLS`/`BLOCK_TIER`: those drive the unconditional
+        probe loop and `--fix`, and cargo-audit is a cargo subcommand plugin
+        (`cargo install cargo-audit`), not an aramid-owned pip dependency --
+        `--fix` must never try to install it.
+      - Conditional on the lockfile that SELECTS the tool, so a Python or JS
+        repo never sees a spurious "cargo-audit missing".
+    Unlike `probe_tests`, these statuses must NOT feed doctor's exit code:
+    `deps` is not in `pipeline.BLOCK_TIER_KEYS`, so a missing cargo-audit
+    can never fail a gate, and doctor inventing a failure the gate would
+    never produce is its own kind of lie. Report, do not block.
+    """
+    if not (root / "Cargo.lock").exists():
+        return []
+    resolved = toolpath.resolve(deps_runner.NAME_CARGO_AUDIT)
+    if resolved is None:
+        return [ToolStatus(
+            deps_runner.NAME_CARGO_AUDIT, False,
+            detail="not installed -- Rust dependency advisories are NOT being "
+                   "checked on this repo; `cargo install cargo-audit` to enable "
+                   "(non-blocking: deps is not a BLOCK-tier gate)")]
+    return [ToolStatus(deps_runner.NAME_CARGO_AUDIT, True, detail=str(resolved))]
 
 
 def _tests_section(cfg) -> dict:
@@ -585,6 +622,11 @@ def cmd_doctor(root: Path, fix: bool = False) -> int:
     for name in ALL_TOOLS:
         print(_report_line(statuses[name]))
     for s in test_statuses:
+        print(_report_line(s))
+    # Reported, never folded into `missing_block`/`missing_tests` below:
+    # `deps` is not BLOCK-tier, so a missing cargo-audit cannot fail a gate
+    # and must not fail doctor. See `probe_deps`.
+    for s in probe_deps(root):
         print(_report_line(s))
     print(_report_line(statuses["interpreter"]))
 

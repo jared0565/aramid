@@ -563,3 +563,59 @@ def test_cmd_doctor_never_raises_on_unparseable_aramid_toml(
     # the rest of the probe still ran and printed, config error notwithstanding
     assert "gitleaks" in text, label
     assert "llm providers:" in text, label
+
+
+# --- B (graphite round 14): doctor must not report green while the only ---
+# supply-chain gate on a Rust repo is absent ---------------------------------
+#
+# `ALL_TOOLS` covers gitleaks/semgrep/ruff/pip-audit, so on a Cargo workspace
+# cargo-audit could be SELECTED by the gate, MISSING at run time, and doctor
+# still print a clean bill of health -- the same "control that looks like
+# coverage and is not" shape as the cargo-audit severity bug. Probed like
+# `probe_tests` (stack-conditional, outside ALL_TOOLS so `--fix` never tries
+# to install it), but unlike tests it must NEVER affect the exit code: `deps`
+# is not in pipeline.BLOCK_TIER_KEYS, so a missing cargo-audit cannot fail a
+# gate and must not fail doctor either. Report, do not block.
+
+def test_probe_deps_reports_cargo_audit_on_a_cargo_workspace(tmp_path, monkeypatch):
+    root = _repo(tmp_path)
+    (root / "Cargo.lock").write_text("version = 3\n", encoding="utf-8")
+    monkeypatch.setattr(doctor.toolpath, "resolve",
+                        lambda name: f"/fake/{name}" if name == "cargo-audit" else None)
+
+    statuses = doctor.probe_deps(root)
+
+    assert [s.name for s in statuses] == ["cargo-audit"]
+    assert statuses[0].present is True
+
+
+def test_probe_deps_reports_absent_cargo_audit_rather_than_staying_silent(tmp_path, monkeypatch):
+    root = _repo(tmp_path)
+    (root / "Cargo.lock").write_text("version = 3\n", encoding="utf-8")
+    monkeypatch.setattr(doctor.toolpath, "resolve", lambda name: None)
+
+    statuses = doctor.probe_deps(root)
+
+    assert [s.name for s in statuses] == ["cargo-audit"]
+    assert statuses[0].present is False
+    assert statuses[0].detail, "an absent supply-chain gate must say why it matters"
+
+
+def test_probe_deps_is_silent_on_a_repo_with_no_cargo_lock(tmp_path):
+    # No false alarm on Python/JS repos -- cargo-audit is not selected there.
+    assert doctor.probe_deps(_repo(tmp_path)) == []
+
+
+def test_missing_cargo_audit_does_not_change_doctor_exit_code(tmp_path, monkeypatch, capsys):
+    """deps is not BLOCK-tier, so its absence cannot fail a gate -- doctor
+    must report it without inventing a failure the gate would never produce."""
+    root = _repo(tmp_path)
+    (root / "Cargo.lock").write_text("version = 3\n", encoding="utf-8")
+    monkeypatch.setattr(doctor, "probe_toolchain", lambda r: _all_present())
+    monkeypatch.setattr(doctor.toolpath, "resolve", lambda name: None)
+
+    code = doctor.cmd_doctor(root)
+    out = capsys.readouterr().out
+
+    assert "cargo-audit" in out, "doctor must name the tool it did not find"
+    assert code == 0, "a missing non-BLOCK-tier deps tool must not fail doctor"

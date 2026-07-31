@@ -389,6 +389,28 @@ def test_validate_hook_shim_accepts_a_foreign_managed_slot_with_relocated_shim(
     assert init._validate_hook_shim(r) is True
 
 
+def test_validate_hook_shim_still_fails_when_slot_is_missing_despite_relocation(
+        tmp_path, monkeypatch):
+    """The third case (graphite, round 14): a relocated sibling is only
+    reachable because a foreign tool's trampoline occupies the slot and
+    chains to it. With the slot EMPTY there is nothing for git to dispatch,
+    so the sibling never runs and this is a genuine gap -- the relocation
+    must not be read as "armed" on its own. This is the case the round-12
+    fix could most easily have got wrong by testing only for a surviving
+    shim and not for something in the slot to reach it."""
+    monkeypatch.setattr(doctor, "probe_toolchain", _fake_present)
+    r = _repo(tmp_path)
+    assert init.cmd_init(r) == 0
+
+    hdir = hooks.hooks_dir(r)
+    slot = hdir / hooks.TRIAGE_HOOK
+    (hdir / f"{hooks.TRIAGE_HOOK}.local").write_bytes(slot.read_bytes())
+    slot.unlink()
+
+    assert hooks._find_chained_aramid_shim(hdir, hooks.TRIAGE_HOOK) is not None
+    assert init._validate_hook_shim(r) is False
+
+
 def test_validate_hook_shim_still_fails_when_foreign_slot_has_no_relocation(
         tmp_path, monkeypatch):
     """The other half: a foreign-managed slot with NO surviving aramid shim

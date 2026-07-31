@@ -485,3 +485,26 @@ def test_red_proof_defaults_present(tmp_path, monkeypatch):
     assert cfg.red_proof.get("red_proof_block_armed") is False
     assert cfg.red_proof.get("wall_budget_s") == 120
     assert cfg.red_proof.get("test_timeout_s") == 60
+
+
+def test_render_repo_stub_does_not_embed_derived_stack_state():
+    """D (graphite, round 14): `init` writes aramid.toml only when absent and
+    contractually never rewrites it, so anything derived that goes into this
+    stub is frozen forever. Detected stack and package manager are exactly
+    that -- they are re-detected every run by aramid.detectors and are NOT
+    Config fields. Operation Firewall's stub still claimed
+    "python; package manager: none" long after it became a Cargo workspace,
+    which misleads in the direction of UNDERSTATING coverage. `doctor`
+    reports both and is always current, so the snapshot has no reason to
+    exist. The idempotency contract is right and does not change; what
+    changes is that no mutable derived state is written into the file it
+    protects."""
+    text = config.render_repo_stub({"python", "rust"}, "cargo", today="2026-07-12")
+
+    assert "detected stack" not in text
+    assert "package manager" not in text
+    assert "rust" not in text and "cargo" not in text
+    # Still a recognisable aramid file, and every real setting survives.
+    assert text.startswith("# aramid repo config")
+    assert "schema_version" in text
+    assert 'bake_started = "2026-07-12"' in text

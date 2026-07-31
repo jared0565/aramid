@@ -240,11 +240,20 @@ def render_repo_stub(stack, pkg_mgr, *, today: str | None = None,
     from datetime import date
 
     day = today or date.today().isoformat()
-    stack_note = ", ".join(sorted(stack)) if stack else "unknown"
-    pkg_note = pkg_mgr or "none"
 
-    header = (f"# aramid repo config -- detected stack: {stack_note}; "
-              f"package manager: {pkg_note}\n")
+    # Deliberately carries NO detected stack / package manager. `init` writes
+    # this file only when absent and never rewrites it (its idempotency
+    # contract), so any DERIVED state written here is frozen for the life of
+    # the repo. Stack and package manager are re-detected on every run by
+    # aramid.detectors and are not Config fields at all -- a snapshot of them
+    # here goes stale the moment a repo adds a language, and it goes stale
+    # silently, understating what aramid actually covers. Reported live by
+    # `aramid doctor` instead. (graphite, round 14, 2026-07-31: Operation
+    # Firewall's stub still read "python; package manager: none" for a Cargo
+    # workspace.) `stack`/`pkg_mgr` stay in the signature: callers pass them
+    # positionally, and they remain available should a future stub need a
+    # genuinely non-derived, stack-dependent default.
+    header = "# aramid repo config -- see ARAMID.md; `aramid doctor` reports the live stack\n"
     body_dict = {
         "schema_version": CURRENT_SCHEMA_VERSION,
         "semgrep_block_armed": False,
