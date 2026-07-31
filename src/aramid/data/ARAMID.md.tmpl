@@ -18,7 +18,7 @@ check --strict --json`.
 | Gate | Budget | Scope | Tools | Failure mode |
 |---|---|---|---|---|
 | pre-commit | `[timeouts].pre_commit` (default 5s) | staged files | gitleaks, ruff (security rules) | fail-open |
-| pre-push | `[timeouts].pre_push` (default 300s) | changed files | gitleaks, semgrep, eslint, typecheck, dependency audit, tests | fail-closed |
+| pre-push | `[timeouts].pre_push` (default 300s) | changed files | gitleaks, semgrep, eslint, clippy, typecheck, dependency audit, tests | fail-closed |
 
 Budgets are named rather than fixed here because a repo can raise them in
 `aramid.toml`, and this file is regenerated from a template that cannot see
@@ -26,6 +26,27 @@ that config -- a hardcoded number would silently drift out of date.
 
 Secrets (gitleaks) always **BLOCK**. Everything else is severity-tiered:
 security-relevant findings block, quality findings warn.
+
+**"WARN tier" does not mean "will not block you."** At pre-push a
+no-new-warnings ratchet escalates every finding that is NEW in this run from
+WARN to BLOCK. It applies to all tools -- ruff, eslint, clippy, semgrep,
+dependency audit -- so the tier describes what a *pre-existing* finding does.
+Anything you are about to write blocks the push on its first appearance,
+whatever its tier, and the intended response is to fix it, override it
+(`aramid override <id> --reason "..."`, ledger-logged) or configure the rule
+away in the tool's own config.
+
+Two consequences worth stating outright, because both surprise people:
+
+- The ledger baseline, not the tier, is what keeps day-one lint from blocking
+  a repo. A brand-new runner reports its existing findings once, they land in
+  the baseline, and only later additions escalate.
+- **The semgrep WARN-only bake is not a ratchet exemption.** It stops
+  pre-existing BLOCK-tier findings from blocking; it does not stop a newly
+  written one, which escalates like any other new WARN. The other disarmable
+  producers ARE ratchet-exempt while disarmed -- `tdd` and `red-proof` by
+  name, and the LLM and mutation gates structurally, by being appended after
+  the ratchet runs. semgrep predates that pattern and was never added to it.
 
 **Noisy WARN-tier rule (e.g. ruff `S101` on test asserts)?** `aramid.toml`'s
 `block_rules` only demotes/promotes the BLOCK/WARN boundary -- it has nothing
