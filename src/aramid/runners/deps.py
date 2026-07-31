@@ -53,6 +53,7 @@ import json
 import time
 from pathlib import Path
 
+from aramid import toolpath
 from aramid.detectors import detect_package_manager
 from aramid.normalizer import RawFinding
 from aramid.runners.base import RunnerResult, ToolState, run_subprocess
@@ -380,6 +381,20 @@ def run_cargo(ctx) -> RunnerResult:
     if not lockfile.exists():
         return RunnerResult(NAME_CARGO_AUDIT, ToolState.MISSING)
 
+    # `cargo` resolving is NOT evidence that `cargo audit` works. cargo-audit
+    # is a separately-installed subcommand plugin (`cargo install
+    # cargo-audit`), shipped as a `cargo-audit` binary that cargo dispatches
+    # to. Without it, `cargo audit --json` exits 101 with "no such command:
+    # audit" and no JSON -- which json_or_crashed reads as CRASHED, i.e.
+    # "this tool broke" for what is really "this tool isn't installed"
+    # (measured against a live Rust repo, 2026-07-31). Probe the plugin
+    # directly and report MISSING, the same signal run_subprocess gives for
+    # any other unresolvable binary. Resolved via toolpath, not shutil.which,
+    # for the reason run_subprocess documents: the two must agree or `doctor`
+    # becomes a false green light.
+    if toolpath.resolve(NAME_CARGO_AUDIT) is None:
+        return RunnerResult(NAME_CARGO_AUDIT, ToolState.MISSING)
+
     cache_path = _cache_path(ctx.root, lockfile.read_bytes())
     if not getattr(ctx, "force_refresh", False):
         cached = _read_cache(cache_path)
@@ -396,9 +411,12 @@ def run_cargo(ctx) -> RunnerResult:
 def _cargo_shape_recognized(raw: str) -> bool:
     """cargo-audit's `--json` report has a long-stable, documented top-level
     shape: `{"vulnerabilities": {"found": bool, "count": int, "list": [...]}}`.
-    NOT a live capture -- cargo/cargo-audit are not installed on the machine
-    this was written on, so this is built from documented/community-known
-    output, same honesty convention as `_pnpm_shape_recognized`'s own
+    NOT a live capture -- correcting this docstring's first version, which
+    claimed cargo was absent: cargo IS installed here, but the `cargo-audit`
+    subcommand plugin is not (`toolpath.resolve("cargo-audit") is None`,
+    checked 2026-07-31), so no real `--json` payload was ever captured. This
+    is built from documented/community-known output, same honesty convention
+    as `_pnpm_shape_recognized`'s own
     "reconstructed from documentation... flagged as an assumption to verify
     in integration" precedent. Requires the container shape parse_cargo
     actually reads (a dict `vulnerabilities` with a list `list`) to be

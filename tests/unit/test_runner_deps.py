@@ -121,8 +121,30 @@ def test_run_cargo_missing_when_no_cargo_lock(tmp_path):
     assert result.state is ToolState.MISSING
 
 
+def test_run_cargo_missing_when_cargo_audit_plugin_not_installed(tmp_path, monkeypatch):
+    # `cargo` itself resolving is NOT evidence that `cargo audit` works:
+    # cargo-audit is a separately-installed subcommand plugin. Without it
+    # cargo exits 101 ("no such command: audit") with no JSON, which
+    # json_or_crashed would read as CRASHED -- reporting "the tool broke"
+    # for the ordinary "the tool isn't installed" case, on every Rust repo
+    # that hasn't run `cargo install cargo-audit`. Probe for the plugin and
+    # report MISSING, the same signal run_subprocess gives for any other
+    # unresolvable binary.
+    (tmp_path / "Cargo.lock").write_text("version = 3\n")
+    monkeypatch.setattr(deps.toolpath, "resolve", lambda name: None)
+
+    def explode(*a, **k):  # pragma: no cover - must never be reached
+        raise AssertionError("cargo must not be invoked when the plugin is absent")
+
+    monkeypatch.setattr(deps, "run_subprocess", explode)
+    result = deps.run_cargo(RunContext(root=tmp_path))
+    assert result.state is ToolState.MISSING
+    assert result.tool == "cargo-audit"
+
+
 def test_run_cargo_invokes_cargo_audit_json(tmp_path, monkeypatch):
     (tmp_path / "Cargo.lock").write_text("version = 3\n")
+    monkeypatch.setattr(deps.toolpath, "resolve", lambda name: f"/fake/{name}")
     captured = {}
 
     def fake_run_subprocess(argv, cwd, timeout_s, env=None):
@@ -137,6 +159,7 @@ def test_run_cargo_invokes_cargo_audit_json(tmp_path, monkeypatch):
 
 def test_run_cargo_unparseable_output_is_crashed(tmp_path, monkeypatch):
     (tmp_path / "Cargo.lock").write_text("version = 3\n")
+    monkeypatch.setattr(deps.toolpath, "resolve", lambda name: f"/fake/{name}")
     monkeypatch.setattr(
         deps, "run_subprocess",
         lambda argv, cwd, t, env=None: RunnerResult(
@@ -149,6 +172,7 @@ def test_run_cargo_vulnerabilities_found_returncode_1_is_still_ok(tmp_path, monk
     # cargo-audit exits 1 when it finds vulnerabilities -- a real report,
     # not a crash, same 0/1 convention as every other deps tool here.
     (tmp_path / "Cargo.lock").write_text("version = 3\n")
+    monkeypatch.setattr(deps.toolpath, "resolve", lambda name: f"/fake/{name}")
     monkeypatch.setattr(
         deps, "run_subprocess",
         lambda argv, cwd, t, env=None: RunnerResult(
