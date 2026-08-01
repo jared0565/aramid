@@ -43,10 +43,31 @@ Two consequences worth stating outright, because both surprise people:
   the baseline, and only later additions escalate.
 - **The semgrep WARN-only bake is not a ratchet exemption.** It stops
   pre-existing BLOCK-tier findings from blocking; it does not stop a newly
-  written one, which escalates like any other new WARN. The other disarmable
-  producers ARE ratchet-exempt while disarmed -- `tdd` and `red-proof` by
-  name, and the LLM and mutation gates structurally, by being appended after
-  the ratchet runs. semgrep predates that pattern and was never added to it.
+  written one, which escalates like any other new WARN. That is deliberate,
+  not an oversight: the bake exists to absorb the **existing backlog** when a
+  repo turns on a large ruleset, and it still does that in full. End it with
+  `aramid arm`. The other disarmable producers ARE ratchet-exempt while
+  disarmed -- `tdd` and `red-proof` by name, and the LLM and mutation gates
+  structurally, by being appended after the ratchet runs.
+
+**What decides whether something is exempt.** One rule, and it is falsifiable
+per candidate:
+
+> A new WARN finding is ratchet-exempt if and only if the push's author cannot
+> make it go away by changing what they are pushing.
+
+The deps shape-drift advisory qualifies (aramid cannot parse the audit tool's
+output; the fix belongs to aramid). `cargo-audit-warnings` qualifies (an
+upstream RUSTSEC publication event, usually with no fix available). A semgrep
+finding on new code does not, and neither does a clippy lint -- you wrote it and
+you can fix it.
+
+`tdd` and `red-proof` are a **documented exception** rather than an application
+of that rule: they fail it outright -- you caused them and you can fix them --
+and are exempt only because an operator deliberately disarmed the producer. The
+LLM and mutation gates are the same exception, implemented structurally. If you
+are adding an entry, it belongs under the rule or under that named exception;
+"it is noisy" is not a third category.
 
 The full exemption list, since "everything escalates" above is otherwise
 absolute: `tdd`, `red-proof`, the deps shape-drift advisory, and

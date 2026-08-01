@@ -545,17 +545,58 @@ def run_gate(root: Path, gate: Gate, mode: str, cfg: config_mod.Config, ledger: 
                                 selected_tools=selected_tools)
 
     if gate is Gate.PRE_PUSH:
+        # ---- THE RATCHET, AND THE ONE RULE THAT GOVERNS ITS EXEMPTION LIST --
+        # A new WARN escalates to BLOCK so warning debt cannot accumulate. The
+        # governing principle for the exemptions, settled by the maintainer's
+        # delegation in interop round 38 (round 21 declined to take it, round
+        # 38 granted it):
+        #
+        #   A new WARN finding is ratchet-exempt if and only if the push's
+        #   author cannot make it go away by changing what they are pushing.
+        #
+        # One falsifiable question per candidate, deliberately phrased as a
+        # single test rather than the two-clause "not caused by this push AND
+        # no remedy but suppression". The two-clause form is ambiguous on
+        # exactly the entry that discriminates: a push that upgrades pnpm DOES
+        # cause DEPS_SHAPE_DRIFT_RULE (the audit tool's output shape changed),
+        # so "not caused by this push" fails -- yet the author still cannot fix
+        # it, because the fix belongs to aramid's parser. The one-question form
+        # admits it cleanly and for the right reason.
+        #
+        # Admitted under the principle:
+        #   DEPS_SHAPE_DRIFT_RULE      -- aramid cannot parse the audit output;
+        #                                 the remedy is a change to aramid.
+        #   NAME_CARGO_AUDIT_WARNINGS  -- an upstream RUSTSEC informational
+        #                                 advisory is a publication event,
+        #                                 usually with no fix available. This is
+        #                                 guarantee 3 of three from round 20 (a
+        #                                 MAINTAINER decision; do not reverse it
+        #                                 here). Round 21 asked that it arrive
+        #                                 under a principle rather than as a
+        #                                 fourth ad-hoc entry -- it now does.
+        #
+        # DOCUMENTED EXCEPTION -- admitted by a different, named mechanism:
+        #   tdd, red-proof   -- these FAIL the principle (the author caused them
+        #                       and can fix them: write the test, make it red
+        #                       first). They are exempt only because an operator
+        #                       DELIBERATELY DISARMED the producer; `aramid arm`
+        #                       ends that. Kept in this list by tool name rather
+        #                       than moved, because the post-ratchet region below
+        #                       is regression-pinned by shape.
+        #   the LLM + mutation gates -- the SAME disarm mechanism, implemented
+        #                       structurally by being appended after this block.
+        #                       Stated here so the third mechanism is explicit
+        #                       rather than an accident of ordering.
+        #
+        # NOT exempt, decided under the principle (round 38):
+        #   semgrep's WARN-only bake -- the bake exists to absorb the EXISTING
+        #                       backlog, and it still does: baselined findings
+        #                       are not in `new_ids`, so the ratchet never
+        #                       touches them. Holding NEW code to the standard
+        #                       is the ratchet working, not the bake failing.
+        #   clippy           -- a lint the author wrote and can fix.
         findings = [
             replace(f, verdict=Verdict.BLOCK)
-            # Guarantee 3 of three for cargo-audit's informational warnings
-            # (interop round 20). Without it, guarantees 1 and 2 give a
-            # feature that is warn-tier by classification and blocking in
-            # practice on FIRST appearance -- which is the only appearance
-            # that matters, since after that it is baselined. A new RUSTSEC
-            # informational advisory is an upstream publication event: it
-            # arrives on a repo that changed nothing, usually with no fix
-            # available, so escalating it would fail a push with no exit but
-            # a suppression. Same reason DEPS_SHAPE_DRIFT_RULE is exempt.
             if (f.id in new_ids and f.verdict is Verdict.WARN
                 and f.rule != deps.DEPS_SHAPE_DRIFT_RULE
                 and f.tool not in ("tdd", "red-proof",

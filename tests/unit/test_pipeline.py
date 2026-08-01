@@ -1768,25 +1768,29 @@ class _OneFindingSemgrep:
 
 
 def test_bake_disarmed_semgrep_is_not_ratchet_exempt(tmp_path, monkeypatch):
-    """CHARACTERIZATION -- records current behaviour, not a claim it is right.
+    """The DECIDED behaviour: semgrep's bake is not a ratchet exemption.
 
     `semgrep_block_armed = false` (the WARN-only bake) makes `policy.classify`
     return WARN for a BLOCK-tier semgrep finding. The pre-push ratchet then
     escalates any NEW WARN back to BLOCK, and semgrep is not on its exemption
-    list -- so the bake gives no protection against findings that are not
-    already in the ledger, which is every finding a developer is about to
-    write.
+    list.
 
-    The asymmetry is why this is pinned rather than simply documented: every
-    OTHER bake-style producer was explicitly exempted as it shipped -- tdd in
-    `e97cab6` ("ratchet-exempt when disarmed"), red-proof in `2407f71`, and
-    the mutation gates structurally, by being appended after the ratchet.
-    semgrep's bake predates that pattern and was never added to it. Whether
-    that is an accretion gap to close or a deliberate "new findings always
-    block" stance is an OPERATOR decision, not one this test settles.
+    This was pinned as a characterization "pending an operator decision" while
+    it was unclear whether that was an accretion gap or a deliberate stance.
+    **Interop round 38 settled it** -- the maintainer delegated the exemption
+    principle to aramid, and under the rule aramid adopted (`pipeline.py`: a new
+    WARN is exempt iff the author cannot make it go away by changing what they
+    are pushing) the bake is NOT exempt. A semgrep finding on new code is
+    exactly what the author can fix.
 
-    If that decision is ever made, change this test deliberately -- do not
-    treat a failure here as a regression.
+    The argument that this makes the bake useless does not survive contact with
+    `new_ids`: the bake exists to absorb the EXISTING backlog when a repo turns
+    on a large ruleset, and baselined findings are never in `new_ids`, so the
+    ratchet does not touch them. Holding new code to the standard is the ratchet
+    working. See the companion test below, which is what fixes the
+    interpretation.
+
+    So this now asserts an intended contract. A failure here IS a regression.
     """
     root = _repo(tmp_path)
     cfg = _cfg(root, tmp_path, monkeypatch)
@@ -1816,6 +1820,10 @@ def test_ratchet_escalates_a_natively_warn_finding_too(tmp_path, monkeypatch):
 
     Without this case the test above reads as "the bake is broken"; with it,
     the accurate reading is "the bake was never a ratchet exemption."
+
+    Round 38 note: this pair is why the decision went the way it did. The
+    escalation is uniform across non-exempt tools, so exempting semgrep would
+    have made the bake a special case rather than removing one.
     """
     root = _repo(tmp_path)
     cfg = _cfg(root, tmp_path, monkeypatch)
