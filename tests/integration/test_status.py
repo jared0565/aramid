@@ -433,7 +433,14 @@ def test_status_reports_llm_lines(tmp_path, capsys, monkeypatch):
         led.record_run("r0", "2026-07-13T12:00:00+00:00", "drain", set(), set(), [f])
     finally:
         led.close()
-    spend_mod.append_spend({"at": "2026-07-13T10:00:00+00:00", "provider": "openrouter",
+    # Current month, NOT a literal: status reports spend MONTH-TO-DATE, so a
+    # fixed date silently stops counting the moment the month rolls over --
+    # this assertion went red on 2026-08-01 with `2026-07-13` hardcoded. The
+    # ledger timestamp above is fine as a literal; it is only an event time and
+    # is never compared against the clock.
+    spend_at = datetime.now(timezone.utc).replace(
+        day=13, hour=10, minute=0, second=0, microsecond=0).isoformat()
+    spend_mod.append_spend({"at": spend_at, "provider": "openrouter",
                             "model": "m", "tokens_in": 1, "tokens_out": 1,
                             "cost_usd": 1.25})
     assert cmd_status(r) == 0

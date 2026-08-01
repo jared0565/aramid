@@ -1,3 +1,4 @@
+import datetime
 import io
 import json
 
@@ -22,6 +23,28 @@ def _cfg(cap=5.0):
     return SimpleNamespace(llm={"openrouter_monthly_cap_usd": cap})
 
 
+def _this_month(day: int = 13) -> str:
+    """A spend timestamp inside the CURRENT month.
+
+    The cap is month-to-date: `spend.month_spend_usd` keeps a record only when
+    `(at.year, at.month) == (now.year, now.month)`, and `available()`/`review()`
+    resolve `now` from the real clock with no seam to inject. So a LITERAL date
+    here does not mean "some spend exists" -- it means "spend exists in that
+    one calendar month", and every test below silently changes meaning when the
+    month rolls over.
+
+    That is not hypothetical: these were written with `2026-07-13` hardcoded
+    and went red on 2026-08-01. `test_installed_true_even_at_cap` was worse --
+    it stayed GREEN while proving nothing, because with month-to-date spend
+    back at $0 there was no cap for `installed()` to be True in spite of.
+
+    Do not replace this with a literal. `day` is <= 28 so it is valid in every
+    month including February."""
+    now = datetime.datetime.now(datetime.UTC)
+    return now.replace(day=day, hour=10, minute=0, second=0,
+                       microsecond=0).isoformat()
+
+
 def test_registers_in_providers():
     assert base.PROVIDERS["openrouter"] is openrouter
 
@@ -35,13 +58,20 @@ def test_available_requires_key(monkeypatch):
 
 
 def test_installed_true_even_at_cap():
-    spend.append_spend({"at": "2026-07-13T10:00:00+00:00", "provider": "openrouter",
+    spend.append_spend({"at": _this_month(), "provider": "openrouter",
                         "model": "m", "tokens_in": 1, "tokens_out": 1, "cost_usd": 9.0})
+    # Assert the PREMISE, not just the conclusion. "even at cap" is only
+    # meaningful while the cap is genuinely reached, and with the old hardcoded
+    # July date this would have passed every day of 2026-08 without that being
+    # true -- month-to-date spend was back at $0, so `installed()` would have
+    # been True in spite of nothing at all. Its three siblings failed loudly;
+    # this one would have gone quiet, which is the more dangerous outcome.
+    assert openrouter.available(_cfg(cap=5.0)) is False    # cap really is reached
     assert openrouter.installed() is True      # installed != available
 
 
 def test_available_false_when_cap_reached():
-    spend.append_spend({"at": "2026-07-13T10:00:00+00:00", "provider": "openrouter",
+    spend.append_spend({"at": _this_month(), "provider": "openrouter",
                         "model": "m", "tokens_in": 1, "tokens_out": 1, "cost_usd": 5.0})
     assert openrouter.available(_cfg(cap=5.0)) is False
 
@@ -74,7 +104,7 @@ def test_review_posts_and_appends_spend(monkeypatch, tmp_path):
 
 
 def test_review_refuses_when_cap_would_breach(monkeypatch):
-    spend.append_spend({"at": "2026-07-13T10:00:00+00:00", "provider": "openrouter",
+    spend.append_spend({"at": _this_month(), "provider": "openrouter",
                         "model": "m", "tokens_in": 1, "tokens_out": 1, "cost_usd": 4.99})
     called = []
     monkeypatch.setattr(openrouter.urllib.request, "urlopen",
