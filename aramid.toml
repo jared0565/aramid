@@ -1,8 +1,28 @@
 # aramid dogfoods itself: this is the config a maintainer's `aramid init .`
-# would write, plus the one override below.
+# would write, plus the overrides below.
 # Bump this in lockstep with aramid's CURRENT_SCHEMA_VERSION on a schema
 # change, or aramid will print a schema-mismatch warning on every run here.
 schema_version = 1
+
+# The other two keys `aramid init` writes (config.py:259-263). They were missing
+# here, so the claim above was false and `aramid status` printed "bake in
+# progress, day ? (bake_started not set in aramid.toml)" while ARAMID.md:146-147
+# tells operators to consult that exact field.
+#
+# NEITHER CHANGES BEHAVIOUR. `semgrep_block_armed = false` is the value the
+# dataclass already defaulted to (config.py:157, `merged.get(..., False)`);
+# stating it explicitly only lets `aramid arm` rewrite the key in place
+# (arm.py:206) instead of inserting it above `[tests]` (arm.py:213 -- this file
+# has section headers, so the EOF-append branch never applies to it).
+# `bake_started` is read at exactly one place -- `_bake_lines` in
+# commands/status.py:142-149 -- and is display-only; no gate reads it.
+#
+# The date is a START-FROM-NOW, not a reconstruction: nothing recorded when the
+# bake actually began, so backdating would assert a fact no one can support.
+# Whether semgrep should instead be armed outright is a posture call for the
+# maintainer -- `aramid arm`, per ARAMID.md:149, there is no auto-promotion.
+semgrep_block_armed = false
+bake_started = "2026-08-02"
 
 # Point the BLOCK-tier pre-push test gate at the unit suite.
 #
