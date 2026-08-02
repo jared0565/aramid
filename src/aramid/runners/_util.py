@@ -26,9 +26,20 @@ def relativize(path_str: str, root: Path) -> str:
     normalizer, which requires a forward-slash pathspec even on Windows.
     Falls back to the original string (slashes normalized) if it isn't
     under root or isn't a valid path at all.
+
+    Backslashes are normalized EXPLICITLY, before `Path` ever sees the
+    string, because that is the one part of this that `Path` cannot do
+    portably: `\\` is a separator on Windows but a legal FILENAME CHARACTER
+    on POSIX, so `PurePosixPath("src\\main.rs").as_posix()` hands the
+    backslash straight back. Delegating to `Path` therefore honoured this
+    docstring on Windows and silently violated it on every POSIX host --
+    which is exactly how a Windows-captured clippy fixture passed locally
+    and reddened all five POSIX CI legs. The trade is deliberate: a POSIX
+    file whose name genuinely contains a backslash is mangled, but such a
+    name could never survive the git pathspec this exists to produce.
     """
     try:
-        p = Path(path_str)
+        p = Path(path_str.replace("\\", "/"))
         if p.is_absolute():
             p = p.relative_to(root)
         return p.as_posix()
