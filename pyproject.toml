@@ -13,7 +13,11 @@ requires-python = ">=3.11"
 dependencies = ["tomli-w>=1.0", "pip-audit>=2.7", "ruff>=0.6", "semgrep>=1.100"]
 
 [project.optional-dependencies]
-dev = ["pytest>=8", "pyyaml>=6"]
+# `packaging` is used by tests/unit/test_version.py to compare versions the way
+# Python packaging itself does (PEP 440 normalization). It was already present
+# transitively via pip-audit/semgrep; declared explicitly so the test suite does
+# not rest on another package's dependency choices.
+dev = ["pytest>=8", "pyyaml>=6", "packaging>=23"]
 
 [project.scripts]
 aramid = "aramid.cli:main"
