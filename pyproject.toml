@@ -20,6 +20,23 @@ where = ["src"]
 [tool.setuptools.package-data]
 aramid = ["data/*.toml", "data/*.tmpl", "rules/*.yml"]
 
+# PIN THE RULE SET EXPLICITLY -- DO NOT DELETE AS "the default anyway".
+#
+# It is the default of ruff 0.15, and was not the default of ruff 0.16. With no
+# `select` here, this repo silently inherits whatever the INSTALLED ruff
+# defaults to, and `pyproject`'s own dependency is `ruff>=0.6` with no ceiling.
+# ruff 0.16.1 widened its defaults (I, PL, RUF, UP, DTZ, ISC, FURB, FLY...), so
+# the same commit that was clean on a developer's 0.15.18 produced 107 findings
+# on CI's 0.16.1 and turned all seven legs red -- a build broken by an upstream
+# release, with no change to this repo at all.
+#
+# Adopting those newer families is a real decision (some, like DTZ's naive
+# datetimes, look worth having) -- but it is a deliberate one, made by editing
+# this list, not one inflicted by whichever version a fresh `pip install`
+# happens to resolve on the day.
+[tool.ruff.lint]
+select = ["E4", "E7", "E9", "F"]
+
 # aramid's own gate runs ruff with the bandit-derived S family armed
 # (src/aramid/runners/ruff.py). The test suite legitimately trips six of
 # those rules by design: pytest asserts (S101), fake "secret" fixtures
