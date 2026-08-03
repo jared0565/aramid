@@ -28,7 +28,8 @@ from pathlib import Path
 from typing import Callable
 
 from aramid import config as config_mod
-from aramid import gitutil, mutation_gate, mutation_score_gate, policy, red_proof, redact, tdd
+from aramid import (gitutil, mutation_gate, mutation_score_gate, policy, red_proof, redact,
+                    tdd, tests_gate)
 from aramid import review as review_mod
 from aramid.detectors import (detect_package_manager, detect_stacks, detect_tests,
                               unrooted_stack_notices)
@@ -543,6 +544,25 @@ def run_gate(root: Path, gate: Gate, mode: str, cfg: config_mod.Config, ledger: 
     selected_tools = toolset.selected_tool_names(root, cfg)
     new_ids = ledger.record_run(run_id, at, str(gate), scope_tools, scope_files, findings,
                                 selected_tools=selected_tools)
+
+    # record_run above can NEVER resolve a whole-suite finding: those carry the
+    # synthetic `<test-suite>` marker, which is not a path and so is never in
+    # scope_files. Without this call they are immortal -- one failed or
+    # timed-out suite leaves a BLOCK-tier finding open through every later
+    # green run (seen in aramid's own ledger: detected 2026-07-12, still open
+    # weeks and thousands of passing tests later).
+    #
+    # Gated on the REGISTRY KEY, not on a result's `.tool` label: those two
+    # diverge for exactly this slot, as the BLOCK_TIER_KEYS comment above
+    # already documents (`.tool` is Path(argv[0]).name -- "pytest", "npm", or
+    # "python" under a configured [tests].command). Deliberately outside the
+    # PRE_PUSH block so `check --all` clears stale suite findings too;
+    # pre-commit never runs tests, so the slot is absent and this no-ops.
+    _tests_result = results.get("tests")
+    tests_gate.auto_resolve_tests(
+        ledger, run_id, at, {f.id for f in findings},
+        suite_completed=(_tests_result is not None
+                         and _tests_result.state is ToolState.OK))
 
     if gate is Gate.PRE_PUSH:
         # ---- THE RATCHET, AND THE ONE RULE THAT GOVERNS ITS EXEMPTION LIST --
