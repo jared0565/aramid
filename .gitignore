@@ -6,6 +6,11 @@ __pycache__/
 *.pyc
 .superpowers/
 *.egg-info/
+# Packaging output. `python -m build` / `pip wheel` write these, and the
+# release workflow builds into dist/ -- without these entries a maintainer who
+# builds a wheel gets a dirty tree and can commit artifacts by accident.
+build/
+dist/
 
 # Graphite
 **/.cache/graphite/

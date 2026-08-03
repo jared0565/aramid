@@ -11,11 +11,27 @@ the small, novel, high-risk slice of commits, never on every push (see the roadm
 
 ## Install
 
+aramid is not on PyPI, so `pip install aramid` does not work. Install the wheel
+attached to a [GitHub Release](https://github.com/jared0565/aramid/releases):
+
 ```bash
-pip install -e .
+pip install https://github.com/jared0565/aramid/releases/download/v0.1.0/aramid-0.1.0-py3-none-any.whl
 ```
 
-This pulls in `ruff`, `semgrep`, and `pip-audit` as aramid's own dependencies. Secret
+Or straight from git, if you would rather pin a ref than a file:
+
+```bash
+pip install "git+https://github.com/jared0565/aramid@v0.1.0"
+```
+
+To work on aramid itself, install it editable from a checkout — this is a
+development install, not the way to deploy it:
+
+```bash
+pip install -e ".[dev]"
+```
+
+Any of these pulls in `ruff`, `semgrep`, and `pip-audit` as aramid's own dependencies. Secret
 scanning additionally requires a `gitleaks` binary on `PATH` (see `aramid doctor`).
 The vendored OWASP semgrep ruleset ships inside the wheel; `aramid update-rules` reports
 its pinned source and install path (refreshing it is a re-vendor + rebuild, offline by

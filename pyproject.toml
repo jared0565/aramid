@@ -4,7 +4,11 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "aramid"
-version = "0.1.0"
+# SINGLE SOURCE OF TRUTH: src/aramid/__init__.py's `__version__`. Previously
+# the version was spelled here AND there, so a bump could update one and ship
+# a wheel whose metadata disagreed with the `--version` the code prints --
+# silent, and only visible after release. Guarded by tests/unit/test_version.py.
+dynamic = ["version"]
 requires-python = ">=3.11"
 dependencies = ["tomli-w>=1.0", "pip-audit>=2.7", "ruff>=0.6", "semgrep>=1.100"]
 
@@ -13,6 +17,9 @@ dev = ["pytest>=8", "pyyaml>=6"]
 
 [project.scripts]
 aramid = "aramid.cli:main"
+
+[tool.setuptools.dynamic]
+version = { attr = "aramid.__version__" }
 
 [tool.setuptools.packages.find]
 where = ["src"]

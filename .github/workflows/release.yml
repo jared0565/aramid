@@ -1,0 +1,114 @@
+# Tag-triggered release: build the wheel + sdist and attach them to a GitHub
+# Release, so `pip install -e .` from a source checkout stops being aramid's
+# only install path.
+#
+# Uses the built-in GITHUB_TOKEN only -- no PyPI account, no repository secret
+# to create, and a release can be deleted if something is wrong. Publishing to
+# PyPI is a separate, irreversible decision (it claims the public name and
+# forbids re-uploading a version) and is deliberately not done here.
+#
+# Every gate below runs BEFORE the release is created, because a bad artifact
+# that is already published cannot be recalled -- only superseded.
+name: release
+
+on:
+  push:
+    tags: ["v*"]
+
+# Needed to create the Release. Everything else stays read-only.
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+
+      # FAIL FAST, BEFORE BUILDING. `aramid.__version__` is the single source of
+      # truth (pyproject reads it via `dynamic`), so a tag that disagrees with
+      # it would publish `aramid-0.1.0.whl` under a tag called v0.2.0 -- a
+      # mismatch nobody notices until someone reports the wrong version.
+      - name: Assert the tag matches aramid.__version__
+        shell: python
+        run: |
+          import os
+          import pathlib
+          import re
+          import sys
+
+          tag = os.environ["GITHUB_REF_NAME"]
+          src = pathlib.Path("src/aramid/__init__.py").read_text(encoding="utf-8")
+          m = re.search(r'^__version__\s*=\s*"([^"]+)"', src, re.M)
+          if not m:
+              sys.exit("::error::could not find __version__ in src/aramid/__init__.py")
+
+          version = m.group(1)
+          if tag != f"v{version}":
+              sys.exit(f"::error::tag {tag} does not match __version__ {version} "
+                       f"-- expected tag v{version}. Bump __version__ or retag.")
+          print(f"tag {tag} matches __version__ {version}")
+
+      - name: Install build backend
+        run: pip install build
+
+      - name: Build wheel and sdist
+        run: python -m build
+
+      # Same check the CI workflow runs, repeated here because THIS is the
+      # artifact that reaches users. A wheel missing the vendored ruleset makes
+      # semgrep crash on every pre-push in every consumer repo, and the failure
+      # would appear far from its cause.
+      - name: Verify packaged data files are present in the wheel
+        shell: python
+        run: |
+          import pathlib
+          import sys
+          import tempfile
+          import zipfile
+
+          wheel = next(pathlib.Path("dist").glob("*.whl"))
+          required = [
+              "aramid/data/block_rules.toml",
+              "aramid/data/defaults.toml",
+              "aramid/rules/owasp.yml",
+          ]
+
+          with tempfile.TemporaryDirectory() as tmp:
+              with zipfile.ZipFile(wheel) as zf:
+                  zf.extractall(tmp)
+              tmp_path = pathlib.Path(tmp)
+              missing = [f for f in required if not (tmp_path / f).exists()]
+
+          if missing:
+              sys.exit(f"::error::missing packaged data file(s) in {wheel.name}: {missing}")
+          print(f"OK: {wheel.name} contains all required data files: {required}")
+
+      # Install the BUILT WHEEL into a clean venv and run the CLI from it. The
+      # CI workflow only ever exercises `pip install -e .`, so nothing until
+      # now proved a non-editable install works at all -- that the console
+      # script is generated, the package imports without the source tree, and
+      # the vendored ruleset resolves from inside site-packages.
+      - name: Smoke-test the built wheel in a clean environment
+        run: |
+          set -euo pipefail
+          python -m venv /tmp/smoke
+          /tmp/smoke/bin/pip install --quiet dist/*.whl
+          cd /tmp   # leave the source tree, so an accidental import of it fails
+          /tmp/smoke/bin/aramid --version
+          /tmp/smoke/bin/python -c "
+          import pathlib
+          from aramid.runners import semgrep
+          p = pathlib.Path(semgrep.VENDORED_RULES_PATH)
+          assert p.is_file(), f'vendored ruleset missing from the installed package: {p}'
+          print(f'vendored ruleset resolved at {p}')
+          "
+
+      - name: Create the GitHub Release with the artifacts
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "${GITHUB_REF_NAME}" dist/* --generate-notes --verify-tag
