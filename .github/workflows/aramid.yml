@@ -91,6 +91,42 @@ jobs:
       - name: Run aramid gate (--all --strict --json)
         run: python -m aramid check --all --strict --json
 
+      # THE STEP ABOVE IS PRE-COMMIT TIER, WHICH IS WEAKER THAN IT READS.
+      # `--all` widens the FILE set, never the runner set, and `--gate` defaults
+      # to pre-commit -- so that step runs gitleaks + ruff only. Until this was
+      # added, CI never invoked semgrep through the gate at all, and the claim
+      # that aramid dogfoods its own engine in CI was false. (Gate.ALL exists in
+      # GATE_RUNNER_KEYS but is unreachable from the CLI.)
+      #
+      # ADDITIVE ON PURPOSE, NOT A REPLACEMENT: the two tiers are complementary,
+      # not nested. ruff runs ONLY at pre-commit; semgrep and tests run ONLY at
+      # pre-push (pipeline.GATE_RUNNER_KEYS). Swapping the step above for this
+      # one would silently drop ruff from CI.
+      #
+      # WHAT THIS BUYS, precisely: it proves semgrep actually RUNS here, and
+      # that the vendored OWASP ruleset resolves and PARSES rather than merely
+      # existing. semgrep cannot fail the build on findings while the WARN-only
+      # bake is unarmed, but a semgrep that is missing or crashing degrades the
+      # run, and `--strict` turns that into exit 1. A ruleset broken at load
+      # time would otherwise surface first in a consumer repo.
+      #
+      # WHAT IT DOES NOT PROVE: this job installs with `pip install -e .`, so
+      # the ruleset is read from the source tree, not from a built wheel. The
+      # "Verify packaged data files" step below checks the wheel CONTAINS the
+      # file; nothing yet loads semgrep against an installed (non-editable)
+      # aramid. Do not read a green run here as wheel-level proof.
+      #
+      # COST: the gate's BLOCK-tier `tests` runner re-runs tests/unit (per
+      # aramid.toml), so this duplicates part of the suite step above. That is
+      # the price of exercising the real gate end-to-end; the legs run in
+      # parallel, so it costs wall-clock once, not seven times.
+      #
+      # TEETH VERIFIED, not assumed: run against a fresh clone with a planted
+      # AWS credential, this exits 1 with a gitleaks BLOCK. Against the clean
+      # tree it exits 0 with zero findings and nothing degraded.
+      - name: Run aramid gate at pre-push tier (semgrep + tests)
+        run: python -m aramid check --gate pre-push --all --strict --json
+
       - name: Install build backend
         run: pip install build
 
