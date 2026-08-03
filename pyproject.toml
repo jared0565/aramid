@@ -21,9 +21,21 @@ where = ["src"]
 aramid = ["data/*.toml", "data/*.tmpl", "rules/*.yml"]
 
 # aramid's own gate runs ruff with the bandit-derived S family armed
-# (src/aramid/runners/ruff.py). The test suite legitimately trips four of
-# those rules by design: pytest asserts (S101) and fake "secret" fixtures
-# exercising the secret-handling paths (S105/S106/S107). Scoped to tests/
-# only -- the S family stays fully armed for src/.
+# (src/aramid/runners/ruff.py). The test suite legitimately trips six of
+# those rules by design: pytest asserts (S101), fake "secret" fixtures
+# exercising the secret-handling paths (S105/S106/S107), and spawning real
+# `git`/`python` to drive hooks and gates end-to-end (S603 "untrusted input",
+# S607 "partial executable path").
+#
+# S603/S607 were the same shape as the other four but were never listed
+# alongside them, so aramid's own gate carried 68 permanently-open findings
+# against its own test tree -- the largest single source of noise in its own
+# ledger, and precisely what teaches an operator to ignore a security tool.
+# Spawning `git` by name IS the thing these e2e tests exist to do; an absolute
+# path would test a different program than the one a developer runs.
+#
+# Scoped to tests/ only -- the S family stays fully armed for src/, where
+# subprocess use is justified per-line with `noqa` instead. Both halves are
+# guarded by tests/unit/test_repo_lint_config.py.
 [tool.ruff.lint.per-file-ignores]
-"tests/**" = ["S101", "S105", "S106", "S107"]
+"tests/**" = ["S101", "S105", "S106", "S107", "S603", "S607"]
