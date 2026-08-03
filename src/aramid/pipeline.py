@@ -542,8 +542,13 @@ def run_gate(root: Path, gate: Gate, mode: str, cfg: config_mod.Config, ledger: 
     # queue.py/ledger.py cycle, ledger.py:155).
     from aramid import toolset
     selected_tools = toolset.selected_tool_names(root, cfg)
+    # `root=` opts this run into resolving findings whose file has LEFT the
+    # repo. Deliberately passed here and nowhere else: init._scan_history
+    # records historical gitleaks findings whose paths belong to old commits
+    # and usually do not exist at HEAD, so the same flag there would clear
+    # every historical secret on sight (see ledger._departed).
     new_ids = ledger.record_run(run_id, at, str(gate), scope_tools, scope_files, findings,
-                                selected_tools=selected_tools)
+                                selected_tools=selected_tools, root=root)
 
     # record_run above can NEVER resolve a whole-suite finding: those carry the
     # synthetic `<test-suite>` marker, which is not a path and so is never in

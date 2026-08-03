@@ -11,6 +11,29 @@ CREATE TABLE IF NOT EXISTS events(
 """
 
 
+def _departed(root: Path | None, file: str | None) -> bool:
+    """True when `file` is no longer present in the repo at all.
+
+    OPT-IN BY DESIGN: `root` is None for every caller except the gate, so this
+    returns False and behaviour is unchanged for them. That is not tidiness,
+    it is a safety requirement -- `commands/init._scan_history` records
+    HISTORICAL gitleaks findings from `git log --all`, whose paths are those of
+    OLD commits and routinely do not exist at HEAD. Resolving on absence there
+    would clear every historical secret the instant it was recorded.
+
+    A path that cannot even be tested (the `<test-suite>` marker is not a legal
+    Windows filename) is reported as present, i.e. NOT departed: the gate has
+    a dedicated resolver for those, and the safe default here is to leave a
+    finding open rather than clear one we could not check.
+    """
+    if root is None or not file:
+        return False
+    try:
+        return not (root / file).exists()
+    except (OSError, ValueError):
+        return False
+
+
 def _detect_payload(f: Finding) -> dict:
     return {"tool": f.tool, "file": f.file, "rule": f.rule, "verdict": str(f.verdict),
             "severity": str(f.severity), "line": f.line, "message": f.message,
@@ -75,7 +98,8 @@ class Ledger:
         return state
 
     def record_run(self, run_id, at, gate, scope_tools, scope_files, findings, *,
-                   selected_tools: set[str] | None = None):
+                   selected_tools: set[str] | None = None,
+                   root: Path | None = None):
         state, seen = _materialize(self.events())
         present = {f.id for f in findings}
         payload = {"gate": gate, "tools": sorted(scope_tools)}
@@ -90,8 +114,18 @@ class Ledger:
             if f.id not in seen:
                 new_ids.append(f.id)
         for fid, rec in state.items():
-            if rec["status"] == "open" and fid not in present \
-               and rec.get("tool") in scope_tools and rec.get("file") in scope_files:
+            if rec["status"] != "open" or fid in present:
+                continue
+            if rec.get("tool") not in scope_tools:
+                continue
+            # `file in scope_files` is the ordinary route. The second clause
+            # exists because every discovery path filters `--diff-filter=ACMR`
+            # (gitutil) -- Deleted is excluded, since a gone file cannot be
+            # linted -- so a deleted file is NEVER in scope_files and its
+            # findings could never resolve. `git rm` a file and its findings
+            # stayed open forever; repos accumulated one immortal entry per
+            # file they ever deleted.
+            if rec.get("file") in scope_files or _departed(root, rec.get("file")):
                 self.append(Event(EventType.FINDING_RESOLVED, run_id, at, finding_id=fid))
         self.append(Event(EventType.RUN_FINISHED, run_id, at,
                           payload={"blocking": sum(1 for f in findings if str(f.verdict)=="block")}))
