@@ -127,6 +127,54 @@ jobs:
       - name: Run aramid gate at pre-push tier (semgrep + tests)
         run: python -m aramid check --gate pre-push --all --strict --json
 
+      # The step above is only worth having if semgrep ACTUALLY ran, and its
+      # own exit code cannot tell you that: runner selection is gate- AND
+      # stack-dependent, so a future edit to GATE_RUNNER_KEYS or to a runner's
+      # applicability could quietly shrink the set back to nothing and the step
+      # would still exit 0. Green for the wrong reason is precisely the defect
+      # this pair of steps exists to correct, so assert it rather than trust it.
+      #
+      # `tools` in the RUN_STARTED payload is scope_tools -- the runners that
+      # reported ToolState.OK -- so membership means "ran and completed", not
+      # merely "was selected". A crashed semgrep is caught by --strict on the
+      # step above; this catches the quieter case where it was never run.
+      #
+      # Only semgrep is asserted. The tests slot is reported under
+      # Path(argv[0]).name, which is "python" for this repo's configured
+      # [tests].command, and asserting an argv-derived name would break the
+      # moment that command changes. The full list is printed so a human can
+      # see it.
+      - name: Assert the pre-push gate really ran semgrep
+        shell: python
+        run: |
+          import json
+          import pathlib
+          import sqlite3
+          import sys
+
+          db = pathlib.Path(".aramid/ledger.db")
+          if not db.exists():
+              sys.exit(f"::error::{db} missing -- the gate step wrote no ledger")
+
+          con = sqlite3.connect(db)
+          rows = con.execute(
+              "select payload from events where type='run_started' order by rowid"
+          ).fetchall()
+          con.close()
+
+          pre_push = [json.loads(p) for (p,) in rows if p]
+          pre_push = [d for d in pre_push if d.get("gate") == "pre-push"]
+          if not pre_push:
+              sys.exit("::error::no pre-push run recorded -- the gate step did "
+                       "not run at the tier this job claims to exercise")
+
+          tools = pre_push[-1].get("tools") or []
+          print(f"pre-push gate completed these runners: {sorted(tools)}")
+          if "semgrep" not in tools:
+              sys.exit("::error::semgrep did not run in the pre-push gate "
+                       f"(completed: {sorted(tools)}). CI would be reporting a "
+                       "pass for a tier it never exercised.")
+
       - name: Install build backend
         run: pip install build
 
