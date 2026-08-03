@@ -10,7 +10,7 @@ import dataclasses
 import json
 
 from aramid.ledger import Ledger
-from aramid.models import Finding
+from aramid.models import Finding, Verdict
 from aramid.pipeline import GateResult
 
 ROTATE_WARNING = "rotate the credential — deleting the line does not fix the leak"
@@ -43,13 +43,32 @@ def render_console(result: GateResult, ledger: Ledger) -> str:
     new_findings = [f for f in result.findings if f.id in result.new_ids]
     baseline_findings = [f for f in result.findings if f.id not in result.new_ids]
 
+    # A BLOCK verdict is the REASON the gate fails, so it is always named --
+    # being un-new is not a reason to hide it. Collapsing these into
+    # "(+N baseline findings)" meant a blocked push printed a count and
+    # nothing else, leaving `--json` as the only way to learn the cause:
+    #
+    #     (+7 baseline findings)
+    #     45 findings open in ledger
+    #     error: failed to push some refs to '...'
+    #
+    # The WARN half stays collapsed; the point is the cause of the failure,
+    # not printing everything.
+    still_blocking = [f for f in baseline_findings if f.verdict is Verdict.BLOCK]
+    quiet_baseline = [f for f in baseline_findings if f.verdict is not Verdict.BLOCK]
+
     if new_findings:
         lines.append(f"NEW findings ({len(new_findings)}):")
         for f in new_findings:
             lines.append(_render_finding(f))
-    if baseline_findings:
-        lines.append(f"(+{len(baseline_findings)} baseline findings)")
-    if not new_findings and not baseline_findings:
+    if still_blocking:
+        lines.append(f"STILL BLOCKING ({len(still_blocking)}) — seen before, "
+                     "and still failing this gate:")
+        for f in still_blocking:
+            lines.append(_render_finding(f))
+    if quiet_baseline:
+        lines.append(f"(+{len(quiet_baseline)} baseline findings)")
+    if not result.findings:
         lines.append("no findings")
 
     if result.degraded:

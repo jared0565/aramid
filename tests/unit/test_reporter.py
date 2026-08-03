@@ -32,6 +32,51 @@ def test_new_findings_render_before_collapsed_baseline(tmp_path):
     ledger.close()
 
 
+def test_blocking_baseline_finding_is_named_not_just_counted(tmp_path):
+    """A BLOCK verdict is the REASON the gate fails, so it must be named even
+    when it is not new.
+
+    Before this, a blocking finding that was not first-seen-this-run got
+    collapsed into `(+N baseline findings)`, so the gate exited 1 having
+    printed nothing but a count -- `--json` was the only way to learn what
+    blocked. Hit for real while pushing a release tag: the whole output was
+
+        (+7 baseline findings)
+        45 findings open in ledger
+        error: failed to push some refs to '...'
+    """
+    ledger = Ledger(tmp_path / "l.db")
+    findings = [
+        _f("warn1", verdict=Verdict.WARN),
+        _f("blk1", tool="tests", rule="tests-failed", verdict=Verdict.BLOCK,
+           file="<test-suite>", line=0),
+    ]
+    result = GateResult(exit_code=1, findings=findings, degraded=[], new_ids=[],
+                        stale_overrides=[], run_id="r1")
+
+    out = reporter.render_console(result, ledger)
+
+    assert "blk1" in out, f"the blocking finding was never named:\n{out}"
+    assert "tests-failed" in out
+    # the WARN one stays collapsed -- this is not a licence to print everything
+    assert "warn1" not in out
+    assert "(+1 baseline findings)" in out
+    ledger.close()
+
+
+def test_gate_that_blocks_never_renders_only_a_count(tmp_path):
+    """The invariant behind the test above, stated directly: if anything in the
+    result blocks, the rendered text must contain that finding's id. A future
+    refactor that reintroduces the collapse fails here."""
+    ledger = Ledger(tmp_path / "l.db")
+    for new_ids in ([], ["blk1"]):          # blocking, new and not-new alike
+        result = GateResult(exit_code=1, findings=[_f("blk1", verdict=Verdict.BLOCK)],
+                            degraded=[], new_ids=new_ids, stale_overrides=[], run_id="r1")
+        out = reporter.render_console(result, ledger)
+        assert "blk1" in out, f"new_ids={new_ids} rendered no cause:\n{out}"
+    ledger.close()
+
+
 # ------------------------------------------------------- secret rotate line --
 
 def test_secret_finding_shows_rotate_warning(tmp_path):
