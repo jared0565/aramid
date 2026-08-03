@@ -1,6 +1,5 @@
 import sys
 import time
-from pathlib import Path
 from aramid.runners.base import run_subprocess, ToolState
 
 def test_missing_binary_is_missing(tmp_path):

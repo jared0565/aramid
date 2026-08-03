@@ -32,7 +32,10 @@ def test_install_invokes_schtasks(monkeypatch, tmp_path):
 
     def fake_run(argv, **kw):
         calls["argv"] = argv
-        class R: returncode = 0; stdout = ""; stderr = ""
+        class R:
+            returncode = 0
+            stdout = ""
+            stderr = ""
         return R()
 
     monkeypatch.setattr(schedule.subprocess, "run", fake_run)

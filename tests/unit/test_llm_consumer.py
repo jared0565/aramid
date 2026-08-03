@@ -31,11 +31,13 @@ def _repo(tmp_path) -> tuple[Path, str, str]:
     _git(r, "config", "user.name", "t")
     (r / "src").mkdir()
     (r / "src" / "auth.py").write_text("x = 1\n", encoding="utf-8")
-    _git(r, "add", "."); _git(r, "commit", "-m", "c1")
+    _git(r, "add", ".")
+    _git(r, "commit", "-m", "c1")
     base_sha = subprocess.run(["git", "rev-parse", "HEAD"], cwd=r, check=True,
                               capture_output=True, text=True).stdout.strip()
     (r / "src" / "auth.py").write_text(FILE_BODY, encoding="utf-8")
-    _git(r, "add", "."); _git(r, "commit", "-m", "c2")
+    _git(r, "add", ".")
+    _git(r, "commit", "-m", "c2")
     head_sha = subprocess.run(["git", "rev-parse", "HEAD"], cwd=r, check=True,
                               capture_output=True, text=True).stdout.strip()
     return r, base_sha, head_sha

@@ -1,4 +1,5 @@
-import subprocess, sys
+import subprocess
+import sys
 
 def test_version_flag_prints_semver():
     out = subprocess.run([sys.executable, "-m", "aramid", "--version"],

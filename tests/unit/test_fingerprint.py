@@ -1,4 +1,4 @@
-from aramid.fingerprint import compute_fingerprint, normalize_line
+from aramid.fingerprint import compute_fingerprint
 
 def test_id_stable_across_line_shift_and_crlf():
     a = compute_fingerprint("ruff","S102","src/a.py","    exec(x)\n",0)

@@ -1,4 +1,3 @@
-from pathlib import Path
 
 from aramid import config
 from aramid.models import Verdict

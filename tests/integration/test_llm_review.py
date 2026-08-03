@@ -28,8 +28,6 @@ faked and still pass.
 import json
 import subprocess
 import sys
-from datetime import datetime, timezone
-from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -126,7 +124,8 @@ def _setup_repo(tmp_path):
     _git(r, "config", "user.name", "t")
     (r / "src").mkdir()
     (r / "src" / "app.py").write_text("x = 1\n", encoding="utf-8")
-    _git(r, "add", "."); _git(r, "commit", "-q", "-m", "c1")
+    _git(r, "add", ".")
+    _git(r, "commit", "-q", "-m", "c1")
     assert cmd_init(r) in (0, 2)      # onboard: config, hooks, baseline, registry
     # Auto-learn hermeticity: item ids are random uuids, and the default
     # audit_every=8 would hash-sample a shadow audit for ~1 in 8 of them,
@@ -141,7 +140,8 @@ def _setup_repo(tmp_path):
     # the gate actually runs (CI: gitleaks/ruff present), the pre-commit gate
     # aborts this commit and the test errors at git-commit time. The drain's
     # catch-up sweep (not the post-commit hook) is what triages this range.
-    _git(r, "add", "."); _git(r, "commit", "-q", "--no-verify", "-m", "risky change")
+    _git(r, "add", ".")
+    _git(r, "commit", "-q", "--no-verify", "-m", "risky change")
     return r
 
 
@@ -214,7 +214,8 @@ def test_full_loop(tmp_path, monkeypatch, seam):
     # --no-verify: same reason as _setup_repo -- aramid's own pre-commit hook is
     # installed in this repo; this fix commit is scaffolding for the auto-resolve
     # assertion below, not a test of the pre-commit gate.
-    _git(r, "add", "."); _git(r, "commit", "-q", "--no-verify", "-m", "fix exec injection")
+    _git(r, "add", ".")
+    _git(r, "commit", "-q", "--no-verify", "-m", "fix exec injection")
     led = Ledger(r / ".aramid" / "ledger.db")
     try:
         assert pipeline.run_gate(r, Gate.PRE_PUSH, "all", cfg, led).exit_code == 0

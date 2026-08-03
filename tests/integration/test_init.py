@@ -201,7 +201,7 @@ def test_second_init_is_idempotent(tmp_path, monkeypatch):
 
     # .gitignore has no duplicate lines and each mandated entry appears once.
     gitignore_text = (r / ".gitignore").read_text(encoding="utf-8")
-    lines = [l for l in gitignore_text.splitlines() if l.strip()]
+    lines = [ln for ln in gitignore_text.splitlines() if ln.strip()]
     assert len(lines) == len(set(lines))
     assert gitignore_text.count(".aramid/") == 1
 

@@ -9,7 +9,6 @@ into aramid.cli's own namespace) for argument translation.
 import subprocess
 import sys
 from pathlib import Path
-from types import SimpleNamespace
 
 from aramid import cli
 from aramid.models import Gate

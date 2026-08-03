@@ -6,7 +6,6 @@ import subprocess
 import sys
 from pathlib import Path
 
-from aramid import hooks
 from aramid.commands import doctor, init
 from aramid.commands.uninstall import cmd_uninstall
 from aramid.ledger import Ledger

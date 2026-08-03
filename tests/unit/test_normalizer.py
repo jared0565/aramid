@@ -1,5 +1,4 @@
 from datetime import datetime, timezone
-from pathlib import Path
 from aramid.ledger import Ledger
 from aramid.normalizer import RawFinding, normalize
 from aramid.models import Gate, Severity, Source, Verdict
@@ -7,7 +6,6 @@ from aramid.models import Gate, Severity, Source, Verdict
 NOW = datetime(2026, 7, 13, 12, 0, 0, tzinfo=timezone.utc)
 
 def _classify(tool, rule, sev, gate):
-    from aramid.models import Severity, Verdict
     return (Severity.HIGH, Verdict.BLOCK)
 
 def test_two_identical_lines_get_distinct_ids(tmp_path, monkeypatch):

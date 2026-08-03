@@ -239,8 +239,8 @@ def test_status_reports_per_tool_skip_streak(tmp_path, monkeypatch, capsys):
 
     assert rc == 0
     assert "semgrep: skipped last 2 run(s)" in out
-    assert "gitleaks" not in [l.strip().split(":")[0] for l in out.splitlines()
-                               if "skipped" in l]
+    assert "gitleaks" not in [ln.strip().split(":")[0] for ln in out.splitlines()
+                              if "skipped" in ln]
 
 
 # ------------------------------------------------- unrotated historical ----

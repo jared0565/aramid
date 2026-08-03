@@ -5,7 +5,10 @@ from aramid.fuzzgen import case_seed, gen_value, supported_params
 
 
 def _rng():
-    return random.Random(1234)
+    # noqa S311 here and below: these are SEEDED generators driving reproducible
+    # fuzz cases. `secrets` would be actively wrong -- a failing case has to
+    # replay identically from its seed, which a CSPRNG cannot do.
+    return random.Random(1234)  # noqa: S311  -- seeded, reproducible, not crypto
 
 
 def test_supported_params_all_hinted():
@@ -56,7 +59,7 @@ def test_gen_value_types():
 def test_gen_value_optional_can_be_none_and_value():
     seen_none = seen_val = False
     for i in range(50):
-        v = gen_value(Optional[int], random.Random(i))
+        v = gen_value(Optional[int], random.Random(i))  # noqa: S311  -- seeded, not crypto
         seen_none |= v is None
         seen_val |= isinstance(v, int)
     assert seen_none and seen_val
@@ -66,7 +69,7 @@ def test_gen_value_special_floats_appear():
     import math
     seen = set()
     for i in range(200):
-        v = gen_value(float, random.Random(i))
+        v = gen_value(float, random.Random(i))  # noqa: S311  -- seeded, not crypto
         if math.isnan(v):
             seen.add("nan")
         elif math.isinf(v):

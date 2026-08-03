@@ -1,7 +1,6 @@
 from types import SimpleNamespace
 
 from aramid import review
-from aramid.review import Arm
 
 LADDER = [
     {"tier": "cheap", "provider": "ollama-cloud", "model": "df", "effort": "", "min_score": 40},

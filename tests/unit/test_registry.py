@@ -1,4 +1,3 @@
-from pathlib import Path
 
 from aramid import registry
 from aramid.fingerprint import normalize_path

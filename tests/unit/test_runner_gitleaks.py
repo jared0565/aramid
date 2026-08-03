@@ -1,7 +1,5 @@
-import json
 from pathlib import Path
 
-import pytest
 
 from aramid.runners import gitleaks
 from aramid.runners.base import RunContext, RunnerResult, ToolState

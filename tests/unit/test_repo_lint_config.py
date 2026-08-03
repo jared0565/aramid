@@ -21,6 +21,7 @@ for `src/`, so a real subprocess risk in shipped code still blocks.
 """
 from pathlib import Path
 
+from aramid import gitutil
 from aramid.runners import ruff
 from aramid.runners.base import RunContext, ToolState
 
@@ -53,6 +54,38 @@ def test_repo_config_exempts_deliberate_subprocess_use_in_tests():
         f"ruff reports {sorted({'S603', 'S607'} & codes)} against "
         f"{SUBPROCESS_USING_TEST}. Add them to [tool.ruff.lint.per-file-ignores] "
         'for "tests/**" in pyproject.toml, alongside S101/S105/S106/S107.')
+
+
+def test_repo_test_tree_is_lint_clean():
+    """aramid's own test tree must pass aramid's own gate, with nothing left
+    over for an operator to learn to scroll past.
+
+    This is a ratchet, and it is meant to be: any new lint defect in tests/
+    fails the suite rather than accumulating silently in the ledger. Findings
+    that are DELIBERATE belong in one of two places -- the `tests/**`
+    per-file-ignores above (tree-wide idioms) or a per-line `# noqa: CODE --
+    reason` (single-site, e.g. the seeded RNG in test_fuzzgen.py). Suppressing
+    one by widening this test instead is how the noise came back last time.
+    """
+    root = _repo_root()
+    py = [f for f in gitutil.all_tracked_files(root)
+          if f.startswith("tests/") and f.endswith(".py")]
+    assert len(py) > 50, (
+        f"only {len(py)} test files discovered -- expected the whole tree. "
+        "A near-empty file list makes this guard pass vacuously")
+
+    ctx = RunContext(root=root, files=py)
+    result = ruff.run(ctx)
+    assert result.state is ToolState.OK, (
+        f"ruff did not run cleanly (state={result.state}); a crashed run "
+        "reports no findings and would make this test vacuously pass")
+
+    findings = ruff.parse(result, ctx)
+    detail = "\n".join(
+        f"  {f.file}:{f.line}  {f.rule}  {f.message}"
+        for f in sorted(findings, key=lambda x: (x.file, x.line)))
+    assert not findings, (
+        f"{len(findings)} lint finding(s) in aramid's own test tree:\n{detail}")
 
 
 def test_security_family_stays_armed_for_src():
