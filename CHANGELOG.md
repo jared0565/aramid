@@ -15,6 +15,24 @@ to publish a tag that disagrees with it.
 First packaged release. Everything below already existed in the repository;
 what is new is that it can be installed without a source checkout.
 
+### Fixed
+
+- **`aramid schedule` works on Linux and macOS**, not only Windows. It was
+  Windows-only, so the scheduled red-team drain could not run on the platforms
+  most servers use. POSIX installs a single marked crontab line; every unmarked
+  line in your crontab is preserved, and re-installing replaces aramid's entry
+  rather than adding another. `aramid status` learned to probe the right
+  backend, so a successful cron install no longer reports "unknown".
+- **The full-history secrets scan honours `.aramid-suppressions.toml`.** It
+  applied only the path-level ignore filter, so the one reviewable, committed
+  way to record "this history hit is a test fixture" was bypassed on exactly
+  the path that produces those findings — leaving the machine-local
+  `ledger mark-not-a-secret` as the only remedy. The suppressed count is
+  printed, never silently dropped.
+- **Analyzer dependencies carry upper bounds.** ruff 0.16.1 widened its default
+  rule set and turned all seven CI legs red against a commit that was clean on
+  0.15.18. Bounds are set where each project signals breaking change.
+
 ### Added
 
 - **Deterministic gate** at `pre-commit` and `pre-push`, running industry
@@ -40,19 +58,15 @@ what is new is that it can be installed without a source checkout.
 Stated plainly because each one changes how you should deploy this:
 
 - **The findings ledger is machine-local.** `aramid init` adds `.aramid/` to
-  `.gitignore`, so triage decisions (`mark-not-a-secret`, overrides, the
-  ratchet baseline) do not travel between developers or reach CI. Every clone
-  re-reports findings another developer already judged. There is currently no
-  tracked, per-finding suppression format; the tracked alternatives are
-  `ignore_paths` in `aramid.toml` or a tool's own allowlist.
-- **The scheduled drain is Windows-only.** `aramid schedule` registers a
-  Windows Task Scheduler job; there is no cron or launchd equivalent. The gate
-  itself is cross-platform and is tested on Linux, macOS and Windows.
-- **Analyzer versions are not pinned.** ruff and semgrep are declared with
-  lower bounds only, so two installs a month apart can resolve different
-  versions, report different findings, and reach different verdicts. An
-  upstream default change has already caused this once — see the
-  `[tool.ruff.lint] select` pin in `pyproject.toml`.
+  `.gitignore`, so `aramid override` decisions and the ratchet baseline do not
+  travel between developers or reach CI. The shareable path is a committed
+  `.aramid-suppressions.toml`, which BLOCK-tier suppression already requires
+  and which the full-history secrets scan now honours — but WARN-tier
+  overrides remain local to whoever ran them.
+- **Analyzer version bounds reduce drift, they do not eliminate it.** ruff,
+  semgrep and pip-audit now carry upper bounds, so a breaking upstream release
+  cannot silently change your verdicts. A patch release still can. If you need
+  byte-identical results across machines, pin them yourself in a lockfile.
 - **`Gate.ALL` is unreachable from the CLI.** `--all` widens the *file* set,
   not the *runner* set; `--gate` accepts only `pre-commit` and `pre-push`.
 - **semgrep ships unarmed.** A WARN-only bake is in effect per repo until
