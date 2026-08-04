@@ -10,7 +10,31 @@ name = "aramid"
 # silent, and only visible after release. Guarded by tests/unit/test_version.py.
 dynamic = ["version"]
 requires-python = ">=3.11"
-dependencies = ["tomli-w>=1.0", "pip-audit>=2.7", "ruff>=0.6", "semgrep>=1.100"]
+# UPPER BOUNDS ARE LOAD-BEARING, NOT HOUSEKEEPING. aramid's proposition is a
+# DETERMINISTIC gate, and an analyzer is not an implementation detail here --
+# it IS the verdict. With lower bounds only, two teams installing aramid a
+# month apart resolve different analyzers, get different findings on identical
+# code, and the ratchet reads the delta as "new".
+#
+# Not hypothetical: ruff 0.16.1 widened its DEFAULT rule set (I, PL, RUF, UP,
+# DTZ, ISC, FURB, FLY) and turned all seven CI legs red against a commit that
+# was clean on 0.15.18, with no change to this repo at all.
+#
+# Bounds are set where each project has signalled breaking change: ruff is 0.x,
+# so a MINOR bump is the breaking unit; the others follow semver majors.
+#
+# HONEST LIMIT: this bounds the blast radius, it does not make the gate
+# reproducible. A patch release can still change what a rule reports. Pinning
+# exactly (`==`) would do that, at the cost of conflicting with any consumer
+# that pins its own ruff, and of aramid having to chase every release. Bounded
+# ranges are the trade; a lockfile is the answer if exact reproducibility is
+# ever required.
+dependencies = [
+    "tomli-w>=1.0,<2",
+    "pip-audit>=2.7,<3",
+    "ruff>=0.6,<0.17",
+    "semgrep>=1.100,<2",
+]
 
 [project.optional-dependencies]
 # `packaging` is used by tests/unit/test_version.py to compare versions the way
