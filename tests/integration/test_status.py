@@ -526,3 +526,26 @@ def test_status_shows_autolearn_armed(tmp_path, monkeypatch, capsys):
                                       encoding="utf-8")
     assert cmd_status(repo) == 0
     assert "autolearn: armed" in capsys.readouterr().out
+
+
+# --- the scheduled-drain line must know about the cron backend ---------------
+
+def test_scheduled_drain_line_reads_cron_on_posix(monkeypatch):
+    """`_scheduled_drain_line` probed schtasks unconditionally, so once the
+    drain became installable via cron a POSIX user could install it
+    successfully and still be told "unknown" -- schtasks does not exist there,
+    the spawn raises, and the except arm swallows it.
+    """
+    import sys as _sys
+
+    from aramid.commands import status as status_mod
+
+    monkeypatch.setattr(_sys, "platform", "linux")
+    monkeypatch.setattr(
+        schedule_mod, "_read_crontab",
+        lambda: f"0 */4 * * * /usr/bin/python3 -m aramid drain --all  {schedule_mod.CRON_MARKER}\n")
+    assert status_mod._scheduled_drain_line() == "scheduled drain: installed"
+
+    monkeypatch.setattr(schedule_mod, "_read_crontab",
+                        lambda: "0 3 * * * /usr/local/bin/backup.sh\n")
+    assert status_mod._scheduled_drain_line() == "scheduled drain: not installed"

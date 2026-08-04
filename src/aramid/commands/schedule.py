@@ -1,9 +1,16 @@
-"""aramid schedule install|remove|status -- Windows Task Scheduler entry
-running `aramid drain --all` every [drain].interval_hours (spec section 2).
-XML registration is used (not bare /SC flags) because StartWhenAvailable
--- "run as soon as possible after a missed start", spec section 6 -- is
-only expressible in the XML schema. The sweep additionally self-heals any
-fully missed window."""
+"""aramid schedule install|remove|status -- a recurring `aramid drain --all`
+every [drain].interval_hours (spec section 2), via Windows Task Scheduler on
+Windows and cron everywhere else.
+
+Windows: XML registration is used (not bare /SC flags) because
+StartWhenAvailable -- "run as soon as possible after a missed start", spec
+section 6 -- is only expressible in the XML schema.
+
+POSIX: a single marked crontab line (see CRON_MARKER). cron has no
+StartWhenAvailable equivalent, which is tolerable because the sweep already
+self-heals a fully missed window. cron rather than launchd on macOS so one
+implementation covers both platforms; launchd is the natural follow-up if
+per-user agent semantics are ever wanted."""
 import subprocess
 import sys
 import tempfile
@@ -63,11 +70,102 @@ def _query_argv() -> list[str]:
     return ["schtasks", "/Query", "/TN", TASK_NAME]
 
 
-def cmd_schedule(root, action: str) -> int:
-    if sys.platform != "win32":
-        print("aramid: schedule: only supported on Windows (Task Scheduler)",
-              file=sys.stderr)
+# ------------------------------------------------------------ POSIX (cron) ---
+# The drain used to be installable on Windows only, which meant the scheduled
+# red-team half of the product could not run on the platforms most servers and
+# CI runners use. The gate was always cross-platform; only the scheduler was
+# not.
+#
+# cron rather than launchd on macOS: one implementation covers both Linux and
+# macOS, and `crontab` is present on both. launchd would be more native on
+# macOS, and is the natural follow-up if per-user agent semantics are ever
+# wanted.
+#
+# cron has no equivalent of Task Scheduler's StartWhenAvailable ("run as soon
+# as possible after a missed start"). That is acceptable here because the drain
+# sweep already self-heals a fully missed window -- see the module docstring.
+CRON_MARKER = "# aramid-drain"
+
+
+def render_cron_line(interpreter: Path, interval_hours: int) -> str:
+    """One crontab line, tagged with CRON_MARKER so it can be found and
+    replaced without touching anything else in the user's crontab.
+
+    `*/N` in the HOUR field only means what you want for N <= 23; `0 */48 * * *`
+    does not mean "every two days", it means "every hour divisible by 48",
+    which never matches. Intervals of a day or more are therefore converted to
+    a day-of-month step. A zero or negative interval would emit `*/0`, a cron
+    syntax error, so it floors at 1.
+    """
+    hours = max(1, int(interval_hours))
+    if hours >= 24:
+        when = f"0 0 */{max(1, hours // 24)} * *"
+    else:
+        when = f"0 */{hours} * * *"
+    return f"{when} {interpreter} -m aramid drain --all  {CRON_MARKER}"
+
+
+def strip_aramid_lines(text: str) -> str:
+    """Drop only aramid's own marked lines. install/remove rewrite the user's
+    ENTIRE crontab, so everything unmarked -- backups, certbot, @reboot jobs --
+    must survive verbatim."""
+    return "\n".join(ln for ln in text.splitlines() if CRON_MARKER not in ln)
+
+
+def _read_crontab() -> str:
+    cp = subprocess.run(["crontab", "-l"], capture_output=True, text=True,
+                        errors="replace")
+    # `crontab -l` exits non-zero with "no crontab for <user>" when none exists.
+    # That is an EMPTY crontab, not a failure -- treating it as an error would
+    # make the very first install impossible.
+    return cp.stdout if cp.returncode == 0 else ""
+
+
+def _write_crontab(text: str) -> None:
+    body = text.strip("\n")
+    cp = subprocess.run(["crontab", "-"], input=(body + "\n") if body else "",
+                        capture_output=True, text=True, errors="replace")
+    if cp.returncode != 0:
+        raise RuntimeError(f"crontab write failed: {cp.stderr.strip()}")
+
+
+def _cron_schedule(root, action: str) -> int:
+    if action == "status":
+        if CRON_MARKER in _read_crontab():
+            print(f"aramid schedule: installed ({TASK_NAME}, cron)")
+            return 0
+        print("aramid-drain: not installed")
         return 3
+
+    remaining = strip_aramid_lines(_read_crontab())
+    if action == "remove":
+        _write_crontab(remaining)
+        print(f"aramid schedule: remove ok ({TASK_NAME})")
+        return 0
+
+    cfg = config_mod.load_config(Path(root))
+    hours = int(cfg.drain.get("interval_hours", 4))
+    line = render_cron_line(Path(sys.executable), hours)
+    # Strip-then-append, so re-installing REPLACES aramid's entry instead of
+    # accumulating a duplicate on every run.
+    _write_crontab(f"{remaining}\n{line}" if remaining.strip() else line)
+    print(f"aramid schedule: install ok ({TASK_NAME}, cron)")
+    return 0
+
+
+def cmd_schedule(root, action: str) -> int:
+    if action not in ("install", "remove", "status"):
+        print(f"aramid: schedule: unknown action {action!r}", file=sys.stderr)
+        return 3
+    if sys.platform != "win32":
+        try:
+            return _cron_schedule(root, action)
+        except FileNotFoundError:
+            print("aramid: schedule: `crontab` not found on PATH", file=sys.stderr)
+            return 3
+        except Exception as exc:
+            print(f"aramid: schedule: engine error: {exc}", file=sys.stderr)
+            return 3
     try:
         if action == "install":
             cfg = config_mod.load_config(Path(root))

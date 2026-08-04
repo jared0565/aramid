@@ -260,13 +260,26 @@ def _registry_line(root: Path) -> str:
 
 
 def _scheduled_drain_line() -> str:
+    """Probe whichever scheduler backend this platform actually uses.
+
+    This queried schtasks unconditionally. Once the drain became installable
+    via cron on Linux/macOS that turned into a lie by omission: schtasks does
+    not exist there, the spawn raises, the except arm swallows it, and a user
+    who had just installed the cron entry successfully was told "unknown".
+    """
     try:
         import subprocess
+        import sys
 
-        from aramid.commands.schedule import _query_argv
-        cp = subprocess.run(_query_argv(), capture_output=True, text=True,
-                            errors="replace")
-        return ("scheduled drain: installed" if cp.returncode == 0
+        from aramid.commands import schedule as schedule_mod
+
+        if sys.platform == "win32":
+            cp = subprocess.run(schedule_mod._query_argv(), capture_output=True,
+                                text=True, errors="replace")
+            installed = cp.returncode == 0
+        else:
+            installed = schedule_mod.CRON_MARKER in schedule_mod._read_crontab()
+        return ("scheduled drain: installed" if installed
                 else "scheduled drain: not installed")
     except Exception:
         return "scheduled drain: unknown"

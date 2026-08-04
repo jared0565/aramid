@@ -445,11 +445,13 @@ Reports on the vendored, offline OWASP semgrep ruleset — performs no network f
 Removes installed hook shims, deletes `ARAMID.md`, removes the `.gitignore` entries `init` appended, deregisters the repo. The ledger (`.aramid/`) is deliberately kept.
 
 ### `aramid schedule install|remove|status`
-Register/remove/query a Windows Task Scheduler job running `<interpreter> -m aramid drain --all` on a recurring interval.
-- Windows-only; any other platform → exit 3.
-- `install` — reads `[drain].interval_hours` (default 4), registers via `schtasks /Create ... /F` under task name `aramid-drain`.
-- `remove` — `schtasks /Delete /TN aramid-drain /F`.
-- `status` — `schtasks /Query /TN aramid-drain`; prints its output or "aramid-drain: not installed".
+Register/remove/query a recurring `<interpreter> -m aramid drain --all`. Cross-platform: Windows Task Scheduler on Windows, cron elsewhere.
+- `install` — reads `[drain].interval_hours` (default 4).
+  - **Windows** — registers via `schtasks /Create ... /F` under task name `aramid-drain`.
+  - **Linux/macOS** — writes one crontab line tagged `# aramid-drain`. Intervals under a day become an hour step (`0 */4 * * *`); a day or more becomes a day step (48h → `0 0 */2 * *`), because `*/N` in the hour field is meaningless for N > 23. Re-installing replaces aramid's line rather than adding a second one, and every unmarked line in your crontab is preserved verbatim.
+- `remove` — `schtasks /Delete /TN aramid-drain /F`, or strips only the marked crontab line.
+- `status` — exit `0` if installed, `3` if not.
+- cron has no equivalent of Task Scheduler's `StartWhenAvailable`; the drain sweep already self-heals a fully missed window. macOS uses cron rather than launchd so one implementation covers both POSIX platforms.
 
 ### `aramid rebaseline [path] [--yes]`
 - `path` (positional, optional, default `.`).
@@ -485,7 +487,7 @@ Register/remove/query a Windows Task Scheduler job running `<interpreter> -m ara
 |---|---|
 | `aramid rebaseline` (no `--yes`) | `3` always (reports what would be discarded) |
 | `aramid doctor` | `2` if either BLOCK-tier tool (gitleaks, semgrep) missing; `0` otherwise. WARN-tier tool absence (ruff, pip-audit) never changes it. |
-| `aramid schedule` | `3` on non-Windows, unknown action, or non-zero `schtasks` result; otherwise mirrors `schtasks`' own return code (`status`) |
+| `aramid schedule` | `3` on unknown action, a non-zero `schtasks` result, a failed `crontab` write, or `crontab` missing from `PATH`; `status` returns `3` when the job is not installed |
 | `aramid drain` | `0` ok; `2` degraded (some repo/consumer failed, rest completed); `3` if the lock is already held (real drain, not dry-run) or the registry is unusable; `0` also when no repos are registered/given |
 | `aramid triage` | `0` on success (queued or not); `3` on engine error |
 | `aramid ledger show <id>` | `3` if id unknown |
