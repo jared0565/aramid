@@ -113,7 +113,11 @@ def strip_aramid_lines(text: str) -> str:
 
 
 def _read_crontab() -> str:
-    cp = subprocess.run(["crontab", "-l"], capture_output=True, text=True,
+    # S607 justification: `crontab` is resolved from PATH deliberately. Its
+    # location differs across distributions and macOS (/usr/bin vs /bin), so an
+    # absolute path would be wrong more often than it was right. argv is fixed
+    # here -- no external input reaches it.
+    cp = subprocess.run(["crontab", "-l"], capture_output=True, text=True,  # noqa: S607
                         errors="replace")
     # `crontab -l` exits non-zero with "no crontab for <user>" when none exists.
     # That is an EMPTY crontab, not a failure -- treating it as an error would
@@ -123,7 +127,9 @@ def _read_crontab() -> str:
 
 def _write_crontab(text: str) -> None:
     body = text.strip("\n")
-    cp = subprocess.run(["crontab", "-"], input=(body + "\n") if body else "",
+    # S607 justification: as in _read_crontab -- fixed argv, PATH-resolved by
+    # design. The crontab BODY arrives on stdin, never as an argument.
+    cp = subprocess.run(["crontab", "-"], input=(body + "\n") if body else "",  # noqa: S607
                         capture_output=True, text=True, errors="replace")
     if cp.returncode != 0:
         raise RuntimeError(f"crontab write failed: {cp.stderr.strip()}")

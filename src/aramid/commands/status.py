@@ -274,7 +274,9 @@ def _scheduled_drain_line() -> str:
         from aramid.commands import schedule as schedule_mod
 
         if sys.platform == "win32":
-            cp = subprocess.run(schedule_mod._query_argv(), capture_output=True,
+            # S603 justification: argv comes from schedule._query_argv(), a
+            # fixed literal list -- no external input reaches it.
+            cp = subprocess.run(schedule_mod._query_argv(), capture_output=True,  # noqa: S603
                                 text=True, errors="replace")
             installed = cp.returncode == 0
         else:
