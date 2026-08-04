@@ -288,6 +288,102 @@ def test_discover_finds_and_inits_multiple_repos_and_skips_non_repos(tmp_path, m
 # faked directly, driving `_scan_history` itself rather than the full
 # `cmd_init` orchestration.
 
+def test_scan_history_honours_committed_suppressions(tmp_path, monkeypatch):
+    """A reviewed, committed `.aramid-suppressions.toml` entry must apply to the
+    full-history scan, not only to gate runs.
+
+    `_scan_history` applied the path-level ignore filter but never consulted
+    `load_suppressions`, so the ONE mechanism aramid offers for a shared,
+    reviewable "this is a fixture, not a credential" judgement was bypassed on
+    exactly the path that produces those findings. The only remaining remedy
+    was `ledger mark-not-a-secret`, which writes to the gitignored ledger and
+    therefore cannot travel between clones -- so every new maintainer running
+    `aramid init` re-discovered the same test fixtures as unrotated secrets.
+
+    Measured on aramid's own repo before the fix: a fresh clone WITH a
+    committed suppressions file still reported `historical: 10`.
+    """
+    r = _repo(tmp_path)
+    _no_user_config(tmp_path, monkeypatch)
+    cfg = config_mod.load_config(r)
+
+    fixture_raw = RawFinding(tool="gitleaks", rule="generic-api-key", severity_raw="high",
+                             file="tests/fixtures/creds.py", line=1, message="found a key",
+                             secret="AKIAFAKEFAKEFAKEFAKE")
+    real_raw = RawFinding(tool="gitleaks", rule="generic-api-key", severity_raw="high",
+                          file="src/config.py", line=3, message="found a key",
+                          secret="AKIAFAKEFAKEFAKEOTHER")
+    monkeypatch.setattr(init.gitleaks_runner, "run",
+                        lambda ctx: RunnerResult("gitleaks", ToolState.OK))
+    monkeypatch.setattr(init.gitleaks_runner, "parse",
+                        lambda result, ctx: [fixture_raw, real_raw])
+
+    # Phase 1 -- learn the id the fixture finding actually gets, rather than
+    # hard-coding a fingerprint that would rot the moment normalize() changes.
+    ledger = _ledger(r)
+    try:
+        init._scan_history(r, ledger, cfg)
+        ids = {e.payload["file"]: e.finding_id for e in ledger.events()
+               if e.type.value == "finding_detected" and e.payload.get("historical")}
+    finally:
+        ledger.close()
+    fixture_id = ids["tests/fixtures/creds.py"]
+
+    # Phase 2 -- commit that judgement and rescan from a clean ledger.
+    (r / ".aramid-suppressions.toml").write_text(
+        "[[suppress]]\n"
+        f'id = "{fixture_id}"\n'
+        'tool = "gitleaks"\n'
+        'rule = "generic-api-key"\n'
+        'path = "tests/fixtures/creds.py"\n'
+        'reason = "deliberate test fixture, not a live credential"\n',
+        encoding="utf-8")
+    (r / ".aramid" / "ledger.db").unlink()
+
+    ledger = _ledger(r)
+    try:
+        count = init._scan_history(r, ledger, cfg)
+
+        assert count == 1, "the suppressed fixture should not be recorded"
+        files = [e.payload["file"] for e in ledger.events()
+                 if e.type.value == "finding_detected" and e.payload.get("historical")]
+        assert files == ["src/config.py"], files
+    finally:
+        ledger.close()
+
+
+def test_scan_history_suppression_does_not_hide_unlisted_secrets(tmp_path, monkeypatch):
+    """The other half: suppressing one finding must not blanket the scan. A
+    secret with no committed entry still gets recorded, so this cannot become
+    an accidental off switch for the history scan."""
+    r = _repo(tmp_path)
+    _no_user_config(tmp_path, monkeypatch)
+    cfg = config_mod.load_config(r)
+
+    real_raw = RawFinding(tool="gitleaks", rule="generic-api-key", severity_raw="high",
+                          file="src/config.py", line=3, message="found a key",
+                          secret="AKIAFAKEFAKEFAKEOTHER")
+    monkeypatch.setattr(init.gitleaks_runner, "run",
+                        lambda ctx: RunnerResult("gitleaks", ToolState.OK))
+    monkeypatch.setattr(init.gitleaks_runner, "parse",
+                        lambda result, ctx: [real_raw])
+    # An entry for a DIFFERENT finding entirely.
+    (r / ".aramid-suppressions.toml").write_text(
+        "[[suppress]]\n"
+        'id = "' + "0" * 64 + '"\n'
+        'tool = "gitleaks"\n'
+        'rule = "generic-api-key"\n'
+        'path = "somewhere/else.py"\n'
+        'reason = "unrelated"\n',
+        encoding="utf-8")
+
+    ledger = _ledger(r)
+    try:
+        assert init._scan_history(r, ledger, cfg) == 1
+    finally:
+        ledger.close()
+
+
 def test_scan_history_drops_findings_under_ignored_graphite_paths(tmp_path, monkeypatch):
     r = _repo(tmp_path)
     _no_user_config(tmp_path, monkeypatch)

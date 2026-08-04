@@ -229,6 +229,28 @@ def _scan_history(root: Path, ledger: Ledger, cfg: config_mod.Config) -> int:
     findings = normalize(raws, root, _historical_ref_for(raws), salt, Gate.ALL, classify)
     historical = [dataclasses.replace(f, historical=True) for f in findings]
 
+    # A committed `.aramid-suppressions.toml` entry is the ONE reviewable,
+    # shareable way to record "this history hit is a fixture, not a
+    # credential". The scan used to bypass it -- applying only the path-level
+    # ignore filter above -- which left `ledger mark-not-a-secret` as the only
+    # remedy. That writes to the gitignored ledger, so the judgement could
+    # never travel between clones and every new maintainer running `init`
+    # re-discovered the same fixtures as unrotated secrets.
+    #
+    # An entry with no `reason` is dropped by load_suppressions and therefore
+    # suppresses nothing -- the fail-safe direction.
+    #
+    # The count is PRINTED, never silent: quietly discarding secret findings is
+    # precisely the behaviour a security tool must not have, even when the
+    # discarding was asked for in version control.
+    suppress_ids = {s.id for s in config_mod.load_suppressions(root)[0]}
+    if suppress_ids:
+        kept = [f for f in historical if f.id not in suppress_ids]
+        if len(kept) != len(historical):
+            print(f"aramid: init: {len(historical) - len(kept)} historical finding(s) "
+                  "suppressed by .aramid-suppressions.toml")
+        historical = kept
+
     ledger.record_run(uuid.uuid4().hex, _now(), "historical-scan",
                        {"gitleaks"}, set(), historical)
     return len(historical)

@@ -1,0 +1,104 @@
+# Reviewed, committed BLOCK-tier suppressions for aramid's own repo.
+#
+# WHY THIS FILE EXISTS. `aramid override` deliberately refuses BLOCK-tier
+# findings and points here instead, because suppressing a blocking security
+# finding should be a reviewable change in version control -- not a local
+# ledger entry only its author can see. Until this file existed, aramid's own
+# ten fixture "secrets" were suppressed via machine-local `ledger
+# mark-not-a-secret` calls, so CI and every fresh clone still reported ten
+# unrotated credentials. aramid was not using the mechanism it ships.
+#
+# Matching is by finding `id`, which is a content fingerprint (tool, rule,
+# path, line content, occurrence) and carries no per-machine salt -- so these
+# entries resolve identically in every clone. `tool`/`rule`/`path` are
+# recorded for readability and for stale-entry detection: if a fixture is
+# edited its id changes, this entry stops matching, and aramid reports it as a
+# stale suppression rather than silently covering nothing.
+#
+# EVERY REASON BELOW WAS RE-VERIFIED AGAINST THE FILE, not inherited from an
+# earlier triage note. A suppression is a standing assertion that something is
+# safe; it deserves a first-hand check each time it is written down.
+
+# --- AWS access-key IDs -----------------------------------------------------
+# These are 16 characters where a real AWS key ID is 20, with a sequential
+# body. They are not merely fake, they are not well-formed.
+
+[[suppress]]
+id = "6dc368ead235637f307d44a7ce9cb1414c50f6f8ebf8cbe00488da71466cd611"
+tool = "gitleaks"
+rule = "generic-api-key"
+path = "tests/integration/test_check.py"
+reason = "Test fixture: a RawFinding placeholder driving the secret-redaction path. 16 chars vs a real key ID's 20, sequential body -- malformed, not a credential."
+
+[[suppress]]
+id = "32d03b844ec1443789a82c3b617d9e1adb39612db9faeaea914faa9ee60ec4b4"
+tool = "gitleaks"
+rule = "generic-api-key"
+path = "tests/integration/test_check.py"
+reason = "Same malformed 16-char fixture as above, in the second check test that exercises secret handling."
+
+[[suppress]]
+id = "bf4035752a0e7d499d643198f8939ca640540cc4ebb0b7617499dda6c56452c0"
+tool = "gitleaks"
+rule = "generic-api-key"
+path = "tests/unit/test_reporter.py"
+reason = "Test fixture `raw_secret`, a malformed AKIA-shaped placeholder, used to prove the reporter never prints a raw secret. Malformed 16-char sequential value."
+
+[[suppress]]
+id = "9fbe3fa83f1d4a589616a3a99f929ea0e726cff51222cc0c3792d6e338fd70e0"
+tool = "gitleaks"
+rule = "generic-api-key"
+path = "tests/unit/test_pipeline.py"
+reason = "Test fixture `secret`, the same malformed placeholder, driving the pipeline's scrub path. Malformed 16-char sequential value."
+
+# --- The one that is well-formed, and why it is still safe ------------------
+# One fixture IS 20 characters and structurally valid, so it got the closest
+# look. tests/integration/test_gitleaks_live.py:18 documents it as
+# deliberately constructed to dodge example-key allowlisting -- the test needs
+# gitleaks to actually fire. It is an access-key ID with no corresponding
+# secret access key anywhere in the repository, and an access-key ID alone
+# cannot authenticate.
+
+[[suppress]]
+id = "d33b7eed1877efaf28144ce16293366c76cfb0233c14c869b40d25b2c347e005"
+tool = "gitleaks"
+rule = "aws-access-token"
+path = "tests/integration/test_gitleaks_live.py"
+reason = "Invented access-key ID with no secret half in the repo; the live-gitleaks test requires a value that is NOT allowlisted as an example, which is why it looks well-formed."
+
+[[suppress]]
+id = "94814a25be6a308baa70d0d803ab2e7263787db1afe00dece777297285fa8895"
+tool = "gitleaks"
+rule = "aws-access-token"
+path = "docs/superpowers/plans/2026-07-20-aramid-release-hardening.md"
+reason = "The same invented key ID quoted in a plan document that describes the gitleaks test above. Documentation of a fixture, not a credential."
+
+# --- Non-credential shapes --------------------------------------------------
+
+[[suppress]]
+id = "6c8924e1b82b159eaf04eeff2b389c83c925d7b6a5295e9df727746c2a7b641d"
+tool = "gitleaks"
+rule = "generic-api-key"
+path = "tests/unit/test_review_packet.py"
+reason = "Fixture `api_key` -- a sequential-hex placeholder, used to prove the review packet redacts secrets before they reach an LLM."
+
+[[suppress]]
+id = "2b5e9da895b6f5a6235afdcfb69aa265a05a2979dfd1b45f57ec8b56363fe232"
+tool = "gitleaks"
+rule = "generic-api-key"
+path = "docs/superpowers/plans/2026-07-13-aramid-phase2b.md"
+reason = "The same sequential-hex fixture quoted in the phase-2b plan that specifies the redaction test."
+
+[[suppress]]
+id = "bf11b534cf2bdae1fd4f4041574b463bb76a9f6f6f103d669676fcc039ec801d"
+tool = "gitleaks"
+rule = "private-key"
+path = "tests/unit/test_review_packet.py"
+reason = "PEM header/footer whose body is the literal ellipsis `MIIE...` -- there is no base64 payload, so there is no key to leak."
+
+[[suppress]]
+id = "6cd86a12c67a33632033bc2e402493497fea16bcbb95b92408b044663cc8a6d4"
+tool = "gitleaks"
+rule = "private-key"
+path = "docs/superpowers/plans/2026-07-13-aramid-phase2b.md"
+reason = "The same ellipsis-bodied PEM quoted in the phase-2b plan. No base64 payload."
