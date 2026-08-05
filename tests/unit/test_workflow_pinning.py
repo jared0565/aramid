@@ -33,10 +33,18 @@ def _workflow_dir() -> Path:
     return Path(__file__).resolve().parents[2] / ".github" / "workflows"
 
 
+def _workflows() -> list[Path]:
+    """Both extensions. GitHub accepts .yml AND .yaml, so globbing only one
+    would let an unpinned workflow in under a filename this guard cannot
+    see -- silent non-coverage rather than a failure."""
+    d = _workflow_dir()
+    return sorted([*d.glob("*.yml"), *d.glob("*.yaml")])
+
+
 def _uses_refs() -> list[tuple[str, str]]:
     """(workflow filename, ref) for every `uses:` across all workflows."""
     found = []
-    for wf in sorted(_workflow_dir().glob("*.yml")):
+    for wf in _workflows():
         text = wf.read_text(encoding="utf-8")
         found += [(wf.name, m.group(1)) for m in _USES.finditer(text)]
     return found
@@ -73,7 +81,7 @@ def test_every_pin_records_the_human_readable_version():
     which version is in use, so nobody upgrades, and pinning turns into
     permanent staleness -- a different supply-chain problem."""
     unlabelled = []
-    for wf in sorted(_workflow_dir().glob("*.yml")):
+    for wf in _workflows():
         for line in wf.read_text(encoding="utf-8").splitlines():
             m = _USES.match(line)
             if not m or m.group(1).startswith("./"):
