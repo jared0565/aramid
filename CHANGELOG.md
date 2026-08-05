@@ -17,6 +17,22 @@ what is new is that it can be installed without a source checkout.
 
 ### Fixed
 
+- **`aramid schedule install` can no longer destroy a crontab.** `crontab -l`
+  exits non-zero both for a user who has no crontab and for a user whose
+  crontab could not be read; the POSIX backend treated every non-zero exit as
+  "empty" and then wrote that result back, so a transient read failure
+  replaced every unrelated job — backups, certbot, monitoring — with aramid's
+  single line. Only the literal "no crontab for" case now reads as empty;
+  anything else aborts the install without writing.
+- **The scheduled drain survives an interpreter path containing spaces.** cron
+  hands the command to a shell, so an unquoted `/opt/my venv/bin/python3` ran
+  `/opt/my` and the drain silently never fired.
+- **A finding whose path escapes the repository is no longer auto-resolved.**
+  `root / file` does not keep you inside `root` — an absolute path discards
+  `root` outright and `..` is never normalized away. The check then landed on
+  an unrelated path that did not exist, reported the file as departed, and
+  silently resolved the finding. Escapes are now treated as "not departed",
+  which leaves the finding open.
 - **`aramid schedule` works on Linux and macOS**, not only Windows. It was
   Windows-only, so the scheduled red-team drain could not run on the platforms
   most servers use. POSIX installs a single marked crontab line; every unmarked

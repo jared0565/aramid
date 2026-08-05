@@ -84,6 +84,69 @@ def test_departed_file_stays_open_when_its_tool_did_not_run(tmp_path):
         led.close()
 
 
+def test_a_departed_file_in_a_subdirectory_still_resolves(tmp_path):
+    """Containment must not cost the ordinary nested case."""
+    led = Ledger(tmp_path / "l.db")
+    try:
+        _seed(led, _finding(file="src/pkg/bad.py"))
+        led.record_run("r1", NOW.isoformat(), "pre-commit",
+                       {"ruff"}, {"other.py"}, [], root=tmp_path)
+        assert led.open_findings()["a" * 64]["status"] == "fixed"
+    finally:
+        led.close()
+
+
+# ------------------------------------------------- paths outside the repo ---
+
+# `root / file` does NOT keep you inside root. Measured on Windows:
+#
+#     Path(r'F:\Projects\aramid') / 'C:/Windows/win.ini'  ->  C:\Windows\win.ini
+#     Path(r'F:\Projects\aramid') / '/etc/passwd'         ->  F:\etc\passwd
+#
+# An absolute `file` discards root entirely, and `..` is never normalized away.
+# The escaped path then almost never exists, `_departed` reports True, and the
+# finding is silently RESOLVED. A path that was never inside the repository
+# cannot have departed it, so the honest answer is "not departed" -- which is
+# also the safe direction, since it leaves the finding open.
+
+
+def test_an_absolute_path_outside_the_repo_is_not_departed(tmp_path):
+    outside = tmp_path.parent / "not_in_the_repo.py"     # absolute, outside root
+    assert not outside.exists()                          # so the join escapes to nothing
+    led = Ledger(tmp_path / "l.db")
+    try:
+        _seed(led, _finding(file=str(outside)))
+        led.record_run("r1", NOW.isoformat(), "pre-commit",
+                       {"ruff"}, {"other.py"}, [], root=tmp_path)
+        assert led.open_findings()["a" * 64]["status"] == "open"
+    finally:
+        led.close()
+
+
+def test_a_traversing_path_is_not_departed(tmp_path):
+    led = Ledger(tmp_path / "l.db")
+    try:
+        _seed(led, _finding(file="../../etc/passwd"))
+        led.record_run("r1", NOW.isoformat(), "pre-commit",
+                       {"ruff"}, {"other.py"}, [], root=tmp_path)
+        assert led.open_findings()["a" * 64]["status"] == "open"
+    finally:
+        led.close()
+
+
+def test_traversal_that_lands_back_inside_the_repo_is_still_judged(tmp_path):
+    """`src/../bad.py` IS `bad.py`. Containment rejects escapes, not every
+    path that happens to contain a dot-dot segment."""
+    led = Ledger(tmp_path / "l.db")
+    try:
+        _seed(led, _finding(file="src/../bad.py"))
+        led.record_run("r1", NOW.isoformat(), "pre-commit",
+                       {"ruff"}, {"other.py"}, [], root=tmp_path)
+        assert led.open_findings()["a" * 64]["status"] == "fixed"
+    finally:
+        led.close()
+
+
 def test_without_root_the_old_behaviour_is_unchanged(tmp_path):
     """Protects `init._scan_history` and `drain._consume_item`, which pass no
     root. A historical gitleaks finding names a path in an OLD commit that

@@ -11,6 +11,7 @@ StartWhenAvailable equivalent, which is tolerable because the sweep already
 self-heals a fully missed window. cron rather than launchd on macOS so one
 implementation covers both platforms; launchd is the natural follow-up if
 per-user agent semantics are ever wanted."""
+import shlex
 import subprocess
 import sys
 import tempfile
@@ -102,7 +103,12 @@ def render_cron_line(interpreter: Path, interval_hours: int) -> str:
         when = f"0 0 */{max(1, hours // 24)} * *"
     else:
         when = f"0 */{hours} * * *"
-    return f"{when} {interpreter} -m aramid drain --all  {CRON_MARKER}"
+    # cron hands the command to a shell, which splits on whitespace: an
+    # unquoted `/opt/my venv/bin/python3` runs `/opt/my` and the drain never
+    # fires, reported nowhere the user is looking. shlex.quote leaves an
+    # ordinary path completely untouched, so already-installed lines still
+    # match what a fresh render produces.
+    return f"{when} {shlex.quote(str(interpreter))} -m aramid drain --all  {CRON_MARKER}"
 
 
 def strip_aramid_lines(text: str) -> str:
@@ -112,17 +118,37 @@ def strip_aramid_lines(text: str) -> str:
     return "\n".join(ln for ln in text.splitlines() if CRON_MARKER not in ln)
 
 
+# `crontab -l` exits non-zero for a user who simply has no crontab yet. Vixie
+# cron, cronie, busybox and macOS all say so on stderr in these words.
+_NO_CRONTAB = "no crontab for"
+
+
 def _read_crontab() -> str:
+    """The existing crontab, or "" when the user genuinely has none.
+
+    Raises RuntimeError on any OTHER failure. That distinction is the whole
+    point of this function: install and remove rewrite the user's ENTIRE
+    crontab from whatever this returns, so treating a transient error as ""
+    replaces every unrelated job -- backups, certbot, monitoring -- with
+    aramid's single line. An aborted install is a message the user can act on;
+    a destroyed crontab is not recoverable. When in doubt, refuse.
+    """
     # S607 justification: `crontab` is resolved from PATH deliberately. Its
     # location differs across distributions and macOS (/usr/bin vs /bin), so an
     # absolute path would be wrong more often than it was right. argv is fixed
     # here -- no external input reaches it.
     cp = subprocess.run(["crontab", "-l"], capture_output=True, text=True,  # noqa: S607
                         errors="replace")
-    # `crontab -l` exits non-zero with "no crontab for <user>" when none exists.
-    # That is an EMPTY crontab, not a failure -- treating it as an error would
-    # make the very first install impossible.
-    return cp.stdout if cp.returncode == 0 else ""
+    if cp.returncode == 0:
+        return cp.stdout
+    err = (cp.stderr or "").strip()
+    if _NO_CRONTAB in err.lower():
+        return ""                       # genuinely empty: the first-install case
+    # Includes rc != 0 with NOTHING on stderr. That is ambiguous, and the two
+    # readings cost very different things, so it resolves to the recoverable
+    # one.
+    raise RuntimeError(f"`crontab -l` failed (exit {cp.returncode}): "
+                       f"{err or 'no error output'}")
 
 
 def _write_crontab(text: str) -> None:

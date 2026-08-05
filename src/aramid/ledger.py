@@ -25,11 +25,26 @@ def _departed(root: Path | None, file: str | None) -> bool:
     Windows filename) is reported as present, i.e. NOT departed: the gate has
     a dedicated resolver for those, and the safe default here is to leave a
     finding open rather than clear one we could not check.
+
+    CONTAINMENT. `root / file` does not keep you inside root. Measured:
+
+        Path(r'F:\\Projects\\aramid') / 'C:/Windows/win.ini' -> C:\\Windows\\win.ini
+        Path(r'F:\\Projects\\aramid') / '/etc/passwd'        -> F:\\etc\\passwd
+
+    An absolute `file` discards root outright and `..` is never normalized
+    away, so the check lands on some unrelated path that almost never exists --
+    reporting "departed" and silently RESOLVING the finding. A path that was
+    never inside the repository cannot have departed it, so an escape returns
+    False, which is also the safe direction: the finding stays open.
     """
     if root is None or not file:
         return False
     try:
-        return not (root / file).exists()
+        base = root.resolve()
+        target = (base / file).resolve()
+        if not target.is_relative_to(base):
+            return False
+        return not target.exists()
     except (OSError, ValueError):
         return False
 

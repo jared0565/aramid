@@ -155,3 +155,99 @@ def test_schedule_no_longer_refuses_outright_on_posix(monkeypatch, tmp_path):
     monkeypatch.setattr(schedule, "_read_crontab", lambda: "")
     monkeypatch.setattr(schedule, "_write_crontab", lambda text: None)
     assert schedule.cmd_schedule(tmp_path, "install") == 0
+
+
+# ------------------------------------------- reading a crontab that we cannot
+
+# `_read_crontab` used to return "" for EVERY non-zero exit from `crontab -l`,
+# on the reasoning that a missing crontab exits non-zero. install then wrote
+# that "" straight back -- so any OTHER failure (a transient filesystem error,
+# a permission problem, a corrupted spool file) silently REPLACED the user's
+# entire crontab with aramid's single line. The only recoverable direction is
+# to refuse: an aborted install is a message, a destroyed crontab is not.
+
+
+class _FakeCP:
+    def __init__(self, returncode=0, stdout="", stderr=""):
+        self.returncode, self.stdout, self.stderr = returncode, stdout, stderr
+
+
+def _fake_crontab_read(monkeypatch, cp):
+    """Patch subprocess.run so `crontab -l` yields `cp`. Deliberately patches
+    the SUBPROCESS rather than `_read_crontab`, so the return-code handling
+    under test is the code actually exercised."""
+    monkeypatch.setattr(schedule.subprocess, "run", lambda argv, **kw: cp)
+
+
+def test_absent_crontab_reads_as_empty_not_as_an_error(monkeypatch):
+    """The genuine first-install case. `crontab -l` exits non-zero with
+    "no crontab for <user>" when none exists; that IS an empty crontab, and
+    treating it as a failure would make the very first install impossible."""
+    _fake_crontab_read(monkeypatch, _FakeCP(1, "", "no crontab for jared\n"))
+    assert schedule._read_crontab() == ""
+
+
+def test_an_unexpected_crontab_failure_raises_instead_of_reading_as_empty(monkeypatch):
+    _fake_crontab_read(monkeypatch, _FakeCP(1, "", "crontab: cannot open spool: I/O error\n"))
+    with pytest.raises(RuntimeError, match="crontab"):
+        schedule._read_crontab()
+
+
+def test_a_silent_crontab_failure_raises(monkeypatch):
+    """rc != 0 with nothing on stderr is ambiguous. Refusing costs a failed
+    install the user can see and retry; guessing "empty" costs their crontab."""
+    _fake_crontab_read(monkeypatch, _FakeCP(2, "", ""))
+    with pytest.raises(RuntimeError):
+        schedule._read_crontab()
+
+
+def test_install_never_writes_when_the_read_failed(monkeypatch, tmp_path, capsys):
+    """THE SAFETY PROPERTY, at the command level: if we could not read the
+    existing crontab, we must not write one. Anything else is data loss."""
+    monkeypatch.setattr(sys, "platform", "linux")
+    _fake_crontab_read(monkeypatch, _FakeCP(1, "", "crontab: cannot open spool: I/O error\n"))
+    wrote = []
+    monkeypatch.setattr(schedule, "_write_crontab", lambda text: wrote.append(text))
+
+    assert schedule.cmd_schedule(tmp_path, "install") == 3
+    assert wrote == [], f"install wrote despite an unreadable crontab: {wrote}"
+    assert "spool" in capsys.readouterr().err
+
+
+def test_remove_never_writes_when_the_read_failed(monkeypatch, tmp_path):
+    """remove rewrites the whole crontab too, from the same unread base."""
+    monkeypatch.setattr(sys, "platform", "linux")
+    _fake_crontab_read(monkeypatch, _FakeCP(1, "", "crontab: cannot open spool: I/O error\n"))
+    wrote = []
+    monkeypatch.setattr(schedule, "_write_crontab", lambda text: wrote.append(text))
+
+    assert schedule.cmd_schedule(tmp_path, "remove") == 3
+    assert wrote == []
+
+
+# ------------------------------------------------- quoting the interpreter ---
+
+
+def test_cron_line_survives_an_interpreter_path_containing_spaces():
+    """cron hands the command to a shell, which splits on whitespace. An
+    unquoted `/opt/my venv/bin/python3` runs `/opt/my` -- the drain never
+    fires, and cron reports it nowhere the user is looking."""
+    import shlex
+    from pathlib import PurePosixPath
+
+    # PurePosixPath, not Path: cron is POSIX-only, and on Windows a plain Path
+    # would render backslashes that POSIX shlex.split then eats as escapes --
+    # the test would fail on the runner rather than on the behaviour.
+    interp = "/opt/my venv/bin/python3"
+    line = schedule.render_cron_line(PurePosixPath(interp), 4)
+    command = line.split(" ", 5)[5]                     # past the 5 cron fields
+    argv = shlex.split(command.split(schedule.CRON_MARKER)[0])
+    assert argv[0] == interp, argv
+
+
+def test_cron_line_leaves_an_ordinary_path_unquoted():
+    """Quoting must not churn the common case -- an already-installed line
+    should keep matching what a fresh render produces."""
+    from pathlib import PurePosixPath
+
+    assert "'" not in schedule.render_cron_line(PurePosixPath("/usr/bin/python3"), 4)
