@@ -15,8 +15,6 @@ The malformed shape used throughout is `"line": None`. That is not invented:
 present-but-null, so `int(None)` raises TypeError -- the exact case the
 original guards' comments cite.
 """
-import pytest
-
 from aramid import mutation_gate, review
 from aramid.models import Gate
 
