@@ -23,9 +23,13 @@ jobs:
   release:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
+      # Pinned to commit SHAs -- see the rationale in aramid.yml. It binds
+      # harder here: this workflow has `contents: write` and publishes the
+      # artifact users install, so a moved tag upstream could alter what gets
+      # built and released under aramid's name.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - uses: actions/setup-python@v7
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: "3.12"
 
@@ -108,7 +112,19 @@ jobs:
           print(f'vendored ruleset resolved at {p}')
           "
 
+      # Name the artifacts rather than globbing. `dist/*` uploads whatever
+      # happens to be in that directory, and every step above builds into it
+      # -- so a leftover from an earlier build, or anything a future step
+      # drops there, would be published under the release with no one having
+      # chosen it. Publishing is the irreversible half of this workflow, so it
+      # gets the explicit list. A missing artifact now fails the step instead
+      # of silently releasing a subset.
       - name: Create the GitHub Release with the artifacts
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release create "${GITHUB_REF_NAME}" dist/* --generate-notes --verify-tag
+        run: |
+          set -euo pipefail
+          shopt -s failglob
+          gh release create "${GITHUB_REF_NAME}" \
+            dist/aramid-*.whl dist/aramid-*.tar.gz \
+            --generate-notes --verify-tag

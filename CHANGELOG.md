@@ -17,6 +17,16 @@ what is new is that it can be installed without a source checkout.
 
 ### Fixed
 
+- **Third-party GitHub Actions are pinned to commit SHAs.** `actions/checkout`,
+  `actions/setup-python` and `gacts/gitleaks` were referenced by mutable major
+  tag. CI is part of aramid's enforcement boundary — the dogfood steps are what
+  prove the gate works — so a moved tag upstream would change what runs, and
+  therefore what gets reported, with no diff in this repository. Readable
+  versions stay in trailing comments, and `tests/unit/test_workflow_pinning.py`
+  fails if either half regresses.
+- **The release workflow names its artifacts instead of globbing `dist/*`**,
+  so a stray file in the build directory cannot be published under a release.
+  A missing expected artifact now fails the step rather than releasing a subset.
 - **The fail-safe handlers say when they swallow something.** Eleven
   `except Exception: continue` guards across the gate and the drain skipped
   bad input silently. Skipping is correct — a malformed ledger record must

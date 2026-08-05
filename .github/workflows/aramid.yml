@@ -57,17 +57,27 @@ jobs:
           - os: macos-latest
             python: "3.12"
     steps:
+      # PINNED TO COMMIT SHAs, NOT TAGS. A tag is a mutable pointer: whoever
+      # owns the action (or compromises them) can move it, and the next run
+      # here executes different code with no diff in this repo and nothing in
+      # the log to notice. That matters more than usual because these steps
+      # are not just infrastructure -- the dogfood steps below are what prove
+      # aramid's gate works, so whatever runs here decides whether a finding
+      # gets reported at all. A tool that flags this in other people's repos
+      # should not ship it in its own. Trailing comments carry the readable
+      # version; tests/unit/test_workflow_pinning.py enforces both halves.
+      #
       # v7/v7 target Node 24. v4/v5 targeted Node 20, which GitHub deprecated:
       # runs still passed but every one carried a "being forced to run on
       # Node.js 24" annotation, i.e. we were already on 24 without having said
       # so. Neither bump costs us anything -- checkout v7's fork-PR block only
       # applies to pull_request_target/workflow_run (we use neither), and
       # setup-python v7 removes the pip-install input (we never set it).
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0 # full history: gitleaks/fingerprint scanning wants real commit history
 
-      - uses: actions/setup-python@v7
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: ${{ matrix.python }}
 
@@ -75,7 +85,7 @@ jobs:
         run: pip install -e .[dev]
 
       - name: Install pinned gitleaks binary onto PATH
-        uses: gacts/gitleaks@v1
+        uses: gacts/gitleaks@c9a0338361dc45a01aa7ebaaa5330179f3c62873 # v1.3.2
         with:
           version: 8.28.0
           run: false # install only -- aramid's own gate invokes gitleaks itself
