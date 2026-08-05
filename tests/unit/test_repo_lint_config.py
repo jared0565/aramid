@@ -30,6 +30,15 @@ from aramid.runners.base import RunContext, ToolState
 # below asserts the finding set is non-empty overall before checking codes.
 SUBPROCESS_USING_TEST = "tests/e2e/test_hook_fires.py"
 
+# The src anchor for "the S family is still armed for shipped code". It used
+# to be red_proof.py, chosen for a known S112 (try-except-continue) -- but
+# that whole class was fixed: every fail-safe handler now reports through
+# aramid.diagnostics, which is a real fix rather than a suppression (a handler
+# that logs is no longer a silent one, so S112 stops applying). The anchor
+# moved to a file whose S findings are STRUCTURAL: a git-hook installer has to
+# invoke `git` by name, so S603/S607 there can never be "fixed" away.
+ARMED_SRC_FILE = "src/aramid/commands/hooks_template.py"
+
 
 def _repo_root() -> Path:
     return Path(__file__).resolve().parents[2]
@@ -90,14 +99,22 @@ def test_repo_test_tree_is_lint_clean():
 
 def test_security_family_stays_armed_for_src():
     """The companion guarantee: exempting tests/ must not disarm the S family
-    for shipped code. Fails if a blanket ignore is added at the top level."""
+    for shipped code. Fails if a blanket ignore is added at the top level.
+
+    Anchored on a REAL src file rather than a synthetic one written into
+    tmp_path: ruff discovers its config from the linted file's location, so a
+    fixture outside the repo would stop exercising this repo's pyproject.toml
+    and the guard would go quietly vacuous -- passing while the S family was
+    disarmed, which is the exact failure it exists to catch.
+    """
     root = _repo_root()
-    ctx = RunContext(root=root, files=["src/aramid/red_proof.py"])
+    ctx = RunContext(root=root, files=[ARMED_SRC_FILE])
     result = ruff.run(ctx)
     assert result.state is ToolState.OK
 
     codes = {f.rule for f in ruff.parse(result, ctx)}
     assert any(c.startswith("S") for c in codes), (
-        "no S-family finding in src/aramid/red_proof.py -- it carries a known "
-        "S112 (try-except-continue). If that was fixed, repoint this at "
-        "another src file with a live S finding; do not delete the guard.")
+        f"no S-family finding in {ARMED_SRC_FILE} -- it carries known "
+        "S603/S607 (it shells out to `git` by name, which a git-hook "
+        "installer must). If that changed, repoint this at another src file "
+        "with a live S finding; do not delete the guard.")

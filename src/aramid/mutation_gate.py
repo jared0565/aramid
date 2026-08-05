@@ -15,7 +15,7 @@ the two one-line rules must agree.
 """
 from pathlib import Path
 
-from aramid import gitutil
+from aramid import diagnostics, gitutil
 from aramid.fingerprint import normalize_path
 from aramid.models import Event, EventType, Finding, Gate, Severity, Source, Verdict
 
@@ -32,6 +32,7 @@ def mutation_gate_findings(cfg, ledger, gate: Gate) -> list[Finding]:
     armed = bool(cfg.mutation.get("mutation_block_armed", False))
     verdict = Verdict.BLOCK if armed else Verdict.WARN
     out = []
+    skipped = 0
     for fid, rec in sorted(ledger.open_findings().items()):
         if rec.get("tool") != TOOL or rec.get("status") != "open":
             continue
@@ -52,7 +53,9 @@ def mutation_gate_findings(cfg, ledger, gate: Gate) -> list[Finding]:
                 evidence=rec.get("evidence", ""), gate=gate,
                 source=Source.DETERMINISTIC))
         except Exception:
+            skipped += 1
             continue
+    diagnostics.note_skipped("mutation-gate", skipped)
     return out
 
 
@@ -77,6 +80,7 @@ def auto_resolve_mutation(ledger, run_id: str, at: str, changed_files) -> list[s
     changed_test_stems = {Path(c).stem for c in changed_files
                           if gitutil.is_test_file(c)}
     resolved = []
+    skipped = 0
     for fid, rec in ledger.open_findings().items():
         if rec.get("tool") != TOOL or rec.get("status") != "open":
             continue
@@ -93,5 +97,7 @@ def auto_resolve_mutation(ledger, run_id: str, at: str, changed_files) -> list[s
                                     payload={"auto_resolved": "gap_addressed"}))
                 resolved.append(fid)
         except Exception:
+            skipped += 1
             continue
+    diagnostics.note_skipped("mutation-resolve", skipped)
     return resolved

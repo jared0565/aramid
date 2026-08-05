@@ -17,6 +17,17 @@ what is new is that it can be installed without a source checkout.
 
 ### Fixed
 
+- **The fail-safe handlers say when they swallow something.** Eleven
+  `except Exception: continue` guards across the gate and the drain skipped
+  bad input silently. Skipping is correct — a malformed ledger record must
+  never crash a gate, and a provider whose probe raises must never crash the
+  drain — but a silent skip made a corrupt ledger produce output identical to
+  a clean run. The highest-stakes one is `llm_gate_findings`, where a skipped
+  record is a confirmed critical that never reaches the BLOCK gate. Behaviour
+  is unchanged; each site now reports via the new `aramid.diagnostics`, one
+  line per loop rather than one per record, and nothing at all on a clean run.
+  Named individually where the identity is the message: which provider failed
+  to load, which file was dropped from a review packet.
 - **`aramid schedule install` can no longer destroy a crontab.** `crontab -l`
   exits non-zero both for a user who has no crontab and for a user whose
   crontab could not be read; the POSIX backend treated every non-zero exit as

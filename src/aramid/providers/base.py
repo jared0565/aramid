@@ -14,6 +14,8 @@ import subprocess
 import sys
 from dataclasses import dataclass
 
+from aramid import diagnostics
+
 ERR_UNAVAILABLE = "unavailable"
 ERR_QUOTA = "quota"
 ERR_TIMEOUT = "timeout"
@@ -44,7 +46,13 @@ def chain(cfg) -> list[object]:
         try:
             if module.available(cfg):
                 out.append(module)
-        except Exception:
+        except Exception as exc:
+            # Named: a provider whose probe RAISES is indistinguishable from
+            # one that is merely not configured, and the difference is the
+            # entire LLM half of the product quietly doing nothing forever.
+            # A well-behaved available() returns False (see claude_cli), so
+            # reaching here at all is the anomaly -- this is not chatter.
+            diagnostics.note_failed("providers", f"{name} probe failed", exc)
             continue
     return out
 

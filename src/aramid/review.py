@@ -9,7 +9,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from aramid import config as config_mod
-from aramid import gitutil, triage
+from aramid import diagnostics, gitutil, triage
 from aramid.fingerprint import compute_fingerprint, normalize_line
 from aramid.models import Event, EventType, Finding, Gate, Severity, Source, Verdict
 
@@ -196,7 +196,12 @@ def build_packet(root: Path, cfg, item) -> Packet | None:
     for f in files:
         try:
             content = gitutil.read_for_fingerprint(root, item.head, f)
-        except Exception:
+        except Exception as exc:
+            # Named, not counted: a file dropped here is a HOLE in what the
+            # reviewer sees, and the reviewer will still answer confidently
+            # about the code it did get. Which file went missing is the
+            # whole message.
+            diagnostics.note_failed("review-packet", f"dropped {f}", exc)
             continue
         if not content or _is_binary(content):
             continue
@@ -419,6 +424,7 @@ def auto_resolve_llm(root: Path, ledger, run_id: str, at: str) -> list[str]:
     removed the quote is itself a commit, so triage re-enqueues the file and
     the next drain re-reviews it."""
     resolved = []
+    skipped = 0
     for fid, rec in ledger.open_findings().items():
         if rec.get("source") != "llm" or rec.get("status") != "open":
             continue
@@ -450,7 +456,12 @@ def auto_resolve_llm(root: Path, ledger, run_id: str, at: str) -> list[str]:
                                 payload={"auto_resolved": "evidence_gone"}))
             resolved.append(fid)
         except Exception:
+            # Counts only what the OUTER guard catches. The inner
+            # read_for_fingerprint handler above sets content = "" and carries
+            # on by design, so it never reaches here.
+            skipped += 1
             continue
+    diagnostics.note_skipped("llm-resolve", skipped)
     return resolved
 
 
@@ -474,6 +485,7 @@ def llm_gate_findings(cfg, ledger, gate: Gate) -> list[Finding]:
         return []
     armed = bool(cfg.llm.get("llm_block_armed", False))
     out = []
+    skipped = 0
     for fid, rec in sorted(ledger.open_findings().items()):
         if rec.get("source") != "llm" or rec.get("status") != "open":
             continue
@@ -497,5 +509,11 @@ def llm_gate_findings(cfg, ledger, gate: Gate) -> list[Finding]:
                 message=rec.get("message", ""), evidence=rec.get("evidence", ""),
                 gate=gate, source=Source.LLM, confirmed=confirmed))
         except Exception:
+            skipped += 1
             continue
+    # The highest-stakes counter in the codebase: a rec skipped here is a
+    # finding that never reaches the BLOCK gate. It stays open for manual
+    # triage (the safe outcome), but until now nothing said so -- a
+    # confirmed critical could drop out of the gate in total silence.
+    diagnostics.note_skipped("llm-gate", skipped)
     return out

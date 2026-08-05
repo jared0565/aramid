@@ -6,7 +6,7 @@ git facts. The graph note is an inert no-op stub that lights up once Graphite
 is decision-grade."""
 from pathlib import Path
 
-from aramid import gitutil
+from aramid import diagnostics, gitutil
 from aramid.fingerprint import normalize_path
 from aramid.models import Event, EventType
 from aramid.normalizer import RawFinding
@@ -91,6 +91,7 @@ def auto_resolve_tdd(ledger, run_id: str, at: str, changed_files, present_ids) -
     changed_test_stems = {Path(c).stem for c in changed_files
                           if gitutil.is_test_file(c)}
     resolved = []
+    skipped = 0
     for fid, rec in ledger.open_findings().items():
         if rec.get("tool") != _TOOL or rec.get("status") != "open" \
            or fid in present_ids:
@@ -108,5 +109,7 @@ def auto_resolve_tdd(ledger, run_id: str, at: str, changed_files, present_ids) -
                                     payload={"auto_resolved": "test_added"}))
                 resolved.append(fid)
         except Exception:
+            skipped += 1
             continue
+    diagnostics.note_skipped("tdd-resolve", skipped)
     return resolved

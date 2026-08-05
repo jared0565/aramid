@@ -14,6 +14,7 @@ always get the budget first.
 import sys
 import time
 
+from aramid import diagnostics
 from aramid import review
 from aramid import autolearn
 from aramid.consumers import base
@@ -71,7 +72,10 @@ def _any_installed(cfg) -> bool:
         try:
             if module.installed():
                 return True
-        except Exception:
+        except Exception as exc:
+            # Same reasoning as providers.base.chain: a raising probe reads
+            # as "not installed", which reads as "nothing to do".
+            diagnostics.note_failed("llm-review", f"{name} probe failed", exc)
             continue
     return False
 

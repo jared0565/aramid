@@ -37,7 +37,7 @@ by construction).
 """
 from pathlib import Path
 
-from aramid import gitutil, mutation_score
+from aramid import diagnostics, gitutil, mutation_score
 from aramid.fingerprint import compute_fingerprint
 from aramid.models import Finding, Gate, Severity, Source, Verdict
 from aramid.mutation_gate import _module_tests
@@ -67,6 +67,7 @@ def mutation_score_gate_findings(cfg, ledger, gate: Gate,
         except Exception:
             changed_test_stems = set()
     out = []
+    skipped = 0
     for r in regressions:
         try:
             rel, sep, func = r.target.partition("::")
@@ -96,5 +97,7 @@ def mutation_score_gate_findings(cfg, ledger, gate: Gate,
                 message=message, evidence=evidence, gate=gate,
                 source=Source.DETERMINISTIC))
         except Exception:
+            skipped += 1
             continue
+    diagnostics.note_skipped("mutation-score-gate", skipped)
     return out

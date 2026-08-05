@@ -37,7 +37,12 @@ def _watchdog_kill(budget: float) -> None:
         print(f"aramid: triage: watchdog: exceeded {budget}s -- killing", file=sys.stderr)
         sys.stderr.flush()
         sys.stdout.flush()
-    except Exception:
+    except Exception:  # noqa: S110 -- see above: there is nowhere left to log.
+        # S110 (try-except-pass) is justified HERE and essentially nowhere
+        # else in this codebase. Every other swallow now reports via
+        # aramid.diagnostics; this one cannot, because the streams it would
+        # report on are exactly what just failed. Reporting is the body of
+        # the `try`.
         pass
     os._exit(3)
 

@@ -10,6 +10,8 @@ import ast
 import copy
 from dataclasses import dataclass
 
+from aramid import diagnostics
+
 _CMP_FLIP = {ast.Eq: ast.NotEq, ast.NotEq: ast.Eq, ast.Lt: ast.LtE,
              ast.LtE: ast.Lt, ast.Gt: ast.GtE, ast.GtE: ast.Gt}
 _CMP_SYM = {ast.Eq: "==", ast.NotEq: "!=", ast.Lt: "<", ast.LtE: "<=",
@@ -79,6 +81,7 @@ def generate_mutants(source: str, target_lines: set[int]) -> list[Mutant]:
     if not spans:
         return []
     mutants: list[Mutant] = []
+    unparseable = 0
     nodes = list(ast.walk(tree))
     for idx, node in enumerate(nodes):
         lineno = getattr(node, "lineno", None)
@@ -93,8 +96,14 @@ def generate_mutants(source: str, target_lines: set[int]) -> list[Mutant]:
             try:
                 mutated = ast.unparse(ast.fix_missing_locations(tree_copy))
             except Exception:
+                unparseable += 1
                 continue
             mutants.append(Mutant(file="", line=lineno, op=op,
                                   description=desc, source=mutated, func=enc[2]))
+    # Unlike the ledger guards, this one is an EXPECTED outcome of mutating an
+    # AST -- some mutations simply do not unparse. It is still worth counting:
+    # a file where every mutant is unparseable yields a mutation score computed
+    # from nothing, which reads exactly like a well-tested file.
+    diagnostics.note_skipped("mutation", unparseable, "unparseable mutant")
     mutants.sort(key=lambda m: (m.line, m.op, m.description))
     return mutants
