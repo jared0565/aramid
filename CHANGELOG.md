@@ -17,6 +17,19 @@ what is new is that it can be installed without a source checkout.
 
 ### Fixed
 
+- **Git hook shims pass `python -P`, so a repo-local `aramid.py` cannot hijack
+  the gate.** `python -m aramid` puts the working directory on `sys.path[0]`
+  and git runs hooks from the top of the tree, so an `aramid.py` file — or an
+  `aramid/` directory — at a repo root beat the installed package. Measured:
+  a package-shaped shadow produced a **full hijack exiting 0**, meaning the
+  pre-commit gate was skipped and the commit proceeded with nothing scanned,
+  indistinguishable from a clean run. All three generators are fixed
+  (`render_shim`, `render_template_shim`, `render_triage_shim`), on both the
+  `$INTERP` and `py -3` arms.
+
+  **Already-installed hooks do not update themselves.** Re-run
+  `aramid hooks install` (and `aramid hooks template install` for the global
+  git template) to regenerate them; nothing gates this on a version bump.
 - **Third-party GitHub Actions are pinned to commit SHAs.** `actions/checkout`,
   `actions/setup-python` and `gacts/gitleaks` were referenced by mutable major
   tag. CI is part of aramid's enforcement boundary — the dogfood steps are what
