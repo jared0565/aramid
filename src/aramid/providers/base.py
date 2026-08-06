@@ -59,7 +59,11 @@ def chain(cfg) -> list[object]:
 
 def _tree_kill(pid: int) -> None:
     if sys.platform == "win32":
-        subprocess.run(["taskkill", "/PID", str(pid), "/T", "/F"],
+        # S603/S607 justification: fixed argv killing a process tree aramid
+        # itself spawned -- `pid` is our own child's, not external input, and
+        # `taskkill` resolves via PATH on every Windows host. Mirrors
+        # runners.base._kill_tree, which makes the identical call.
+        subprocess.run(["taskkill", "/PID", str(pid), "/T", "/F"],  # noqa: S603,S607
                        capture_output=True, text=True, encoding="utf-8",
                        errors="replace", timeout=30)
 
@@ -68,7 +72,13 @@ def run_provider_subprocess(argv: list[str], prompt: str,
                             timeout_s: float) -> tuple[int, str, str] | None:
     """Returns (returncode, stdout, stderr), or None on timeout (after
     killing the whole child tree)."""
-    proc = subprocess.Popen(argv, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+    # S603 justification: the LLM-provider counterpart of
+    # runners.base.run_subprocess -- launching a provider's own CLI is this
+    # function's entire purpose. Every `argv` is built by a provider module
+    # from its fixed binary name plus flags; the PROMPT never enters argv, it
+    # is written to the child's stdin below, so no prompt content can be read
+    # as an argument. No shell is involved.
+    proc = subprocess.Popen(argv, stdin=subprocess.PIPE, stdout=subprocess.PIPE,  # noqa: S603
                             stderr=subprocess.PIPE, text=True,
                             encoding="utf-8", errors="replace")
     try:

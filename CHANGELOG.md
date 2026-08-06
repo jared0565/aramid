@@ -111,6 +111,45 @@ to publish a tag that disagrees with it.
   so this is hardening rather than a reported failure. Ordinary paths render
   byte-identically, so already-installed entries still match a fresh render.
 
+### Changed
+
+- **The 20 remaining `S`-family findings in `src/` are triaged and
+  documented.** Each was assessed individually and each turned out to be a
+  false positive at its call site, so each carries a per-line suppression
+  naming the specific reason rather than a blanket per-file ignore:
+  - **S603/S607 (14)** — `git config`, `schtasks`, `taskkill`, `cmd /c mklink`
+    and the provider-CLI launcher. All fixed argv lists with no shell, taking
+    only constants and paths aramid built itself. Resolution by PATH is
+    deliberate where the binary's location varies by platform, and `mklink` is
+    a `cmd.exe` builtin with no path to name at all.
+  - **S310 (4)** — the two LLM provider endpoints. Both URLs are module-level
+    **https literals**, never config- or response-derived, so no `file:` or
+    custom scheme can reach `urlopen`; and urllib's own redirect handler
+    rejects any redirect target outside http/https/ftp (verified on 3.14), so
+    a hostile redirect cannot introduce one either.
+  - **S311 (2)** — the auto-learn and fuzz seeds, where non-cryptographic is
+    the *requirement*: both are seeded deterministically so a choice is
+    reproducible in tests and a failing fuzz case is replayable from its
+    report.
+
+  Verified none of the suppressions is over-broad — with the `S` family and
+  `RUF100` both enabled, ruff reports no unused directive among them.
+
+- **The `src/` lint guard now runs ruff with `--ignore-noqa`, and its
+  threat model is corrected.** Suppressing those 20 findings broke the guard
+  that proves the `S` family is still armed for shipped code: it worked by
+  finding a live `S` finding in a real `src/` file, and after the triage no
+  such file existed. Ignoring noqa asks the question that actually matters —
+  with documented per-site suppressions set aside, does the family still fire?
+
+  The guard also claimed it would fail "if a blanket ignore is added at the
+  top level". **Measured, that is not the threat:** a top-level
+  `ignore = ["S603", "S607"]` changes nothing, because the runner passes
+  `--extend-select S` on the command line and CLI selection outranks config
+  `ignore` — 6 findings before, 6 after. The vector that genuinely disarms is
+  `per-file-ignores`; `"src/**" = ["S603", "S607"]` takes the same file to 0.
+  The guard is now teeth-checked against that one.
+
 ### Notes
 
 - **Where `examined` reporting stands.** Four of the file-list runners now

@@ -63,10 +63,15 @@ def review(prompt: str, model: str, timeout_s: float, *, effort: str = "", cfg) 
     if effort:
         body_obj["reasoning"] = {"effort": effort}
     body = json.dumps(body_obj).encode("utf-8")
-    req = urllib.request.Request(_URL, data=body, method="POST", headers={
+    # S310 justification: `_URL` is a module-level https LITERAL, never
+    # derived from config, an environment variable or a response -- there is
+    # no path by which a `file:` or custom scheme reaches here. Redirects
+    # cannot introduce one either: urllib's own HTTPRedirectHandler rejects
+    # any redirect target outside http/https/ftp (verified on 3.14).
+    req = urllib.request.Request(_URL, data=body, method="POST", headers={  # noqa: S310
         "Authorization": f"Bearer {key}", "Content-Type": "application/json"})
     try:
-        with urllib.request.urlopen(req, timeout=timeout_s) as fh:
+        with urllib.request.urlopen(req, timeout=timeout_s) as fh:  # noqa: S310
             data = json.loads(fh.read().decode("utf-8"))
     except TimeoutError:
         # The request may have completed -- and been billed -- server-side

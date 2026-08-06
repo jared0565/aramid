@@ -65,7 +65,12 @@ def run_spec(spec: dict) -> dict:
                 continue
             hints = typing.get_type_hints(fn)
             for i in range(cases):
-                rng = random.Random(fuzzgen.case_seed(rel, func_name, i))
+                # S311 justification: as in autolearn.decision_rng, determinism
+                # is the point. The seed is derived from (file, function, case
+                # index) so a failing fuzz case can be REPRODUCED exactly from
+                # its report; a cryptographic generator would make every
+                # reported failure unreplayable. No secret is generated here.
+                rng = random.Random(fuzzgen.case_seed(rel, func_name, i))  # noqa: S311
                 kwargs = {p: fuzzgen.gen_value(hints.get(p), rng) for p in params}
                 cases_run += 1
                 try:

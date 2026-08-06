@@ -61,7 +61,13 @@ def _link_node_modules(src_root: Path, wt: Path) -> bool:
         return False
     dst_nm = wt / "node_modules"
     if sys.platform == "win32":
-        cp = subprocess.run(["cmd", "/c", "mklink", "/J", str(dst_nm), str(src_nm)],
+        # S603/S607 justification: `mklink` is a cmd.exe BUILTIN, so there is
+        # no executable to name by absolute path -- `cmd /c` is the only way
+        # to invoke it, and cmd.exe is resolved from PATH on every Windows
+        # host. argv is a fixed list; both paths are ones aramid constructed
+        # itself (the worktree it just created and the source node_modules),
+        # passed as separate argv entries rather than a shell string.
+        cp = subprocess.run(["cmd", "/c", "mklink", "/J", str(dst_nm), str(src_nm)],  # noqa: S603,S607
                             capture_output=True, text=True)
         if cp.returncode != 0:
             raise OSError(f"mklink /J failed: {(cp.stderr or '').strip()[:200]}")

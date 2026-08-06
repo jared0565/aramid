@@ -105,7 +105,12 @@ def decision_rng(item_id: str, state: dict) -> random.Random:
     reproducible in tests, varies across state updates in production."""
     seed = hashlib.sha256(
         f"{item_id}|{state.get('updated_at', '')}".encode()).hexdigest()
-    return random.Random(int(seed, 16))
+    # S311 justification: non-cryptographic is the REQUIREMENT here, not a
+    # compromise. This RNG picks which arm to explore; it is seeded from a
+    # sha256 of (item_id, updated_at) precisely so the choice is reproducible
+    # in tests and re-derivable from state. A cryptographic generator would
+    # destroy the determinism the spec asks for, and nothing here is a secret.
+    return random.Random(int(seed, 16))  # noqa: S311
 
 
 def uplift_pick(arms, score: int, bucket: str, state: dict,

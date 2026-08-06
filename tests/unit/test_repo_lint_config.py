@@ -23,7 +23,7 @@ from pathlib import Path
 
 from aramid import gitutil
 from aramid.runners import ruff
-from aramid.runners.base import RunContext, ToolState
+from aramid.runners.base import RunContext, ToolState, run_subprocess
 
 # A file that genuinely spawns processes, so the rules have something to fire
 # on. If this ever stops using subprocess the test goes vacuous, so the run
@@ -37,6 +37,14 @@ SUBPROCESS_USING_TEST = "tests/e2e/test_hook_fires.py"
 # that logs is no longer a silent one, so S112 stops applying). The anchor
 # moved to a file whose S findings are STRUCTURAL: a git-hook installer has to
 # invoke `git` by name, so S603/S607 there can never be "fixed" away.
+#
+# "Cannot be FIXED away" turned out not to mean "cannot be SUPPRESSED away".
+# Those call sites were later given justified per-line noqa directives for
+# S603/S607, and every other S finding in src/ was suppressed the same way --
+# so there is no longer any src file carrying a live one to repoint this at.
+# The guard now runs ruff with `--ignore-noqa`, which is the more faithful
+# test anyway: see below. (Spelling the directive out literally here would
+# make ruff parse this prose as a real one -- it warns about exactly that.)
 ARMED_SRC_FILE = "src/aramid/commands/hooks_template.py"
 
 
@@ -99,22 +107,46 @@ def test_repo_test_tree_is_lint_clean():
 
 def test_security_family_stays_armed_for_src():
     """The companion guarantee: exempting tests/ must not disarm the S family
-    for shipped code. Fails if a blanket ignore is added at the top level.
+    for shipped code.
+
+    This used to say "fails if a blanket ignore is added at the top level".
+    Measured 2026-08-06, that is not the threat -- a top-level
+    `ignore = ["S603", "S607"]` changes NOTHING, because the runner passes
+    `--extend-select S` on the command line and CLI selection outranks config
+    `ignore` (6 findings before, 6 after). The vector that actually disarms is
+    `per-file-ignores`: adding `"src/**" = ["S603", "S607"]` takes the same
+    file to 0 findings, and that is what this test is teeth-checked against.
 
     Anchored on a REAL src file rather than a synthetic one written into
     tmp_path: ruff discovers its config from the linted file's location, so a
     fixture outside the repo would stop exercising this repo's pyproject.toml
     and the guard would go quietly vacuous -- passing while the S family was
     disarmed, which is the exact failure it exists to catch.
+
+    Run with `--ignore-noqa`, which separates the two things that both make an
+    S finding disappear. A per-line `# noqa: S603 -- reason` is a DOCUMENTED
+    decision about one call site and is not what this guards; a blanket ignore
+    in pyproject.toml disarms the family for all of shipped code and is. Left
+    honouring noqa, this guard failed the moment those call sites were
+    suppressed -- and could not be repointed, because by then no src file
+    carried a live S finding at all. Ignoring noqa asks the question that
+    actually matters: with suppressions set aside, does the S family still
+    FIRE on shipped code?
     """
     root = _repo_root()
     ctx = RunContext(root=root, files=[ARMED_SRC_FILE])
-    result = ruff.run(ctx)
-    assert result.state is ToolState.OK
+    argv = ruff._build_argv(ctx)
+    argv.insert(argv.index("--"), "--ignore-noqa")
+    raw = run_subprocess(argv, root, 60)
+    result = ruff.json_or_crashed(ruff.NAME, raw, ruff._OK_RETURNCODES)
+    assert result.state is ToolState.OK, (
+        f"ruff did not run cleanly (state={result.state}); a crashed run "
+        "reports no findings and would make this test vacuously pass")
 
     codes = {f.rule for f in ruff.parse(result, ctx)}
     assert any(c.startswith("S") for c in codes), (
-        f"no S-family finding in {ARMED_SRC_FILE} -- it carries known "
-        "S603/S607 (it shells out to `git` by name, which a git-hook "
-        "installer must). If that changed, repoint this at another src file "
-        "with a live S finding; do not delete the guard.")
+        f"no S-family finding in {ARMED_SRC_FILE} even with noqa ignored -- "
+        "it carries structural S603/S607 (it shells out to `git` by name, "
+        "which a git-hook installer must). Either the S family was disarmed "
+        "in pyproject.toml, or this file stopped using subprocess. Repoint "
+        "the anchor; do not delete the guard.")

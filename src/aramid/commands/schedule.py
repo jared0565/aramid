@@ -232,15 +232,20 @@ def cmd_schedule(root, action: str) -> int:
             try:
                 # errors="replace" on all schtasks reads -- schtasks emits the
                 # console/ANSI codepage, not UTF-8 (see drain._pid_alive).
-                cp = subprocess.run(_create_argv(xml_path), capture_output=True, text=True,
+                # S603 justification (all three schtasks calls in this block):
+                # each argv comes from a module-local `_*_argv()` builder made
+                # of fixed flags plus TASK_NAME (a constant) and a
+                # tempfile-generated path aramid created itself. No shell, and
+                # nothing external reaches argv.
+                cp = subprocess.run(_create_argv(xml_path), capture_output=True, text=True,  # noqa: S603
                                     errors="replace")
             finally:
                 xml_path.unlink(missing_ok=True)
         elif action == "remove":
-            cp = subprocess.run(_delete_argv(), capture_output=True, text=True,
+            cp = subprocess.run(_delete_argv(), capture_output=True, text=True,  # noqa: S603
                                 errors="replace")
         elif action == "status":
-            cp = subprocess.run(_query_argv(), capture_output=True, text=True,
+            cp = subprocess.run(_query_argv(), capture_output=True, text=True,  # noqa: S603
                                 errors="replace")
             print(cp.stdout.strip() or "aramid-drain: not installed")
             return 0 if cp.returncode == 0 else 3
