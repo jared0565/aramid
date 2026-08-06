@@ -27,9 +27,11 @@ what is new is that it can be installed without a source checkout.
   (`render_shim`, `render_template_shim`, `render_triage_shim`), on both the
   `$INTERP` and `py -3` arms.
 
-  **Already-installed hooks do not update themselves.** Re-run
-  `aramid hooks install` (and `aramid hooks template install` for the global
-  git template) to regenerate them; nothing gates this on a version bump.
+  **Already-installed hooks do not update themselves**, and two separate
+  commands write them: `aramid hooks install` regenerates the global git
+  template (`init.templateDir`, which seeds new clones), and `aramid init`
+  regenerates a repo's own `.githooks/`. Both are needed, and nothing gates
+  either on a version bump.
 - **Third-party GitHub Actions are pinned to commit SHAs.** `actions/checkout`,
   `actions/setup-python` and `gacts/gitleaks` were referenced by mutable major
   tag. CI is part of aramid's enforcement boundary — the dogfood steps are what
