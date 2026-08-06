@@ -34,7 +34,6 @@ from pathlib import Path
 import pytest
 
 from aramid import hooks
-from aramid.models import Gate
 
 INTERP = Path("C:/Python314/python.exe")
 
