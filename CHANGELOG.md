@@ -167,6 +167,20 @@ to publish a tag that disagrees with it.
   `gitleaks`, `deps` and `tests` are a different shape: they scan history,
   manifests, and a pass/fail suite rather than a file set.
 
+- **A `noqa`-suppressed finding is recorded as `fixed`, not `overridden`.**
+  Triaging the 20 `S` findings above moved the ledger from 27 open to 6, and
+  every one of those 21 reads as `fixed` — but what changed for 20 of them is
+  a documented justification, not the behaviour. aramid observes tool output;
+  a suppression makes the tool silent, and nothing in that silence says
+  whether the risk was removed or reviewed and accepted.
+
+  This is worth stating plainly given the rest of this release is about
+  `fixed` records that did not mean what they said. It is a narrower problem
+  than those were — the decision is recorded, in-repo, next to the code, and
+  reviewable in the diff, rather than invented by the gate — but a reader
+  auditing the ledger alone cannot tell the two apart, and the `overridden`
+  state that exists for this distinction is not reached by this path.
+
 ## [0.1.0] — 2026-08-06
 
 First packaged release. Everything below already existed in the repository;
