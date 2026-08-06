@@ -114,7 +114,8 @@ class Ledger:
 
     def record_run(self, run_id, at, gate, scope_tools, scope_files, findings, *,
                    selected_tools: set[str] | None = None,
-                   root: Path | None = None):
+                   root: Path | None = None,
+                   examined_by_tool: dict[str, set[str]] | None = None):
         state, seen = _materialize(self.events())
         present = {f.id for f in findings}
         payload = {"gate": gate, "tools": sorted(scope_tools)}
@@ -133,14 +134,31 @@ class Ledger:
                 continue
             if rec.get("tool") not in scope_tools:
                 continue
-            # `file in scope_files` is the ordinary route. The second clause
-            # exists because every discovery path filters `--diff-filter=ACMR`
-            # (gitutil) -- Deleted is excluded, since a gone file cannot be
-            # linted -- so a deleted file is NEVER in scope_files and its
-            # findings could never resolve. `git rm` a file and its findings
-            # stayed open forever; repos accumulated one immortal entry per
-            # file they ever deleted.
-            if rec.get("file") in scope_files or _departed(root, rec.get("file")):
+            # `file in <what the tool examined>` is the ordinary route. The
+            # second clause exists because every discovery path filters
+            # `--diff-filter=ACMR` (gitutil) -- Deleted is excluded, since a
+            # gone file cannot be linted -- so a deleted file is NEVER in
+            # scope_files and its findings could never resolve. `git rm` a
+            # file and its findings stayed open forever; repos accumulated one
+            # immortal entry per file they ever deleted. It has to stay ahead
+            # of the examination check too: nothing can examine a file that no
+            # longer exists, so requiring examination would re-create exactly
+            # that bug.
+            #
+            # EXAMINATION, not mere presence in the run's file set. A runner
+            # reports `examined` for the files it can vouch for; absent from
+            # the map means "could not report" and falls back to scope_files,
+            # which is the pre-2026-08-06 behaviour. An EMPTY set is a
+            # positive claim that nothing was looked at, and resolves nothing.
+            # Without this, a runner whose own config excluded a file still
+            # exited 0, landed in scope_tools, and its findings there were
+            # recorded as FIXED -- a false repair written into an append-only
+            # audit trail. Measured on ruff `--force-exclude`; the same shape
+            # applies to .eslintignore and clippy exclusions.
+            tool_scope = (examined_by_tool or {}).get(rec.get("tool"))
+            in_scope = (rec.get("file") in scope_files if tool_scope is None
+                        else rec.get("file") in tool_scope)
+            if in_scope or _departed(root, rec.get("file")):
                 self.append(Event(EventType.FINDING_RESOLVED, run_id, at, finding_id=fid))
         self.append(Event(EventType.RUN_FINISHED, run_id, at,
                           payload={"blocking": sum(1 for f in findings if str(f.verdict)=="block")}))

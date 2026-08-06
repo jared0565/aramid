@@ -17,6 +17,23 @@ what is new is that it can be installed without a source checkout.
 
 ### Fixed
 
+- **A runner can no longer resolve findings in files it never examined.**
+  Resolution required only that the tool exited `OK` and that the file was in
+  the *gate's* file set — but every selective runner examines a subset of
+  that. `ruff` passes `--force-exclude`, so it honours the repo's own
+  `exclude` config even for explicitly-passed paths and still exits 0 with
+  zero findings. Adding a path to `[tool.ruff] exclude` therefore recorded
+  every open finding in it as **`fixed`** — a false repair written into an
+  append-only audit trail, indistinguishable from a real one. Runners now
+  report what they actually analyzed (`RunnerResult.examined`), and
+  resolution intersects against that.
+
+  **Scope, stated plainly:** the mechanism is general but only `ruff` reports
+  today, via `ruff check --show-files` (measured cost: 0.19s on a 197-file
+  repo). Every other runner reports `None`, which falls back to the previous
+  behaviour — so the equivalent hole via `.eslintignore` or clippy exclusions
+  is still open. `None` means "cannot vouch" and is deliberately *not* the
+  same as the empty set, which is a positive claim that nothing was examined.
 - **Git hook shims pass `python -P`, so a repo-local `aramid.py` cannot hijack
   the gate.** `python -m aramid` puts the working directory on `sys.path[0]`
   and git runs hooks from the top of the tree, so an `aramid.py` file — or an

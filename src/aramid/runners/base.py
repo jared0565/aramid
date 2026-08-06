@@ -23,6 +23,19 @@ class RunnerResult:
     stderr: str = ""
     duration_s: float = 0.0
     returncode: int = 0
+    # Repo-relative paths this runner can VOUCH for having analyzed.
+    #
+    # `None` means "cannot report" and is NOT the empty set: it falls back to
+    # the gate-wide file set, preserving the pre-2026-08-06 behaviour for
+    # runners that have not opted in. The empty set is a positive claim that
+    # nothing was examined, and it BLOCKS resolution.
+    #
+    # This exists because `state is ToolState.OK` conflates "ran and found
+    # nothing" with "ran over nothing". Measured: ruff exits 0 with zero
+    # findings both when a file is clean and when the repo's own `exclude`
+    # config skips it (`--force-exclude`), so resolution credited ruff for a
+    # file it never opened. See tests/unit/test_resolution_requires_examination.py.
+    examined: frozenset[str] | None = None
 
 @dataclass
 class RunContext:

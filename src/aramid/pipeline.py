@@ -536,6 +536,14 @@ def run_gate(root: Path, gate: Gate, mode: str, cfg: config_mod.Config, ledger: 
     # 7. record this run; enforce the pre-push no-new-warnings ratchet.
     scope_tools = {r.tool for r in flat_results if r.state is ToolState.OK}
     scope_files = set(files)
+    # What each runner can VOUCH for having analyzed. `state is OK` alone
+    # conflates "ran and found nothing" with "ran over nothing" -- ruff exits
+    # 0 with zero findings both for a clean file and for one the repo's own
+    # `exclude` config skips -- so resolution keyed on scope_files credited a
+    # runner for files it never opened, recording false repairs. A runner that
+    # reports None is absent here and falls back (ledger.record_run).
+    examined_by_tool = {r.tool: set(r.examined) for r in flat_results
+                        if r.state is ToolState.OK and r.examined is not None}
     # Local import: toolset.py imports pipeline.GATE_RUNNER_KEYS/_is_applicable
     # at module scope, so importing it here at module scope would be
     # circular (mirrors ledger.compact()'s identical fix for the
@@ -548,7 +556,8 @@ def run_gate(root: Path, gate: Gate, mode: str, cfg: config_mod.Config, ledger: 
     # and usually do not exist at HEAD, so the same flag there would clear
     # every historical secret on sight (see ledger._departed).
     new_ids = ledger.record_run(run_id, at, str(gate), scope_tools, scope_files, findings,
-                                selected_tools=selected_tools, root=root)
+                                selected_tools=selected_tools, root=root,
+                                examined_by_tool=examined_by_tool)
 
     # record_run above can NEVER resolve a whole-suite finding: those carry the
     # synthetic `<test-suite>` marker, which is not a path and so is never in
