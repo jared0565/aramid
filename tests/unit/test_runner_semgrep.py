@@ -199,3 +199,94 @@ def test_canonical_rule_id_still_prefers_the_rightmost_occurrence():
 
     cid = "/src/rust-memory-safety.junk/config/rust-memory-safety.transmute"
     assert _canonical_rule_id(cid) == "rust-memory-safety.transmute"
+
+
+# --- examined set -----------------------------------------------------------
+#
+# Shapes below are copied from a live `semgrep --json` capture (1.169.0,
+# 2026-08-06) against the vendored OWASP ruleset. Three behaviours were
+# measured rather than assumed, and two of them say there is NO hole here:
+#   - `.semgrepignore` is BYPASSED for explicitly-passed paths (an ignored
+#     file was scanned and did produce a finding), so it is not ruff's
+#     `--force-exclude` hole in disguise;
+#   - so is the default 1MB `--max-target-bytes` limit (a 1,224,024-byte file
+#     was scanned and did produce a finding);
+#   - but a file with a syntax error IS listed under `paths.scanned`, yields
+#     no findings, and semgrep still exits 0. That one is real.
+
+def _payload(scanned, results=(), errors=()) -> str:
+    return json.dumps({"paths": {"scanned": list(scanned)},
+                       "results": list(results), "errors": list(errors)})
+
+
+_SYNTAX_ERROR = {
+    "type": ["PartialParsing", [{"path": "src/syntaxerr.py",
+                                 "start": {"line": 2, "col": 5, "offset": 0},
+                                 "end": {"line": 2, "col": 10, "offset": 5}}]],
+    "path": "src/syntaxerr.py",
+    "message": "Syntax error at line src/syntaxerr.py:2:\n `eval(` was unexpected",
+}
+
+
+def _ok(raw, tmp_path, monkeypatch, files):
+    monkeypatch.setattr(
+        semgrep, "run_subprocess",
+        lambda argv, cwd, t, env=None: RunnerResult("semgrep", ToolState.OK, raw=raw, returncode=1))
+    return semgrep.run(RunContext(root=tmp_path, files=files))
+
+
+def test_examined_excludes_a_file_semgrep_could_not_parse(tmp_path, monkeypatch):
+    """semgrep lists an unparseable file as `scanned` and exits 0 having found
+    nothing in it -- so resolution recorded every open semgrep finding in that
+    file as fixed the moment a syntax error was introduced."""
+    raw = _payload(["src/bad.py", "src/syntaxerr.py"], errors=[_SYNTAX_ERROR])
+
+    result = _ok(raw, tmp_path, monkeypatch, ["src/bad.py", "src/syntaxerr.py"])
+
+    assert result.examined == frozenset({"src/bad.py"})
+
+
+def test_examined_excludes_files_semgrep_has_no_rules_for(tmp_path, monkeypatch):
+    """The adapter passes ctx.files UNFILTERED -- unlike ruff/eslint there is
+    no suffix screen -- so semgrep is handed `.md`, `.bin`, images and all.
+    Measured: those never appear in `paths.scanned`, so they must not be
+    vouched for either."""
+    raw = _payload(["src/bad.py"])
+
+    result = _ok(raw, tmp_path, monkeypatch,
+                 ["src/bad.py", "src/blob.bin", "README.md"])
+
+    assert result.examined == frozenset({"src/bad.py"})
+
+
+def test_examined_normalizes_windows_separators(tmp_path, monkeypatch):
+    """`paths.scanned` comes back with the host's separators; resolution
+    matches against ledger paths, which are forward-slash."""
+    raw = _payload([r"src\aramid\ledger.py"])
+
+    result = _ok(raw, tmp_path, monkeypatch, ["src/aramid/ledger.py"])
+
+    assert result.examined == frozenset({"src/aramid/ledger.py"})
+
+
+def test_missing_paths_key_cannot_report_rather_than_vouching_for_nothing(
+        tmp_path, monkeypatch):
+    """A semgrep old enough to omit `paths` must fall back to the previous
+    behaviour, not block every resolution forever. That is exactly what the
+    None/empty-set distinction on RunnerResult.examined is for."""
+    raw = json.dumps({"results": [], "errors": []})
+
+    result = _ok(raw, tmp_path, monkeypatch, ["src/bad.py"])
+
+    assert result.examined is None
+
+
+def test_degraded_run_vouches_for_nothing(tmp_path, monkeypatch):
+    monkeypatch.setattr(
+        semgrep, "run_subprocess",
+        lambda argv, cwd, t, env=None: RunnerResult("semgrep", ToolState.TIMEOUT))
+
+    result = semgrep.run(RunContext(root=tmp_path, files=["a.py"]))
+
+    assert result.state is ToolState.TIMEOUT
+    assert result.examined is not None and not result.examined

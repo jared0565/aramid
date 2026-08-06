@@ -46,6 +46,24 @@ to publish a tag that disagrees with it.
   rather than falling back to the gate's whole file set — narrow but real, as
   a repo whose eslint config lints `.vue`/`.svelte`/`.astro` has those paths
   in gate scope while the adapter's own suffix list does not name them.
+- **`semgrep` reports what it examined.** A file semgrep cannot parse is
+  listed under `paths.scanned`, produces no findings, and semgrep still exits
+  **0** — so introducing a syntax error recorded every open semgrep finding in
+  that file as `fixed`. Those files are now subtracted from the vouched set.
+  (`PartialParsing` means semgrep parsed *part* of the file; partial analysis
+  is still not analysis it can be held to.) Free, like eslint's: `paths.scanned`
+  is already in the output.
+
+  **Two mechanisms were measured and are NOT holes**, contrary to what the
+  0.1.0 scope note implied: `.semgrepignore` is bypassed for explicitly-passed
+  paths (an ignored file was scanned and did report a finding), and so is the
+  default 1MB `--max-target-bytes` limit (a 1,224,024-byte file was scanned and
+  did report a finding). What `paths.scanned` *does* legitimately narrow is
+  file types — the adapter passes `ctx.files` unfiltered, with no suffix screen
+  of its own, so `.md`, `.bin` and images reach semgrep and never come back.
+
+  On a semgrep old enough not to emit `paths`, the adapter reports "cannot
+  vouch" and falls back rather than blocking every semgrep resolution forever.
 
 ## [0.1.0] — 2026-08-06
 

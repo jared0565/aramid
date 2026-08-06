@@ -6,6 +6,7 @@ doc §3). The actual rule YAML is populated by a later task; this module
 only owns the path constant and the invocation/parse contract.
 """
 import json
+from dataclasses import replace
 from pathlib import Path
 
 from aramid.normalizer import RawFinding
@@ -92,9 +93,66 @@ def _build_argv(ctx) -> list[str]:
     return argv
 
 
+def _error_paths(data: dict) -> set[str]:
+    """Files semgrep reported an error against, as semgrep spells them."""
+    out = set()
+    for err in data.get("errors") or []:
+        for candidate in (err.get("path"), (err.get("location") or {}).get("path")):
+            if candidate:
+                out.add(candidate)
+    return out
+
+
+def _examined(data: dict, ctx) -> frozenset[str] | None:
+    """Repo-relative paths semgrep can vouch for having analysed.
+
+    Free -- semgrep already reports `paths.scanned`, so nothing extra runs.
+
+    Three behaviours were MEASURED against semgrep 1.169.0 rather than
+    assumed, and two of them say this adapter never had ruff's hole:
+      - `.semgrepignore` is BYPASSED for explicitly-passed paths (an ignored
+        file was scanned and did produce a finding);
+      - so is the default 1MB `--max-target-bytes` limit (a 1,224,024-byte
+        file was scanned and did produce a finding).
+    What IS real: `paths.scanned` is genuinely narrower than the list handed
+    over, because `_build_argv` passes `ctx.files` UNFILTERED -- no suffix
+    screen, unlike ruff and eslint -- so `.md`, `.bin` and images go to
+    semgrep and simply never come back as scanned.
+
+    And a file semgrep could not parse is listed as `scanned`, yields no
+    findings, and still exits 0 -- so it is subtracted here. Same reasoning as
+    the eslint adapter's fatal-entry exclusion: without it, introducing a
+    syntax error silently resolves every open finding in that file. Note
+    `PartialParsing` means semgrep parsed *some* of the file; partial
+    analysis is still not analysis it can be held to.
+
+    Returns None -- "cannot report", falling back to the gate's file set --
+    when `paths` is absent, as on a semgrep old enough not to emit it. That
+    is what the None/empty-set distinction on `RunnerResult.examined` exists
+    for: blocking every semgrep resolution forever would be a worse answer
+    than the behaviour those users already have.
+    """
+    paths = (data.get("paths") or {}).get("scanned")
+    if paths is None:
+        return None
+    unparsed = {relativize(p, ctx.root) for p in _error_paths(data)}
+    return frozenset(
+        rel for rel in (relativize(p, ctx.root) for p in paths)
+        if rel not in unparsed
+    )
+
+
 def run(ctx) -> RunnerResult:
     result = run_subprocess(_build_argv(ctx), ctx.root, TIMEOUT_S)
-    return json_or_crashed(NAME, result, _OK_RETURNCODES, empty="{}")
+    out = json_or_crashed(NAME, result, _OK_RETURNCODES, empty="{}")
+    # A degraded semgrep vouches for nothing (see the eslint adapter).
+    if out.state is not ToolState.OK:
+        return replace(out, examined=frozenset())
+    try:
+        data = json.loads(out.raw or "{}")
+    except json.JSONDecodeError:  # pragma: no cover - json_or_crashed pre-screens
+        return replace(out, examined=frozenset())
+    return replace(out, examined=_examined(data, ctx))
 
 
 def parse(result: RunnerResult, ctx) -> list[RawFinding]:
