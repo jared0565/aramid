@@ -31,7 +31,6 @@ back to the old behaviour, so no runner is broken by not opting in — the gap
 that leaves is real and deliberate, and named in the runner tests below.
 """
 from datetime import datetime, timezone
-from pathlib import Path
 
 from aramid.ledger import Ledger
 from aramid.models import Finding, Gate, Severity, Verdict
