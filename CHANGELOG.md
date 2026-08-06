@@ -10,6 +10,43 @@ to publish a tag that disagrees with it.
 
 ## [Unreleased]
 
+### Fixed
+
+- **An ignored file no longer manufactures a finding, and could no longer
+  block a push.** eslint reports an explicitly-passed ignored file as a
+  warning with a **null** `ruleId` ("File ignored because of a matching
+  ignore pattern"), and the adapter mapped `ruleId or "eslint-parse-error"` —
+  so every such file produced a WARN finding named `eslint-parse-error`,
+  pointing at a file eslint had deliberately declined to lint. It fingerprints
+  and enters the ledger like any real finding, so on pre-push it is a **new
+  id**, and new ids are what the ratchet escalates to BLOCK: adding a path to
+  `ignores` and touching a file under it could fail the push, citing a parse
+  error in a file that parses fine.
+
+  File-level notices are now told apart from findings by **shape** — no rule
+  id, not fatal, no position — never by message text. A genuine parse error
+  also carries a null `ruleId`; what distinguishes it is `fatal: true` plus a
+  line and column, and it is still reported. Shape is also what keeps this
+  working across eslint majors, which is why the adapter does not simply pass
+  eslint 9's `--no-warn-ignored`: that option does not exist in eslint 8,
+  where an unrecognised flag exits 2 and takes the runner to CRASHED.
+- **`eslint` reports what it examined, so `ignores` can no longer forge a
+  fix.** This is the same hole 0.1.0 closed for ruff, via eslint's own
+  equivalent of `--force-exclude`: eslint exits cleanly having never opened an
+  ignored file, so resolution recorded every open finding in it as **`fixed`**
+  in the append-only ledger. Files eslint declined to lint, and files it could
+  not parse, are both excluded from the vouched set — a file that fails to
+  parse was analysed too, so leaving it in would mean a syntax error silently
+  resolved every other open finding in that file.
+
+  Unlike ruff this costs **no extra subprocess**: eslint's JSON formatter
+  already emits one entry per file it processed, clean ones included. (ruff's
+  JSON names only files *with* findings, which is why that adapter has to run
+  `--show-files` separately.) The no-JS-files no-op now vouches for nothing
+  rather than falling back to the gate's whole file set — narrow but real, as
+  a repo whose eslint config lints `.vue`/`.svelte`/`.astro` has those paths
+  in gate scope while the adapter's own suffix list does not name them.
+
 ## [0.1.0] — 2026-08-06
 
 First packaged release. Everything below already existed in the repository;
