@@ -20,6 +20,10 @@ dist/
 # Claude Code: shared settings.json is tracked (graphite-first hook wiring);
 # settings.local.json is personal machine state.
 .claude/settings.local.json
+
+# Editor state, per-developer. Not tracked for the same reason as
+# settings.local.json: it says nothing about the project.
+.vscode/
 .graphite*
 
 .githooks/

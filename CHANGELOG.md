@@ -10,7 +10,7 @@ to publish a tag that disagrees with it.
 
 ## [Unreleased]
 
-## [0.1.0] — unreleased
+## [0.1.0] — 2026-08-06
 
 First packaged release. Everything below already existed in the repository;
 what is new is that it can be installed without a source checkout.
