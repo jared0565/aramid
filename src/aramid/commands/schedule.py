@@ -103,12 +103,33 @@ def render_cron_line(interpreter: Path, interval_hours: int) -> str:
         when = f"0 0 */{max(1, hours // 24)} * *"
     else:
         when = f"0 */{hours} * * *"
-    # cron hands the command to a shell, which splits on whitespace: an
-    # unquoted `/opt/my venv/bin/python3` runs `/opt/my` and the drain never
+    # Two layers parse this, and shlex.quote only addresses the lower one.
+    #
+    # SHELL: cron hands the command to a shell, which splits on whitespace, so
+    # an unquoted `/opt/my venv/bin/python3` runs `/opt/my` and the drain never
     # fires, reported nowhere the user is looking. shlex.quote leaves an
     # ordinary path completely untouched, so already-installed lines still
     # match what a fresh render produces.
-    return f"{when} {shlex.quote(str(interpreter))} -m aramid drain --all  {CRON_MARKER}"
+    #
+    # CRON: crontab(5) says the command runs "up to a newline or a % character".
+    # An unescaped `%` is converted to a newline, and everything after the first
+    # one is fed to the command as STDIN; `\%` is the escape. Quotes give no
+    # protection at all here -- cron parses the line before any shell sees it --
+    # so `/opt/py%3/bin/python` silently installed a TRUNCATED command whose
+    # severed tail became stdin. Escaping after quoting is the right order:
+    # cron unescapes first, then the shell parses what is left.
+    text = str(interpreter)
+    # A newline cannot be escaped at any layer -- a crontab line IS the unit of
+    # the file. Rendering one anyway would append a second, UNMARKED line that
+    # `strip_aramid_lines` could never remove, because CRON_MARKER goes with
+    # whichever half it lands on. Refuse instead, the same call `_read_crontab`
+    # makes: an aborted install is a message the user can act on.
+    if "\n" in text or "\r" in text:
+        raise ValueError(
+            "aramid: schedule: refusing to install -- the interpreter path "
+            f"contains a line break, which no crontab line can carry: {text!r}")
+    command = shlex.quote(text).replace("%", "\\%")
+    return f"{when} {command} -m aramid drain --all  {CRON_MARKER}"
 
 
 def strip_aramid_lines(text: str) -> str:

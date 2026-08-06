@@ -251,3 +251,98 @@ def test_cron_line_leaves_an_ordinary_path_unquoted():
     from pathlib import PurePosixPath
 
     assert "'" not in schedule.render_cron_line(PurePosixPath("/usr/bin/python3"), 4)
+
+
+# --- crontab is not a shell -------------------------------------------------
+#
+# shlex.quote makes the path safe for the SHELL that cron hands the command
+# to. It does nothing about the layer above it: crontab(5) says the command
+# runs "up to a newline or a % character", that an unescaped `%` becomes a
+# newline, and that everything after the first `%` is fed to the command as
+# stdin. Single quotes do not protect either character, because cron parses
+# the line before any shell sees it.
+
+def _as_cron_would_run(line: str) -> str:
+    r"""The command cron actually hands the shell.
+
+    Models crontab(5) faithfully, because the weak version of these tests only
+    collapsed `\%` to `%` -- which is a no-op when nothing is escaped, so they
+    passed against the unfixed renderer. The damaging half is the TRUNCATION:
+    cron stops the command at the first unescaped `%` and feeds everything
+    after it to the command as stdin.
+    """
+    command = line.split(" ", 5)[5]                     # past the 5 cron fields
+    out, i = [], 0
+    while i < len(command):
+        if command[i] == "\\" and command[i + 1:i + 2] == "%":
+            out.append("%")                             # cron unescapes `\%`
+            i += 2
+        elif command[i] == "%":
+            break                                       # rest becomes stdin
+        else:
+            out.append(command[i])
+            i += 1
+    return "".join(out)
+
+
+def test_cron_line_escapes_a_percent_in_the_interpreter_path():
+    r"""cron turns an unescaped `%` into a newline and sends the remainder to
+    the command as stdin, so `/opt/py%3/bin/python` silently installs a
+    truncated command plus a second, UNMARKED line -- which
+    `strip_aramid_lines` can then never remove, because the marker went to the
+    orphan half."""
+    import re
+    from pathlib import PurePosixPath
+
+    line = schedule.render_cron_line(PurePosixPath("/opt/py%3/bin/python"), 4)
+
+    assert "%" in line                      # the path really did contain one
+    assert "\\%" in line
+    # no BARE percent survives: every one is preceded by a backslash
+    assert not re.search(r"(?<!\\)%", line), line
+
+
+def test_cron_line_survives_cron_percent_processing_as_one_whole_command():
+    """The command must reach the shell INTACT. Unfixed, cron truncated it at
+    the `%` in the path, so the drain invocation never ran at all -- and the
+    severed tail became stdin."""
+    from pathlib import PurePosixPath
+
+    line = schedule.render_cron_line(PurePosixPath("/opt/py%3/bin/python"), 4)
+
+    assert "-m aramid drain --all" in _as_cron_would_run(line)
+
+
+def test_cron_line_percent_escape_round_trips_to_the_original_path():
+    """Put a path carrying BOTH hazards through cron's processing and then the
+    shell's, and check the interpreter that comes out is the one that went in."""
+    import shlex
+    from pathlib import PurePosixPath
+
+    interp = "/opt/py%3/my venv/bin/python"
+    line = schedule.render_cron_line(PurePosixPath(interp), 4)
+
+    argv = shlex.split(_as_cron_would_run(line).split(schedule.CRON_MARKER)[0])
+
+    assert argv[0] == interp, argv
+
+
+@pytest.mark.parametrize("hostile", ["\n", "\r"])
+def test_cron_line_refuses_a_path_that_cannot_be_one_line(hostile):
+    """A newline in the path ends the crontab entry outright -- no amount of
+    quoting or escaping can carry it, since a crontab line IS the unit. The
+    only correct answer is to refuse the install rather than write a mangled
+    crontab, the same reasoning as `_read_crontab` refusing on an unreadable
+    crontab instead of treating it as empty."""
+    from pathlib import PurePosixPath
+
+    with pytest.raises(ValueError):
+        schedule.render_cron_line(PurePosixPath(f"/opt/py{hostile}evil/python"), 4)
+
+
+def test_cron_line_is_always_exactly_one_line():
+    from pathlib import PurePosixPath
+
+    line = schedule.render_cron_line(PurePosixPath("/opt/py%3/my venv/bin/python"), 4)
+
+    assert len(line.splitlines()) == 1, line

@@ -89,6 +89,28 @@ to publish a tag that disagrees with it.
   1000 unrelated ones were rejected. Negligible against clippy's 240 s budget,
   though it is a visible fraction of a warm cached run.
 
+- **The scheduled drain survives an interpreter path containing `%`, and
+  refuses one containing a line break.** 0.1.0 quoted the path for the shell;
+  that addressed the lower of the two layers that parse a crontab line.
+  crontab(5) says the command runs "up to a newline or a `%` character": an
+  unescaped `%` becomes a newline, and everything after the first one is fed
+  to the command as **stdin**. Quotes give no protection, because cron parses
+  the line before any shell sees it — so `/opt/py%3/bin/python` installed a
+  **truncated** command whose severed tail became stdin, and the drain never
+  ran. `%` is now escaped as `\%`, after quoting, since cron unescapes first
+  and the shell parses what is left.
+
+  A line break cannot be escaped at any layer — a crontab line *is* the unit
+  of the file — so the install is refused instead. Rendering it anyway would
+  append a second, **unmarked** line that `strip_aramid_lines` could never
+  remove, because the marker goes with whichever half it lands on. Same call
+  `_read_crontab` already makes: an aborted install is a message you can act
+  on, a corrupted crontab is not.
+
+  Reachability is limited — the only call site passes `Path(sys.executable)` —
+  so this is hardening rather than a reported failure. Ordinary paths render
+  byte-identically, so already-installed entries still match a fresh render.
+
 ### Notes
 
 - **Where `examined` reporting stands.** Four of the file-list runners now
