@@ -59,6 +59,8 @@ load-bearing rather than cosmetic, for the reason given there.
 """
 import dataclasses
 import json
+import re
+from pathlib import Path
 
 from aramid import toolpath
 from aramid.normalizer import RawFinding
@@ -126,16 +128,147 @@ def _ndjson_or_crashed(result: RunnerResult) -> RunnerResult:
                         result.duration_s, result.returncode)
 
 
+# A dependency list is space-separated with `\ ` escaping a literal space.
+# The lookbehind is what keeps Windows path SEPARATORS out of it: a lone
+# backslash in `src\lib.rs` is not an escape, only backslash-space is.
+_DEP_SPLIT = re.compile(r"(?<!\\) ")
+
+
+def _parse_depfile(text: str) -> list[tuple[str, list[str]]]:
+    """Parse a cargo dep-info file into `(target, dependencies)` rules.
+
+    Makefile-ish: `<target>: <dep> <dep> ...`, one rule per line, then every
+    dependency repeated as a phony target with no deps, then `# env-dep:`
+    comments. Only the real rules are returned.
+
+    Split on the first COLON-SPACE, never the first colon: on Windows a
+    target line begins `C:\\...`, so splitting at the first `:` would take the
+    drive letter for the whole target and drop the rule entirely.
+    """
+    rules = []
+    for line in text.splitlines():
+        line = line.strip()
+        if not line or line.startswith("#"):
+            continue
+        target, sep, rest = line.partition(": ")
+        if not sep:
+            continue                       # phony line (`src\lib.rs:`)
+        deps = [d.replace("\\ ", " ") for d in _DEP_SPLIT.split(rest.strip()) if d]
+        rules.append((target.strip(), deps))
+    return rules
+
+
+def _repo_relative_rs(dep: str, pkg_root: Path, root: Path) -> str | None:
+    """A dependency, as a repo-relative `.rs` path, or None if it is neither.
+
+    Backslashes are normalized BEFORE `Path` sees the string, for the reason
+    spelled out in `_util.relativize`: `\\` is a separator on Windows but a
+    legal filename character on POSIX, so delegating to `Path` would work
+    here and silently mangle paths on every POSIX CI leg.
+    """
+    if not dep.lower().endswith(".rs"):
+        return None                        # Cargo.toml, build scripts' inputs
+    p = Path(dep.replace("\\", "/"))
+    if not p.is_absolute():
+        p = pkg_root / p
+    try:
+        resolved = p.resolve()
+        if not resolved.is_relative_to(root):
+            return None                    # registry / sysroot sources
+        return resolved.relative_to(root).as_posix()
+    except (OSError, ValueError):
+        return None
+
+
+def _examined(raw: str, ctx) -> frozenset[str]:
+    """Repo-relative `.rs` files cargo actually compiled this run.
+
+    The JSON stream alone cannot answer this: `compiler-artifact` records
+    name only CRATE ROOTS (`target.src_path`), so a module reached through
+    `mod` never appears. The dep-info file cargo writes beside each artifact
+    does list them, and is exact -- measured on a live crate, a lib target's
+    depfile named `src/lib.rs src/used.rs Cargo.toml` and correctly omitted an
+    `src/orphan.rs` that no `mod` declaration reached.
+
+    That omission is the whole point. A finding recorded in a file that later
+    stops being compiled -- someone deletes `mod foo;` and leaves foo.rs in
+    the tree -- would otherwise be silently recorded as `fixed`, because
+    clippy exits 0 having never looked at it.
+
+    Depfiles are never garbage-collected and, measured, are NOT rewritten on a
+    cached run (mtimes byte-identical across two runs), so freshness cannot be
+    established by timestamp and a directory accumulates one per
+    feature/profile combination ever built. They are matched STRUCTURALLY
+    instead: a depfile counts only if one of its own target lines is an
+    artifact filename THIS run reported. Stale ones name stale artifacts and
+    are dropped.
+
+    Dependency paths are relative to the PACKAGE root, not the repo root --
+    rustc runs with cwd set to the package -- so each depfile resolves against
+    the `manifest_path` of the artifact that claimed it. Getting this wrong
+    would quietly vouch for the wrong paths in every workspace.
+
+    Returns the empty set, never None, when nothing can be matched: that is a
+    positive "vouches for nothing" that blocks resolution, where None would
+    fall back to the gate file set and reopen the hole.
+    """
+    package_of: dict[Path, Path] = {}
+    for line in (raw or "").splitlines():
+        if not line.strip():
+            continue
+        try:
+            record = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if record.get("reason") != "compiler-artifact":
+            continue
+        manifest = record.get("manifest_path")
+        pkg_root = Path(manifest).parent if manifest else ctx.root
+        for out in record.get("filenames") or []:
+            package_of[Path(out)] = pkg_root
+    if not package_of:
+        return frozenset()
+
+    root = ctx.root.resolve()
+    examined: set[str] = set()
+    for deps_dir in {artifact.parent for artifact in package_of}:
+        try:
+            depfiles = sorted(deps_dir.glob("*.d"))
+        except OSError:
+            continue
+        for depfile in depfiles:
+            try:
+                rules = _parse_depfile(
+                    depfile.read_text(encoding="utf-8", errors="replace"))
+            except OSError:
+                continue
+            pkg_root = next((package_of[Path(t)] for t, _ in rules
+                             if Path(t) in package_of), None)
+            if pkg_root is None:
+                continue                   # belongs to some other build
+            pkg_root = pkg_root.resolve()
+            for _, deps in rules:
+                for dep in deps:
+                    rel = _repo_relative_rs(dep, pkg_root, root)
+                    if rel is not None:
+                        examined.add(rel)
+    return frozenset(examined)
+
+
 def run(ctx) -> RunnerResult:
     if not (ctx.root / "Cargo.toml").exists():
-        return RunnerResult(NAME, ToolState.MISSING)
+        return RunnerResult(NAME, ToolState.MISSING, examined=frozenset())
     # Probe BEFORE invoking cargo: see module docstring on 101's two meanings.
     if toolpath.resolve(CLIPPY_BIN) is None:
-        return RunnerResult(NAME, ToolState.MISSING)
+        return RunnerResult(NAME, ToolState.MISSING, examined=frozenset())
     result = run_subprocess(
         ["cargo", "clippy", "--all-targets", "--message-format=json", "--quiet"],
         ctx.root, TIMEOUT_S)
-    return _ndjson_or_crashed(result)
+    out = _ndjson_or_crashed(result)
+    # A degraded clippy vouches for nothing (see the ruff/eslint adapters).
+    if out.state is not ToolState.OK:
+        return dataclasses.replace(out, examined=frozenset())
+    return dataclasses.replace(out, examined=_examined(out.raw, ctx))
 
 
 def parse(result: RunnerResult, ctx) -> list[RawFinding]:

@@ -64,6 +64,47 @@ to publish a tag that disagrees with it.
 
   On a semgrep old enough not to emit `paths`, the adapter reports "cannot
   vouch" and falls back rather than blocking every semgrep resolution forever.
+- **`clippy` reports what it examined, so a file that stops being compiled no
+  longer resolves its own findings.** Delete a `mod foo;` and leave `foo.rs`
+  in the tree and cargo never compiles it again — clippy exits 0 having never
+  looked at it, and every open finding in it was recorded `fixed`.
+
+  The JSON stream cannot answer this on its own: `compiler-artifact` records
+  name only crate roots (`target.src_path`), so modules reached through `mod`
+  never appear. The dep-info file cargo writes beside each artifact does, and
+  is exact. Two measured properties shape how they are used — a fully cached
+  re-run still emits every artifact record, so the artifact set is always
+  available; but cached runs do **not** rewrite depfiles, so freshness cannot
+  be established by timestamp. Since depfiles are never garbage-collected, a
+  directory accumulates one per feature/profile combination ever built, and
+  they are matched **structurally** instead: a depfile counts only if one of
+  its own target lines is an artifact filename *this run* reported.
+
+  Dependency paths resolve against the **package** root, not the repo root —
+  rustc runs with cwd set to the package — so workspace members are handled
+  correctly rather than quietly vouching for paths one directory level off.
+
+  **Cost, measured:** 464 ms against a synthetic `deps/` holding 1001
+  depfiles (the scale of a crate with a large dependency tree), where all
+  1000 unrelated ones were rejected. Negligible against clippy's 240 s budget,
+  though it is a visible fraction of a warm cached run.
+
+### Notes
+
+- **Where `examined` reporting stands.** Four of the file-list runners now
+  report it — `ruff` (0.1.0), `eslint`, `semgrep` and `clippy` — which closes
+  every hole named in the 0.1.0 scope paragraph.
+
+  **`typecheck` remains open, and not because it cannot.** `tsc --listFiles`
+  emits exactly the needed list (verified on TypeScript 7.0.2: it prints each
+  compilation input alongside the diagnostics), the adapter simply does not
+  pass it today. tsc is also the runner where this matters most, because it
+  follows imports and so analyses far more than the files handed to it. The
+  mypy arm was not assessed — mypy is not installed on this machine, so no
+  claim is made about it either way.
+
+  `gitleaks`, `deps` and `tests` are a different shape: they scan history,
+  manifests, and a pass/fail suite rather than a file set.
 
 ## [0.1.0] — 2026-08-06
 
