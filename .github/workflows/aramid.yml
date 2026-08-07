@@ -185,6 +185,34 @@ jobs:
                        f"(completed: {sorted(tools)}). CI would be reporting a "
                        "pass for a tier it never exercised.")
 
+      # WHEN THIS JOB GOES RED, SAY WHICH TEST. A blocking gate writes its
+      # reason to `.aramid/logs/<tool>-<run_id>.log` and nowhere else: the
+      # finding carries evidence=None and the directory is gitignored. On
+      # 2026-08-06 the windows-latest/py3.14 leg failed at the pre-push step
+      # with "tests-failed", passed on re-run with no code change, and the one
+      # string naming the failing test died with the container. Six legs were
+      # green, so that is a live intermittent in the suite of a tool whose
+      # whole claim is deterministic verdicts -- and it is unidentified.
+      #
+      # PLACEMENT. `if: failure()` fires for any earlier failed step even
+      # though the steps between it were skipped, so one step here covers both
+      # gate tiers rather than one per tier. It must sit after both, which
+      # tests/unit/test_ci_log_dump.py asserts by parsing this file.
+      #
+      # ALWAYS EXITS 0. It is a diagnostic; a second red step would only bury
+      # the first. That is also why it is a committed file rather than an
+      # inline `shell: python` block -- a dump that silently prints nothing
+      # looks identical to one that correctly found nothing, so every branch
+      # of it is pinned by unit tests that run it as a subprocess.
+      #
+      # PUBLIC BY DESIGN: this repo is public, so this publishes scan logs of
+      # sources that are already public, scrubbed of the run's gitleaks
+      # secrets by pipeline._write_logs. The python-*.log body is the same
+      # pytest output the `Run test suite` step already prints on every run.
+      - name: Dump .aramid/logs on failure (names the failing test)
+        if: failure()
+        run: python .github/scripts/dump_aramid_logs.py
+
       - name: Install build backend
         run: pip install build
 
