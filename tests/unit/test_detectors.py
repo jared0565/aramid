@@ -421,3 +421,95 @@ def test_every_root_gated_stack_has_help_text():
     """A stack added to one table and not the other would KeyError inside
     the notice loop -- i.e. crash the gate, from a detector."""
     assert set(detectors._ROOT_GATED_STACKS) == set(detectors._ROOT_GATED_HELP)
+
+
+# --- cargo / go test kinds --------------------------------------------------
+# Rust is an already-CLAIMED stack (detect_stacks returns "rust"; clippy and
+# cargo-audit run on it), so a BLOCK-tier test gate that cannot run there was
+# an inconsistency, not a missing feature. Go is added as a test KIND only --
+# detect_stacks still does not claim Go, because a `go test` runner without
+# vet/staticcheck would be a coverage claim aramid cannot honour.
+#
+# DETECTION IS FILENAME-ONLY, MEASURED NOT ASSUMED. Sniffing `.rs` contents
+# for #[test]/#[cfg(test)] would catch inline unit tests -- the commoner Rust
+# layout -- but measured 409 ms against 4 ms for the filename walk on 500
+# files / 2.5 MB, in a detector that runs on every gate. An inline-only crate
+# instead falls through to the loud "no suite detected" WARN naming
+# [tests].command, which is an honest degradation rather than silence.
+
+def _rust(tmp_path, with_tests=True, nested=None):
+    root = tmp_path / "rs"
+    (root).mkdir(exist_ok=True)
+    (root / "Cargo.toml").write_text("[package]\nname='d'\n", encoding="utf-8")
+    (root / "src").mkdir(exist_ok=True)
+    (root / "src" / "lib.rs").write_text("pub fn f() {}\n", encoding="utf-8")
+    if with_tests:
+        d = (root / nested / "tests") if nested else (root / "tests")
+        d.mkdir(parents=True, exist_ok=True)
+        (d / "it.rs").write_text("#[test]\nfn t() {}\n", encoding="utf-8")
+    return root
+
+
+def test_cargo_detected_from_a_tests_dir_of_rs_files(tmp_path):
+    assert "cargo" in detectors.detect_tests(_rust(tmp_path))
+
+
+def test_cargo_detected_in_a_workspace_member(tmp_path):
+    """Workspaces put member crates under crates/<name>/, each with its own
+    tests/. Keying on the walk rather than a root-level glob covers them."""
+    assert "cargo" in detectors.detect_tests(_rust(tmp_path, nested="crates/inner"))
+
+
+def test_no_cargo_without_a_cargo_toml(tmp_path):
+    """A bare tests/*.rs with no manifest is not a Cargo project -- and
+    `cargo test` there would fail for a reason that is not the repo's."""
+    root = tmp_path / "norust"
+    (root / "tests").mkdir(parents=True)
+    (root / "tests" / "it.rs").write_text("#[test]\nfn t() {}\n", encoding="utf-8")
+    assert "cargo" not in detectors.detect_tests(root)
+
+
+def test_inline_only_crate_is_not_detected_and_that_is_deliberate(tmp_path):
+    """The documented, measured trade-off: no content sniffing. This must be
+    a KNOWN gap with a loud downstream WARN, never an accident -- if someone
+    later adds content detection, this test should be updated deliberately,
+    not discovered failing."""
+    assert "cargo" not in detectors.detect_tests(_rust(tmp_path, with_tests=False))
+
+
+def _go(tmp_path, with_tests=True):
+    root = tmp_path / "go"
+    root.mkdir(exist_ok=True)
+    (root / "go.mod").write_text("module example.com/d\n\ngo 1.22\n", encoding="utf-8")
+    (root / "main.go").write_text("package main\n\nfunc main() {}\n", encoding="utf-8")
+    if with_tests:
+        (root / "main_test.go").write_text(
+            "package main\n\nimport \"testing\"\n\nfunc TestX(t *testing.T) {}\n",
+            encoding="utf-8")
+    return root
+
+
+def test_go_detected_from_a_test_go_file_beside_the_source(tmp_path):
+    """Go's convention puts *_test.go next to the source with NO tests/
+    directory -- which is exactly why the old marker-based notice never
+    fired on a Go repo."""
+    assert "go" in detectors.detect_tests(_go(tmp_path))
+
+
+def test_no_go_without_a_go_mod(tmp_path):
+    root = tmp_path / "nogo"
+    root.mkdir()
+    (root / "main_test.go").write_text("package main\n", encoding="utf-8")
+    assert "go" not in detectors.detect_tests(root)
+
+
+def test_no_go_when_the_module_has_no_test_files(tmp_path):
+    assert "go" not in detectors.detect_tests(_go(tmp_path, with_tests=False))
+
+
+def test_a_python_repo_is_unaffected_by_the_new_kinds(tmp_path):
+    """Regression: the new kinds must not widen what a Python repo reports."""
+    root = tmp_path / "py"
+    root.mkdir()
+    (root / "test_x.py").write_text("def test_x(): pass\n", encoding="utf-8")
+    assert detectors.detect_tests(root) == {"pytest"}

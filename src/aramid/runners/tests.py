@@ -114,6 +114,7 @@ lockfile at all: the lockfile gate only guards promoting a detected npm
 suite to a SECOND concurrent suite alongside an already-detected Python
 one, never the single-suite case (B1 regression).
 """
+import dataclasses
 import shlex
 import sys
 import time
@@ -270,6 +271,38 @@ def run_npm_test(ctx, timeout_s: float | None = None) -> RunnerResult:
                            timeout_s if timeout_s is not None else _timeout(ctx))
 
 
+def run_cargo_test(ctx, timeout_s: float | None = None) -> RunnerResult:
+    """`cargo test` -- RESTAMPED to "cargo-test".
+
+    run_subprocess names a result after Path(argv[0]).name, which here is
+    plain "cargo" -- the same name clippy and cargo-audit derive before THEY
+    restamp. `_write_logs` keys its filename on `.tool` and `degraded_tools`
+    is a set, so two runners sharing a name silently overwrite one another's
+    diagnostic log (the exact bug json_or_crashed's restamping docstring
+    describes). pytest/npm need no such treatment because nothing else in the
+    gate is called pytest or npm."""
+    r = run_subprocess(["cargo", "test"], ctx.root,
+                       timeout_s if timeout_s is not None else _timeout(ctx))
+    return dataclasses.replace(r, tool="cargo-test")
+
+
+def run_go_test(ctx, timeout_s: float | None = None) -> RunnerResult:
+    """`go test ./...` -- restamped for symmetry with run_cargo_test; "go" is
+    not currently claimed by another runner, but relying on that is how the
+    collision above happens the next time one is added."""
+    r = run_subprocess(["go", "test", "./..."], ctx.root,
+                       timeout_s if timeout_s is not None else _timeout(ctx))
+    return dataclasses.replace(r, tool="go-test")
+
+
+# Fixed order: this is BOTH the order `.sub_results` carries and the order
+# the [review M2] "first non-OK state" rule walks. pytest-then-npm is
+# unchanged from when this was a hardcoded pair, so a pytest+npm repo
+# produces a byte-identical aggregate to before.
+_SUITE_RUNNERS = (("pytest", run_pytest), ("npm", run_npm_test),
+                  ("cargo", run_cargo_test), ("go", run_go_test))
+
+
 def _run_one_within_deadline(tool_name: str, run_one, ctx) -> RunnerResult:
     """Run one suite capped by whatever remains until `ctx.gate_deadline`
     ([review B2]) -- never by its own full per-tool timeout alone, and
@@ -285,12 +318,15 @@ def _run_one_within_deadline(tool_name: str, run_one, ctx) -> RunnerResult:
     return run_one(ctx, min(_timeout(ctx), remaining))
 
 
-def _run_dual(ctx) -> RunnerResult:
-    """Both `detect_tests()` kinds are present and the lockfile gate passed
-    (`_dual_stack_run` below): run BOTH suites sequentially, sharing one
-    wall-clock deadline, and bundle the results (module docstring)."""
-    py_result = _run_one_within_deadline("pytest", run_pytest, ctx)
-    npm_result = _run_one_within_deadline("npm", run_npm_test, ctx)
+def _run_many(ctx, names) -> RunnerResult:
+    """Two or more `detect_tests()` kinds are present: run each suite
+    sequentially, sharing one wall-clock deadline, and bundle the results
+    (module docstring). Generalized from the original hardcoded pytest+npm
+    pair when cargo/go were added -- the two-kind case must still produce an
+    identical aggregate, which `tests/unit/test_runner_tests.py` pins
+    unmodified."""
+    results = [_run_one_within_deadline(n, fn, ctx)
+               for n, fn in _SUITE_RUNNERS if n in names]
 
     # [review M2]: OK iff BOTH subs OK; otherwise the FIRST non-OK sub-state,
     # in the fixed pytest-then-npm order `.sub_results` carries below.
@@ -298,34 +334,17 @@ def _run_dual(ctx) -> RunnerResult:
     # "worst" state to rank, only OK-vs-not-OK is ever consulted downstream
     # (pipeline._BAD_STATES). This INVERTS deps._run_mixed's OR rule --
     # mirror deps' `.sub_results` SHAPE only, never its state rule.
-    if py_result.state is ToolState.OK and npm_result.state is ToolState.OK:
+    if all(r.state is ToolState.OK for r in results):
         state = ToolState.OK
-    elif py_result.state is not ToolState.OK:
-        state = py_result.state
     else:
-        state = npm_result.state
+        state = next(r.state for r in results if r.state is not ToolState.OK)
     # [review M4] `.returncode` is left at its dataclass default (0) --
     # meaningless on the aggregate (two returncodes cannot collapse into
     # one, and 0 reads as success); consult `.sub_results` for the real
     # per-suite exit codes.
     combined = RunnerResult("tests", state)
-    combined.sub_results = [py_result, npm_result]
+    combined.sub_results = results
     return combined
-
-
-def _dual_stack_run(ctx) -> RunnerResult:
-    """Entry point for the has-pytest-and-has-npm case. Only promotes to a
-    real dual-run when the JS side has a package-manager lockfile -- see
-    module docstring for the C1/B1/B3 rationale. Without one: the
-    single-suite (pytest-only) path runs, with NO `.sub_results` (same
-    shape as any other single-kind repo), and a loud notice fires --
-    silently dropping a detected suite is exactly the bug class this
-    module exists to fix, so the drop must never be quiet."""
-    pkg_manager = getattr(ctx, "pkg_manager", None) or detect_package_manager(ctx.root)
-    if pkg_manager is None:
-        print(_NO_LOCKFILE_NOTICE, file=sys.stderr)
-        return run_pytest(ctx)
-    return _run_dual(ctx)
 
 
 def run(ctx) -> RunnerResult:
@@ -334,14 +353,32 @@ def run(ctx) -> RunnerResult:
     command = getattr(ctx, "test_command", None)
     if command:
         return run_custom(ctx, command)
-    kinds = _detected(ctx)
+    kinds = set(_detected(ctx))
+
+    # [review C1/B1/B3] The lockfile gate, deliberately kept scoped to the
+    # pytest+npm pair exactly as when it was written. Widening it to "npm
+    # plus any other kind" would be defensible in the abstract, but
+    # _NO_LOCKFILE_NOTICE says "running pytest only this run" -- on an
+    # npm+cargo repo that sentence would be false, and a notice this module
+    # exists to make trustworthy must not state an invented fact.
     if "pytest" in kinds and "npm" in kinds:
-        return _dual_stack_run(ctx)
-    if "pytest" in kinds:
-        return run_pytest(ctx)
-    if "npm" in kinds:
-        return run_npm_test(ctx)
-    return RunnerResult("tests", ToolState.MISSING)
+        pkg_manager = getattr(ctx, "pkg_manager", None) or detect_package_manager(ctx.root)
+        if pkg_manager is None:
+            print(_NO_LOCKFILE_NOTICE, file=sys.stderr)
+            kinds.discard("npm")
+
+    selected = [n for n, _ in _SUITE_RUNNERS if n in kinds]
+    if not selected:
+        return RunnerResult("tests", ToolState.MISSING)
+    if len(selected) == 1:
+        # SHAPE MATTERS: a single suite returns the raw subprocess result,
+        # carrying that tool's own name ("pytest"/"npm"/"cargo-test"), NOT an
+        # aggregate named "tests" and NOT `.sub_results`. parse()'s `_sub`
+        # guard and ledger.record_run's resolution keying both read `.tool`,
+        # so a cargo-only repo must look exactly like a pytest-only repo
+        # does, one name over.
+        return dict(_SUITE_RUNNERS)[selected[0]](ctx)
+    return _run_many(ctx, kinds)
 
 
 def parse(result: RunnerResult, ctx, *, _sub: bool = False) -> list[RawFinding]:

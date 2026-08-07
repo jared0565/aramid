@@ -248,11 +248,12 @@ def _no_suite_notice(ctx: RunContext) -> str:
     return (
         f"aramid: tests: {found} -- the BLOCK-tier test gate ran NOTHING on "
         f"this run, so a pass here says nothing about your tests. Detected "
-        f"stack(s): {stacks}. aramid recognizes only pytest (test_*.py, "
-        f"*_test.py, conftest.py) and an npm `test` script; cargo and go "
-        f"suites are not detected. Set [tests].command to point aramid at "
-        f"your suite, or [tests].enabled = false to declare this repo has "
-        f"none.")
+        f"stack(s): {stacks}. aramid detects pytest (test_*.py, "
+        f"*_test.py, conftest.py), an npm `test` script, cargo (a "
+        f"tests/*.rs file) and go (a *_test.go file) -- a Rust crate whose "
+        f"tests are all inline #[cfg(test)] is the known gap. Set "
+        f"[tests].command to point aramid at your suite, or "
+        f"[tests].enabled = false to declare this repo has none.")
 
 
 def _tests_config_notices(gate: Gate, ctx: RunContext, budget_s: float) -> list[str]:
@@ -290,7 +291,7 @@ def _tests_config_notices(gate: Gate, ctx: RunContext, budget_s: float) -> list[
         kinds = _detected_tests(ctx)
         if not kinds:
             notices.append(_no_suite_notice(ctx))
-        elif "pytest" in kinds and "npm" in kinds:
+        elif len(kinds) >= 2:
             # [review I3 + B1, MANDATORY case] Both kinds detected, but the
             # C1 lockfile gate (runners/tests.py) means npm only actually
             # runs when a JS package-manager lockfile backs it up. Resolved
@@ -298,8 +299,13 @@ def _tests_config_notices(gate: Gate, ctx: RunContext, budget_s: float) -> list[
             # fresh detect_package_manager(root) only as fallback) so this
             # check and the real runner never disagree about which repos
             # get promoted to a dual run.
-            pkg_manager = ctx.pkg_manager or detect_package_manager(ctx.root)
+            effective = set(kinds)
+            if "pytest" in kinds and "npm" in kinds:
+                pkg_manager = ctx.pkg_manager or detect_package_manager(ctx.root)
+            else:
+                pkg_manager = "n/a"     # gate does not apply to this pairing
             if pkg_manager is None:
+                effective.discard("npm")
                 notices.append(
                     "aramid: tests: both a Python test suite and a "
                     "package.json test script were detected, but no JS "
@@ -308,7 +314,7 @@ def _tests_config_notices(gate: Gate, ctx: RunContext, budget_s: float) -> list[
                     "skipped this run (pytest still runs). Run `npm "
                     "install` (or pnpm/yarn), or set [tests].command to "
                     "run it explicitly.")
-            else:
+            if len(effective) >= 2:
                 # [review B5] Informational only -- Task 3's shared
                 # ctx.gate_deadline is what actually keeps a dual-suite run
                 # inside budget_s; this only explains a run that had to
@@ -359,8 +365,10 @@ def _tests_config_notices(gate: Gate, ctx: RunContext, budget_s: float) -> list[
                 if effective_timeout > budget_s:
                     key = _BUDGET_KEY.get(gate, "pre_push")
                     notices.append(
-                        f"aramid: tests: this repo runs a pytest suite AND "
-                        f"an npm suite sequentially, sharing ONE "
+                        f"aramid: tests: this repo runs "
+                        f"{len(effective)} suites "
+                        f"({', '.join(sorted(effective))}) sequentially, "
+                        f"sharing ONE "
                         f"[timeouts].{key} budget of {budget_s:g}s -- the "
                         f"effective per-suite timeout "
                         f"({effective_timeout:g}s) already exceeds that "

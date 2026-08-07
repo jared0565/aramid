@@ -104,9 +104,36 @@ def detect_tests(root: Path) -> set[str]:
     # A bare `tests/` directory is deliberately NOT a signal -- that was the
     # false-positive bug (a TS repo's tests/*.test.ts directory made this
     # true). Only a real Python test file counts.
+    #
+    # cargo/go are gated on their MANIFEST first so the extra filename checks
+    # below cost nothing in a repo that is neither. Both are FILENAME-ONLY,
+    # measured rather than assumed: sniffing `.rs` contents for
+    # #[test]/#[cfg(test)] would also catch inline unit tests -- the commoner
+    # Rust layout -- but cost 409 ms against 4 ms for the filename walk on 500
+    # files / 2.5 MB, in a function that runs on every gate, in a module whose
+    # history is a series of detector-walk regressions. An inline-only crate
+    # falls through to pipeline's "no suite detected" WARN, which names
+    # [tests].command -- an honest, loud degradation instead of silence.
+    #
+    # Keyed on the walk rather than a root-level glob so a workspace member
+    # (crates/<name>/tests/*.rs) counts too.
+    need_pytest = True
+    need_cargo = (root / "Cargo.toml").exists()
+    need_go = (root / "go.mod").exists()
     for p in _iter_files(root):
-        if _is_pytest_file(p.name):
+        if need_pytest and _is_pytest_file(p.name):
             out.add("pytest")
+            need_pytest = False
+        if need_cargo and p.suffix == ".rs" and p.parent.name == "tests":
+            out.add("cargo")
+            need_cargo = False
+        if need_go and p.name.endswith("_test.go"):
+            out.add("go")
+            need_go = False
+        # Early exit preserved exactly for the pytest-only case that had it:
+        # with no Cargo.toml and no go.mod both flags start False, so this
+        # breaks on the first pytest file just as `break` used to.
+        if not (need_pytest or need_cargo or need_go):
             break
     pj = root / "package.json"
     if pj.exists():

@@ -223,6 +223,49 @@ to publish a tag that disagrees with it.
 
 ### Added
 
+- **`cargo test` and `go test` are detected and run.** `tests` is BLOCK-tier,
+  but `detect_tests` recognised exactly two kinds — a pytest-shaped file, or
+  an npm `test` script — so on a Rust or Go repo the gate exited 0 having
+  never run the suite. Rust was the sharper case: `detect_stacks` already
+  claims `rust` and clippy + cargo-audit already run there, so a test gate
+  that could not run was an inconsistency with a promise already made.
+  Measured on the same synthetic repos, after:
+
+  | | runners that completed |
+  |---|---|
+  | Rust (cargo present) | gitleaks, semgrep, clippy, cargo-audit, **cargo-test** |
+  | Go (toolchain absent) | exit **1**, `degraded: ['go-test']`, and `doctor` predicts it: `MISSING tests-go` |
+
+  **Go is added as a test *kind*, not as a linted *stack*.** `detect_stacks`
+  still does not claim Go — shipping `go test` without vet/staticcheck and
+  calling Go "supported" would be a coverage claim aramid cannot honour.
+
+  **Detection is filename-only, and that is a measured trade-off, not an
+  oversight.** Sniffing `.rs` contents for `#[test]`/`#[cfg(test)]` would also
+  catch inline unit tests — the commoner Rust layout — but cost **409 ms
+  against 4 ms** for the filename walk on 500 files / 2.5 MB, in a function
+  that runs on every gate, in a module whose history is a series of
+  detector-walk regressions. A crate whose tests are all inline instead falls
+  through to the "no suite detected" WARN added above, which names
+  `[tests].command`. That is a known, loud gap rather than a silent one, and
+  a test pins it so any future content-sniffing is a deliberate change.
+  Detection keys on the walk rather than a root-level glob, so Cargo
+  workspace members (`crates/<name>/tests/*.rs`) count.
+
+  The runner's hardcoded pytest+npm pair is generalised to N suites sharing
+  one deadline, preserving `[review M2]` worst-wins and the `.sub_results`
+  order exactly — `tests/unit/test_runner_tests.py` passed **unmodified** as
+  the regression gate. Before this, two detected kinds where neither was the
+  npm half meant one ran and the other was dropped silently, which is the
+  bug class that module exists to prevent. The npm lockfile gate is
+  deliberately left scoped to the pytest+npm pairing: widening it would make
+  its own notice ("running pytest only this run") false on an npm+cargo repo.
+
+  cargo/go results are restamped to `cargo-test` / `go-test`. `run_subprocess`
+  names a result `Path(argv[0]).name` — plain `cargo`, the same name clippy
+  and cargo-audit derive before *they* restamp — and `_write_logs` keys its
+  filename on `.tool`, so two runners sharing a name silently overwrite one
+  another's diagnostic log.
 - **A blocking gate in CI now says which test failed.** When the gate blocks,
   its reason lives in `.aramid/logs/<tool>-<run_id>.log` and nowhere else —
   the finding's `evidence` is a verbatim echo of its `message` (`"python

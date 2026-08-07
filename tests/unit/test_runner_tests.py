@@ -544,3 +544,108 @@ def test_budget_exhausted_after_first_suite_skips_second_but_keeps_first_result(
     findings = {f.tool: f.rule for f in tests_runner.parse(result, ctx)}
     assert findings["pytest"] == "tests-failed"   # first suite's real failure preserved
     assert findings["npm"] == "tests-failed"        # attributed to npm's OWN timeout, not the slot
+
+
+# --- cargo / go suites ------------------------------------------------------
+
+def _cargo_repo(tmp_path):
+    (tmp_path / "Cargo.toml").write_text("[package]\nname='d'\n", encoding="utf-8")
+    (tmp_path / "tests").mkdir(exist_ok=True)
+    (tmp_path / "tests" / "it.rs").write_text("#[test]\nfn t() {}\n", encoding="utf-8")
+
+
+def _go_repo(tmp_path):
+    (tmp_path / "go.mod").write_text("module e/d\n\ngo 1.22\n", encoding="utf-8")
+    (tmp_path / "main_test.go").write_text("package main\n", encoding="utf-8")
+
+
+def test_a_cargo_only_repo_runs_cargo_test(tmp_path, monkeypatch):
+    _cargo_repo(tmp_path)
+    calls = []
+    monkeypatch.setattr(tests_runner, "run_subprocess", _tracking_ok_fake(calls))
+
+    result = tests_runner.run(RunContext(root=tmp_path))
+
+    assert [c[0] for c in calls] == ["cargo"]
+    assert result.state is ToolState.OK
+
+
+def test_a_cargo_only_result_is_restamped_away_from_bare_cargo(tmp_path, monkeypatch):
+    """run_subprocess names a result Path(argv[0]).name -- "cargo" -- which
+    is what clippy and cargo-audit derive before THEY restamp. `_write_logs`
+    keys its filename on `.tool`, so two runners sharing a name overwrite one
+    another's diagnostic log. It must also NOT become "tests": parse()'s
+    sub-guard and the single-vs-aggregate shape split both read that."""
+    _cargo_repo(tmp_path)
+    monkeypatch.setattr(tests_runner, "run_subprocess", _tracking_ok_fake([]))
+
+    result = tests_runner.run(RunContext(root=tmp_path))
+
+    assert result.tool == "cargo-test"
+    assert not getattr(result, "sub_results", None), (
+        "a single suite must keep the raw shape a pytest-only repo has")
+
+
+def test_a_go_only_repo_runs_go_test_over_the_module(tmp_path, monkeypatch):
+    _go_repo(tmp_path)
+    calls = []
+    captured = []
+
+    def fake(argv, cwd, timeout_s, env=None):
+        captured.append(list(argv))
+        calls.append((argv[0], timeout_s))
+        return RunnerResult(tool=argv[0], state=ToolState.OK, returncode=0)
+
+    monkeypatch.setattr(tests_runner, "run_subprocess", fake)
+    result = tests_runner.run(RunContext(root=tmp_path))
+
+    assert captured == [["go", "test", "./..."]], (
+        "./... is what makes this cover the whole module rather than the "
+        "root package only")
+    assert result.tool == "go-test"
+
+
+def test_pytest_and_cargo_both_run_and_aggregate(tmp_path, monkeypatch):
+    """The generalisation's whole point: before this, a repo with two kinds
+    where one was not npm ran ONE of them and dropped the other silently --
+    the bug class this module exists to prevent."""
+    (tmp_path / "test_x.py").write_text("def test_x(): pass\n", encoding="utf-8")
+    _cargo_repo(tmp_path)
+    calls = []
+    monkeypatch.setattr(tests_runner, "run_subprocess", _tracking_ok_fake(calls))
+
+    result = tests_runner.run(RunContext(root=tmp_path))
+
+    assert [c[0] for c in calls] == ["pytest", "cargo"]
+    assert result.tool == "tests"
+    assert [r.tool for r in result.sub_results] == ["pytest", "cargo-test"]
+
+
+def test_a_failing_cargo_sub_makes_the_aggregate_not_ok(tmp_path, monkeypatch):
+    """[review M2] worst-wins must hold for the new kinds too, not just for
+    the pytest/npm pair it was written against."""
+    (tmp_path / "test_x.py").write_text("def test_x(): pass\n", encoding="utf-8")
+    _cargo_repo(tmp_path)
+
+    def fake(argv, cwd, timeout_s, env=None):
+        if argv[0] == "cargo":
+            return RunnerResult(tool=argv[0], state=ToolState.MISSING)
+        return RunnerResult(tool=argv[0], state=ToolState.OK, returncode=0)
+
+    monkeypatch.setattr(tests_runner, "run_subprocess", fake)
+    result = tests_runner.run(RunContext(root=tmp_path))
+
+    assert result.state is ToolState.MISSING
+
+
+def test_three_kinds_all_run_in_the_fixed_order(tmp_path, monkeypatch):
+    (tmp_path / "test_x.py").write_text("def test_x(): pass\n", encoding="utf-8")
+    _cargo_repo(tmp_path)
+    _go_repo(tmp_path)
+    calls = []
+    monkeypatch.setattr(tests_runner, "run_subprocess", _tracking_ok_fake(calls))
+
+    result = tests_runner.run(RunContext(root=tmp_path))
+
+    assert [c[0] for c in calls] == ["pytest", "cargo", "go"]
+    assert [r.tool for r in result.sub_results] == ["pytest", "cargo-test", "go-test"]

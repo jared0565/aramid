@@ -404,6 +404,15 @@ def probe_tests(root: Path, cfg) -> list[ToolStatus]:
     if "npm" in kinds:
         s = probe_tool("npm")
         out.append(ToolStatus("tests-npm", s.present, s.version, s.detail))
+    # Same rule as the two above: probed because detect_tests found the
+    # SUITE, so a missing binary is a BLOCK-tier gate that cannot run --
+    # exactly what this probe exists to catch before the next push does.
+    if "cargo" in kinds:
+        s = probe_tool("cargo")
+        out.append(ToolStatus("tests-cargo", s.present, s.version, s.detail))
+    if "go" in kinds:
+        s = probe_tool("go")
+        out.append(ToolStatus("tests-go", s.present, s.version, s.detail))
     return out
 
 
