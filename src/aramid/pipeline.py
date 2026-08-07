@@ -393,6 +393,30 @@ def _flatten(results: dict[str, RunnerResult]) -> list[RunnerResult]:
     return flat
 
 
+def _examined_by_tool(flat_results: list[RunnerResult]) -> dict[str, set[str]]:
+    """What each runner can VOUCH for having analyzed, keyed by tool name.
+
+    `state is OK` alone conflates "ran and found nothing" with "ran over
+    nothing" -- ruff exits 0 with zero findings both for a clean file and for
+    one the repo's own `exclude` config skips -- so resolution keyed on
+    scope_files credited runners for files they never opened, recording false
+    repairs. A runner reporting None is absent from this map and falls back
+    (ledger.record_run); a runner reporting the empty set is present and
+    blocks resolution outright.
+
+    The KEY here is `RunnerResult.tool`, and `ledger.record_run` looks it up
+    by the tool stamped on each Finding. Those two must agree or the lookup
+    misses, `tool_scope` comes back None, and resolution SILENTLY falls back
+    to the pre-fix behaviour -- the hole reopens with nothing to show for it.
+    They only agree because every adapter restamps: `run_subprocess` names a
+    result after `Path(argv[0]).name`, which is "tsc.cmd" on win32, "cargo"
+    for clippy and "python" for the tests runner. `tests/unit/
+    test_examined_tool_keys_match_findings.py` pins that agreement.
+    """
+    return {r.tool: set(r.examined) for r in flat_results
+            if r.state is ToolState.OK and r.examined is not None}
+
+
 def _write_logs(root: Path, run_id: str, flat_results: list[RunnerResult],
                  raw_secrets: list[str]) -> None:
     logs_dir = root / ".aramid" / "logs"
@@ -542,8 +566,7 @@ def run_gate(root: Path, gate: Gate, mode: str, cfg: config_mod.Config, ledger: 
     # `exclude` config skips -- so resolution keyed on scope_files credited a
     # runner for files it never opened, recording false repairs. A runner that
     # reports None is absent here and falls back (ledger.record_run).
-    examined_by_tool = {r.tool: set(r.examined) for r in flat_results
-                        if r.state is ToolState.OK and r.examined is not None}
+    examined_by_tool = _examined_by_tool(flat_results)
     # Local import: toolset.py imports pipeline.GATE_RUNNER_KEYS/_is_applicable
     # at module scope, so importing it here at module scope would be
     # circular (mirrors ledger.compact()'s identical fix for the
