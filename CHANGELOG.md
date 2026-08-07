@@ -111,6 +111,27 @@ to publish a tag that disagrees with it.
   so this is hardening rather than a reported failure. Ordinary paths render
   byte-identically, so already-installed entries still match a fresh render.
 
+- **A blocking gate now says WHY, not just THAT.** When the BLOCK-tier
+  `tests` runner failed, aramid reported `python exited 1: test suite failed`
+  and wrote an **empty** log file — because `_write_logs` persisted only
+  `stderr`, and a failing pytest returns `state=OK, returncode=1` with **zero**
+  bytes of stderr and its entire report, the only thing naming the failing
+  test, on stdout. Nothing aramid offered could tell you which test failed.
+
+  That is not theoretical: a `windows-latest / py3.14` CI leg failed at exactly
+  this step, passed on re-run with no code change, and the flake could not be
+  identified from any artifact — the string that would have named it was
+  collected, held in `RunnerResult.raw`, and discarded.
+
+  stdout is now persisted alongside stderr, scrubbed through the same redactor
+  (an assertion diff is precisely where a real secret surfaces, and this file
+  goes to disk). Written **only** when the runner degraded or exited non-zero:
+  a clean ruff or semgrep puts its whole JSON report on stdout, already
+  surfaced as findings, and copying that on every green run would grow
+  `.aramid/logs` for nothing — there is no rotation. Capped at 64 KB keeping
+  the **tail**, since pytest prints its summary last. With no stdout to add,
+  the file is byte-identical to its previous format.
+
 - **`tsc` reports what it examined, closing the last of the resolution
   holes.** This runner type-checks the **project**, not `ctx.files`, so a
   source file left out of tsconfig's `include`/`files` is never checked at

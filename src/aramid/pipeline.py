@@ -393,6 +393,46 @@ def _flatten(results: dict[str, RunnerResult]) -> list[RunnerResult]:
     return flat
 
 
+# Tail of stdout kept per runner per run. Bounded because there is no log
+# rotation: an unbounded copy of every semgrep JSON report would grow
+# `.aramid/logs` without limit. The TAIL is the half worth keeping -- pytest
+# prints its short summary last.
+_LOG_STDOUT_CAP = 64 * 1024
+
+
+def _log_body(r: RunnerResult) -> str:
+    """What to persist for one runner: stderr, plus stdout when the run had a
+    problem.
+
+    stderr alone was not enough, and the gap was worst exactly where it hurt
+    most. Measured 2026-08-07: a failing `[tests]` command returns
+    `state=OK, returncode=1` with **zero** bytes of stderr and its whole
+    pytest report -- the only thing naming the failing test -- on stdout. So
+    the BLOCK-tier gate that stops a push wrote an EMPTY log and reported
+    `python exited 1: test suite failed`, with no surface anywhere that could
+    say which test. A `windows-latest / py3.14` leg hit precisely that, passed
+    on re-run, and the flake could not be identified.
+
+    stdout is written only when `state` is not OK or the exit code is
+    non-zero. A clean ruff or semgrep puts its entire JSON report on stdout
+    and it is ALREADY surfaced as findings; copying it on every green run
+    would grow the log directory for nothing.
+
+    When there is no stdout to add, the body is byte-identical to the
+    pre-2026-08-07 format -- no headers, no blank lines -- so nothing that
+    reads these files sees a gratuitous change.
+    """
+    err = r.stderr or ""
+    out = r.raw or ""
+    if not out or (r.state is ToolState.OK and r.returncode == 0):
+        return err
+    if len(out) > _LOG_STDOUT_CAP:
+        out = (f"[{len(out) - _LOG_STDOUT_CAP} earlier bytes truncated]\n"
+               f"{out[-_LOG_STDOUT_CAP:]}")
+    body = f"--- stdout ---\n{out}"
+    return f"{body}\n--- stderr ---\n{err}" if err else body
+
+
 def _examined_by_tool(flat_results: list[RunnerResult]) -> dict[str, set[str]]:
     """What each runner can VOUCH for having analyzed, keyed by tool name.
 
@@ -422,7 +462,7 @@ def _write_logs(root: Path, run_id: str, flat_results: list[RunnerResult],
     logs_dir = root / ".aramid" / "logs"
     logs_dir.mkdir(parents=True, exist_ok=True)
     for r in flat_results:
-        scrubbed = redact.scrub(r.stderr or "", raw_secrets)
+        scrubbed = redact.scrub(_log_body(r), raw_secrets)
         (logs_dir / f"{r.tool}-{run_id}.log").write_text(scrubbed, encoding="utf-8")
 
 
