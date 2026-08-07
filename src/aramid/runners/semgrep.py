@@ -127,10 +127,15 @@ def _examined(data: dict, ctx) -> frozenset[str] | None:
     analysis is still not analysis it can be held to.
 
     Returns None -- "cannot report", falling back to the gate's file set --
-    when `paths` is absent, as on a semgrep old enough not to emit it. That
-    is what the None/empty-set distinction on `RunnerResult.examined` exists
-    for: blocking every semgrep resolution forever would be a worse answer
-    than the behaviour those users already have.
+    when `paths` is absent from a REAL report, as on a semgrep old enough not
+    to emit it. That is what the None/empty-set distinction on
+    `RunnerResult.examined` exists for: blocking every semgrep resolution
+    forever would be a worse answer than the behaviour those users already
+    have.
+
+    That fallback is for an old semgrep and nothing else. `run()` screens out
+    the no-report case before calling this, because an empty stdout also
+    arrives here as a dict with no `paths` -- see the comment there.
     """
     paths = (data.get("paths") or {}).get("scanned")
     if paths is None:
@@ -147,6 +152,18 @@ def run(ctx) -> RunnerResult:
     out = json_or_crashed(NAME, result, _OK_RETURNCODES, empty="{}")
     # A degraded semgrep vouches for nothing (see the eslint adapter).
     if out.state is not ToolState.OK:
+        return replace(out, examined=frozenset())
+    # NO REPORT AT ALL is not an old semgrep, and must not reach _examined's
+    # missing-`paths` fallback. `json_or_crashed` substitutes `empty="{}"` for
+    # empty stdout while keeping OK; `{}` has no `paths`, so the fallback
+    # would return None, which keeps semgrep out of
+    # `pipeline._examined_by_tool` and lets `ledger.record_run` credit it with
+    # `scope_files` -- the gate's whole file set -- writing every open semgrep
+    # finding `fixed` on a run that analysed nothing we can name. Since
+    # a2e101f those are BLOCK-tier findings that stop a push. An old semgrep
+    # is distinguishable without a version probe: it still emits a real JSON
+    # report, just without `paths`. `{}` is only ever aramid's own placeholder.
+    if not (result.raw or "").strip():
         return replace(out, examined=frozenset())
     try:
         data = json.loads(out.raw or "{}")

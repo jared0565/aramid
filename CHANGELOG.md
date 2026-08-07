@@ -12,6 +12,30 @@ to publish a tag that disagrees with it.
 
 ### Fixed
 
+- **A semgrep run that produced no report no longer resolves every open
+  semgrep finding.** `json_or_crashed(..., empty="{}")` substitutes `{}` for
+  empty stdout while keeping `ToolState.OK`. `{}` has no `paths`, so
+  `_examined` took its missing-`paths` fallback and returned `None` — "cannot
+  vouch" — which keeps semgrep out of `pipeline._examined_by_tool` and lets
+  `ledger.record_run` credit it with `scope_files`, the gate's **entire** file
+  set. Every open semgrep finding was then written **`fixed`** into an
+  append-only ledger by a run that analysed nothing it could name: a false
+  repair, the exact defect class the `examined` work exists to close, for the
+  one tool whose verdicts newly stop a push since semgrep was armed. eslint,
+  clippy and tsc all return the empty set for their equivalent
+  no-usable-output case; semgrep was the lone hold-out.
+
+  The missing-`paths` fallback is still there and still reachable — it exists
+  for a semgrep old enough not to emit the key, and blocking those users'
+  resolution forever would be the worse answer. **The two cases needed no
+  policy choice to separate:** an old semgrep still emits a real JSON report,
+  it just omits `paths`, whereas `{}` is only ever aramid's own placeholder
+  for no output at all. `run()` screens on the pre-normalisation `raw`, so no
+  version probe is involved. Both directions are pinned: deleting the screen
+  turns the new test red, and making it unconditional turns the old-semgrep
+  fallback test red.
+
+  Found by aramid's own `llm-review` against its own repository.
 - **An ignored file no longer manufactures a finding, and could no longer
   block a push.** eslint reports an explicitly-passed ignored file as a
   warning with a **null** `ruleId` ("File ignored because of a matching

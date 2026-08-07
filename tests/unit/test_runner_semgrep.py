@@ -281,6 +281,43 @@ def test_missing_paths_key_cannot_report_rather_than_vouching_for_nothing(
     assert result.examined is None
 
 
+def test_no_output_at_all_vouches_for_nothing_rather_than_for_everything(
+        tmp_path, monkeypatch):
+    """Empty stdout is NOT an old semgrep, and must not reach the fallback
+    above.
+
+    `json_or_crashed(..., empty="{}")` substitutes `{}` for empty stdout while
+    keeping ToolState.OK. `{}` has no `paths`, so `_examined` returned None --
+    "cannot vouch" -- and None keeps the tool out of
+    `pipeline._examined_by_tool`, so `ledger.record_run` falls back to
+    `scope_files`: the gate's ENTIRE file set. Every open semgrep finding
+    would be written `fixed` into an append-only ledger on a run that produced
+    no report at all. Since a2e101f semgrep is BLOCK-armed, so those are
+    findings that now stop a push.
+
+    The two cases are cleanly separable and the distinction is not a judgement
+    call: an old semgrep still emits a real JSON report (see the test above),
+    it just omits `paths`. `{}` is aramid's own placeholder, never semgrep's
+    output. eslint, clippy and tsc all return the empty set for their
+    equivalent no-usable-output case; semgrep was the lone hold-out."""
+    result = _ok("", tmp_path, monkeypatch, ["src/bad.py"])
+
+    assert result.state is ToolState.OK
+    assert result.examined == frozenset(), (
+        "a semgrep run that reported nothing must vouch for nothing -- "
+        "None here credits it with the whole gate file set")
+
+
+def test_whitespace_only_output_is_no_output(tmp_path, monkeypatch):
+    """`json_or_crashed` only substitutes on a falsy `raw`, so a lone newline
+    survives as `"\\n"` -- which json.loads rejects, taking the run to CRASHED.
+    Pin it anyway: the check must key on emptiness after stripping, so that a
+    future loosening of either side cannot reopen the hole quietly."""
+    result = _ok("   \n  ", tmp_path, monkeypatch, ["src/bad.py"])
+
+    assert result.examined == frozenset()
+
+
 def test_degraded_run_vouches_for_nothing(tmp_path, monkeypatch):
     monkeypatch.setattr(
         semgrep, "run_subprocess",
