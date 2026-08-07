@@ -158,6 +158,53 @@ to publish a tag that disagrees with it.
   equivalent, and reporting the empty set would block every mypy resolution
   outright rather than fall back.
 
+### Added
+
+- **A blocking gate in CI now says which test failed.** When the gate blocks,
+  its reason lives in `.aramid/logs/<tool>-<run_id>.log` and nowhere else —
+  the finding's `evidence` is a verbatim echo of its `message` (`"python
+  exited 1: test suite failed"`), and the directory is gitignored and was
+  never uploaded. One `windows-latest / py3.14` leg blocked on `tests-failed`
+  minutes after the same job had run the whole suite green, and a re-run with
+  no code change went green; nothing aramid emitted named the test. A new step
+  runs `.github/scripts/dump_aramid_logs.py` under `if: failure()`, which
+  fires for any earlier failed step even though the steps between it were
+  skipped — so one step placed after both gate tiers covers both.
+
+  It is a committed file rather than an inline `shell: python` block because
+  it **always exits 0**: a dump that silently prints nothing is
+  indistinguishable from one that correctly found nothing, which is the exact
+  failure mode it exists to correct. Every branch is pinned by
+  `tests/unit/test_ci_log_dump.py`, which runs it as a subprocess from a temp
+  cwd, and five deliberate mutations of the script were each confirmed to turn
+  the matching test red before it shipped.
+
+  Three hardenings that measurement, not reasoning, asked for. UTF-8 is forced
+  on stdout — a redirected pipe on Windows hands Python the locale encoding,
+  and one box-drawing character out of pytest would raise
+  `UnicodeEncodeError`, killing the dump on the very leg that flakes. A
+  leading `::` in a log body is neutralised, because a body is untrusted text
+  and `::add-mask::x` would make GitHub redact `x` from all later output —
+  a failing test could suppress the diagnostic this step exists to print.
+  Bodies are capped at the 40 newest **and the cap is announced**:
+  `.aramid/logs` is never rotated, and a real dev checkout measured 477 files.
+
+  Verified end to end rather than asserted: on a throwaway branch carrying a
+  test rigged to fail only under the gate, step 6 stayed green, step 8 went
+  red, step 9 was skipped, and the dump ran and printed the failing test's
+  name — on all seven matrix legs, including `windows-latest / py3.14`.
+
+  **Why publishing these logs is acceptable is narrower than "they get
+  scrubbed",** and aramid's own llm-review was right to press on it.
+  `redact.scrub` is fed only the secrets recovered from *successfully parsed*
+  findings, so a crashed scanner would be redacted against an empty list; the
+  scrub is a second line of defence, not the first. The first is that gitleaks
+  writes its report to `--report-path` — a temp file that never reaches
+  `.aramid/logs` — and runs without `-v`, so it prints no finding to any
+  stream that is persisted. A real body, read back from a CI run, is 250 bytes
+  of banner plus `INF … no leaks found`. Both halves are now pinned by a test
+  rather than left as a comment asserting them.
+
 ### Changed
 
 - **The 20 remaining `S`-family findings in `src/` are triaged and

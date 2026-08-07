@@ -205,10 +205,17 @@ jobs:
       # looks identical to one that correctly found nothing, so every branch
       # of it is pinned by unit tests that run it as a subprocess.
       #
-      # PUBLIC BY DESIGN: this repo is public, so this publishes scan logs of
-      # sources that are already public, scrubbed of the run's gitleaks
-      # secrets by pipeline._write_logs. The python-*.log body is the same
-      # pytest output the `Run test suite` step already prints on every run.
+      # PUBLIC BY DESIGN, and the reason is narrower than "it gets scrubbed".
+      # redact.scrub is fed only the secrets recovered from SUCCESSFULLY
+      # PARSED findings, so a crashed scanner would be redacted against an
+      # empty list -- it is a second line of defence, not the first. The
+      # first is that gitleaks writes its report to --report-path (a temp
+      # file that never reaches .aramid/logs) and runs without -v, so it
+      # prints no finding to any stream we persist; a real body here is 250
+      # bytes of banner plus "INF no leaks found". Both halves are pinned by
+      # test_gitleaks_never_prints_findings_to_a_stream_we_publish. The rest
+      # is scan output of sources that are already public, and python-*.log
+      # is the same pytest output `Run test suite` prints on every run.
       - name: Dump .aramid/logs on failure (names the failing test)
         if: failure()
         run: python .github/scripts/dump_aramid_logs.py

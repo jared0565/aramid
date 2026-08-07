@@ -15,12 +15,19 @@ reports success -- indistinguishable from a correct version finding nothing.
 Living here makes it executable by `tests/unit/test_ci_log_dump.py`, which
 runs it as a subprocess from a temp cwd and pins every branch.
 
-DISCLOSURE. This repository is public, so the job log is public. What gets
-published: scan logs of a repo whose sources are already public, scrubbed of
-this run's gitleaks secrets by `pipeline._write_logs`. The `python-*.log`
-body is the same pytest output the `Run test suite` step already prints
-unconditionally. `upload-artifact` would buy nothing -- public-repo artifacts
-are equally downloadable -- and would cost another action SHA to pin.
+DISCLOSURE. This repository is public, so the job log is public, and "it gets
+scrubbed" is NOT the reason that is acceptable: `redact.scrub` is fed only the
+secrets recovered from successfully parsed findings, so a crashed scanner
+would be redacted against an empty list. The actual reason is that the secret
+scanner never puts a secret on a stream we persist -- gitleaks writes its
+report to `--report-path`, a temp file that never reaches `.aramid/logs`, and
+runs without `-v`, so a real body here is banner plus "INF no leaks found".
+`tests/unit/test_ci_log_dump.py` pins both halves. Everything else is scan
+output of sources that are already public, and `python-*.log` is the same
+pytest output the `Run test suite` step prints unconditionally.
+
+`upload-artifact` would buy nothing -- public-repo artifacts are equally
+downloadable -- and would cost another action SHA to pin.
 
 Standard library only, and no aramid import: this must work on a leg where
 the install is what broke.

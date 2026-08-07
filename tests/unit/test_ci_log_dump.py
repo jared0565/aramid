@@ -192,6 +192,45 @@ def test_the_body_count_is_capped_and_the_cap_is_ANNOUNCED(tmp_path):
         "like a complete one")
 
 
+# ------------------------------------------------- the disclosure premise ---
+# Publishing `.aramid/logs` to a PUBLIC job log is only defensible because the
+# secret scanner's own output carries no secrets. aramid's own llm-review
+# flagged this step for publishing "unscrubbed gitleaks stdout", reasoning that
+# `redact.scrub` is fed only the secrets recovered from SUCCESSFULLY PARSED
+# findings, so a crashed gitleaks would be redacted against an empty list.
+#
+# The premise is sound; the mechanism was wrong, and measurement settled it.
+# gitleaks writes its JSON report to `--report-path`, a temp file inside a
+# TemporaryDirectory that never reaches `.aramid/logs`, and it is invoked
+# WITHOUT `-v`, so it never prints individual findings. A real CI log body,
+# read back from the rehearsal run, is 250 bytes of banner plus
+# "INF 0 commits scanned / no leaks found".
+#
+# Both halves of that are load-bearing and neither is self-evident from the
+# dump script, so pin them here rather than leave a comment asserting them.
+
+
+def test_gitleaks_never_prints_findings_to_a_stream_we_publish():
+    from pathlib import Path as _P
+
+    from aramid.runners import gitleaks
+
+    class _Ctx:
+        rng = "HEAD~1..HEAD"
+
+    argv = gitleaks._build_argv(_Ctx(), _P("report.json"))
+
+    assert "--report-path" in argv, (
+        "gitleaks' findings must go to a FILE. If the report ever moves to a "
+        "stream, `.aramid/logs` starts carrying raw secret material and this "
+        "step publishes it to a public job log.")
+    assert not ({"-v", "--verbose"} & set(argv)), (
+        "gitleaks is verbose: it now prints each finding, including the "
+        "matched secret, to a stream that _write_logs persists and the CI "
+        "dump step publishes. Either drop the flag or stop publishing "
+        f"gitleaks-*.log. argv={argv}")
+
+
 # ------------------------------------------------------------- the wiring ---
 # The tests above prove the script. These prove CI actually calls it -- a
 # perfect script nobody invokes buys nothing, and that half is invisible from
