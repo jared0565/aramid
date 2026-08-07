@@ -62,11 +62,60 @@ def has_mypy_config(root: Path) -> bool:
     return False
 
 
+def _split_listed_files(raw: str, root: Path) -> tuple[str, frozenset[str]]:
+    """Separate `--listFiles` path lines from tsc's diagnostics.
+
+    Returns `(raw_without_paths, examined)`. The path lines are CONSUMED, so
+    `raw` still holds exactly the diagnostics it held before the flag was
+    added -- which is what `parse_tsc` and every log this result reaches want.
+    Measured on TypeScript 7.0.2 with only `typescript` + `@types/node`
+    installed, `--listFiles` emitted 65 path lines to 1 diagnostic, 63 of them
+    lib/`node_modules` `.d.ts`; a real application project emits thousands.
+
+    Classification is positional and needs no filesystem access:
+      - a line matching `_TSC_LINE` is a diagnostic (it carries `(line,col):
+        error TSxxxx`, which a bare path never does);
+      - a line that is otherwise an ABSOLUTE path is a `--listFiles` entry,
+        and is consumed whether or not it lives in this repo -- tsc lists its
+        own bundled `lib.es*.d.ts` from wherever TypeScript is installed, and
+        those are real inputs that simply cannot hold a repo finding;
+      - anything else is unrecognised tsc output and is KEPT, so a message
+        like `error TS5083: Cannot read file ...` is never silently eaten.
+    """
+    diagnostics: list[str] = []
+    examined: set[str] = set()
+    base = root.resolve()
+    for line in (raw or "").splitlines():
+        stripped = line.strip()
+        if not stripped:
+            continue
+        if _TSC_LINE.match(stripped):
+            diagnostics.append(line)
+            continue
+        candidate = Path(stripped.replace("\\", "/"))
+        if not candidate.is_absolute():
+            diagnostics.append(line)
+            continue
+        try:
+            resolved = candidate.resolve()
+            if resolved.is_relative_to(base):
+                examined.add(resolved.relative_to(base).as_posix())
+        except (OSError, ValueError):
+            pass
+    return "\n".join(diagnostics), frozenset(examined)
+
+
 def run_tsc(ctx) -> RunnerResult:
     binp = _tsc_bin(ctx.root)
     if not binp.exists():
-        return RunnerResult(NAME_TSC, ToolState.MISSING)
-    result = run_subprocess([str(binp), "--noEmit"], ctx.root, TIMEOUT_S)
+        return RunnerResult(NAME_TSC, ToolState.MISSING, examined=frozenset())
+    # `--listFiles` closes tsconfig's version of ruff's `exclude` hole: this
+    # runner checks the PROJECT, not ctx.files, so a source file left out of
+    # tsconfig `include`/`files` is never checked, tsc still exits 0, and
+    # resolution recorded every open finding in it as fixed. Measured free in
+    # time (0.93s vs 0.98s for a bare --noEmit -- tsc already reads all of
+    # them); its cost is output volume, which `_split_listed_files` absorbs.
+    result = run_subprocess([str(binp), "--noEmit", "--listFiles"], ctx.root, TIMEOUT_S)
     # T-8 section 11: run_subprocess labels RunnerResult.tool from argv[0]'s
     # basename ("tsc.cmd" on win32), which both mismatches parse_tsc's
     # stamped tool AND makes typecheck.parse()'s own dispatch (`if
@@ -74,7 +123,13 @@ def run_tsc(ctx) -> RunnerResult:
     # ledger-resolution gap, a total detection gap. Relabel unconditionally
     # (not just the OK branch): run_subprocess's own TIMEOUT path also
     # carries the wrong name. Mirrors eslint.py's json_or_crashed relabel.
-    return dataclasses.replace(result, tool=NAME_TSC)
+    result = dataclasses.replace(result, tool=NAME_TSC)
+    # A degraded tsc vouches for nothing (see the ruff/eslint adapters); only
+    # an OK run produced a file list to trust.
+    if result.state is not ToolState.OK:
+        return dataclasses.replace(result, examined=frozenset())
+    raw, examined = _split_listed_files(result.raw, ctx.root)
+    return dataclasses.replace(result, raw=raw, examined=examined)
 
 
 def run_mypy(ctx) -> RunnerResult:

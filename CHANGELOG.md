@@ -111,6 +111,32 @@ to publish a tag that disagrees with it.
   so this is hardening rather than a reported failure. Ordinary paths render
   byte-identically, so already-installed entries still match a fresh render.
 
+- **`tsc` reports what it examined, closing the last of the resolution
+  holes.** This runner type-checks the **project**, not `ctx.files`, so a
+  source file left out of tsconfig's `include`/`files` is never checked at
+  all — tsc exits 0, says nothing about it, and every open finding in it was
+  recorded `fixed`. Narrowing `include` forged repairs, exactly as adding a
+  `[tool.ruff] exclude` entry did.
+
+  The adapter now passes `--listFiles`. Measured on TypeScript 7.0.2, that is
+  **free in time** — 0.93 s against 0.98 s for a bare `--noEmit`, since tsc
+  already reads every one of those files — but not free in *output*: with only
+  `typescript` and `@types/node` installed it emitted 65 path lines to 1
+  diagnostic, 63 of them lib/`node_modules` `.d.ts`, and a real application
+  project emits thousands. Rather than accept that in the logs, or pay a
+  second `--listFilesOnly` parse of the whole program, the path lines are
+  **consumed** into `examined`; `raw` still holds exactly the diagnostics it
+  held before.
+
+  Paths outside the repository are dropped — tsc lists its own bundled
+  `lib.es*.d.ts` from wherever TypeScript is installed, real inputs that
+  cannot hold a repo finding. Unrecognised output is kept, so a message like
+  `error TS5083: Cannot read file …` is never silently eaten.
+
+  The **mypy** arm still reports "cannot vouch": it has no `--listFiles`
+  equivalent, and reporting the empty set would block every mypy resolution
+  outright rather than fall back.
+
 ### Changed
 
 - **The 20 remaining `S`-family findings in `src/` are triaged and
@@ -152,19 +178,16 @@ to publish a tag that disagrees with it.
 
 ### Notes
 
-- **Where `examined` reporting stands.** Four of the file-list runners now
-  report it — `ruff` (0.1.0), `eslint`, `semgrep` and `clippy` — which closes
-  every hole named in the 0.1.0 scope paragraph.
+- **Where `examined` reporting stands.** Every runner that analyses a file set
+  now reports it: `ruff` (0.1.0), `eslint`, `semgrep`, `clippy` and `tsc`.
+  That closes every hole named in the 0.1.0 scope paragraph and the one this
+  release opened up in its place.
 
-  **`typecheck` remains open, and not because it cannot.** `tsc --listFiles`
-  emits exactly the needed list (verified on TypeScript 7.0.2: it prints each
-  compilation input alongside the diagnostics), the adapter simply does not
-  pass it today. tsc is also the runner where this matters most, because it
-  follows imports and so analyses far more than the files handed to it. The
-  mypy arm was not assessed — mypy is not installed on this machine, so no
-  claim is made about it either way.
-
-  `gitleaks`, `deps` and `tests` are a different shape: they scan history,
+  Two adapters still report "cannot vouch", both for stated reasons rather
+  than oversight. **mypy** has no `--listFiles` equivalent — and note this was
+  not verified first-hand, because mypy is not installed on this machine, so
+  it is a claim about the tool's documented surface only. **gitleaks**,
+  **deps** and **tests** are a different shape entirely: they scan history,
   manifests, and a pass/fail suite rather than a file set.
 
 - **A `noqa`-suppressed finding is recorded as `fixed`, not `overridden`.**
