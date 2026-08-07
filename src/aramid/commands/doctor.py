@@ -97,6 +97,12 @@ class ToolStatus:
     present: bool
     version: str = ""
     detail: str = ""
+    # Third state, deliberately not a `present` flip. "Nothing to probe" is
+    # neither present nor missing: flipping `present` would fold it into
+    # `missing_tests` and fail doctor with "test toolchain broken", inventing
+    # a failure the gate would never produce. Report, do not block -- same
+    # rule as probe_deps' cargo-audit.
+    warn: bool = False
 
 
 def _tools_dir() -> Path:
@@ -381,8 +387,15 @@ def probe_tests(root: Path, cfg) -> list[ToolStatus]:
     from aramid.detectors import detect_tests
     kinds = detect_tests(root)
     if not kinds:
-        return [ToolStatus("tests", True,
-                            detail="no test suite detected -- nothing to probe")]
+        return [ToolStatus(
+            "tests", True, warn=True,
+            detail="no test suite detected -- the BLOCK-tier test gate will "
+                   "run NOTHING, so a green gate will not mean your tests "
+                   "passed. aramid recognizes only pytest (test_*.py, "
+                   "*_test.py, conftest.py) and an npm `test` script; cargo "
+                   "and go suites are not detected. Set [tests].command to "
+                   "point aramid at your suite, or [tests].enabled = false "
+                   "to declare this repo has none")]
 
     out = []
     if "pytest" in kinds:
@@ -395,6 +408,8 @@ def probe_tests(root: Path, cfg) -> list[ToolStatus]:
 
 
 def _report_line(status: ToolStatus) -> str:
+    if status.warn:
+        return f"  WARN     {status.name:<12} {status.detail}".rstrip()
     if status.present:
         detail = f" ({status.detail})" if status.detail else ""
         return f"  OK       {status.name:<12} {status.version}{detail}".rstrip()
@@ -679,5 +694,21 @@ def cmd_doctor(root: Path, fix: bool = False) -> int:
     if unenforced:
         return 2                        # tools fine, but nothing is gating
 
+    warn_tests = [s for s in test_statuses if s.warn]
+    for s in warn_tests:
+        # A POINTER, not the detail again -- the WARN row above already
+        # carries the full text, and printing the paragraph twice is how a
+        # loud channel teaches people to skim past it. Same shape as the
+        # missing_block line: short here, detail in the table.
+        print(f"aramid: doctor: {s.name}: the BLOCK-tier `{s.name}` gate has "
+              f"nothing to run in this repo -- see the WARN line above.",
+              file=sys.stderr)
+    if warn_tests:
+        # Never the bare sentence: on a Rust or Go repo it was the last thing
+        # printed, and it reads as coverage the run does not have.
+        print("aramid: doctor: all BLOCK-tier TOOLS present, but see the "
+              "warning(s) above -- not every BLOCK-tier gate has something "
+              "to run here.")
+        return 0
     print("aramid: doctor: all BLOCK-tier tools present.")
     return 0

@@ -218,6 +218,43 @@ def _plausible_test_setup(root: Path) -> bool:
     return False
 
 
+def _no_suite_notice(ctx: RunContext) -> str:
+    """The BLOCK-tier test gate has nothing to run -- and the gate will still
+    exit 0.
+
+    MEASURED on synthetic Rust and Go repos, both with a real, working suite:
+    `check --gate pre-push --all --strict` returned **0**, completing only the
+    language-agnostic runners, because `detect_tests` recognizes exactly two
+    kinds -- a pytest-shaped file, or an npm `test` script. `cargo test` and
+    `go test` are neither.
+
+    This used to be reported only when `_plausible_test_setup` was true, which
+    keys on Python-flavoured markers (tests/, pytest.ini, tox.ini). Rust trips
+    it by convention and got a message written entirely in pytest vocabulary;
+    Go, whose `main_test.go` sits beside the source with no tests/ directory,
+    got **total silence**. Both variants now say the same three things: the
+    gate ran nothing, what IS recognized, and how to fix or opt out.
+
+    Deliberately not gated on the stack being known: an unrecognized stack is
+    when a reader most needs to be told coverage is thin.
+    """
+    if _plausible_test_setup(ctx.root):
+        found = ("a tests/, test/, pytest.ini, tox.ini or "
+                 "[tool.pytest.ini_options] setup was found, but aramid "
+                 "recognized no suite in it")
+    else:
+        found = "no test suite was detected"
+    stacks = ", ".join(sorted(ctx.stacks or ())) or "none recognized"
+    return (
+        f"aramid: tests: {found} -- the BLOCK-tier test gate ran NOTHING on "
+        f"this run, so a pass here says nothing about your tests. Detected "
+        f"stack(s): {stacks}. aramid recognizes only pytest (test_*.py, "
+        f"*_test.py, conftest.py) and an npm `test` script; cargo and go "
+        f"suites are not detected. Set [tests].command to point aramid at "
+        f"your suite, or [tests].enabled = false to declare this repo has "
+        f"none.")
+
+
 def _tests_config_notices(gate: Gate, ctx: RunContext, budget_s: float) -> list[str]:
     """Loud, per-run notices for `[tests]` config that would otherwise
     silently weaken or neuter the BLOCK-tier test gate. Every case below is
@@ -251,15 +288,8 @@ def _tests_config_notices(gate: Gate, ctx: RunContext, budget_s: float) -> list[
     # neither case below can be silently dropping anything while one is set.
     if not ctx.test_command:
         kinds = _detected_tests(ctx)
-        if not kinds and _plausible_test_setup(ctx.root):
-            notices.append(
-                "aramid: tests: a tests/, test/, pytest.ini, tox.ini, or "
-                "[tool.pytest.ini_options] setup was found, but aramid's "
-                "detector recognized no suite in it (custom python_files "
-                "patterns, unittest-style testfoo.py naming, and "
-                "doctest-only suites aren't recognized) -- the BLOCK-tier "
-                "test gate has nothing to run. Set [tests].command to "
-                "point aramid at your suite explicitly.")
+        if not kinds:
+            notices.append(_no_suite_notice(ctx))
         elif "pytest" in kinds and "npm" in kinds:
             # [review I3 + B1, MANDATORY case] Both kinds detected, but the
             # C1 lockfile gate (runners/tests.py) means npm only actually

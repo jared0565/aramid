@@ -638,13 +638,74 @@ def test_false_negative_notice_when_pytest_ini_exists_with_no_tests_dir(tmp_path
     assert "[tests].command" in notices[0]
 
 
-def test_no_false_negative_notice_when_nothing_plausible_exists(tmp_path):
-    """Negative control: a repo with no test setup at all (no tests/,
-    test/, pytest.ini, tox.ini, or pyproject pytest section) must stay
-    silent -- there's genuinely nothing to explain."""
+def test_notice_when_no_suite_is_detected_at_all(tmp_path):
+    """This case used to be asserted SILENT, on the reasoning that a repo
+    with no test setup has "genuinely nothing to explain". Measured against
+    a real Go repo (go.mod, main.go, main_test.go beside it), that reasoning
+    does not survive: `check --gate pre-push --all --strict` exits **0**,
+    completes only gitleaks and semgrep, and prints nothing whatsoever --
+    while `tests` is BLOCK-tier and simply never ran.
+
+    "Nothing to explain" is true only if you already assume the repo is
+    Python. `detect_tests` recognizes a pytest-shaped file or an npm `test`
+    script and nothing else, so `cargo test` and `go test` both land here.
+    The old notice was gated behind `_plausible_test_setup`, which keys on
+    Python-flavoured markers (tests/, pytest.ini, tox.ini) -- Rust happens to
+    trip it by convention and Go never does.
+
+    A BLOCK-tier gate that ran nothing must not be indistinguishable from
+    one that ran and passed. That is the failure class this whole engine
+    exists to prevent."""
     root = tmp_path / "fn3"
     root.mkdir()
-    assert pipeline._tests_config_notices(Gate.PRE_PUSH, _ctx(root), budget_s=300) == []
+
+    notices = pipeline._tests_config_notices(
+        Gate.PRE_PUSH, _ctx(root), budget_s=300)
+
+    assert len(notices) == 1, (
+        "a pre-push gate whose BLOCK-tier test runner has nothing to run "
+        "said nothing at all")
+    assert "BLOCK-tier" in notices[0]
+
+
+def test_the_no_suite_notice_names_what_aramid_can_actually_detect(tmp_path):
+    """A Rust or Go developer reading a message about `pytest.ini` and
+    `testfoo.py` naming learns nothing. Name the two kinds that are
+    recognized, so "why didn't it find my suite?" is answerable."""
+    root = tmp_path / "fn3b"
+    root.mkdir()
+
+    notice = pipeline._tests_config_notices(
+        Gate.PRE_PUSH, _ctx(root), budget_s=300)[0]
+
+    assert "pytest" in notice and "npm" in notice
+    assert "[tests].command" in notice, "the remedy must be named"
+    assert "enabled" in notice, "the opt-out must be named too"
+
+
+def test_the_no_suite_notice_names_the_detected_stack(tmp_path):
+    """`ctx.stacks` is populated from detect_stacks, so the notice can say
+    what it DID recognize. On the Rust probe that is the difference between
+    "aramid is broken" and "aramid does not run cargo test"."""
+    root = tmp_path / "fn3c"
+    root.mkdir()
+
+    notice = pipeline._tests_config_notices(
+        Gate.PRE_PUSH, _ctx(root, stacks={"rust"}), budget_s=300)[0]
+
+    assert "rust" in notice
+
+
+def test_no_suite_and_gate_disabled_stays_silent(tmp_path):
+    """The opt-out must actually opt out. A repo that genuinely has no tests
+    declares it with [tests].enabled = false, and then this notice would be
+    nagging about a decision already made -- which is how a loud channel
+    trains people to ignore it."""
+    root = tmp_path / "fn3d"
+    root.mkdir()
+
+    assert pipeline._tests_config_notices(
+        Gate.PRE_PUSH, _ctx(root, tests_enabled=False), budget_s=300) == []
 
 
 def test_no_false_negative_notice_when_test_command_is_configured(tmp_path):

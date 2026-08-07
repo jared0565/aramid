@@ -12,6 +12,45 @@ to publish a tag that disagrees with it.
 
 ### Fixed
 
+- **A repo whose test suite aramid cannot detect is now told so, instead of
+  reading as covered.** `tests` is BLOCK-tier, but `detect_tests` recognises
+  exactly two kinds — a pytest-shaped file, or an npm `test` script. `cargo
+  test` and `go test` are neither. Measured on synthetic Rust and Go repos,
+  each carrying a real working suite:
+
+  | | before |
+  |---|---|
+  | `check --gate pre-push --all --strict` | **exit 0**, zero findings, nothing degraded |
+  | runners that actually ran (Rust) | gitleaks, semgrep, clippy, cargo-audit — **no tests** |
+  | runners that actually ran (Go) | gitleaks, semgrep — **no tests** |
+  | stderr (Go) | **nothing at all** |
+  | `doctor` | `OK tests (no test suite detected)`, then `all BLOCK-tier tools present.` |
+
+  `--strict` does not catch it, because strict remaps *degraded* and *engine
+  error* — and nothing here is degraded. It is reported as a clean run. That
+  is the failure class this engine exists to prevent: a pass indistinguishable
+  from a tier that never executed.
+
+  The old notice was gated behind a Python-flavoured marker check (`tests/`,
+  `pytest.ini`, `tox.ini`), so **Rust tripped it only by convention** — and
+  got a message written entirely in pytest vocabulary that never mentions
+  cargo — while **Go, whose `main_test.go` sits beside the source, got total
+  silence**. The notice now fires whenever the gate has nothing to run, names
+  the detected stack, names the two kinds that *are* recognised, and names
+  both the remedy (`[tests].command`) and the opt-out (`[tests].enabled =
+  false`). `doctor` grew a third state: the row renders `WARN`, not `OK`, and
+  the summary no longer ends on the bare sentence `all BLOCK-tier tools
+  present.`
+
+  **Report, do not block** — the same rule `probe_deps` already applies to
+  cargo-audit. Exit codes are unchanged and pinned by a test: a docs or config
+  repo legitimately has no suite, and inventing a failure the gate would never
+  produce would break `doctor` in exactly the repos most likely to run it
+  first. A repo that genuinely has no tests declares it with `[tests].enabled
+  = false`, which silences both surfaces.
+
+  This does **not** add `cargo test` / `go test` support; it makes their
+  absence impossible to mistake for a pass.
 - **A semgrep run that produced no report no longer resolves every open
   semgrep finding.** `json_or_crashed(..., empty="{}")` substitutes `{}` for
   empty stdout while keeping `ToolState.OK`. `{}` has no `paths`, so

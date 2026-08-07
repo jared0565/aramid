@@ -5,6 +5,7 @@ from pathlib import Path
 import pytest
 
 from aramid import toolpath
+from aramid import config as config_mod
 from aramid.commands import doctor
 
 
@@ -619,3 +620,55 @@ def test_missing_cargo_audit_does_not_change_doctor_exit_code(tmp_path, monkeypa
 
     assert "cargo-audit" in out, "doctor must name the tool it did not find"
     assert code == 0, "a missing non-BLOCK-tier deps tool must not fail doctor"
+
+
+# --- doctor must not report a green test toolchain it never probed ----------
+#
+# Measured on synthetic Rust and Go repos, both carrying a real working suite:
+# doctor printed `OK tests (no test suite detected -- nothing to probe)` and
+# `all BLOCK-tier tools present.`, exiting 0 -- while `tests` is BLOCK-tier
+# and `detect_tests` recognizes only a pytest-shaped file or an npm `test`
+# script, so `cargo test`/`go test` are invisible to it. This module's own
+# header docstring names that exact failure ("doctor could print 'all
+# BLOCK-tier tools present' and exit 0 on a repo whose test tool is absent"),
+# but only the detected-kind-with-missing-tool case was ever closed.
+#
+# Report, do not block -- the same rule as cargo-audit above. A repo may
+# legitimately have no tests; what it may not do is read as covered.
+
+def test_probe_tests_does_not_report_OK_when_it_probed_nothing(tmp_path):
+    root = _repo(tmp_path)
+    statuses = doctor.probe_tests(root, config_mod.load_config(root))
+
+    assert len(statuses) == 1
+    line = doctor._report_line(statuses[0])
+    assert not line.lstrip().startswith("OK"), (
+        f"a tier that was never probed rendered as OK: {line!r}")
+
+
+def test_a_repo_with_no_detectable_suite_is_told_the_gate_runs_nothing(
+        tmp_path, monkeypatch, capsys):
+    root = _repo(tmp_path)
+    monkeypatch.setattr(doctor, "probe_toolchain", lambda r: _all_present())
+
+    doctor.cmd_doctor(root)
+    cap = capsys.readouterr()
+    both = cap.out + cap.err
+
+    assert "BLOCK-tier" in both and "tests" in both
+    assert "[tests].command" in both, "the remedy must be named"
+    assert "enabled" in both, "the opt-out must be named too"
+
+
+def test_no_detectable_suite_does_not_change_doctor_exit_code(
+        tmp_path, monkeypatch, capsys):
+    """Report, do not block. A docs or config repo genuinely has no suite;
+    inventing a failure doctor's own gate would never produce would make
+    `doctor` useless in exactly the repos most likely to run it first."""
+    root = _repo(tmp_path)
+    monkeypatch.setattr(doctor, "probe_toolchain", lambda r: _all_present())
+
+    code = doctor.cmd_doctor(root)
+    capsys.readouterr()
+
+    assert code == 0
