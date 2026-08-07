@@ -21,7 +21,7 @@ schema_version = 1
 # bake actually began, so backdating would assert a fact no one can support.
 # Whether semgrep should instead be armed outright is a posture call for the
 # maintainer -- `aramid arm`, per ARAMID.md:149, there is no auto-promotion.
-semgrep_block_armed = false
+semgrep_block_armed = true
 bake_started = "2026-08-02"
 
 # Point the BLOCK-tier pre-push test gate at the unit suite.
