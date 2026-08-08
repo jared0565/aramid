@@ -47,6 +47,17 @@ to publish a tag that disagrees with it.
   new content — rather than a wall-clock threshold, which is precisely what
   made the hung-runner guard below flaky.
 
+  **aramid's own `red-proof` consumer then flagged that new test, correctly.**
+  Its first version branched on `after == before` and asserted only a size
+  match in that branch, so it passed whether a link *or* a copy happened — it
+  could not fail, making it the very defect it was written to prevent.
+  Hard-link support is now established by an **independent probe** on the same
+  filesystem rather than inferred from the outcome under test, so the fallback
+  and the regression are no longer the same observation. The discriminator is
+  measured: `shutil.copy` leaves `st_nlink` at 1 while `os.link` takes it to 2,
+  so the assertion provably separates them. Noted because it is the session's
+  own lesson landing on its own work — and because the gate caught it, not me.
+
   **Honestly graded:** the stall is intermittent and concurrent foreign
   `pytest tests -q` runs were observed in this working tree while measuring, so
   this is not proof the stall is eliminated — it removes three of the four

@@ -134,34 +134,51 @@ def test_doctor_probe_and_runner_agree_on_gitleaks(tmp_path, monkeypatch,
         "doctor reports gitleaks present but the runner cannot execute it"
 
 
-def test_the_fake_tool_helper_writes_one_interpreter_copy_not_one_per_test(
+def test_fake_tool_hard_links_rather_than_writing_a_new_executable(
         tmp_path, fake_tool_source):
     """Guards the actual fix, which is otherwise invisible: every assertion
-    above passes just as well with four fresh copies, so nothing else here
-    would notice a revert to `shutil.copy(sys.executable, ...)` per test.
+    above passes just as well with four fresh interpreter copies, so nothing
+    else here would notice a revert to `shutil.copy(sys.executable, ...)`
+    per test.
 
-    Asserts the two properties that make the reduction real, and both are
-    deterministic -- unlike a wall-clock threshold, which is what made
-    test_pipeline's hung-runner guard flaky in the first place:
+    [Rewritten immediately after being written -- aramid's own red-proof
+    consumer flagged this test, correctly.] The first version branched on
+    `after == before` and asserted only a size match in that branch, i.e. it
+    PASSED whether a link or a copy happened. It could not fail, which makes
+    it exactly the defect it was written to prevent: a check indistinguishable
+    from one that never ran.
 
-    1. the session source is a real, runnable executable, and
-    2. materialising a tool from it adds NO new file content -- proven by
-       st_nlink rising on the shared inode, or, where hard links are
-       unavailable, by explicitly tolerating the copy fallback.
+    Hard-link support is now established by an INDEPENDENT probe on the same
+    filesystem, never inferred from the outcome under test -- otherwise the
+    fallback and the regression are the same observation. `tmp_path` and
+    `fake_tool_source` both live under `tmp_path_factory`'s root, so a probe
+    here is representative of the link the helper actually attempts.
+
+    Deliberately asserts a DETERMINISTIC property (st_nlink on the shared
+    inode) rather than a duration -- a wall-clock threshold is what made
+    test_pipeline's hung-runner guard flaky.
     """
     assert fake_tool_source.is_file()
     assert fake_tool_source.stat().st_size == os.path.getsize(sys.executable)
+
+    probe = tmp_path / "link-probe"
+    probe.write_bytes(b"x")
+    try:
+        os.link(probe, tmp_path / "link-probe-alias")
+        links_supported = True
+    except OSError:
+        links_supported = False
 
     before = fake_tool_source.stat().st_nlink
     dst = _fake_tool(tmp_path / "tools", "linkprobe", fake_tool_source)
     after = fake_tool_source.stat().st_nlink
 
     assert dst.is_file()
-    if after == before:
-        # The copy fallback ran. Legitimate (cross-volume temp root, no
-        # hard-link support), but say so out loud rather than letting a
-        # silently-degraded optimisation read as a pass.
-        assert dst.stat().st_size == fake_tool_source.stat().st_size
-    else:
-        assert after == before + 1, \
-            "expected exactly one new hard link to the session's tool source"
+    if not links_supported:
+        pytest.skip("no hard-link support on this filesystem -- _fake_tool's "
+                    "copy fallback is the correct behaviour here, and this "
+                    "test has nothing left to prove")
+    assert after == before + 1, (
+        "expected exactly one new hard link to the session's tool source; "
+        f"st_nlink went {before} -> {after}, which means a fresh executable "
+        "was written per test again")
