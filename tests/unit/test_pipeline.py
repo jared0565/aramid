@@ -1,4 +1,5 @@
 import subprocess
+import threading
 import time
 from pathlib import Path
 from types import SimpleNamespace
@@ -1175,15 +1176,59 @@ def test_hung_runner_does_not_block_past_gate_budget(tmp_path, monkeypatch):
     """Important #2 regression test: a runner that hangs well past the
     gate's wall-clock budget must not block run_gate -- previously the
     ThreadPoolExecutor context manager's implicit shutdown(wait=True)
-    joined every submitted thread, including hung ones, on the way out."""
+    joined every submitted thread, including hung ones, on the way out.
+
+    [CI flake fix, 2026-08-08] This read `assert elapsed < 1.0` against a
+    `time.sleep(2.0)`: a 0.8s window that CONTENTION closes with the
+    production code behaving perfectly. run_gate's own overhead on this
+    path is not free -- a real `git` spawn in _discover_files, _write_logs'
+    filesystem writes, salt creation, ledger IO. Measured on 12 cores:
+    ~0.4s idle, but 2.4-3.0s at 2x CPU oversubscription. The bound was
+    1.0s.
+
+    Reproduced before fixing: 9/10 failures under load (elapsed 1.63-4.11s)
+    vs 0/6 idle. A hang-duration sweep proves the code is innocent --
+    elapsed stayed ~2.4s whether the runner hung for 0.5s, 2.0s or 6.0s,
+    i.e. flat in the hang, which is exactly what "abandoned, not joined"
+    looks like. A join would have tracked the hang.
+
+    Why this test and not another: CI step 8 runs `pytest -q tests/unit`
+    INSIDE the pre-push gate, concurrently with gitleaks/semgrep/ruff/
+    pip-audit on a small Windows runner, while step 6 runs the same tests
+    with the box to itself -- and only step 8 has ever failed.
+
+    The fix is not a bigger sleep. A `threading.Event` released the instant
+    the measurement is taken makes the correct-vs-regressed gap enormous
+    (~0.4-3s against the full 30s wait) instead of a 0.8s judgement call,
+    and costs nothing on the happy path. It MUST be released on every path:
+    `shutdown(cancel_futures=True)` does not cancel an ALREADY-RUNNING
+    future, so an unreleased worker sits in concurrent.futures' atexit join
+    for the whole timeout and hangs interpreter exit.
+
+    WHAT THIS NO LONGER GUARDS: how CLOSE to the 0.2s budget run_gate
+    returns. `elapsed < 10.0` asserts only "did not join the hung worker".
+    For a "budget_s is not actually honoured" regression look at
+    test_dual_suite_deadline_shares_one_origin_with_the_real_executor_wait
+    below, which drives the REAL _run_selected / ThreadPoolExecutor.wait()
+    path. NOT at the _tests_config_notices budget tests above: those pin
+    the NOTICE about a timeout_s larger than the budget: they call the
+    helper directly, assert on its message, and never reach run_gate at
+    all.
+    """
     root = _repo(tmp_path)
     cfg = _cfg(root, tmp_path, monkeypatch)
     ledger = _ledger(tmp_path)
 
     cfg.timeouts["pre_commit"] = 0.2  # tiny budget
 
+    release = threading.Event()
+
     def hang_run(ctx):
-        time.sleep(2.0)  # far past the budget
+        # Blocks until the measurement below has been taken. The 30s is a
+        # safety net, not a wait anyone should ever pay: under the
+        # regression this test exists to catch, run_gate joins this thread
+        # and `elapsed` becomes the full 30s -- unmistakably past the bound.
+        release.wait(30.0)
         return RunnerResult("hangy", ToolState.OK)
 
     monkeypatch.setitem(pipeline.RUNNERS, "hangy",
@@ -1191,10 +1236,16 @@ def test_hung_runner_does_not_block_past_gate_budget(tmp_path, monkeypatch):
     monkeypatch.setitem(pipeline.GATE_RUNNER_KEYS, Gate.PRE_COMMIT, ["hangy"])
 
     start = time.monotonic()
-    result = pipeline.run_gate(root, Gate.PRE_COMMIT, "staged", cfg, ledger, run_id="run-timeout")
-    elapsed = time.monotonic() - start
+    try:
+        result = pipeline.run_gate(root, Gate.PRE_COMMIT, "staged", cfg, ledger,
+                                   run_id="run-timeout")
+        elapsed = time.monotonic() - start
+    finally:
+        # Every path, run_gate raising included -- see the docstring: a
+        # worker left blocked here stalls interpreter exit for 30s.
+        release.set()
 
-    assert elapsed < 1.0  # returned near the 0.2s budget, not after the 2s sleep
+    assert elapsed < 10.0  # abandoned the worker; did not join its 30s wait
     assert result.degraded == ["hangy"]
     assert result.exit_code == 2  # WARN-tier degrade only (not a BLOCK_TIER_KEYS member)
 

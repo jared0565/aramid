@@ -12,6 +12,53 @@ to publish a tag that disagrees with it.
 
 ### Fixed
 
+- **The `windows-latest / py3.14` CI flake: a wall-clock assertion that CPU
+  contention could close, not a product defect.**
+  `test_hung_runner_does_not_block_past_gate_budget` asserted `elapsed < 1.0`
+  against a `time.sleep(2.0)` and a 0.2s budget. `run_gate`'s own overhead on
+  that path is not free — a real `git` spawn in `_discover_files`,
+  `_write_logs`' filesystem writes, salt creation, ledger IO — so the 0.8s
+  window between "returned at budget" and "joined the hung worker" was doing
+  the discriminating.
+
+  | | idle | 2× CPU oversubscription |
+  |---|---|---|
+  | `run_gate` overhead on this path | ~0.4s | **2.4 – 3.0s** |
+  | failures in 10 runs | 0/6 | **9/10** (elapsed 1.63 – 4.11s) |
+
+  **The production code is innocent, and that was measured rather than
+  assumed.** A hang-duration sweep held everything else fixed and varied only
+  the hang: elapsed stayed ~2.4s whether the runner hung for 0.5s, 2.0s or
+  6.0s. Flat in the hang is exactly what *abandoned, not joined* looks like; a
+  regression would have tracked it.
+
+  Why this test, on this leg: CI step 8 runs `pytest -q tests/unit` **inside**
+  the pre-push gate, concurrently with gitleaks, semgrep, ruff and pip-audit
+  on a small Windows runner, while step 6 runs the same tests with the box to
+  itself. Step 6 has never failed; step 8 did. Same commit, same runner, eight
+  minutes apart — a strict subset failing while the superset passed.
+
+  The fix is not a bigger sleep. A `threading.Event`, released the instant the
+  measurement is taken, replaces the 0.8s judgement call with a gap nothing
+  can bridge: ~0.4 – 3s correct against a full 30s wait if `run_gate` ever
+  joins again. Verified both ways — the guard still turns red under a mutated
+  `shutdown(wait=True)` (`assert 30.12 < 10.0`), and the same 24-hog load that
+  produced 9/10 failures now produces none. Releasing on **every** path
+  (`try/finally`) is load-bearing: `shutdown(cancel_futures=True)` does not
+  cancel an already-running future, so an unreleased worker would stall
+  interpreter exit for the full timeout.
+
+  Honestly graded: the `.aramid/logs` from the original run are gone and the
+  log-dump step postdates it, so this is strong circumstantial evidence, not a
+  confirmed identification of that specific failure. The dump step now names
+  the failing test on any recurrence, which will confirm or refute it.
+
+  Scope checked, not assumed: the other absolute-time assertions in
+  `tests/unit` were inventoried. `test_runner_base.py` allows `< 10` against a
+  5s sleep, and `test_shared_budget_caps_the_second_suites_timeout` — despite
+  a 50ms `pytest.approx` margin — survived 10/10 under the same load, so both
+  were left alone rather than pre-emptively widened.
+
 - **A repo whose test suite aramid cannot detect is now told so, instead of
   reading as covered.** `tests` is BLOCK-tier, but `detect_tests` recognises
   exactly two kinds — a pytest-shaped file, or an npm `test` script. `cargo
