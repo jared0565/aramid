@@ -12,6 +12,47 @@ to publish a tag that disagrees with it.
 
 ### Fixed
 
+- **`tests/unit/test_toolpath.py` no longer writes and executes four fresh
+  interpreter copies, which had twice made aramid's own pre-push gate
+  unusable.** `_fake_tool` did `shutil.copy(sys.executable, …)` into each
+  test's `tmp_path` and the tests then *executed* those brand-new ~104 KB
+  binaries. On Windows that is the shape most likely to draw a real-time scan
+  of an unknown executable, and this file has twice been measured taking
+  minutes instead of seconds — 2026-08-05, and again 2026-08-08 where a
+  **single test exceeded 600s**, against ~2.5s on a quiet machine.
+
+  Not cosmetic: `[tests].command` runs `pytest -q tests/unit` under a 600s
+  budget, so when this file stalls the BLOCK-tier test gate times out,
+  degrades, and **blocks every push** on aramid's own repo.
+
+  Now one real copy per session (a `session`-scoped fixture), hard-linked into
+  each test's tools dir thereafter — so materialising a fake tool writes no new
+  executable bytes at all. The source is created under `tmp_path_factory`'s
+  root rather than as a direct copy of the interpreter, deliberately: that puts
+  it on the **same volume** as every `tmp_path`. On CI's Windows runner
+  `sys.executable` is on `C:` (hostedtoolcache) while the temp root is on `D:`,
+  so linking straight from the interpreter would raise `EXDEV` and fall back to
+  copying on the one platform that needs this most. `shutil.copy` remains as a
+  fallback for filesystems without hard links.
+
+  Verified: `os.link` measured taking `st_nlink` 1 → 2 with the link executing
+  cleanly (`rc 0`, `Python 3.14.5`); the file runs 7 passed in 1.30s; and the
+  three tests that pin the managed-dir fallback still fail when
+  `toolpath.resolve` is mutated to drop it.
+
+  A new test guards the fix itself, because nothing else can: every existing
+  assertion passes just as well with four copies, so a revert would be
+  invisible. It asserts the deterministic properties — the source is a real
+  runnable executable, and materialising a tool adds a hard link rather than
+  new content — rather than a wall-clock threshold, which is precisely what
+  made the hung-runner guard below flaky.
+
+  **Honestly graded:** the stall is intermittent and concurrent foreign
+  `pytest tests -q` runs were observed in this working tree while measuring, so
+  this is not proof the stall is eliminated — it removes three of the four
+  copy-and-execute cycles, which is the exposure, and is verifiable
+  independently of machine mood.
+
 - **The `windows-latest / py3.14` CI flake: a wall-clock assertion that CPU
   contention could close, not a product defect.**
   `test_hung_runner_does_not_block_past_gate_budget` asserted `elapsed < 1.0`
