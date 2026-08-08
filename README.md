@@ -52,8 +52,8 @@ The authoritative backstop is re-running `aramid check --all --strict --json` in
 
 ## Documentation
 
-- **[User Guide](docs/user-guide.md)** — task-oriented walkthrough: install, onboarding, the gate, running checks, the red-team drain, and each consumer.
-- **[Knowledge Base](docs/knowledge-base.md)** — reference: concepts glossary, full configuration reference, consumer reference, CLI commands, and exit codes.
+- **[User Guide](https://github.com/jared0565/aramid/blob/main/docs/user-guide.md)** — task-oriented walkthrough: install, onboarding, the gate, running checks, the red-team drain, and each consumer.
+- **[Knowledge Base](https://github.com/jared0565/aramid/blob/main/docs/knowledge-base.md)** — reference: concepts glossary, full configuration reference, consumer reference, CLI commands, and exit codes.
 - **Design specs & implementation plans** — `docs/superpowers/specs/` and `docs/superpowers/plans/`.
 
 ## Exit-code contract

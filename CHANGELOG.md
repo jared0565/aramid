@@ -223,6 +223,50 @@ to publish a tag that disagrees with it.
 
 ### Added
 
+- **PyPI publishing is wired up, and the package metadata that makes it worth
+  doing.** `[project]` carried name, version, `requires-python` and
+  dependencies — and nothing else. `twine check` said `long_description
+  missing`: publishing would have produced a package page with **no
+  description at all**, and nothing in the repo would have objected. The wheel
+  was verified to contain its data files; what it said *about itself* was never
+  checked. Now filled in from README.md and LICENSE rather than written fresh,
+  so page and repo cannot drift: `description`, `readme`, SPDX `license`,
+  `authors` (name only — putting a personal address on a public page is the
+  maintainer's call, not a default), `keywords`, 11 classifiers, and
+  `[project.urls]`.
+
+  Three things that surfaced only by building and looking, not by reasoning:
+
+  - **`Typing :: Typed` would have been a false claim** — there is no
+    `src/aramid/py.typed`. Dropped rather than papered over by adding the
+    marker, which would assert a level of type coverage nothing here verifies.
+  - **Two README links were repo-relative** (`docs/user-guide.md`,
+    `docs/knowledge-base.md`). Correct on GitHub, 404 on PyPI, which serves the
+    README detached from the repository. Now absolute.
+  - **PEP 639 makes a `License ::` classifier an error, not a warning**
+    alongside an SPDX `license` expression — it broke the build outright, and
+    the syntax also raises the `setuptools` floor to 77.
+
+  `release.yml` gains `twine check`, a **clean-venv sdist smoke test**, and a
+  separate `publish-pypi` job. The sdist was previously built and published but
+  never installed: the wheel and the sdist are produced by different code
+  paths, and any consumer whose platform or policy forces a source build gets
+  that artifact. Publishing is its own job — gated on the `pypi` environment,
+  `needs: release` so it cannot run unless every gate passed, and using
+  **Trusted Publishing** (OIDC), so there is no API token or repository secret.
+  `skip-existing: false` deliberately: a silent no-op on a release tag is the
+  "green for a reason indistinguishable from success" shape this repo exists to
+  prevent.
+
+  `tests/unit/test_packaging_metadata.py` pins all of it — page-would-be-blank,
+  relative links, the PEP 639 conflict, the unbacked `Typing` claim and the
+  backend floor — each verified to fail against a deliberately reintroduced
+  defect.
+
+  **Not done, deliberately:** no version bump, no tag, no upload. Publishing
+  needs a one-time *pending publisher* on pypi.org (and a separate one on
+  test.pypi.org), which is an account-level action; and cutting a release is a
+  "is this ready to ship?" judgement. Both are documented in `RELEASING.md`.
 - **`[hooks].pre_push_match_ci` — make the pre-push shim run what CI runs.**
   The generated shim calls `aramid check --gate pre-push` with no scope flag,
   which `cli._check_mode` resolves to `range`: changed files only. CI runs

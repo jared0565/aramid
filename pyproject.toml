@@ -1,9 +1,43 @@
 [build-system]
-requires = ["setuptools>=68"]
+# >=77 is required by the PEP 639 `license = "MIT"` / `license-files`
+# syntax below; on an older setuptools that spelling is not understood.
+requires = ["setuptools>=77"]
 build-backend = "setuptools.build_meta"
 
 [project]
 name = "aramid"
+# PyPI PAGE METADATA. Absent until now, which was invisible while the only
+# install path was a wheel URL: `twine check` reported `long_description
+# missing`, i.e. publishing would have produced a package page with no
+# description at all. Sourced from README.md and LICENSE rather than written
+# fresh, so the page and the repo cannot drift into saying different things.
+description = "A deterministic, offline security and quality gate for git hooks -- gitleaks, semgrep, ruff/eslint, pip-audit and your own suite, at pre-commit and pre-push."
+readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE"]
+# Name only, deliberately no email: LICENSE already makes "FBMac" public, so
+# this adds no disclosure, whereas putting a personal address on a public
+# package page is the maintainer's call to make, not a default to inherit.
+authors = [{ name = "FBMac" }]
+keywords = ["security", "sast", "secrets", "git-hooks", "pre-commit", "static-analysis", "linting", "devsecops"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Environment :: Console",
+    "Intended Audience :: Developers",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
+    "Topic :: Security",
+    "Topic :: Software Development :: Quality Assurance",
+    "Topic :: Software Development :: Testing",
+    # No "Typing :: Typed": that classifier asserts the package ships
+    # type information, and there is no src/aramid/py.typed marker. The
+    # claim would be false on a public page.
+]
+
 # SINGLE SOURCE OF TRUTH: src/aramid/__init__.py's `__version__`. Previously
 # the version was spelled here AND there, so a bump could update one and ship
 # a wheel whose metadata disagreed with the `--version` the code prints --
@@ -35,6 +69,12 @@ dependencies = [
     "ruff>=0.6,<0.17",
     "semgrep>=1.100,<2",
 ]
+
+[project.urls]
+Homepage = "https://github.com/jared0565/aramid"
+Repository = "https://github.com/jared0565/aramid"
+Changelog = "https://github.com/jared0565/aramid/blob/main/CHANGELOG.md"
+Issues = "https://github.com/jared0565/aramid/issues"
 
 [project.optional-dependencies]
 # `packaging` is used by tests/unit/test_version.py to compare versions the way

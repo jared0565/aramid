@@ -70,6 +70,8 @@ artifact cannot be recalled, only superseded:
 | Tag matches `__version__` | Publishing `aramid-0.1.0.whl` under a tag called `v0.2.0` |
 | Packaged data files present | A wheel missing the vendored OWASP ruleset, which makes semgrep crash on every pre-push in every consumer repo |
 | Clean-venv smoke test | A wheel that installs but does not work: it installs into a fresh virtualenv, leaves the source tree so an accidental import of it fails, runs the console script, and asserts the ruleset resolves from inside `site-packages` |
+| `twine check` | A package page that renders wrong — or, as was true until 0.1.0, one with **no description at all** |
+| Clean-venv **sdist** smoke test | An sdist that publishes fine and fails on install. The wheel and the sdist are built by different code paths, and any consumer whose platform or policy forces a source build gets this artifact |
 
 ## Undoing a release
 
@@ -79,8 +81,49 @@ git push --delete origin v0.1.0   # if --cleanup-tag did not remove it
 git tag -d v0.1.0
 ```
 
-Deleting is safe here precisely because the artifacts are GitHub Releases. If
-aramid is ever published to PyPI this stops being true — a PyPI version can be
-yanked but never re-uploaded, which is why that step is a separate decision.
+Deleting is safe for the **GitHub Release** half. It is not safe once
+`publish-pypi` has run: a PyPI version can be yanked but never re-uploaded, and
+the first upload claims the public name permanently. That is why publishing is
+a separate job, gated on its own environment.
+
+## Publishing to PyPI
+
+`publish-pypi` runs after every gate above passes, using **Trusted Publishing**
+(OIDC) — there is no API token and no repository secret to leak or rotate.
+
+### One-time setup — two of them, on the maintainer's accounts
+
+These cannot be done from this repository; they are account-level settings.
+Configuring one does **not** configure the other.
+
+1. **pypi.org** → *Your projects* → *Publishing* → add a **pending publisher**
+
+   | field | value |
+   | --- | --- |
+   | PyPI project name | `aramid` |
+   | Owner | `jared0565` |
+   | Repository | `aramid` |
+   | Workflow name | `release.yml` |
+   | Environment | `pypi` |
+
+   "Pending" is the right kind: it authorises a project that does not exist
+   yet, which is the case until the first upload.
+
+2. **test.pypi.org** — the same form, if you want to rehearse first. A separate
+   account and a separate pending publisher.
+
+Optionally add a required reviewer to the `pypi` GitHub environment; the job is
+already gated on it, so no workflow change is needed.
+
+### Which version publishes first
+
+`v0.1.0` is already tagged and has a GitHub Release, so re-pushing that tag
+will not re-run the workflow and `gh release create` would fail on the existing
+release. PyPI itself is empty (`aramid` is unclaimed), so `0.1.0` is *available*
+there — but the clean path is to cut the next version rather than delete and
+recreate a published GitHub Release.
+
+Bumping `__version__` and cutting the tag is a "is this ready to ship?"
+judgement and is deliberately not automated.
 
 [GitHub Release]: https://github.com/jared0565/aramid/releases

@@ -2,10 +2,20 @@
 # Release, so `pip install -e .` from a source checkout stops being aramid's
 # only install path.
 #
-# Uses the built-in GITHUB_TOKEN only -- no PyPI account, no repository secret
-# to create, and a release can be deleted if something is wrong. Publishing to
-# PyPI is a separate, irreversible decision (it claims the public name and
-# forbids re-uploading a version) and is deliberately not done here.
+# Two jobs, deliberately split. `release` uses the built-in GITHUB_TOKEN only
+# and produces a GitHub Release, which can be deleted if something is wrong.
+# `publish-pypi` is the IRREVERSIBLE half -- PyPI forbids re-uploading a
+# version, and the first upload claims the public name for good -- so it is
+# gated on the `pypi` environment, runs only after every check below has
+# passed, and uses Trusted Publishing (OIDC): no API token, no repository
+# secret to leak or rotate.
+#
+# ONE-TIME SETUP, on the maintainer's account, before the first tag:
+#   pypi.org -> Your projects -> Publishing -> add a PENDING publisher
+#     owner: jared0565   repo: aramid
+#     workflow: release.yml   environment: pypi
+# TestPyPI is a SEPARATE account with a SEPARATE pending publisher; configuring
+# one does not configure the other.
 #
 # Every gate below runs BEFORE the release is created, because a bad artifact
 # that is already published cannot be recalled -- only superseded.
@@ -92,6 +102,15 @@ jobs:
               sys.exit(f"::error::missing packaged data file(s) in {wheel.name}: {missing}")
           print(f"OK: {wheel.name} contains all required data files: {required}")
 
+      # The render test for the PyPI page itself. Until the metadata was
+      # filled in, this reported `long_description missing` -- i.e. publishing
+      # would have produced a package page with no description at all, which
+      # nothing else here would have caught.
+      - name: Check the distribution metadata renders
+        run: |
+          pip install twine
+          twine check dist/*
+
       # Install the BUILT WHEEL into a clean venv and run the CLI from it. The
       # CI workflow only ever exercises `pip install -e .`, so nothing until
       # now proved a non-editable install works at all -- that the console
@@ -112,6 +131,27 @@ jobs:
           print(f'vendored ruleset resolved at {p}')
           "
 
+      # THE SDIST WAS PUBLISHED BUT NEVER INSTALLED. The step above proves the
+      # wheel; the sdist was only globbed into `gh release create`. They are
+      # built by different code paths -- package-data reaching a wheel does not
+      # prove it reaches an sdist -- and any consumer on a platform or policy
+      # that forces a source build gets this artifact, not the wheel. `--no-deps`
+      # because the dependency set is already proven above; what is unproven
+      # here is whether the SOURCE archive carries its data files.
+      - name: Smoke-test the built sdist in a clean environment
+        run: |
+          set -euo pipefail
+          python -m venv /tmp/smoke-sdist
+          /tmp/smoke-sdist/bin/pip install --quiet --no-deps dist/*.tar.gz
+          cd /tmp
+          /tmp/smoke-sdist/bin/python -c "
+          import pathlib
+          from aramid.runners import semgrep
+          p = pathlib.Path(semgrep.VENDORED_RULES_PATH)
+          assert p.is_file(), f'vendored ruleset missing from the SDIST install: {p}'
+          print(f'sdist install resolved the vendored ruleset at {p}')
+          "
+
       # Name the artifacts rather than globbing. `dist/*` uploads whatever
       # happens to be in that directory, and every step above builds into it
       # -- so a leftover from an earlier build, or anything a future step
@@ -128,3 +168,41 @@ jobs:
           gh release create "${GITHUB_REF_NAME}" \
             dist/aramid-*.whl dist/aramid-*.tar.gz \
             --generate-notes --verify-tag
+
+  # Separate job so the irreversible step cannot run unless every gate in
+  # `release` passed. `needs` gives the ordering; `environment` is what lets a
+  # required reviewer be added on the PyPI side without touching this file.
+  publish-pypi:
+    needs: release
+    runs-on: ubuntu-latest
+    environment: pypi
+    permissions:
+      # Trusted Publishing exchanges this OIDC token for a short-lived PyPI
+      # credential. `contents` is NOT needed here -- this job builds nothing
+      # and writes nothing to the repository.
+      id-token: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.12"
+
+      # Rebuilt rather than passed between jobs as an artifact. An artifact
+      # round-trip is one more place the bytes could differ from what the gates
+      # above actually inspected, and the build is deterministic from the tag.
+      - name: Build wheel and sdist
+        run: |
+          pip install build
+          python -m build
+
+      # SHA resolved from the v1.14.2 ANNOTATED tag object to its commit --
+      # `git/ref/tags/<tag>` returns the tag object's own sha for an annotated
+      # tag, which is not what `uses:` pins to.
+      - uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33 # v1.14.2
+        with:
+          # Fail loudly rather than skip: a silent no-op on a release tag is
+          # exactly the "green for a reason indistinguishable from success"
+          # shape this repo exists to prevent.
+          skip-existing: false
+          print-hash: true
