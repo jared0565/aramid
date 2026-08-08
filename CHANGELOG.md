@@ -12,6 +12,37 @@ to publish a tag that disagrees with it.
 
 ### Fixed
 
+- **The secret scanner's stdout is no longer persisted at all, so publishing
+  `.aramid/logs` cannot depend on how gitleaks chooses to behave.** `_log_body`
+  persists stdout whenever a runner degraded or exited non-zero, and
+  `_write_logs` scrubs it with `raw_secrets` — the strings recovered from
+  *this run's successfully parsed* gitleaks findings. Those two conditions come
+  apart exactly where it matters: a gitleaks that crashed or timed out mid-scan
+  parses nothing, so the redactor gets an **empty list** and has nothing to
+  match on, while `state is not OK` means its stdout is written verbatim — and
+  the `if: failure()` CI step prints every log to a **public** job log.
+
+  Reported by `llm-review`. Its stated mechanism was **wrong** and the
+  distinction matters: gitleaks writes findings to `--report-format json
+  --report-path <file>`, never to stdout, and runs without `-v`, so no secret
+  material was reaching that stream. The claim that the workflow justified
+  publication on "it gets scrubbed" was also wrong — the comment already said
+  the opposite in as many words.
+
+  The **premise** was right anyway, and that is what got fixed. The existing
+  guard (`test_gitleaks_never_prints_findings_to_a_stream_we_publish`) asserts
+  on *aramid's argv* — that we do not ask for verbose output. It cannot show
+  that a future gitleaks won't print matches by default, or on an error path.
+  An external tool's output behaviour is not ours to guarantee, so
+  `pipeline._NO_STDOUT_TOOLS` now drops that stream before it is ever written.
+  Nothing diagnostic is lost: findings go to a report file this code never
+  reads, and failures explain themselves on stderr, which is still persisted.
+
+  Written test-first: the new guard fails against the old code with a crashed
+  gitleaks and an **empty** secret list — deliberately empty, because seeding
+  it with the secret would only prove the scrubber works when it already knows
+  the answer.
+
 - **PyPI would have received bytes that none of the release gates inspected.**
   The `release` job runs four integrity gates against specific files in
   `dist/` — `twine check`, the packaged-data-file check, a clean-venv wheel

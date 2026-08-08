@@ -208,14 +208,22 @@ jobs:
       # PUBLIC BY DESIGN, and the reason is narrower than "it gets scrubbed".
       # redact.scrub is fed only the secrets recovered from SUCCESSFULLY
       # PARSED findings, so a crashed scanner would be redacted against an
-      # empty list -- it is a second line of defence, not the first. The
-      # first is that gitleaks writes its report to --report-path (a temp
-      # file that never reaches .aramid/logs) and runs without -v, so it
-      # prints no finding to any stream we persist; a real body here is 250
-      # bytes of banner plus "INF no leaks found". Both halves are pinned by
-      # test_gitleaks_never_prints_findings_to_a_stream_we_publish. The rest
-      # is scan output of sources that are already public, and python-*.log
-      # is the same pytest output `Run test suite` prints on every run.
+      # empty list -- it is a LAST line of defence, not the first.
+      #
+      # The first line no longer depends on how gitleaks chooses to behave:
+      # pipeline._NO_STDOUT_TOOLS drops the secret scanner's stdout before it
+      # is ever written to .aramid/logs, whatever its exit code. Previously
+      # the argument rested on gitleaks writing its report to --report-path
+      # and running without -v -- true, and still asserted by
+      # test_gitleaks_never_prints_findings_to_a_stream_we_publish, but that
+      # test checks OUR argv, not what a future gitleaks prints by default.
+      # An external tool's output behaviour is not ours to guarantee, so the
+      # stream is simply not kept. Nothing diagnostic is lost: gitleaks
+      # failures explain themselves on stderr, which is still persisted.
+      #
+      # The rest is scan output of sources that are already public in this
+      # repository, and python-*.log is the same pytest output that
+      # `Run test suite` prints on every run.
       - name: Dump .aramid/logs on failure (names the failing test)
         if: failure()
         run: python .github/scripts/dump_aramid_logs.py

@@ -489,9 +489,27 @@ def _flatten(results: dict[str, RunnerResult]) -> list[RunnerResult]:
 _LOG_STDOUT_CAP = 64 * 1024
 
 
+# Runners whose stdout is NEVER persisted, whatever their exit code.
+#
+# gitleaks is the one runner whose output can quote secret material, and the
+# scrubber cannot help exactly when it matters: `_write_logs` scrubs with the
+# secrets recovered from THIS run's successfully PARSED gitleaks findings, so a
+# gitleaks that crashed or timed out mid-scan parses nothing, hands the
+# redactor an EMPTY list, and its stdout is written verbatim --
+# `.github/scripts/dump_aramid_logs.py` then prints every log to a PUBLIC CI
+# job log under `if: failure()`. GitHub masks registered `secrets.*` values,
+# not secrets found in repository content.
+#
+# Nothing diagnostic is lost. runners/gitleaks.py passes `--report-format json
+# --report-path <file>`, so findings go to a file `_log_body` never reads and
+# stdout carries only a banner and a count; failures explain themselves on
+# stderr, which is still persisted.
+_NO_STDOUT_TOOLS = frozenset({"gitleaks"})
+
+
 def _log_body(r: RunnerResult) -> str:
     """What to persist for one runner: stderr, plus stdout when the run had a
-    problem.
+    problem -- except for `_NO_STDOUT_TOOLS` above, whose stdout is never kept.
 
     stderr alone was not enough, and the gap was worst exactly where it hurt
     most. Measured 2026-08-07: a failing `[tests]` command returns
@@ -513,7 +531,8 @@ def _log_body(r: RunnerResult) -> str:
     """
     err = r.stderr or ""
     out = r.raw or ""
-    if not out or (r.state is ToolState.OK and r.returncode == 0):
+    if (not out or r.tool in _NO_STDOUT_TOOLS
+            or (r.state is ToolState.OK and r.returncode == 0)):
         return err
     if len(out) > _LOG_STDOUT_CAP:
         out = (f"[{len(out) - _LOG_STDOUT_CAP} earlier bytes truncated]\n"

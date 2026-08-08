@@ -102,3 +102,37 @@ def test_a_degraded_runner_logs_its_stdout_too(tmp_path):
                           raw="Traceback: ruleset failed to load", stderr="")
 
     assert "ruleset failed to load" in _log(tmp_path, result)
+
+
+def test_the_secret_scanners_stdout_is_never_persisted(tmp_path):
+    """The one runner whose stdout must not be kept, and the scrubber cannot
+    save it.
+
+    `_write_logs` scrubs with `raw_secrets` -- the strings recovered from THIS
+    run's successfully PARSED gitleaks findings. Those two conditions come
+    apart exactly when it matters: a gitleaks that crashed or timed out
+    mid-scan parses nothing, so the secret list is EMPTY and the redactor has
+    nothing to match on, while `state is not OK` means its stdout gets
+    persisted verbatim. `.github/scripts/dump_aramid_logs.py` then prints
+    every log to a PUBLIC CI job log under `if: failure()`.
+
+    Nothing is lost by dropping it: runners/gitleaks.py passes
+    `--report-format json --report-path <file>`, so findings go to a file this
+    function never reads, and failures explain themselves on stderr -- which
+    is still persisted, as the second assertion pins.
+
+    Note the empty secret list passed to `_write_logs` here: that IS the
+    scenario. A test that seeded it with the secret would prove only that the
+    scrubber works when it already knows the answer.
+    """
+    secret = "AKIAIOSFODNN7EXAMPLE"
+    result = RunnerResult("gitleaks", ToolState.CRASHED,
+                          raw=f"partial scan: {secret} in config.yml",
+                          stderr="gitleaks: fatal: could not read HEAD")
+
+    body = _log(tmp_path, result)
+
+    assert secret not in body, (
+        "a crashed gitleaks persisted unscrubbed stdout, which the CI dump "
+        "step publishes to a public job log")
+    assert "could not read HEAD" in body, "stderr must still explain the failure"
