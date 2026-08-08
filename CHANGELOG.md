@@ -12,6 +12,50 @@ to publish a tag that disagrees with it.
 
 ### Fixed
 
+- **aramid could print its verdict and then refuse to exit — a hung `git push`
+  after the gate had already decided.** Important #2 fixed only half of this.
+  Dropping the executor's context manager made `run_gate` *return* at the
+  budget, but a `ThreadPoolExecutor` worker is not a daemon, so both
+  `concurrent.futures._python_exit` and `threading._shutdown` join it during
+  **interpreter shutdown**. The verdict was printed on time and the process
+  then sat there for as long as the abandoned runner ran:
+
+  | hung runner | `run_gate` returned | **process exited** |
+  |---|---|---|
+  | 3s | 0.24s | **3.42s** |
+  | 12s | 0.22s | **12.36s** |
+
+  Exit time tracks the straggler exactly. The gate runs inside a git hook, so
+  this is the push hanging — and it has **no ceiling**, because
+  `run_subprocess` passes `timeout_s` to `communicate()`, which does not cover
+  `subprocess.Popen`. A runner stuck in process creation hangs the hook
+  indefinitely; that is not hypothetical, since a test whose subprocess was
+  capped at 60s was measured running past 600s on this repo.
+
+  The obvious one-line fix does not work, and was measured rather than
+  assumed: detaching the pool's threads from
+  `concurrent.futures._threads_queues` gave **10.21s against 10.23s unfixed**,
+  because `threading._shutdown` joins non-daemon threads regardless of what
+  the futures module thinks. `t.daemon = True` cannot be set after a thread
+  starts, so getting daemon threads at all means owning them — `_run_selected`
+  now uses raw daemon threads with an `Event`-based budget wait. Exit drops to
+  **0.63s**.
+
+  Written test-first: the guard failed at **45.4s against a 15s bound** with
+  `RETURNED` already in stdout — proving the verdict was produced and the
+  process then hung — and passes in 1.75s after. It measures a **child**
+  process, because interpreter shutdown is not observable from inside the
+  interpreter performing it. The existing `test_hung_runner_does_not_block_past_gate_budget`
+  could never have caught this: it measures `run_gate`'s return, which was
+  always fine.
+
+  **The trade, stated rather than buried:** a daemon thread is killed at
+  interpreter exit, so an abandoned runner's child process can outlive the
+  gate. Its result was already discarded as `TIMEOUT`, and `run_subprocess`
+  deliberately launches children detached
+  (`CREATE_NEW_PROCESS_GROUP`/`start_new_session`) so they were never ours to
+  reap. A short-lived orphan analyzer beats a hung push.
+
 - **`tests/unit/test_toolpath.py` no longer writes and executes four fresh
   interpreter copies, which had twice made aramid's own pre-push gate
   unusable.** `_fake_tool` did `shutil.copy(sys.executable, …)` into each

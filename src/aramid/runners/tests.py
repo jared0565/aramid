@@ -46,8 +46,8 @@ ABSOLUTE `time.monotonic()` instant set once by aramid.pipeline.run_gate
 -- see RunContext's docstring) rather than each getting an independent
 full per-tool timeout: they run sequentially inside one `run()` call, so
 two 300s-timeout suites would otherwise sum to 600s against a 300s
-pre-push slot -- well past what aramid.pipeline._run_selected's
-ThreadPoolExecutor actually waits for, which would discard BOTH suites'
+pre-push slot -- well past what aramid.pipeline._run_selected's own
+budget wait actually waits for, which would discard BOTH suites'
 results behind a single bare pipeline-level TIMEOUT (tool="tests", no
 `.sub_results`) naming the wrong cause. If the shared deadline is already
 past before the second suite can run at all, that suite is reported as

@@ -1,4 +1,5 @@
 import subprocess
+import sys
 import threading
 import time
 from pathlib import Path
@@ -1248,6 +1249,65 @@ def test_hung_runner_does_not_block_past_gate_budget(tmp_path, monkeypatch):
     assert elapsed < 10.0  # abandoned the worker; did not join its 30s wait
     assert result.degraded == ["hangy"]
     assert result.exit_code == 2  # WARN-tier degrade only (not a BLOCK_TIER_KEYS member)
+
+
+def test_the_process_can_exit_while_an_abandoned_runner_is_still_running():
+    """The other half of Important #2, and the blind spot in the guard above:
+    `run_gate` RETURNING at the budget is not the same as the PROCESS being
+    able to exit.
+
+    `_run_selected` abandons a straggler with `shutdown(wait=False)`, but a
+    ThreadPoolExecutor worker is not a daemon, so BOTH
+    `concurrent.futures._python_exit` and `threading._shutdown` join it during
+    interpreter shutdown. The verdict is printed and the process then sits
+    there. Measured before the fix, and it tracked the hang exactly:
+
+        hang  3s -> returned 0.24s, PROCESS EXITED 3.42s
+        hang 12s -> returned 0.22s, PROCESS EXITED 12.36s
+
+    Why it matters beyond tidiness: the gate runs inside a git hook, so this
+    is `git push` hanging after aramid has already decided. And it is not
+    bounded by `[timeouts]` -- `run_subprocess` passes `timeout_s` to
+    `communicate()`, which does NOT cover `subprocess.Popen`, so a runner
+    stuck in process creation hangs the hook indefinitely. That is not
+    hypothetical: a test whose subprocess was capped at 60s was measured
+    running past 600s on this repo (see tests/unit/test_toolpath.py).
+
+    Detaching the threads from `concurrent.futures._threads_queues` looks like
+    the one-line fix and is NOT one -- measured at 10.21s against 10.23s
+    unfixed, because `threading._shutdown` joins non-daemon threads whatever
+    the futures module thinks. Daemon threads are what actually works (0.63s).
+
+    Runs in a CHILD process because that is the only place process exit is
+    observable; a monkeypatch in the pytest process cannot measure its own
+    interpreter shutdown. 45s hang against a 15s bound: a healthy child is
+    ~0.7s (0.4s of which is importing aramid), so the margin is ~20x, chosen
+    deliberately over a tight threshold after a wall-clock assertion in this
+    same file turned out to be flaky under CPU contention.
+    """
+    hang_s = 45.0
+    bound_s = 15.0
+    code = (
+        "import time\n"
+        "from types import SimpleNamespace\n"
+        "from aramid import pipeline\n"
+        f"hangy = SimpleNamespace(run=lambda ctx: time.sleep({hang_s}),"
+        " parse=lambda r, c: [])\n"
+        "pipeline._run_selected({'hangy': hangy}, None, 0.2)\n"
+        "print('RETURNED', flush=True)\n"
+    )
+
+    start = time.monotonic()
+    cp = subprocess.run([sys.executable, "-c", code], capture_output=True,
+                        text=True, timeout=hang_s + 60)
+    elapsed = time.monotonic() - start
+
+    assert "RETURNED" in cp.stdout, (
+        f"child never got past _run_selected; stderr={cp.stderr[-2000:]}")
+    assert elapsed < bound_s, (
+        f"aramid returned its verdict but the process took {elapsed:.1f}s to "
+        f"exit, tracking the abandoned runner's {hang_s}s sleep -- in a git "
+        "hook that is a hung push")
 
 
 # ------------------------- (i2) tests dual-suite: single deadline origin ---

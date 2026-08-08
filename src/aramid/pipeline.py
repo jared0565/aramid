@@ -19,9 +19,9 @@ without touching real tool binaries -- see tests/unit/test_pipeline.py.
 """
 import functools
 import sys
+import threading
 import time
 import uuid
-from concurrent.futures import ThreadPoolExecutor, wait
 from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 from pathlib import Path
@@ -392,31 +392,82 @@ def _select_runners(gate: Gate, ctx: RunContext) -> dict[str, object]:
 
 def _run_selected(selected: dict[str, object], ctx: RunContext,
                    budget_s: float) -> dict[str, RunnerResult]:
+    """Run every applicable runner concurrently; abandon stragglers at
+    `budget_s`.
+
+    RAW DAEMON THREADS, NOT A ThreadPoolExecutor -- that is the point of this
+    function, not a style choice. Important #2 fixed only half of it by
+    dropping the executor's context manager, whose implicit
+    `shutdown(wait=True)` joined every submitted thread and let one hung
+    runner block run_gate past the budget. `shutdown(wait=False)` does make
+    run_gate RETURN on time -- but a pool worker is not a daemon, so both
+    `concurrent.futures._python_exit` and `threading._shutdown` join it during
+    INTERPRETER SHUTDOWN. aramid printed its verdict and the process then sat
+    there for as long as the straggler ran. Measured: a 12s hung runner
+    returned in 0.22s and the process exited at 12.36s; 3s -> 3.42s.
+
+    The gate runs inside a git hook, so that is `git push` HANGING after
+    aramid has already decided -- and it is not bounded by `[timeouts]`,
+    because `runners.base.run_subprocess` passes `timeout_s` to
+    `communicate()`, which does not cover `subprocess.Popen`. A runner stuck
+    in process creation hangs the hook with no ceiling at all (a test capped
+    at 60s was measured running past 600s on this repo).
+
+    Detaching the pool's threads from `concurrent.futures._threads_queues`
+    looks like the one-line fix and is NOT one: measured at 10.21s against
+    10.23s unfixed, because `threading._shutdown` joins non-daemon threads
+    whatever the futures module thinks. `t.daemon = True` cannot be set after
+    a thread has started, so getting daemons at all means owning them here.
+    Daemon threads exit in 0.63s. Guarded by
+    test_the_process_can_exit_while_an_abandoned_runner_is_still_running,
+    which measures a CHILD process because interpreter shutdown is not
+    observable from inside the interpreter doing it.
+
+    THE TRADE, stated plainly: a daemon thread is killed at interpreter exit,
+    so an abandoned runner's child process can outlive the gate. Its result
+    was already discarded as TIMEOUT, and run_subprocess deliberately launches
+    children detached (CREATE_NEW_PROCESS_GROUP / start_new_session) so they
+    are not ours to reap either way. A short-lived orphan analyzer is strictly
+    better than a hung push.
+    """
     results: dict[str, RunnerResult] = {}
     if not selected:
         return results
-    # Important #2 fix: don't use the executor as a context manager -- its
-    # implicit `shutdown(wait=True)` on exit blocks until EVERY submitted
-    # thread returns, including ones already bucketed into `not_done` below,
-    # so a single hung runner could block run_gate (and the git hook) well
-    # past the gate's wall-clock budget. Submit, wait up to the budget, then
-    # shut down without waiting -- any still-running thread is abandoned
-    # (its result is already recorded as TIMEOUT) rather than joined.
-    ex = ThreadPoolExecutor(max_workers=len(selected))
-    try:
-        future_to_key = {ex.submit(module.run, ctx): key for key, module in selected.items()}
-        done, not_done = wait(future_to_key, timeout=budget_s)
-        for fut in done:
-            key = future_to_key[fut]
-            try:
-                results[key] = fut.result()
-            except Exception as exc:  # a runner raising is a crash, not a pipeline failure
-                results[key] = RunnerResult(key, ToolState.CRASHED, stderr=str(exc))
-        for fut in not_done:
-            key = future_to_key[fut]
+
+    outcomes: dict[str, tuple[bool, object]] = {}
+    lock = threading.Lock()
+    all_done = threading.Event()
+    pending = len(selected)
+
+    def _work(key: str, module) -> None:
+        nonlocal pending
+        try:
+            outcome = (True, module.run(ctx))
+        except Exception as exc:  # a runner raising is a crash, not a pipeline failure
+            outcome = (False, exc)
+        with lock:
+            outcomes[key] = outcome
+            pending -= 1
+            if pending == 0:
+                all_done.set()
+
+    for key, module in selected.items():
+        threading.Thread(target=_work, args=(key, module), daemon=True,
+                         name=f"aramid-runner-{key}").start()
+
+    # Same duration measured from the same point as the wait() this replaces,
+    # so run_gate's gate_deadline argument below is unaffected.
+    all_done.wait(timeout=budget_s)
+
+    with lock:
+        finished = dict(outcomes)
+    for key in selected:
+        if key not in finished:
             results[key] = RunnerResult(key, ToolState.TIMEOUT)
-    finally:
-        ex.shutdown(wait=False, cancel_futures=True)
+            continue
+        ok, value = finished[key]
+        results[key] = value if ok else RunnerResult(key, ToolState.CRASHED,
+                                                     stderr=str(value))
     return results
 
 
@@ -547,7 +598,7 @@ def run_gate(root: Path, gate: Gate, mode: str, cfg: config_mod.Config, ledger: 
     # _select_runners/detect_tests() or any other pre-flight filesystem
     # work below runs: runners.tests's dual pytest+npm path needs to
     # measure "time left" against the SAME origin _run_selected's own
-    # ThreadPoolExecutor.wait(timeout=budget_s) effectively uses, not a
+    # budget wait (`all_done.wait(timeout=budget_s)`) effectively uses, not a
     # fresh clock restarted after its own detect_tests() walk -- two
     # differently-anchored clocks is what let a completed suite's real
     # result be silently replaced by a bare pipeline-level TIMEOUT (review
