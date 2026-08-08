@@ -12,6 +12,40 @@ to publish a tag that disagrees with it.
 
 ### Fixed
 
+- **PyPI would have received bytes that none of the release gates inspected.**
+  The `release` job runs four integrity gates against specific files in
+  `dist/` — `twine check`, the packaged-data-file check, a clean-venv wheel
+  smoke test and a clean-venv sdist smoke test. `publish-pypi` then did a fresh
+  `actions/checkout` and `python -m build`, discarding every inspected artifact
+  and uploading newly produced bytes. `needs: release` ordered the jobs and
+  proved nothing about what actually reached PyPI.
+
+  The rationale in the workflow was mine, and it had this backwards: *"an
+  artifact round-trip is one more place the bytes could differ … and the build
+  is deterministic from the tag."* An artifact transfers the **exact** inspected
+  bytes; a rebuild manufactures new ones no gate ever saw. Determinism was an
+  assumption, not an enforced control — a different `setuptools`/`build`
+  resolution at the second job's own `pip install build` is enough to diverge.
+
+  It also meant **the GitHub Release and PyPI could carry different artifacts
+  under the same version**, on two public channels, with PyPI unable to be
+  re-uploaded once a version is taken. Caught by aramid's own `llm-review`
+  consumer before the first publish, which is the one release where it would
+  have been unrecoverable.
+
+  `release` now uploads the gated distribution (`if-no-files-found: error`, so
+  an empty upload fails instead of becoming a silent no-op publish), and
+  `publish-pypi` downloads and publishes exactly those files — no checkout, no
+  `setup-python`, no build. It also prints `sha256sum dist/*` before handing
+  over, so the hashes we sent can be compared against the publish action's own
+  `print-hash` output.
+
+  New `tests/unit/test_release_workflow.py` pins the property structurally
+  (not a digest, which would fail on every legitimate edit): publish must not
+  rebuild, the upload and download artifact names must match, and the upload
+  must fail on no files. Kill-checked — reintroducing a build step and
+  mistyping the artifact name each turn the guard red with a named cause.
+
 - **aramid could print its verdict and then refuse to exit — a hung `git push`
   after the gate had already decided.** Important #2 fixed only half of this.
   Dropping the executor's context manager made `run_gate` *return* at the

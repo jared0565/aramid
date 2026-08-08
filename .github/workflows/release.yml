@@ -169,6 +169,20 @@ jobs:
             dist/aramid-*.whl dist/aramid-*.tar.gz \
             --generate-notes --verify-tag
 
+      # Hand the GATED bytes to publish-pypi so both public channels carry the
+      # same artifact. Named, not globbed, for the same reason as the release
+      # step above. `if-no-files-found: error` because an empty upload here
+      # would surface as an empty publish -- a no-op that looks like success.
+      - name: Upload the gated distribution for the publish job
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: gated-dist
+          path: |
+            dist/aramid-*.whl
+            dist/aramid-*.tar.gz
+          if-no-files-found: error
+          retention-days: 1
+
   # Separate job so the irreversible step cannot run unless every gate in
   # `release` passed. `needs` gives the ordering; `environment` is what lets a
   # required reviewer be added on the PyPI side without touching this file.
@@ -182,19 +196,39 @@ jobs:
       # and writes nothing to the repository.
       id-token: write
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-
-      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+      # PUBLISH THE BYTES THE GATES INSPECTED -- do not rebuild here.
+      #
+      # This job used to `actions/checkout` and `python -m build` again, on the
+      # stated theory that "an artifact round-trip is one more place the bytes
+      # could differ from what the gates above actually inspected, and the build
+      # is deterministic from the tag". That reasoning is backwards. An artifact
+      # transfers the EXACT inspected bytes; a rebuild manufactures new ones that
+      # none of the four gates in `release` (twine check, packaged-data check,
+      # wheel smoke test, sdist smoke test) ever saw. `needs: release` ordered
+      # the jobs and proved nothing about the artifact that actually reached
+      # PyPI. Determinism was an assumption, not an enforced control -- a
+      # different setuptools/build resolution at this job's own `pip install
+      # build` is enough to diverge.
+      #
+      # It also meant the GitHub Release and PyPI could carry DIFFERENT
+      # artifacts under the same version, on two public channels, and PyPI
+      # cannot be re-uploaded once a version is taken.
+      #
+      # No checkout and no setup-python: this job now builds nothing, and the
+      # publish action reads `dist/` directly.
+      - uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5.0.0
         with:
-          python-version: "3.12"
+          name: gated-dist
+          path: dist
 
-      # Rebuilt rather than passed between jobs as an artifact. An artifact
-      # round-trip is one more place the bytes could differ from what the gates
-      # above actually inspected, and the build is deterministic from the tag.
-      - name: Build wheel and sdist
+      # Irreversible destination, so say out loud what is going. `print-hash`
+      # below reports what PyPI received; this reports what we handed it, and
+      # the two must agree.
+      - name: Show exactly what is about to be published
         run: |
-          pip install build
-          python -m build
+          set -euo pipefail
+          ls -l dist
+          sha256sum dist/*
 
       # SHA resolved from the v1.14.2 ANNOTATED tag object to its commit --
       # `git/ref/tags/<tag>` returns the tag object's own sha for an annotated
