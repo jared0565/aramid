@@ -87,13 +87,40 @@ def hooks_dir(root: Path) -> Path:
     return root / ".git" / "hooks"
 
 
-def _exit_case_lines(gate: Gate) -> list[str]:
+def _exit_case_lines(gate: Gate, match_ci: bool = False) -> list[str]:
     if gate is Gate.PRE_COMMIT:
         return ['case "$status" in', "  2|3) exit 0 ;;", '  *) exit "$status" ;;', "esac"]
+    if match_ci:
+        # CI parity: nothing is softened. Note this only ever changes the
+        # WARN-tier case -- a degraded BLOCK-tier tool already exits 1 via
+        # policy.escalate_degraded, so `2) exit 0` was never swallowing a
+        # gitleaks/semgrep/tests degradation.
+        return ['case "$status" in', '  *) exit "$status" ;;', "esac"]
     return ['case "$status" in', "  2) exit 0 ;;", '  *) exit "$status" ;;', "esac"]
 
 
-def render_shim(gate: Gate, interpreter: Path) -> bytes:
+def _check_args(gate: Gate, match_ci: bool) -> str:
+    """Argv tail for the shim's `aramid check` call.
+
+    Default is bare `--gate <hook>`, which cli._check_mode resolves to
+    `range` -- changed files only. `[hooks].pre_push_match_ci = true` swaps in
+    the argv CI step 8 uses verbatim, so the two cannot drift apart by
+    accident.
+
+    OPT-IN ON PURPOSE. Moving a repo from range to `--all` surfaces every
+    previously-unscanned finding at once, and the ledger has never seen those
+    ids -- the ratchet reads them as NEW and escalates to BLOCK, so the next
+    push is blocked by findings the developer did not introduce.
+    `aramid rebaseline` is the remedy, and it has to be a deliberate step
+    rather than something an upgrade inflicts.
+    """
+    hook = "pre-commit" if gate is Gate.PRE_COMMIT else "pre-push"
+    if match_ci and gate is not Gate.PRE_COMMIT:
+        return f"--gate {hook} --all --strict"
+    return f"--gate {hook}"
+
+
+def render_shim(gate: Gate, interpreter: Path, match_ci: bool = False) -> bytes:
     """Render the `sh` shim for `gate`. Returns BYTES with `\n` line
     endings ONLY -- never route this through a text-mode write on Windows.
 
@@ -118,17 +145,17 @@ def render_shim(gate: Gate, interpreter: Path) -> bytes:
         "",
         f'INTERP="{interp_sh}"',
         'if [ -x "$INTERP" ]; then',
-        f'    "$INTERP" -P -m aramid check --gate {hook}',
+        f'    "$INTERP" -P -m aramid check {_check_args(gate, match_ci)}',
         "    status=$?",
         "elif command -v py >/dev/null 2>&1; then",
-        f"    py -3 -P -m aramid check --gate {hook}",
+        f"    py -3 -P -m aramid check {_check_args(gate, match_ci)}",
         "    status=$?",
         "else",
         '    echo "aramid: no usable python interpreter (tried $INTERP and py -3)" >&2',
         "    status=3",
         "fi",
         "",
-        *_exit_case_lines(gate),
+        *_exit_case_lines(gate, match_ci),
         MARKER_END,
         "",
     ]
@@ -344,6 +371,18 @@ def _warn_foreign_managed_conflict(
           f"installed until this is resolved manually.", file=sys.stderr)
 
 
+def _match_ci(root: Path) -> bool:
+    """Read `[hooks].pre_push_match_ci`. Fails CLOSED: an unparseable or
+    absent config yields the narrow default shim, never the wider one -- a
+    broken aramid.toml must not silently widen a gate's scope."""
+    try:
+        from aramid import config as config_mod
+        return bool((config_mod.load_config(root).hooks or {}).get(
+            "pre_push_match_ci", False))
+    except Exception:  # noqa: BLE001 - hook generation must never hard-fail here
+        return False
+
+
 def install(root: Path, interpreter: Path) -> None:
     """Install (or idempotently regenerate) the pre-commit/pre-push shims.
 
@@ -368,6 +407,10 @@ def install(root: Path, interpreter: Path) -> None:
     resolution."""
     hdir = hooks_dir(root)
     hdir.mkdir(parents=True, exist_ok=True)
+    # Read ONCE per install, not per gate: both shims must be rendered from
+    # the same view of the config, and one unparseable read must not produce
+    # a half-widened pair.
+    match_ci = _match_ci(root)
 
     for gate in GATES:
         hook = gate.value
@@ -391,7 +434,7 @@ def install(root: Path, interpreter: Path) -> None:
             shim_path.replace(chained_path)
             _make_executable(chained_path)
 
-        shim_path.write_bytes(render_shim(gate, interpreter))
+        shim_path.write_bytes(render_shim(gate, interpreter, match_ci))
         _make_executable(shim_path)
 
     hook = TRIAGE_HOOK

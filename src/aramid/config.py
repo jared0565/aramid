@@ -50,6 +50,7 @@ class Config:
     red_proof: dict = field(default_factory=dict)
     tests: dict = field(default_factory=dict)
     deps: dict = field(default_factory=dict)
+    hooks: dict = field(default_factory=dict)
 
 
 def _user_config_path() -> Path:
@@ -174,6 +175,7 @@ def load_config(root: Path) -> Config:
         red_proof=merged.get("red_proof", {}),
         tests=merged.get("tests", {}),
         deps=merged.get("deps", {}),
+        hooks=merged.get("hooks", {}),
     )
 
 

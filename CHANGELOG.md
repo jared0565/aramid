@@ -223,6 +223,38 @@ to publish a tag that disagrees with it.
 
 ### Added
 
+- **`[hooks].pre_push_match_ci` — make the pre-push shim run what CI runs.**
+  The generated shim calls `aramid check --gate pre-push` with no scope flag,
+  which `cli._check_mode` resolves to `range`: changed files only. CI runs
+  `--all --strict`. So a finding in a file the push did not touch is invisible
+  locally and caught on the seven-leg matrix — the main source of "green on
+  push, red in CI" here. With the option on, the shim emits the argv CI step 8
+  uses verbatim, and stops mapping exit 2 to 0.
+
+  **Off by default, and that is load-bearing rather than timidity.** Moving a
+  repo from `range` to `--all` surfaces every previously-unscanned finding at
+  once; the ledger has never seen those ids, so the ratchet reads them as
+  **new** and escalates them to BLOCK. The next push would be blocked by
+  findings the developer did not introduce. Pair it with `aramid rebaseline`.
+  The shim is generated, so the setting only takes effect on `aramid init`.
+  `_match_ci` fails **closed**: an unparseable config yields the narrow shim,
+  never the wider one.
+
+  Scoped to pre-push. The pre-commit shim still maps both 2 and 3 to 0 — it is
+  the fast local filter, and CI parity is a claim about the pre-push gate.
+  `render_template_shim` (git's global `init.templateDir`) is deliberately
+  untouched: it is written once, machine-wide, with no repo config in view.
+
+  **A correction to how this gap was previously described.** The `2) exit 0`
+  mapping is a much smaller divergence than it appears: `policy.
+  escalate_degraded` already returns **1** at pre-push whenever a BLOCK-tier
+  tool (gitleaks/semgrep/tests) degrades, so exit 2 only ever meant a
+  *WARN*-tier tool degraded. Verified by running the gate against a Go repo
+  with no Go toolchain — exit **1 without `--strict`**. The scope difference,
+  not the exit-code mapping, is what this option is actually for.
+
+  Enabled for aramid's own repo, where it is safe specifically because this
+  ledger has been scanned with `--all` many times already.
 - **`cargo test` and `go test` are detected and run.** `tests` is BLOCK-tier,
   but `detect_tests` recognised exactly two kinds — a pytest-shaped file, or
   an npm `test` script — so on a Rust or Go repo the gate exited 0 having

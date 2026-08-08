@@ -204,3 +204,16 @@ block_armed = false      # RESERVED: inert in 2c-3 (WARN-only); unit-4 wires the
 # in pipeline.py, both of which are load-bearing rather than belt-and-braces.
 [deps]
 cargo_audit_warnings = false
+
+[hooks]
+# Make the generated pre-push shim run the argv CI uses -- `--all --strict`
+# -- instead of the default `range` scope, and stop mapping exit 2 to 0.
+#
+# OFF by default, and that is load-bearing rather than timidity: switching a
+# repo from range to `--all` surfaces every previously-unscanned finding at
+# once, and the ledger has never seen those ids, so the ratchet reads them as
+# NEW and escalates them to BLOCK. The next push would be blocked by findings
+# the developer did not introduce. Turn this on together with
+# `aramid rebaseline`, and re-run `aramid init` -- the shim is generated, so
+# the setting only takes effect when it is regenerated.
+pre_push_match_ci = false

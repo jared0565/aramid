@@ -437,3 +437,79 @@ def test_install_chains_foreign_post_commit_and_uninstall_restores(tmp_path):
     uninstall(r)
     assert (hdir / "post-commit").read_bytes() == foreign
     assert not (hdir / "post-commit.aramid-chained").exists()
+
+
+# --- [hooks].pre_push_match_ci ---------------------------------------------
+# The shim runs `check --gate pre-push` with NO scope flag, which
+# cli._check_mode resolves to `range` -- only files changed against upstream.
+# CI runs `--all --strict`. So a finding sitting in a file you did not touch
+# is invisible locally and caught in CI, which is the main generator of
+# "green on push, red on CI" here.
+#
+# OPT-IN, and the default must not move. Switching a repo from range to --all
+# surfaces every previously-unscanned finding at once; those are ids the
+# ledger has never seen, so the ratchet treats them as NEW and escalates them
+# to BLOCK -- the first push after such a change would be blocked by findings
+# the developer did not introduce. `aramid rebaseline` is the remedy, but it
+# has to be a deliberate step, not a surprise inflicted by an upgrade.
+
+def test_default_pre_push_shim_is_unchanged(tmp_path):
+    """Regression guard for every existing consumer: with no config, the
+    rendered bytes must be exactly what they were before this option."""
+    default = render_shim(Gate.PRE_PUSH, Path("C:/py/python.exe")).decode()
+
+    assert "-m aramid check --gate pre-push\n" in default
+    assert "--all" not in default and "--strict" not in default
+    assert "2) exit 0 ;;" in default
+
+
+def test_match_ci_uses_the_same_argv_as_the_CI_step():
+    data = render_shim(Gate.PRE_PUSH, Path("C:/py/python.exe"), match_ci=True).decode()
+
+    assert "-m aramid check --gate pre-push --all --strict" in data
+
+
+def test_match_ci_stops_swallowing_a_degraded_run():
+    """`2) exit 0` is what makes the hook weaker than CI for a WARN-tier
+    degradation. A BLOCK-tier degradation already exits 1 via
+    policy.escalate_degraded, so only exit 2 was ever being softened -- but
+    "couldn't tell" still must not read as "passed" when the point of the
+    option is CI parity."""
+    data = render_shim(Gate.PRE_PUSH, Path("C:/py/python.exe"), match_ci=True).decode()
+
+    assert "2) exit 0" not in data
+    assert 'exit "$status"' in data
+
+
+def test_match_ci_does_not_touch_the_pre_commit_shim():
+    """pre-commit is the fast local filter and maps BOTH 2 and 3 to 0 by
+    design; CI parity is a statement about the pre-push gate only."""
+    on = render_shim(Gate.PRE_COMMIT, Path("C:/py/python.exe"), match_ci=True)
+    off = render_shim(Gate.PRE_COMMIT, Path("C:/py/python.exe"))
+
+    assert on == off
+
+
+def test_install_reads_the_option_from_the_repo_config(tmp_path):
+    root = tmp_path / "r"
+    (root / ".git" / "hooks").mkdir(parents=True)
+    (root / "aramid.toml").write_text(
+        "[hooks]\npre_push_match_ci = true\n", encoding="utf-8")
+
+    install(root, Path(sys.executable))
+
+    body = (root / ".git" / "hooks" / "pre-push").read_text(encoding="utf-8")
+    assert "--all --strict" in body
+    # ...and the pre-commit shim beside it is untouched by the option
+    pc = (root / ".git" / "hooks" / "pre-commit").read_text(encoding="utf-8")
+    assert "--all" not in pc
+
+
+def test_install_defaults_to_the_narrow_shim_without_config(tmp_path):
+    root = tmp_path / "r2"
+    (root / ".git" / "hooks").mkdir(parents=True)
+
+    install(root, Path(sys.executable))
+
+    body = (root / ".git" / "hooks" / "pre-push").read_text(encoding="utf-8")
+    assert "--all" not in body

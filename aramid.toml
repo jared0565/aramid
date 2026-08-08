@@ -53,3 +53,14 @@ timeout_s = 600
 # that a genuinely hung suite takes 10 min rather than 5 to be declared hung.
 [timeouts]
 pre_push = 600
+
+[hooks]
+# Run the pre-push shim with the argv CI step 8 uses (`--all --strict`)
+# rather than the default `range` scope, so a finding in a file this push
+# did not touch is caught here instead of on the seven-leg matrix.
+#
+# Safe to enable HERE specifically: this repo's ledger has already been
+# scanned with `--all` many times, so there is no backlog of never-seen ids
+# for the ratchet to escalate. A repo turning this on for the first time
+# should pair it with `aramid rebaseline` -- see defaults.toml.
+pre_push_match_ci = true
