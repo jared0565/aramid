@@ -10,6 +10,36 @@ to publish a tag that disagrees with it.
 
 ## [Unreleased]
 
+### Fixed
+
+- **A whole-project runner could record findings as `fixed` in files the gate
+  never scoped.** `ledger.record_run` **replaced** the gate's `scope_files`
+  with the runner's examined set rather than **intersecting** them, so the
+  moment a runner reported anything, the gate's own scope stopped constraining
+  resolution.
+
+  Both the 0.1.0 changelog and the module contract say *"resolution intersects
+  against that."* The code did not — this is the same false-repair class the
+  examined-set mechanism was introduced to close, reintroduced from the
+  too-**wide** side.
+
+  It bites runners that report more than the gate scoped: clippy's examined set
+  is every `.rs` file cargo compiled in the crate; tsc's `--listFiles` is the
+  whole program. A `range`-mode push touching one file compiles the crate, and
+  because cargo replays no diagnostic for files it did not recompile, every
+  open finding in an **untouched** file was written `fixed` into an append-only
+  audit trail — indistinguishable from a real repair.
+
+  `ruff` never exposed it, which is why the existing tests did not catch it: it
+  is handed an explicit file list, so its examined set cannot exceed the scope.
+  The new regression test is modelled on clippy for that reason. The
+  departed-file clause is unchanged and still runs ahead of the check.
+
+  Reported by `llm-review`, and correct in both premise *and* mechanism —
+  including the exact one-line fix. Worth recording, since the previous four
+  findings from the same producer were a duplicate, a refutation, and two
+  already-fixed.
+
 ### Added
 
 - **The CI log dump's disclosure argument is now enforced instead of asserted.**

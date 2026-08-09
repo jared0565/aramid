@@ -189,3 +189,75 @@ def test_examined_defaults_to_none_for_runners_that_do_not_report():
     from aramid.runners.base import RunnerResult
 
     assert RunnerResult("x", ToolState.OK).examined is None
+
+
+# ----------------------------------------- the too-WIDE side of the same bug --
+
+def test_a_whole_project_runner_cannot_resolve_findings_outside_the_gate_scope(tmp_path):
+    """The same false-repair class as this module's headline bug, reintroduced
+    from the opposite direction.
+
+    `in_scope` REPLACED `scope_files` with the tool's examined set instead of
+    intersecting the two, so once a runner reported anything, the gate's own
+    scope stopped constraining resolution. The contract says otherwise in two
+    places -- this module's docstring and the 0.1.0 changelog both say
+    "resolution intersects against that."
+
+    It matters for WHOLE-PROJECT runners, which report far more than the gate
+    scoped. clippy's `_examined` is every `.rs` file cargo compiled in the
+    crate; tsc's `--listFiles` is the whole program. A `range`-mode pre-push
+    touching one file therefore compiles the crate, reports every `.rs` file
+    as examined, and -- because cargo replays no diagnostic for files it did
+    not recompile -- records open findings in UNTOUCHED files as `fixed` in an
+    append-only audit trail.
+
+    Modelled on clippy here rather than ruff: ruff is passed an explicit file
+    list so its examined set cannot exceed the scope, which is why the
+    existing tests in this file never caught it.
+    """
+    led = Ledger(tmp_path / "l.db")
+    untouched = "c" * 64
+    try:
+        led.record_run("r0", NOW.isoformat(), "pre-push", set(), set(), [
+            _finding(tool="clippy", file="src/touched.rs"),
+            Finding(id=untouched, tool="clippy", rule="clippy::needless_return",
+                    severity_raw="warning", severity=Severity.MEDIUM,
+                    verdict=Verdict.WARN, file="src/untouched.rs", line=9,
+                    message="m", evidence="e", gate=Gate.PRE_PUSH),
+        ])
+        # range mode: the push touched ONE file. cargo compiled the whole crate.
+        led.record_run("r1", NOW.isoformat(), "pre-push", {"clippy"},
+                       {"src/touched.rs"}, [],
+                       examined_by_tool={"clippy": {"src/touched.rs",
+                                                    "src/untouched.rs"}})
+        state = led.open_findings()
+
+        assert state[FID]["status"] == "fixed", "the in-scope finding should still resolve"
+        assert state[untouched]["status"] == "open", (
+            "a finding in a file the gate never scoped was recorded as FIXED")
+    finally:
+        led.close()
+
+
+def test_narrowing_still_works_when_the_tool_examined_less_than_the_scope(tmp_path):
+    """The other direction must be unaffected -- this is the case the examined
+    map was introduced for, and an intersection has to keep honouring it."""
+    led = Ledger(tmp_path / "l.db")
+    excluded = "d" * 64
+    try:
+        led.record_run("r0", NOW.isoformat(), "pre-commit", set(), set(), [
+            _finding(),
+            Finding(id=excluded, tool="ruff", rule="S110", severity_raw="error",
+                    severity=Severity.HIGH, verdict=Verdict.WARN,
+                    file="legacy/old.py", line=1, message="m", evidence="e",
+                    gate=Gate.PRE_COMMIT),
+        ])
+        led.record_run("r1", NOW.isoformat(), "pre-commit", {"ruff"},
+                       {"bad.py", "legacy/old.py"}, [],
+                       examined_by_tool={"ruff": {"bad.py"}})
+        state = led.open_findings()
+
+        assert state[FID]["status"] == "fixed"
+        assert state[excluded]["status"] == "open"
+    finally:
+        led.close()

@@ -155,9 +155,26 @@ class Ledger:
             # recorded as FIXED -- a false repair written into an append-only
             # audit trail. Measured on ruff `--force-exclude`; the same shape
             # applies to .eslintignore and clippy exclusions.
+            # INTERSECT, never replace. This read
+            #     `rec["file"] in scope_files if tool_scope is None
+            #      else rec["file"] in tool_scope`
+            # so the moment a runner reported anything, the gate's own scope
+            # stopped constraining resolution -- the same false-repair class
+            # this block exists to prevent, reintroduced from the too-WIDE
+            # side. Both this module's contract and the 0.1.0 changelog say
+            # "resolution intersects against that"; the code did not.
+            #
+            # It bites WHOLE-PROJECT runners, which report far more than the
+            # gate scoped: clippy's examined set is every `.rs` file cargo
+            # compiled in the crate, tsc's `--listFiles` is the whole program.
+            # A `range`-mode push touching one file compiles the crate, and
+            # because cargo replays no diagnostic for files it did not
+            # recompile, every open finding in an UNTOUCHED file was written
+            # `fixed`. ruff never exposed it -- it is handed an explicit file
+            # list, so its examined set cannot exceed the scope.
             tool_scope = (examined_by_tool or {}).get(rec.get("tool"))
-            in_scope = (rec.get("file") in scope_files if tool_scope is None
-                        else rec.get("file") in tool_scope)
+            in_scope = (rec.get("file") in scope_files
+                        and (tool_scope is None or rec.get("file") in tool_scope))
             if in_scope or _departed(root, rec.get("file")):
                 self.append(Event(EventType.FINDING_RESOLVED, run_id, at, finding_id=fid))
         self.append(Event(EventType.RUN_FINISHED, run_id, at,
