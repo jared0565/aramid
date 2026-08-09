@@ -1,6 +1,15 @@
 import json
+import re
 import sqlite3
 from pathlib import Path
+
+# Module scope, NOT a lazy import inside the one branch that uses it: an
+# ImportError would then surface only on a ledger corrupt enough to make
+# `resolve_departed` swallow something, i.e. exactly when the diagnostic is
+# needed. Safe because `diagnostics` imports nothing but `sys` -- unlike
+# `queue`, which imports Ledger from here and so must stay local (see
+# `compact`).
+from aramid import diagnostics
 from aramid.models import Event, EventType, Finding
 
 _SCHEMA = """
@@ -11,8 +20,52 @@ CREATE TABLE IF NOT EXISTS events(
 """
 
 
-def _departed(root: Path | None, file: str | None) -> bool:
+_SYNTHETIC_RE = re.compile(r"^<.*>$")
+
+
+def _is_synthetic_path(file: str | None) -> bool:
+    """True for a `<...>` label that stands in for a finding with no file.
+
+    The tests runner reports every whole-suite finding against `<test-suite>`
+    (runners/tests.py). It is not a path, so "does it still exist?" has no
+    answer, and `_departed` must not invent one -- see the LANDMINE there.
+
+    Matched by SHAPE, not by importing `_SUITE_FILE_MARKER`. Three reasons:
+    `record_run` sees only a string and has no way to know which producer
+    wrote it; a second synthetic marker inherits the guard rather than needing
+    a second fix; and `ledger` importing a runner inverts the layering that
+    `tests_gate` exists to respect ("no runner imports the ledger"). A real
+    file honestly named `<x>` therefore never resolves via the departed route
+    -- the safe direction, since it leaves the finding OPEN.
+    `test_the_real_suite_marker_matches_the_synthetic_shape` pins the shape to
+    the live constant so a rename cannot silently escape the guard.
+    """
+    return bool(file) and _SYNTHETIC_RE.match(file) is not None
+
+
+def _resolved_root(root: Path | None) -> Path | None:
+    """`root.resolve()`, or None if there is no root or it cannot be resolved.
+
+    Split out so a caller checking many findings resolves the repo root ONCE.
+    It was inside `_departed`, i.e. recomputed per finding, and on Windows
+    `Path.resolve()` is a filesystem round trip -- measured at roughly half the
+    0.8 ms each `_departed` call was costing. `resolve_departed` walks every
+    open finding of a producer, so that was linear waste on every gate run.
+    """
+    if root is None:
+        return None
+    try:
+        return root.resolve()
+    except (OSError, ValueError):
+        return None
+
+
+def _departed(root: Path | None, file: str | None,
+              base: Path | None = None) -> bool:
     """True when `file` is no longer present in the repo at all.
+
+    Pass `base` (an already-resolved root) to skip re-resolving per call; it
+    takes precedence over `root`, which may then be None.
 
     OPT-IN BY DESIGN: `root` is None for every caller except the gate, so this
     returns False and behaviour is unchanged for them. That is not tidiness,
@@ -21,10 +74,41 @@ def _departed(root: Path | None, file: str | None) -> bool:
     OLD commits and routinely do not exist at HEAD. Resolving on absence there
     would clear every historical secret the instant it was recorded.
 
-    A path that cannot even be tested (the `<test-suite>` marker is not a legal
-    Windows filename) is reported as present, i.e. NOT departed: the gate has
-    a dedicated resolver for those, and the safe default here is to leave a
-    finding open rather than clear one we could not check.
+    LANDMINE, and this docstring asserted the OPPOSITE until 2026-08-09. It
+    claimed a path that "cannot even be tested (the `<test-suite>` marker is
+    not a legal Windows filename) is reported as present, i.e. NOT departed",
+    on the theory that the check would raise and hit the `except` below.
+    MEASURED FALSE, and on both platforms:
+
+        Path(r'F:\\Projects\\aramid') / '<test-suite>'   .resolve()  -> no raise
+                                                          .exists()  -> False
+
+    Non-strict `Path.resolve()` does not validate the name, and `.exists()`
+    answers False for an illegal one rather than raising -- so this returned
+    True and the marker read as DEPARTED. On Linux `<test-suite>` is simply a
+    legal filename that does not exist: True again. The documented safety
+    property held on no platform at all, and the consequence was live: whenever
+    the tool clause let a suite finding through, `record_run` resolved it here
+    -- BLOCK-tier -- without the `suite_completed` evidence that
+    `tests_gate.auto_resolve_tests` requires before clearing one, and several
+    steps before that resolver was consulted.
+
+    MEASURED, not inferred. The two routes write different payloads, so
+    aramid's own ledger can be asked directly: of 4 historical resolutions of
+    whole-suite findings, 3 carry an EMPTY payload (this route) and 1 carries
+    `auto_resolved: suite_completed_clean`. The single exception is the shape
+    worth remembering -- it is a run where the tool clause DID stop
+    `record_run`, leaving the finding open for the real resolver, which is
+    exactly the protection this guard now provides unconditionally.
+
+    Outcomes agreed with the correct ones only because `scope_tools` holds
+    `Path(argv[0]).name` and aramid's own `[tests].command` makes that
+    "python", so "the suite ran OK" and "python in scope_tools" are the same
+    condition HERE; in a repo where those labels diverge, they are not.
+
+    The property is now enforced rather than assumed, by `_is_synthetic_path`
+    ahead of any filesystem question. Do not replace that with a `try/except`
+    around the existence check -- there is no exception to catch.
 
     CONTAINMENT. `root / file` does not keep you inside root. Measured:
 
@@ -37,16 +121,118 @@ def _departed(root: Path | None, file: str | None) -> bool:
     never inside the repository cannot have departed it, so an escape returns
     False, which is also the safe direction: the finding stays open.
     """
-    if root is None or not file:
+    if not file or _is_synthetic_path(file):
+        return False
+    if base is None:
+        base = _resolved_root(root)
+    if base is None:
         return False
     try:
-        base = root.resolve()
-        target = (base / file).resolve()
-        if not target.is_relative_to(base):
+        target = base / file
+        # EXISTENCE FIRST, containment only on absence -- and this ordering is
+        # an optimisation, not a semantic change. `resolve()` is a filesystem
+        # round trip on Windows and dominated the cost when `resolve_departed`
+        # walks every open finding of a producer; the overwhelmingly common
+        # answer is "the file is still there", which one `exists()` settles.
+        # Equivalent case by case, because containment can only ever turn a
+        # True into a False, and a path that EXISTS is already False:
+        #   inside + exists   -> False both ways
+        #   inside + absent   -> True  both ways (containment passes)
+        #   escaped + exists  -> False both ways ("C:/Windows/win.ini" is
+        #                        there, so `not exists()` was already False)
+        #   escaped + absent  -> False both ways (containment rejects it)
+        # Symlinks included: `exists()` follows them, so a link out of the repo
+        # to a live file answers False exactly as `resolve()` + containment did.
+        if target.exists():
             return False
-        return not target.exists()
+        if not target.resolve().is_relative_to(base):
+            return False       # never inside the repo, so it cannot have left
+        return True
     except (OSError, ValueError):
         return False
+
+
+def resolve_departed(ledger, run_id: str, at: str, *, root, tool: str,
+                     present_ids) -> list[str]:
+    """Resolve one producer's open findings whose file has LEFT the repository.
+
+    WHY PRODUCERS NEED THEIR OWN CALL. `record_run` already does this, but only
+    after `rec["tool"] in scope_tools` -- and that set is
+    `{r.tool for r in results if OK}`, i.e. runner labels taken from
+    `Path(argv[0]).name`. The synchronous producers emit no RunnerResult at
+    all, so `red-proof` and `tdd` can never appear there and the departed check
+    was unreachable for them. Unlike a runner they have no second route either:
+    `auto_resolve_red_proof` clears a finding only via `proven_red`, which
+    requires a base-tree pytest run on a file that no longer exists to run it
+    against. Their findings on a deleted file were IMMORTAL.
+
+    Live instance in aramid's own ledger: `890d7493a3e3`, red-proof on
+    `tests/unit/test_zz_ci_dump_rehearsal.py` -- committed in `2d7dfe51`,
+    judged, then the push was blocked and the commit rewritten without that
+    file. Open across every later run until it was closed by hand.
+
+    OPT-IN, AND DELIBERATELY NOT A GLOBAL RULE IN `record_run`. Moving the
+    check ahead of the tool gate would cover these two for free and was the
+    first attempt; it also silently resolves every finding whose stored `file`
+    is not a path -- `consumers/dast.py` writes `"GET /login"`, which does not
+    exist, joins to `root/GET/login`, passes containment, and reads as gone.
+    Opting in per producer keeps that impossible: a producer that does not call
+    this keeps findings open, which is the safe direction.
+
+    NOT OPTED IN, and each for a reason worth re-checking rather than
+    assuming:
+      - `llm-review` needs nothing -- `auto_resolve_llm` fires when the stored
+        evidence quote is absent from HEAD, and deleting the file removes it.
+      - `mutation`, `js-mutation`, `fuzz` DO have this bug: their findings are
+        anchored to real repo-relative source paths, and their resolvers key on
+        the push having touched the file, which a deletion never satisfies
+        (discovery filters `--diff-filter=ACMR`). Left out of the 2026-08-09
+        change as unevidenced scope, not as settled -- opting them in is one
+        call each.
+      - `dast` must NEVER opt in: its `file` is a method+endpoint, so departure
+        is not a question that has an answer.
+
+    `present_ids` skips anything this run's producer re-fired, for the same
+    reason `auto_resolve_red_proof` does: resolution runs after `record_run`,
+    so a still-live finding is already re-detected and must not be resolved out
+    from under itself. `root` None makes this a no-op, so a caller that has no
+    repo to check cannot accidentally clear anything. Never raises.
+
+    COST, measured rather than assumed (Windows / CPython 3.14, both producers,
+    steady state with every file present). This walks every open finding of the
+    named producer on every pre-push, so it is linear and worth watching:
+
+        10 open findings ->   3.0 ms      <- realistic
+       200 open findings ->  31.1 ms
+      1000 open findings -> 120.5 ms
+
+    The naive form -- `root.resolve()` per finding, then `resolve()` again on
+    the target before testing existence -- measured 808 ms at 1000. Hoisting
+    the root (`_resolved_root`) and testing existence before containment
+    (`_departed`) accounts for the 6.7x; `open_findings()` itself is ~10 ms at
+    that size and is not the bottleneck. If a producer with a large backlog
+    ever opts in, re-measure before assuming this stays cheap.
+    """
+    base = _resolved_root(root)
+    if base is None:
+        return []                      # no repo to check -> clear nothing
+    resolved: list[str] = []
+    skipped = 0
+    for fid, rec in ledger.open_findings().items():
+        if rec.get("tool") != tool or rec.get("status") != "open" \
+           or fid in present_ids:
+            continue
+        try:
+            if _departed(None, rec.get("file"), base=base):
+                ledger.append(Event(EventType.FINDING_RESOLVED, run_id, at,
+                                    finding_id=fid,
+                                    payload={"auto_resolved": "file_departed"}))
+                resolved.append(fid)
+        except Exception:
+            skipped += 1
+            continue
+    diagnostics.note_skipped(f"{tool}-departed-resolve", skipped)
+    return resolved
 
 
 def _detect_payload(f: Finding) -> dict:
@@ -132,6 +318,28 @@ class Ledger:
         for fid, rec in state.items():
             if rec["status"] != "open" or fid in present:
                 continue
+            # THE TOOL GATE STAYS AHEAD OF THE DEPARTED CHECK. Considered
+            # moving it (2026-08-09) so that producers absent from scope_tools
+            # -- red-proof, tdd -- could resolve findings on deleted files, and
+            # REVERTED before shipping. Doing so exposes every finding whose
+            # stored `file` is not a repo-relative path at all, because
+            # `_departed` answers "gone" for anything that does not exist:
+            #
+            #     consumers/dast.py writes  file=f"{f.method} {f.path}"
+            #     _departed(root, "GET /login")  ->  True
+            #
+            # It passes containment (it joins to root/GET/login) and every open
+            # DAST finding would be written `fixed` on the next gate run -- a
+            # false repair, of security findings, into an append-only audit
+            # trail. That is the exact class this block exists to prevent.
+            # `<test-suite>` was merely the instance we already knew about.
+            #
+            # A global departure rule is wrong in PRINCIPLE for such producers:
+            # "has this file left the repo" is not a question you can ask about
+            # an HTTP endpoint. So departure is opt-in per producer, via
+            # `resolve_departed` below, and a producer that never opts in keeps
+            # the safe behaviour by default. Fail-safe, rather than a denylist
+            # of shapes that a new consumer must remember to join.
             if rec.get("tool") not in scope_tools:
                 continue
             # `file in <what the tool examined>` is the ordinary route. The

@@ -1693,6 +1693,13 @@ def _mut_repo(tmp_path):
 
 def _seed_mut(led, fid="g" * 64, file="src/pkg/ghost.py"):
     # ghost.py is NOT in the repo -> auto_resolve_mutation never resolves it.
+    # It is also not `git rm`d, merely absent: `mutation` is a producer and so
+    # never appears in scope_tools, which is what keeps record_run's
+    # departed-file path from reaching it. `mutation` has NOT opted in to
+    # ledger.resolve_departed (see its docstring -- it is a real gap there,
+    # left as unevidenced scope), so absence stays inert here. Opting it in
+    # would resolve this seeded finding and break these tests, which is the
+    # signal to give it a present-but-untracked file instead.
     f = Finding(id=fid, tool="mutation", rule="flip_comparison",
                 severity_raw="medium", severity=Severity.MEDIUM,
                 verdict=Verdict.WARN, file=file, line=7,
@@ -1734,6 +1741,11 @@ def test_mutation_findings_absent_at_pre_commit(tmp_path, monkeypatch):
         _seed_mut(led)
         got = pipeline.run_gate(r, Gate.PRE_COMMIT, "staged", cfg, led)
         assert not any(f.tool == "mutation" for f in got.findings)
+        # NON-VACUITY. "Absent from the report" is also satisfied by a finding
+        # that the run RESOLVED, which is a different -- and much worse --
+        # outcome than the gate declining to surface it. This test passed for
+        # exactly that wrong reason while ghost.py did not exist on disk.
+        assert led.open_findings()["g" * 64]["status"] == "open"
     finally:
         led.close()
 
@@ -1795,6 +1807,80 @@ def test_range_mode_without_upstream_does_not_resolve_tdd(tmp_path, monkeypatch)
     try:
         _seed_tdd(led, fid, "a.py")
         pipeline.run_gate(root, Gate.PRE_PUSH, "range", cfg, led)
+        assert led.open_findings()[fid]["status"] == "open"
+    finally:
+        led.close()
+
+
+def _seed_red_proof(led, fid, file):
+    f = Finding(id=fid, tool="red-proof", rule="test-not-red",
+                severity_raw="medium", severity=Severity.MEDIUM,
+                verdict=Verdict.WARN, file=file, line=0,
+                message="a changed test-definition line passes against the "
+                        "pre-change tree (never red)",
+                evidence="", gate=Gate.PRE_PUSH, source=Source.DETERMINISTIC)
+    led.record_run("r0", _MUT_NOW, "drain", set(), set(), [f])
+
+
+def test_gate_resolves_a_producer_finding_whose_file_left_the_repo(tmp_path, monkeypatch):
+    """THE WIRING. `ledger.resolve_departed` is unit-tested next door; this
+    proves `run_gate` actually calls it, which no unit test of the helper can.
+
+    A red-proof finding on a file that is not in the repo could never resolve
+    by any route: `auto_resolve_red_proof` needs the file present to run pytest
+    against, and `record_run` bails at `tool in scope_tools` because
+    "red-proof" is a producer and never a runner label. Real instance in
+    aramid's own ledger (`890d7493a3e3`), closed by hand.
+
+    Deliberately run WITHOUT a genuine range, in "all" mode: departure does not
+    depend on the push delta, so this also pins that the call sits outside the
+    `mode == "range" and rng` nest that guards the scope_files-driven
+    resolvers. Move it back inside and this goes red.
+    """
+    root = _repo(tmp_path)
+    cfg = _cfg(root, tmp_path, monkeypatch)
+    led = _ledger(tmp_path)
+    monkeypatch.setitem(pipeline.GATE_RUNNER_KEYS, Gate.PRE_PUSH, [])
+    gone, present = "r" * 64, "p" * 64
+    try:
+        _seed_red_proof(led, gone, "tests/unit/test_deleted.py")
+        _seed_red_proof(led, present, "a.py")     # _repo commits a.py
+        assert not (root / "tests" / "unit" / "test_deleted.py").exists()
+
+        pipeline.run_gate(root, Gate.PRE_PUSH, "all", cfg, led)
+
+        state = led.open_findings()
+        assert state[gone]["status"] == "fixed"
+        assert state[gone].get("file") == "tests/unit/test_deleted.py"
+        # NON-VACUITY: a bug that resolved every red-proof finding would also
+        # satisfy the assertion above. The one on a file that still exists
+        # must survive.
+        assert state[present]["status"] == "open"
+    finally:
+        led.close()
+
+
+def test_the_gate_does_not_resolve_a_dast_finding_on_a_missing_endpoint(tmp_path, monkeypatch):
+    """The opt-in's whole point, at gate level. `consumers/dast.py` stores
+    `file=f"{f.method} {f.path}"`, so a DAST finding's "path" is "GET /login" --
+    which does not exist, joins to root/GET/login, passes `_departed`'s
+    containment check, and reads as departed. Nothing may resolve it on that
+    basis: add "dast" to the producer list in run_gate and this goes red, which
+    is the point of pinning it here rather than trusting a comment.
+    """
+    root = _repo(tmp_path)
+    cfg = _cfg(root, tmp_path, monkeypatch)
+    led = _ledger(tmp_path)
+    monkeypatch.setitem(pipeline.GATE_RUNNER_KEYS, Gate.PRE_PUSH, [])
+    fid = "d" * 64
+    try:
+        f = Finding(id=fid, tool="dast", rule="missing-hsts",
+                    severity_raw="medium", severity=Severity.MEDIUM,
+                    verdict=Verdict.WARN, file="GET /login", line=0,
+                    message="no Strict-Transport-Security header", evidence="",
+                    gate=Gate.ALL, source=Source.DETERMINISTIC)
+        led.record_run("r0", _MUT_NOW, "drain", set(), set(), [f])
+        pipeline.run_gate(root, Gate.PRE_PUSH, "all", cfg, led)
         assert led.open_findings()[fid]["status"] == "open"
     finally:
         led.close()

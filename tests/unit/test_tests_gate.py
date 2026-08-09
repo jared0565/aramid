@@ -56,13 +56,69 @@ def test_record_run_alone_cannot_resolve_a_suite_finding(tmp_path):
 
     Without this, the resolver tests below could pass for the wrong reason --
     they would not prove the resolver is what does the work.
+
+    `root=` IS THE WHOLE POINT AND WAS MISSING UNTIL 2026-08-09. This asserted
+    the right thing about the wrong call: `run_gate` is the only production
+    caller that passes `root`, and it ALWAYS passes it, so a version of this
+    test that omits it exercises a configuration the gate never runs. It
+    passed for a reason unrelated to its own docstring -- `_departed` short-
+    circuits to False on `root is None` -- and hid a second, live route to
+    resolution that scope_files has nothing to do with. Measured with `root`
+    supplied and the shipped code: `fixed`. See
+    `test_the_suite_marker_is_not_a_departed_file` for the route and the fix.
     """
     led = Ledger(tmp_path / "l.db")
     try:
         _seed(led, _suite_finding())
         led.record_run("r1", NOW.isoformat(), "pre-push",
                        {"pytest", "tests"},
-                       {"src/app.py", "tests/unit/test_x.py"}, [])
+                       {"src/app.py", "tests/unit/test_x.py"}, [],
+                       root=tmp_path)
+        assert led.open_findings()["a" * 64]["status"] == "open"
+    finally:
+        led.close()
+
+
+def test_the_suite_marker_is_not_a_departed_file(tmp_path):
+    """`<test-suite>` is a synthetic label, not a path, so "does this file still
+    exist?" is not a question that can be asked about it -- and `_departed`
+    answering True is how a BLOCK-tier suite finding gets resolved by a run
+    that never established the suite passed.
+
+    `ledger._departed` used to claim in its own docstring that such a path is
+    "reported as present, i.e. NOT departed", on the theory that the marker is
+    an illegal Windows filename and the check would raise. MEASURED FALSE on
+    Windows / CPython 3.14: non-strict `Path.resolve()` does not raise on an
+    illegal name, and `.exists()` returns False rather than raising, so
+    `_departed` returned True. On Linux the marker is a perfectly legal
+    filename that simply does not exist -- also True. The documented safety
+    property held on no platform at all.
+
+    THIS WAS LIVE, not a hazard introduced by some other change. `scope_tools`
+    holds `Path(argv[0]).name`; aramid's own `[tests].command` is
+    `["python", "-m", "pytest", ...]`, so "python" is in scope_tools whenever
+    that runner exits OK, the tool clause passes, and `record_run` reached the
+    departed check and resolved the finding -- several steps before
+    `tests_gate.auto_resolve_tests` was consulted. Measured in aramid's own
+    ledger: of 4 historical resolutions of whole-suite findings, 3 carry an
+    EMPTY payload (record_run's departed path) and only 1 carries
+    `auto_resolved: suite_completed_clean`. The resolver written to be the only
+    thing that can clear these was beaten to it three times out of four.
+
+    Outcomes coincided with the correct ones only by accident of labelling --
+    "tests ran OK" and "python in scope_tools" happen to be the same condition
+    HERE. The module docstring above already warns those labels vary per repo;
+    where they diverge, a suite finding cleared on a run whose suite never ran.
+    """
+    led = Ledger(tmp_path / "l.db")
+    try:
+        _seed(led, _suite_finding(tool="python"))
+        # Exactly the shipped pre-push shape: the tests runner exited OK, so
+        # its argv[0] label is in scope_tools and the tool clause does NOT
+        # stop us. Only the synthetic-path guard does.
+        led.record_run("r1", NOW.isoformat(), "pre-push",
+                       {"gitleaks", "python", "semgrep"}, {"src/app.py"}, [],
+                       root=tmp_path)
         assert led.open_findings()["a" * 64]["status"] == "open"
     finally:
         led.close()

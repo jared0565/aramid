@@ -12,6 +12,72 @@ to publish a tag that disagrees with it.
 
 ### Fixed
 
+- **A BLOCK-tier whole-suite finding could resolve on a run that never ran the
+  suite.** `ledger._departed` decided whether a finding's file had left the
+  repo by asking the filesystem — and the `tests` runner reports every
+  whole-suite finding against the synthetic marker `<test-suite>`, which is not
+  a path. No file of that name exists, so the marker read as **departed** and
+  `record_run` resolved the finding, several steps before
+  `tests_gate.auto_resolve_tests` — the resolver that exists to demand
+  `suite_completed` evidence first — was ever consulted.
+
+  `_departed`'s own docstring asserted the opposite, claiming the marker "is
+  reported as present" because it is not a legal Windows filename and the check
+  would raise. Measured false on both platforms: non-strict `Path.resolve()`
+  does not validate the name and `.exists()` answers `False` rather than
+  raising, while on Linux the marker is simply a legal name that does not
+  exist. **The documented safety property held on no platform at all**, and the
+  test pinning it passed only because it omitted the `root=` argument that the
+  gate — the sole caller that reaches this path — always passes.
+
+  Outcomes coincided with the correct ones by accident: `scope_tools` holds
+  `Path(argv[0]).name`, and aramid's own `[tests].command` makes that
+  `"python"`, so *"the suite ran OK"* and *"python is in scope_tools"* happen to
+  be the same condition here. A repo whose labels diverge got a suite finding
+  cleared on a run whose suite never executed.
+
+  Measured in aramid's own ledger, which distinguishes the two routes by
+  payload: of **4** historical resolutions of whole-suite findings, **3** carry
+  an empty payload — `record_run` — and only **1** carries
+  `auto_resolved: suite_completed_clean`. The resolver written to be the only
+  thing that can clear these was beaten to it three times out of four, because
+  `record_run` runs first and leaves nothing `open` behind.
+
+  `_departed` now refuses synthetic `<...>` markers outright, matched by shape
+  so a second marker inherits the guard; a tripwire test pins the shape to the
+  live `_SUITE_FILE_MARKER` so a rename cannot escape it.
+
+- **Findings from `red-proof` and `tdd` on a deleted file were immortal.** The
+  departed-file resolution added in 0.1.0 sits *behind*
+  `if rec["tool"] not in scope_tools: continue`, and `scope_tools` is
+  `{r.tool for r in results if OK}` — runner labels. The synchronous producers
+  emit no `RunnerResult`, so their names can never appear there, and unlike the
+  runners they have no fallback resolver: `auto_resolve_red_proof` clears only
+  via `proven_red`, which requires a base-tree pytest run on a file that no
+  longer exists.
+
+  Live instance in aramid's own ledger: `890d7493a3e3`, red-proof on
+  `tests/unit/test_zz_ci_dump_rehearsal.py` — committed, judged, then the push
+  was blocked and the commit rewritten without that file. It stayed open across
+  every subsequent run and had to be closed by hand.
+
+  Fixed with a new `ledger.resolve_departed`, which each producer **opts into**
+  by name. The one-line alternative — moving the departed check ahead of the
+  tool gate — was implemented, measured, and **reverted**: `_departed` answers
+  "gone" for anything that does not exist, and not every producer stores a
+  path. `consumers/dast.py` writes `file=f"{f.method} {f.path}"`, so
+  `"GET /login"` joins to `root/GET/login`, passes the containment check, and
+  reads as departed. That change would have written every open DAST finding
+  `fixed` — a false repair, of security findings, into an append-only audit
+  trail, which is the exact class the tool clause exists to prevent.
+
+  So a producer that never opts in keeps its findings open: fail-safe by
+  default, rather than a denylist of shapes each new consumer must remember to
+  join. `mutation`, `js-mutation` and `fuzz` have the same bug and are
+  deliberately **not** opted in here — unevidenced scope, not settled; each is
+  one call. `llm-review` needs nothing, since `auto_resolve_llm` already fires
+  when the stored evidence quote leaves `HEAD`. `dast` must never opt in.
+
 - **A whole-project runner could record findings as `fixed` in files the gate
   never scoped.** `ledger.record_run` **replaced** the gate's `scope_files`
   with the runner's examined set rather than **intersecting** them, so the

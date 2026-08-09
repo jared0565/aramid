@@ -13,6 +13,25 @@ any number of subsequent green runs. Seen in aramid's own ledger -- detected
 2026-07-12, still open weeks later with the suite passing throughout. `tests`
 is BLOCK-tier, so that is not a cosmetic wart.
 
+AND THIS RESOLVER WAS BEING UNDERCUT BY A SECOND ROUTE (fixed 2026-08-09).
+`record_run` has a third resolve path the sentence above omits: a file that has
+LEFT the repo resolves regardless of scope_files. `ledger._departed` judged the
+`<test-suite>` marker by asking whether a file of that name exists -- it does
+not -- so whenever the tool clause let a suite finding through, `record_run`
+cleared it there, several lines before this function was called and WITHOUT the
+`suite_completed` evidence below.
+
+Measured rather than argued: the two routes write different payloads, and in
+aramid's own ledger 3 of the 4 historical whole-suite resolutions carry an
+EMPTY payload (record_run) against 1 carrying `auto_resolved:
+suite_completed_clean`. This module was beaten to its own job three times out
+of four. The outcomes coincided only by accident of labelling (see the final
+paragraph: aramid's own `[tests].command` makes `argv[0]` "python", so "tests
+ran OK" and "python in scope_tools" happen to be the same condition); where
+they diverge, a suite finding cleared on a run whose suite never executed.
+`_departed` now refuses synthetic `<...>` markers outright, so this module is
+once again the ONLY thing that can resolve a suite finding.
+
 WHY IT IS A SEPARATE MODULE. Every other producer resolves its own stale
 findings from its own domain module (`review.auto_resolve_llm`,
 `mutation_gate.auto_resolve_mutation`, `tdd.auto_resolve_tdd`,

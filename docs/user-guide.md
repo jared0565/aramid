@@ -271,6 +271,14 @@ aramid ledger mark-unreachable <id> --reason "no python stack in this repo anymo
 
 `--reason` is required. The command refuses (exit `3`) for: an unknown id; a finding whose tool is a producer/consumer (`tdd`, `red-proof`, `mutation`, `mutation-score`, `llm-review`, `js-mutation`, `fuzz`, `dast`) — those resolve through their own producer's mechanism, never by hand; a finding whose status isn't exactly `open` (a historical secret is redirected to `mark-rotated`/`mark-not-a-secret` instead); or a finding whose tool still runs here — that is a broken-toolchain problem (`aramid doctor`), not a ghost, and retiring it would hide a real gap rather than an obsolete one. Unlike `mark-not-a-secret`, this transition **does** resurrect: if the tool ever comes back and re-detects the same finding, it automatically re-opens — a repo that flips detection off and back on cannot permanently launder an open finding this way.
 
+### Findings on a file you deleted
+
+Deleting a file closes its findings automatically — nothing can re-report on a path that is gone, so the next gate run marks them fixed. If the file comes back, they re-open on the next scan.
+
+That has always held for findings from a **runner** (ruff, semgrep, gitleaks, …). Since 2026-08-09 it also holds for `red-proof` and `tdd`, whose findings previously stayed open forever: their own resolvers need the file to be present (red-proof re-runs pytest against it, tdd waits for the push to touch it), and git file discovery excludes deletions, so a deleted path never entered scope for either.
+
+Not yet fixed for `mutation`, `js-mutation` and `fuzz` — same cause; close those by hand with `aramid override`. Findings from `dast` are excluded deliberately, not by oversight: they are anchored to an endpoint (`GET /login`) rather than a file, so "was this file deleted?" is not a question that has an answer for them, and treating it as one would silently clear live security findings.
+
 ### Overriding a WARN finding
 
 ```powershell
