@@ -102,5 +102,9 @@ def render_json(result: GateResult) -> str:
         "degraded": list(result.degraded),
         "new_ids": list(result.new_ids),
         "stale_overrides": [dataclasses.asdict(s) for s in result.stale_overrides],
+        # Always present, even when empty: an ABSENT key means an aramid old
+        # enough not to record provenance, an EMPTY one means it looked and
+        # found nothing. A consumer diffing two runs has to tell those apart.
+        "tools": dict(getattr(result, "tool_provenance", {}) or {}),
     }
     return json.dumps(payload, indent=2)

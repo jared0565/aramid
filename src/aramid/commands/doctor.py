@@ -165,6 +165,60 @@ def probe_tool(name: str) -> ToolStatus:
     return ToolStatus(name, True, version)
 
 
+def _version_of(exe: Path) -> str:
+    """`<exe> --version`, first line, or "" if it will not answer. Same
+    PATH-prepend as probe_tool for the same reason (semgrep's wrapper shells
+    out to a sibling by bare name). Never raises: this feeds an advisory
+    notice, and a notice must not be able to fail a doctor run."""
+    env = {**os.environ, "PATH": str(exe.parent) + os.pathsep + os.environ.get("PATH", "")}
+    try:
+        cp = subprocess.run([str(exe), "--version"], capture_output=True, text=True,  # noqa: S603
+                             encoding="utf-8", errors="replace", timeout=15, env=env)
+    except (OSError, subprocess.TimeoutExpired):
+        return ""
+    out = (cp.stdout or cp.stderr).strip()
+    return out.splitlines()[0] if out else ""
+
+
+def divergence_lines() -> list[str]:
+    """Report every declared dependency whose resolved copy is not the one pip
+    installed beside aramid. Empty -- and therefore silent -- in the ordinary
+    case, including the common one where a user installed the analyzers
+    themselves and has no venv copy at all; a notice on every run is a notice
+    nobody reads.
+
+    Both ABSOLUTE PATHS and both versions are printed. Naming only the tool
+    would leave the reader unable to tell which analyzer produced a finding
+    set, which is the entire question this answers.
+
+    Advisory, never a failure: PATH-first is intended behaviour
+    (`toolpath.divergence`), and an operator pinning their own toolchain is
+    doing something legitimate. What they should not have to do is guess that
+    it happened."""
+    lines = []
+    for d in toolpath.divergences():
+        raw_rv, raw_dv = _version_of(d.resolved), _version_of(d.dependency_copy)
+        # Two different FILES of the same VERSION cannot report differently,
+        # so saying so trains the reader to skip this block. Found by looking
+        # at the real output, not by a test: on a machine with both a
+        # user-scheme and a venv pip-audit 2.10.1 the first version of this
+        # printed DRIFT for it. UNKNOWN is not agreement -- if either copy
+        # will not answer `--version`, report, because the silent case would
+        # be the one where the unreadable binary is the broken one.
+        if raw_rv and raw_dv and raw_rv == raw_dv:
+            continue
+        rv = raw_rv or "version unknown"
+        dv = raw_dv or "version unknown"
+        lines.append(f"  DRIFT    {d.tool:<12} running {rv}")
+        lines.append(f"                        {d.resolved}")
+        lines.append(f"           aramid's own dependency is {dv}")
+        lines.append(f"                        {d.dependency_copy}")
+    if lines:
+        lines.append("  findings are only comparable across machines when these agree; "
+                     "PATH wins by design (see toolpath.divergence)")
+    return lines
+
+
 def _sh_path_to_win(interp_sh: str) -> Path | None:
     """Reverse of `hooks.win_sh_path`: `/c/x/y` -> `C:/x/y`."""
     if len(interp_sh) >= 3 and interp_sh[0] == "/" and interp_sh[2] == "/":
@@ -668,6 +722,8 @@ def cmd_doctor(root: Path, fix: bool = False) -> int:
     for s in probe_deps(root):
         print(_report_line(s))
     print(_report_line(statuses["interpreter"]))
+    for line in divergence_lines():
+        print(line)
 
     print("llm providers:")
     for line in probe_providers():

@@ -279,6 +279,26 @@ aramid override <id> --reason "false positive, confirmed by security team"
 
 `--reason` is required (non-empty). This refuses (exit `3`) for any BLOCK-tier finding — including a confirmed-critical LLM finding, even before `[llm].llm_block_armed` is set, since arming applies retroactively — and prints the exact `.aramid-suppressions.toml` entry to add instead, ready to paste.
 
+### `DRIFT` in `aramid doctor` — you are running a different analyzer than aramid shipped
+
+aramid declares `ruff`, `semgrep` and `pip-audit` as dependencies, so `pip install aramid` puts specific versions of them next to it. But tool resolution is **PATH-first, by design** — your own toolchain wins, and aramid's copy is a fallback, never an override.
+
+That means an older copy earlier on your `PATH` is what actually runs. It is not an error, and nothing is broken. What matters is that it changes what gets reported:
+
+```
+  DRIFT    ruff         running ruff 0.15.18
+                        C:\...\Roaming\Python314\Scripts\ruff.EXE
+           aramid's own dependency is ruff 0.16.2
+                        C:\...\venv\Scripts\ruff.exe
+```
+
+Measured on exactly that pair, same file: `0.15.18` reported one finding, `0.16.2` reported three. Two consequences, both quiet:
+
+- **The ratchet.** A finding that exists under one version and not the other is *new* to whichever side sees it first — so CI can block a push for something your own gate never showed you. That is the local-vs-CI gap `[hooks].pre_push_match_ci` exists to close, defeated underneath it.
+- **Fingerprints.** A different rule id is a different finding id, so baseline entries and `.aramid-suppressions.toml` stop matching.
+
+`doctor` stays silent when both copies are the same version, and when you have no second copy at all. To make it agree, either remove the older copy from `PATH` or install the same version there. Every gate run also records which binary it used under `tools` in `aramid check --json` — that is what to compare when CI and local disagree.
+
 ### An LLM finding you fixed that stays open anyway
 
 LLM findings resolve deterministically and for free: each one stores the verbatim line it was raised against, and when that line is gone from `HEAD`, the next gate closes the finding. No tokens, no re-review.

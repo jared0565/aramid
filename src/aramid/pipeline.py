@@ -22,14 +22,14 @@ import sys
 import threading
 import time
 import uuid
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable
 
 from aramid import config as config_mod
 from aramid import (gitutil, mutation_gate, mutation_score_gate, policy, red_proof, redact,
-                    tdd, tests_gate)
+                    tdd, tests_gate, toolpath)
 from aramid import review as review_mod
 from aramid.detectors import (detect_package_manager, detect_stacks, detect_tests,
                               unrooted_stack_notices)
@@ -92,6 +92,52 @@ class GateResult:
     # `run_subprocess`), which would never name-match "tests" in
     # BLOCK_TIER_KEYS even though it IS the BLOCK-tier "tests" slot degrading.
     degraded_block_tier: bool = False
+    # WHICH BINARY produced these findings, per runner key that actually ran:
+    # {"ruff": {"path": "...", "dependency_copy": "..."}}. `dependency_copy`
+    # appears ONLY when it differs from `path` -- i.e. when the tool aramid
+    # declares as a dependency lost to a copy earlier on PATH, which is
+    # intended resolution behaviour but changes what gets reported
+    # (`toolpath.divergence` has the measured 1-vs-3-findings example).
+    #
+    # In the RUN's output rather than only in `doctor` because this is what
+    # someone reads when CI and local disagree: two finding sets are only
+    # comparable when the analyzers behind them are.
+    tool_provenance: dict = field(default_factory=dict)
+
+
+def _tool_provenance(selected) -> dict:
+    """Which binary backed each runner key this run selected.
+
+    Keyed on the REGISTRY KEY rather than `RunnerResult.tool`, deliberately:
+    those two diverge (the "tests" slot reports `.tool == "pytest"`), and the
+    key is what a reader matches against config and against another run.
+
+    Cheap by construction -- `toolpath.resolve` is a `shutil.which` plus at
+    most a few `exists()` calls, and NO `--version` subprocess. Versions are
+    doctor's job; paying a process launch per tool on every commit to enrich
+    an informational field would be a bad trade.
+
+    Tolerant of filesystem weirdness, NOT of programming errors. `OSError`
+    only, deliberately: the first version of this caught bare `Exception`,
+    and when `toolpath` turned out not to be imported here the resulting
+    NameError was swallowed into an empty dict on every run -- a feature that
+    silently did nothing, with green tests either side of it. `resolve` and
+    `divergence` already absorb their own OSErrors, so this layer is for a
+    path vanishing between the two calls and nothing else."""
+    out: dict = {}
+    for key in selected:
+        try:
+            resolved = toolpath.resolve(key)
+            if resolved is None:
+                continue
+            entry = {"path": str(resolved)}
+            div = toolpath.divergence(key)
+            if div is not None:
+                entry["dependency_copy"] = str(div.dependency_copy)
+            out[key] = entry
+        except OSError:
+            continue
+    return out
 
 
 def _default_clock() -> str:
@@ -918,4 +964,5 @@ def run_gate(root: Path, gate: Gate, mode: str, cfg: config_mod.Config, ledger: 
 
     return GateResult(exit_code=exit_code, findings=findings, degraded=degraded_tools,
                        new_ids=new_ids, stale_overrides=stale, run_id=run_id,
-                       degraded_block_tier=degraded_block_tier)
+                       degraded_block_tier=degraded_block_tier,
+                       tool_provenance=_tool_provenance(selected))

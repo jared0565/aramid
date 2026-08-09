@@ -10,6 +10,51 @@ to publish a tag that disagrees with it.
 
 ## [Unreleased]
 
+### Added
+
+- **`aramid doctor` now reports `DRIFT` when it is about to run a different
+  copy of an analyzer than the one shipped as aramid's dependency, and every
+  gate run records which binary produced its findings.** Found by installing
+  the published 0.2.0 wheel into a clean venv and driving it at a JS repo the
+  way a first-time user would — `doctor` cheerfully reported `ruff 0.15.18`
+  while `ruff 0.16.2` sat unused in the venv beside aramid.
+
+  Measured on that pair, same input file: **0.15.18 reported one finding
+  (`F401`); 0.16.2 reported three (`F401`, `I001`, `PLW1510`).** Same aramid,
+  same code, different verdicts. Two consequences, both silent:
+
+  - **The ratchet.** A finding that exists under one analyzer version and not
+    the other is *new* to whichever side sees it first, so CI can block a push
+    for something the developer's own gate never showed — precisely the
+    local-vs-CI divergence `[hooks].pre_push_match_ci` exists to close,
+    defeated one layer underneath it.
+  - **Fingerprints.** A different rule id is a different finding id, so
+    baselines and `.aramid-suppressions.toml` entries stop matching.
+
+  **Resolution order is deliberately unchanged.** PATH-first is intended
+  ("the operator's own toolchain always wins"), and a per-tool exception would
+  restore the two-resolution-path arrangement `toolpath` exists to collapse.
+  Venv-first would not buy determinism either — `ruff>=0.6,<0.17` still
+  resolves differently on machines that installed aramid months apart. The
+  defect was the *silence*, so that is what changed.
+
+  `doctor` is quiet when both copies are the same version, and when there is
+  no second copy at all — a notice on every run is a notice nobody reads. That
+  case was found by **rendering the real output**, not by a test: `pip-audit`
+  diverged by path at an identical 2.10.1 and the first version printed it as
+  DRIFT. Unknown is still not treated as agreement: if either copy will not
+  answer `--version`, it reports.
+
+  `aramid check --json` gains a `tools` key — resolved path per runner, plus
+  `dependency_copy` only when it differs. Always present, even when empty: an
+  absent key means an aramid too old to record provenance, an empty one means
+  it looked and found nothing.
+
+  The tool list is checked against the installed package metadata by a test,
+  because a hand-maintained "tools we depend on" set is exactly what goes
+  stale in silence. `gitleaks` is deliberately excluded — it is a binary
+  aramid downloads, and PATH beating it is the documented intent.
+
 ### Fixed
 
 - **The README told everyone `pip install aramid` does not work.** It opened
