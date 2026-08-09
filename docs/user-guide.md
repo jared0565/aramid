@@ -279,6 +279,20 @@ aramid override <id> --reason "false positive, confirmed by security team"
 
 `--reason` is required (non-empty). This refuses (exit `3`) for any BLOCK-tier finding — including a confirmed-critical LLM finding, even before `[llm].llm_block_armed` is set, since arming applies retroactively — and prints the exact `.aramid-suppressions.toml` entry to add instead, ready to paste.
 
+### An LLM finding you fixed that stays open anyway
+
+LLM findings resolve deterministically and for free: each one stores the verbatim line it was raised against, and when that line is gone from `HEAD`, the next gate closes the finding. No tokens, no re-review.
+
+That is a proxy, and it has one honest failure mode. **A fix that guards the path *leading to* the quoted line leaves the quote byte-identical** — an early return, a new precondition, a call site that stops being reached — so the finding stays open even though it is genuinely fixed.
+
+The match is deliberately not loosened, because resolving too eagerly is how a confirmed-critical finding disappears from the block gate. Close it by hand instead, and say what fixed it:
+
+```powershell
+aramid override <id> --reason "fixed in e3270a3; the guard is in run(), so the quoted line in _examined never changed"
+```
+
+Use `override` rather than `.aramid-suppressions.toml` here. A suppression asserts something is *acceptable*; this one is *fixed*. A tracked entry would also never go stale — the quote never moves, so it never near-misses — leaving a permanent record of a transient fact. Machine-local is right: the next drain re-reviews the file and re-raises the finding if the fix was incomplete.
+
 ### Suppressing a finding for the whole team — `.aramid-suppressions.toml`
 
 `aramid override` writes to the ledger in `.aramid/`, which is gitignored. That is deliberate — it is the "quiet this for me, on this machine" channel, and because nobody else can review it, it is limited to WARN-tier findings.

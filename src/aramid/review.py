@@ -422,7 +422,38 @@ def auto_resolve_llm(root: Path, ledger, run_id: str, at: str) -> list[str]:
     dev who fixed the code is never blocked by a stale finding. A missing/
     unreadable file counts as gone. False-resolve safety net: the edit that
     removed the quote is itself a commit, so triage re-enqueues the file and
-    the next drain re-reviews it."""
+    the next drain re-reviews it.
+
+    KNOWN LIMITATION, and the operator's exit from it. "The quote is gone" is
+    a proxy for "the code changed", and a real fix does not always move the
+    quoted line. A fix that GUARDS THE PATH LEADING TO the evidence -- an
+    early return, a new precondition, a call site that stops being reached --
+    leaves the quote byte-identical, so nothing here fires and the finding
+    stays open forever even though it is genuinely fixed. Two live examples
+    from 2026-08-07, both fixed within hours and both still open a day later:
+
+      e3270a3  semgrep's no-report fail-open. The evidence quoted a line
+               INSIDE `_examined`; the fix added a guard in `run()` so
+               `_examined` is never reached on that path. Quote unchanged.
+      cf25587  gitleaks stdout persistence. The evidence quoted the
+               `redact.scrub` call site; the fix changed what `_log_body`
+               RETURNS to it. Quote unchanged.
+
+    This is the conservative direction failing safe, not a bug to fix here --
+    loosening the match is how a confirmed critical gets resolved away, which
+    the paragraph above exists to prevent. There is deliberately no
+    `ledger mark-fixed` either: it would need the same BLOCK-tier refusal
+    `commands/override.py` carries, and a fixed confirmed-critical LLM
+    finding would then have nowhere to go at all.
+
+    So the exit is manual: `aramid override <id> --reason "fixed in <sha>;
+    ..."`. That is the right home rather than `.aramid-suppressions.toml`.
+    A suppression asserts something is ACCEPTABLE; these are FIXED. And a
+    tracked entry would never go stale -- the quote never moves, so it never
+    near-misses -- making a permanent record of a transient fact. The
+    ledger being machine-local is correct here: the next drain re-reviews the
+    file and either re-raises the finding, meaning the fix was incomplete, or
+    does not."""
     resolved = []
     skipped = 0
     for fid, rec in ledger.open_findings().items():
