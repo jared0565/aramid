@@ -275,6 +275,17 @@ def test_the_real_suite_marker_matches_the_synthetic_shape():
     the shape still covers the actual marker the tests runner emits. Rename
     `_SUITE_FILE_MARKER` to something without angle brackets and this goes red
     here, rather than silently reopening the resolve-a-BLOCK-finding route.
+
+    Checked against the scenario it CLAIMS to catch, not merely against a
+    broken guard -- those fail for different reasons, and only the first is
+    what this test is for. Measured:
+
+        "<test-suite>"   -> True    (current)
+        "__test_suite__" -> False   -> this test goes RED
+        "test-suite"     -> False   -> this test goes RED
+        ":test-suite:"   -> False   -> this test goes RED
+        "<suite>"        -> True    -> stays green, correctly: a rename that
+                                       KEEPS the brackets is still guarded
     """
     from aramid.ledger import _is_synthetic_path
     from aramid.runners.tests import _SUITE_FILE_MARKER

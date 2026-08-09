@@ -76,12 +76,25 @@ to publish a tag that disagrees with it.
   join. `llm-review` needs nothing, since `auto_resolve_llm` already fires when
   the stored evidence quote leaves `HEAD`. `dast` must never opt in.
 
-  Deliberately **not** opted in, as unevidenced scope rather than a settled
-  question — and the two cases are not equivalent:
+  Deliberately **not** opted in — but for two unequal reasons, and the
+  difference decides who can pick each one up:
 
-  - `mutation` has a resolver that simply cannot see deletions (it fires only
-    when the push touches the file, and discovery filters `--diff-filter=ACMR`).
-    One call fixes it.
+  - `mutation` is **ready to opt in**: it writes `tool="mutation"` against real
+    repo-relative paths (`consumers/mutation.py`), exactly the shape
+    `resolve_departed` takes, and its own resolver simply cannot see deletions
+    (it fires only when the push touches the file, and discovery filters
+    `--diff-filter=ACMR`). No design question remains — it is one entry in the
+    tuple in `run_gate`, plus a test.
+
+    The one snag, so the next person does not rediscover it:
+    `test_pipeline._seed_mut` seeds its finding on a deliberately **absent**
+    `src/pkg/ghost.py`, which opting in would resolve, breaking three tests
+    that use it. Give the fixture a **present-but-untracked** `ghost.py`
+    instead — present so `_departed` is False, untracked so it stays out of
+    `ctx.files` and `auto_resolve_mutation` does not fire on it either.
+
+    Left out here only because it is a different producer from the two this
+    change was scoped to.
   - `js-mutation` and `fuzz` turn out to have **no resolver at all**, which is
     a strictly larger defect found while checking this one. No `auto_resolve_*`
     matches those tool names; `record_run` cannot reach them because it keys on
