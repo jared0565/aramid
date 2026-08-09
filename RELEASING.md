@@ -1,8 +1,15 @@
 # Releasing aramid
 
-aramid is published as a wheel attached to a [GitHub Release]. There is no PyPI
-package, so `pip install aramid` does not work; consumers install the release
-artifact or a git ref (see the README's Install section).
+aramid is published to [PyPI](https://pypi.org/project/aramid/) — `pip install
+aramid` — and the same wheel and sdist are attached to a [GitHub Release].
+
+**The same bytes reach both, and that is now a measured property rather than an
+intention.** `publish-pypi` downloads the `gated-dist` artifact the integrity
+gates inspected instead of rebuilding from the tag; after 0.2.0 the sha256 of
+each file was identical on pypi.org, test.pypi.org and the GitHub Release. The
+job used to `checkout` + `build` again, which meant the four gates below vouched
+for bytes nobody published — and the two public channels could carry different
+code under one version. Do not reintroduce a build step in a publish job.
 
 ## The single source of truth
 
@@ -30,8 +37,8 @@ normalised form into the wheel. Either spelling is fine in `__version__`.
 5. **Tag and push the tag:**
 
    ```bash
-   git tag v0.1.0          # must be exactly "v" + __version__
-   git push origin v0.1.0
+   git tag -a vX.Y.Z       # must be exactly "v" + __version__
+   git push origin vX.Y.Z
    ```
 
 6. The `release` workflow takes it from there.
@@ -47,7 +54,7 @@ environment.
 That test then blocks the push, and the symptom is unhelpful:
 
 ```
-$ git push origin v0.1.0
+$ git push origin vX.Y.Z
 (+6 baseline findings)
 44 findings open in ledger
 error: failed to push some refs to '...'
@@ -67,24 +74,30 @@ artifact cannot be recalled, only superseded:
 
 | Gate | Catches |
 | --- | --- |
-| Tag matches `__version__` | Publishing `aramid-0.1.0.whl` under a tag called `v0.2.0` |
+| Tag matches `__version__` | Publishing `aramid-0.2.0.whl` under a tag called `v0.3.0` |
 | Packaged data files present | A wheel missing the vendored OWASP ruleset, which makes semgrep crash on every pre-push in every consumer repo |
 | Clean-venv smoke test | A wheel that installs but does not work: it installs into a fresh virtualenv, leaves the source tree so an accidental import of it fails, runs the console script, and asserts the ruleset resolves from inside `site-packages` |
-| `twine check` | A package page that renders wrong — or, as was true until 0.1.0, one with **no description at all** |
+| `twine check` | A package page that renders wrong — or, as was true right up until the 0.2.0 metadata work, one with **no description at all** |
 | Clean-venv **sdist** smoke test | An sdist that publishes fine and fails on install. The wheel and the sdist are built by different code paths, and any consumer whose platform or policy forces a source build gets this artifact |
 
 ## Undoing a release
 
 ```bash
-gh release delete v0.1.0 --yes --cleanup-tag
-git push --delete origin v0.1.0   # if --cleanup-tag did not remove it
-git tag -d v0.1.0
+gh release delete vX.Y.Z --yes --cleanup-tag
+git push --delete origin vX.Y.Z   # if --cleanup-tag did not remove it
+git tag -d vX.Y.Z
 ```
 
-Deleting is safe for the **GitHub Release** half. It is not safe once
-`publish-pypi` has run: a PyPI version can be yanked but never re-uploaded, and
-the first upload claims the public name permanently. That is why publishing is
-a separate job, gated on its own environment.
+Deleting is safe for the **GitHub Release** half, and it stays safe for as long
+as the run sits paused at `publish-pypi` — which, with the required reviewer, is
+until someone approves it. It is not safe afterwards: a PyPI version can be
+yanked but never re-uploaded, and the first upload claims the public name
+permanently. That is why publishing is a separate job, gated on its own
+environment.
+
+A publisher misconfiguration fails at `publish-testpypi` instead, which is the
+cheap failure: nothing is published, the name stays unclaimed, and
+`skip-existing: true` on that job means a retry after fixing it runs clean.
 
 ## Publishing to PyPI
 
@@ -96,7 +109,12 @@ a separate job, gated on its own environment.
 These cannot be done from this repository; they are account-level settings.
 Configuring one does **not** configure the other.
 
-1. **pypi.org** → *Your projects* → *Publishing* → add a **pending publisher**
+1. **pypi.org** → <https://pypi.org/manage/account/publishing/> → *Add a new
+   pending publisher* (GitHub tab)
+
+   This is the **account-level** publishing page. *Your projects → Publishing*
+   is the path for a project that already exists, and there is nothing there to
+   attach to before the first upload.
 
    | field | value |
    | --- | --- |
@@ -109,9 +127,10 @@ Configuring one does **not** configure the other.
    "Pending" is the right kind: it authorises a project that does not exist
    yet, which is the case until the first upload.
 
-2. **test.pypi.org** — the same form, on a **separate account**. This one is
-   **not optional**: `publish-pypi` declares `needs: [release,
-   publish-testpypi]`, so without it every release stops before PyPI.
+2. **test.pypi.org** — <https://test.pypi.org/manage/account/publishing/>, the
+   same form on a **separate account with a separate login**. This one is **not
+   optional**: `publish-pypi` declares `needs: [release, publish-testpypi]`, so
+   without it every release stops before PyPI.
 
    | field | value |
    | --- | --- |
@@ -132,16 +151,44 @@ Configuring one does **not** configure the other.
    Note the environments differ (`testpypi` vs `pypi`); a publisher registered
    against the wrong one silently fails to authorise.
 
-Optionally add a required reviewer to the `pypi` GitHub environment; the job is
-already gated on it, so no workflow change is needed.
+**The field that actually goes wrong is `Environment name`.** PyPI labels it
+*(optional)* and renders `pypi` as greyed placeholder text, so it reads as
+already filled in. It is not — type it. Both publish jobs declare an
+`environment:`, and PyPI checks that claim on every upload, so a blank here
+produces an authorization failure at publish time with nothing pointing at the
+cause. Second-most-likely: **Workflow name** wants the filename `release.yml`,
+not the workflow's display name (`release`).
 
-### Which version publishes first
+### The `pypi` environment has a required reviewer
 
-`v0.1.0` is already tagged and has a GitHub Release, so re-pushing that tag
-will not re-run the workflow and `gh release create` would fail on the existing
-release. PyPI itself is empty (`aramid` is unclaimed), so `0.1.0` is *available*
-there — but the clean path is to cut the next version rather than delete and
-recreate a published GitHub Release.
+Configured 2026-08-09, reviewer `jared0565`. This is live behaviour, not a
+suggestion: after the tag, `release` and `publish-testpypi` run unattended, then
+the run **halts** at `publish-pypi` until it is approved in the Actions UI
+(*Review deployments* → tick `pypi` → *Approve and deploy*). That pause is the
+point — it is when you go and look at the TestPyPI page.
+
+Two things learned configuring it:
+
+- The GitHub environments (`pypi`, `testpypi`) must **exist** before a reviewer
+  can be attached. A workflow referencing one creates it implicitly at run time,
+  which is too late.
+- The API happily accepts a `required_reviewers` rule with an **empty** reviewer
+  list, and it reads back as `protection_rules=1` — a gate that looks configured
+  and enforces nothing. Verify the reviewer *list*, not the rule count.
+
+To remove it: `gh api -X DELETE
+repos/jared0565/aramid/environments/pypi/deployment_protection_rules/62182509`
+
+### What actually shipped first
+
+**0.2.0**, on 2026-08-09 — the first version on PyPI. `0.1.0` exists as a
+GitHub Release only, describing a much older tree; reusing that number would
+have made the Release notes and the PyPI artifact describe different code.
+
+The whole path ran end to end and was verified against the live indexes rather
+than the workflow's own report: wheel `284,898 B` and sdist `252,736 B`, with
+matching sha256 on pypi.org, test.pypi.org and the GitHub Release, and a
+clean-venv `pip install aramid` importing `0.2.0` from `site-packages`.
 
 Bumping `__version__` and cutting the tag is a "is this ready to ship?"
 judgement and is deliberately not automated.

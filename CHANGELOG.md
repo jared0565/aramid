@@ -10,6 +10,41 @@ to publish a tag that disagrees with it.
 
 ## [Unreleased]
 
+### Fixed
+
+- **The README told everyone `pip install aramid` does not work.** It opened
+  with "aramid is not on PyPI" and pointed at hard-coded `v0.1.0` wheel URLs —
+  false the moment 0.2.0 published, and on the most public page in the project.
+  `RELEASING.md` led with the same sentence.
+
+- **`RELEASING.md` and `release.yml` sent maintainers to the wrong PyPI page.**
+  Both said *Your projects → Publishing*, which is where you attach a publisher
+  to a project that **already exists**. Before the first upload there is nothing
+  there; the pending-publisher form lives on the account-level page
+  (`/manage/account/publishing/`). Also recorded: PyPI labels `Environment name`
+  *optional* and renders a greyed placeholder that reads as pre-filled, and
+  leaving it blank fails authorization at publish time with nothing naming the
+  cause.
+
+- `twine check`'s row in the gate table credited the missing-description fix to
+  0.1.0. It landed in the 0.2.0 metadata work. Tag/undo examples now use
+  `vX.Y.Z` rather than a concrete version that goes stale and invites pasting a
+  tag that already exists.
+
+### Added
+
+- **Documented that the `pypi` environment carries a required reviewer**, so a
+  tagged release halts after the TestPyPI rehearsal until a human approves it —
+  live behaviour since 2026-08-09, previously described as an optional extra.
+  Two findings from configuring it are recorded with it: the GitHub environment
+  must exist *before* a reviewer can be attached, and the API accepts a
+  `required_reviewers` rule with an **empty** reviewer list that reads back as
+  `protection_rules=1` — a gate that looks configured and enforces nothing.
+
+- `RELEASING.md` now states the three-way sha256 match as a **verified property**
+  of the pipeline rather than an intention, with the 0.2.0 figures, and says
+  plainly not to reintroduce a build step in a publish job.
+
 ## [0.2.0] — 2026-08-09
 
 First release published to PyPI. 0.1.0 exists as a GitHub Release only, so

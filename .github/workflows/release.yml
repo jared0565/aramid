@@ -10,12 +10,21 @@
 # passed, and uses Trusted Publishing (OIDC): no API token, no repository
 # secret to leak or rotate.
 #
-# ONE-TIME SETUP, on the maintainer's account, before the first tag:
-#   pypi.org -> Your projects -> Publishing -> add a PENDING publisher
+# ONE-TIME SETUP, on the maintainer's account, before the first tag. DONE for
+# this repo on 2026-08-09; kept because it is what a fork or a re-key needs.
+#   https://pypi.org/manage/account/publishing/  -> "Add a new pending publisher"
 #     owner: jared0565   repo: aramid
 #     workflow: release.yml   environment: pypi
+# That is the ACCOUNT-level page. "Your projects -> Publishing" is for a project
+# that already exists, and there is nothing to attach to before the first
+# upload -- this comment said so for a week and it was wrong.
 # TestPyPI is a SEPARATE account with a SEPARATE pending publisher; configuring
-# one does not configure the other.
+# one does not configure the other. `Environment name` is labelled optional and
+# shows a greyed placeholder that looks pre-filled -- type it, or the upload
+# fails to authorise with nothing naming the cause.
+#
+# The `pypi` environment also carries a REQUIRED REVIEWER, so a tagged release
+# halts after the TestPyPI rehearsal until a human approves it. See RELEASING.md.
 #
 # Every gate below runs BEFORE the release is created, because a bad artifact
 # that is already published cannot be recalled -- only superseded.

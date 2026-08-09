@@ -11,17 +11,23 @@ the small, novel, high-risk slice of commits, never on every push (see the roadm
 
 ## Install
 
-aramid is not on PyPI, so `pip install aramid` does not work. Install the wheel
-attached to a [GitHub Release](https://github.com/jared0565/aramid/releases):
+```bash
+pip install aramid
+```
+
+Published on [PyPI](https://pypi.org/project/aramid/) from 0.2.0 onward. Every
+release is also attached to a [GitHub Release](https://github.com/jared0565/aramid/releases)
+as a wheel and an sdist — the *same bytes*, verified by sha256 across both
+indexes — so pinning a file works too:
 
 ```bash
-pip install https://github.com/jared0565/aramid/releases/download/v0.1.0/aramid-0.1.0-py3-none-any.whl
+pip install https://github.com/jared0565/aramid/releases/download/v0.2.0/aramid-0.2.0-py3-none-any.whl
 ```
 
 Or straight from git, if you would rather pin a ref than a file:
 
 ```bash
-pip install "git+https://github.com/jared0565/aramid@v0.1.0"
+pip install "git+https://github.com/jared0565/aramid@v0.2.0"
 ```
 
 To work on aramid itself, install it editable from a checkout — this is a
