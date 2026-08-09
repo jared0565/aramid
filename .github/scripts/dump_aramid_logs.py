@@ -26,6 +26,17 @@ runs without `-v`, so a real body here is banner plus "INF no leaks found".
 output of sources that are already public, and `python-*.log` is the same
 pytest output the `Run test suite` step prints unconditionally.
 
+That argument is PER-RUNNER, and it is prose. Prose does not fail when a
+runner is added -- a new scanner would start publishing to a public job log
+with nobody re-reading this paragraph. So it is backed by a tripwire:
+`test_a_new_runner_forces_the_disclosure_argument_to_be_rechecked` compares
+`pipeline.GATE_RUNNER_KEYS` against a review record listing each runner and
+why its output is safe, and goes red the moment the two disagree -- in either
+direction, since a stale entry makes the record read as more thorough than it
+is. Deliberately a TRIPWIRE and not an allowlist here: withholding an
+unreviewed body would make this script go silent on exactly the leg that
+flakes, which is the reason it exists.
+
 `upload-artifact` would buy nothing -- public-repo artifacts are equally
 downloadable -- and would cost another action SHA to pin.
 

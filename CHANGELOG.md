@@ -12,6 +12,32 @@ to publish a tag that disagrees with it.
 
 ### Added
 
+- **The CI log dump's disclosure argument is now enforced instead of asserted.**
+  `dump_aramid_logs.py` prints every persisted runner log to a **public** job
+  log on `if: failure()`, and its docstring justifies that tool by tool. That
+  justification is prose: it does not fail when a runner is added, so a new
+  scanner would start publishing with nobody re-reading the paragraph.
+
+  A tripwire now compares `pipeline.GATE_RUNNER_KEYS` against a review record
+  naming each runner and why its output is safe, and goes red when they
+  disagree **in either direction** — a stale entry is also a defect, because it
+  makes the record read as more thorough than it is. Red-proofed both ways.
+
+  **Deliberately a tripwire and not an allowlist.** Withholding an unreviewed
+  body would make the script go silent on exactly the leg that flakes, which is
+  the intermittent it was written to diagnose. Keep printing; force a human to
+  re-check when the set changes.
+
+  Three findings closed against this file, and the review is most of what
+  changed: the reported vector — "a failing pytest whose assertion diff carries
+  credentials" — adds **zero** incremental disclosure, because
+  `Run test suite` already runs `python -m pytest -q` unconditionally and that
+  output is public regardless. The script is also **not packaged in the wheel**
+  (verified against the built artifact), so the blast radius is aramid's own CI
+  and never a consumer's. One of the three was a duplicate of another; a third
+  claimed `sys.stdout.reconfigure` "may fail on older Pythons" when
+  `requires-python` is `>=3.11` and every supported interpreter has it.
+
 - **`aramid doctor` now reports `DRIFT` when it is about to run a different
   copy of an analyzer than the one shipped as aramid's dependency, and every
   gate run records which binary produced its findings.** Found by installing

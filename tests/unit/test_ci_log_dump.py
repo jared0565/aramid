@@ -285,3 +285,74 @@ def test_it_never_fails_the_job(tmp_path):
     r = _run(tmp_path)
 
     assert r.returncode == 0, r.stderr
+
+
+# ---------------------------------------------- disclosure argument decay ---
+
+# Every runner whose persisted log body has been INDIVIDUALLY assessed as safe
+# to print to a PUBLIC job log. This is not an allowlist the script enforces --
+# it prints everything, deliberately, because withholding a body would silence
+# the diagnostic on exactly the leg that flakes. It is a review record, and the
+# test below turns it into a tripwire.
+#
+# The reasoning, per runner, as of 2026-08-09:
+#   gitleaks  -- stdout is never persisted at all (`pipeline._NO_STDOUT_TOOLS`);
+#                findings go to `--report-path`, a temp file outside .aramid/logs.
+#   tests     -- the registry key for the suite slot. Its output is the SAME
+#                pytest output the `Run test suite` step prints unconditionally
+#                on every run, so the dump discloses nothing new.
+#   ruff      -- lint output over sources already public in this repository.
+#   semgrep   -- SAST output over the same public sources.
+#   eslint    -- ditto, for JS/TS sources.
+#   clippy    -- ditto, for Rust sources.
+#   typecheck -- tsc/mypy output over public sources.
+#   deps      -- advisory ids and package versions from pip-audit/cargo-audit.
+#                No index credentials exist in this workflow to be echoed.
+_REVIEWED_FOR_PUBLICATION = frozenset({
+    "gitleaks", "tests", "ruff", "semgrep", "eslint", "clippy", "typecheck", "deps",
+})
+
+
+def test_a_new_runner_forces_the_disclosure_argument_to_be_rechecked():
+    """The dump script's DISCLOSURE docstring argues, tool by tool, that
+    nothing secret reaches a persisted stream. That argument is prose, it is
+    unenforced, and it is a standing claim about EVERY runner -- including
+    ones that do not exist yet. Add a runner and it silently starts publishing
+    to a public job log with nobody re-reading the paragraph.
+
+    This is the tripwire, and it is deliberately NOT an allowlist in the
+    script. Withholding an unreviewed body would make the diagnostic go silent
+    on precisely the leg that flakes, which is the reason the script exists
+    (a `windows-latest/py3.14` intermittent whose only artifact died with the
+    container). Better to keep printing and force a human to re-check at the
+    moment the set changes.
+
+    If this fails: read the DISCLOSURE paragraph in
+    `.github/scripts/dump_aramid_logs.py`, decide whether the new runner's
+    stdout/stderr can carry anything not already public, and then add it above
+    WITH its reason -- or drop its stdout in `pipeline._NO_STDOUT_TOOLS` the
+    way gitleaks is handled.
+    """
+    from aramid.pipeline import GATE_RUNNER_KEYS
+
+    live = {k for keys in GATE_RUNNER_KEYS.values() for k in keys}
+    unreviewed = live - _REVIEWED_FOR_PUBLICATION
+
+    assert not unreviewed, (
+        f"runner(s) {sorted(unreviewed)} can write a log that the CI dump "
+        f"publishes to a PUBLIC job log, and no one has assessed what their "
+        f"output contains")
+
+
+def test_the_review_record_does_not_outlive_the_runners_it_describes():
+    """The other direction, and the reason the assertion above is not enough
+    on its own: a stale name in the review record is a claim about a runner
+    that no longer exists, which makes the record read as more thorough than
+    it is. Same failure mode as a stale suppression entry."""
+    from aramid.pipeline import GATE_RUNNER_KEYS
+
+    live = {k for keys in GATE_RUNNER_KEYS.values() for k in keys}
+    # `ruff` is pre-commit-only and `tests` pre-push-only; both are in `live`.
+    stale = _REVIEWED_FOR_PUBLICATION - live
+
+    assert not stale, f"review record names runner(s) that no longer exist: {sorted(stale)}"
