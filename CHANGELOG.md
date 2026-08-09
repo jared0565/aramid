@@ -76,25 +76,25 @@ to publish a tag that disagrees with it.
   join. `llm-review` needs nothing, since `auto_resolve_llm` already fires when
   the stored evidence quote leaves `HEAD`. `dast` must never opt in.
 
-  Deliberately **not** opted in — but for two unequal reasons, and the
-  difference decides who can pick each one up:
+  **`mutation` opted in too.** It writes `tool="mutation"` against real
+  repo-relative paths (`consumers/mutation.py`), exactly the shape
+  `resolve_departed` takes, and its own resolver cannot see deletions — it
+  fires only when the push touches the file, and discovery filters
+  `--diff-filter=ACMR`. It is further out of reach than the other two, since
+  the **drain** records it and passes no `root` at all. Resolution here is also
+  strictly more conservative than the resolver it already has, which is liberal
+  by design (a wrong resolve re-fires on the next drain).
 
-  - `mutation` is **ready to opt in**: it writes `tool="mutation"` against real
-    repo-relative paths (`consumers/mutation.py`), exactly the shape
-    `resolve_departed` takes, and its own resolver simply cannot see deletions
-    (it fires only when the push touches the file, and discovery filters
-    `--diff-filter=ACMR`). No design question remains — it is one entry in the
-    tuple in `run_gate`, plus a test.
+  That needed one fixture change worth recording, because the test suite had
+  been relying on the bug: `test_pipeline._seed_mut` seeded on a deliberately
+  **absent** `src/pkg/ghost.py`, which the opt-in resolved before the
+  assertions ran. The fixture now writes a **present-but-untracked**
+  `ghost.py` — present so `_departed` is False, untracked so it stays out of
+  `ctx.files` and `auto_resolve_mutation` stays quiet too. Landing the fixture
+  change alone, before the opt-in, confirmed it was behaviour-neutral.
 
-    The one snag, so the next person does not rediscover it:
-    `test_pipeline._seed_mut` seeds its finding on a deliberately **absent**
-    `src/pkg/ghost.py`, which opting in would resolve, breaking three tests
-    that use it. Give the fixture a **present-but-untracked** `ghost.py`
-    instead — present so `_departed` is False, untracked so it stays out of
-    `ctx.files` and `auto_resolve_mutation` does not fire on it either.
+  Still **not** opted in:
 
-    Left out here only because it is a different producer from the two this
-    change was scoped to.
   - `js-mutation` and `fuzz` turn out to have **no resolver at all**, which is
     a strictly larger defect found while checking this one. No `auto_resolve_*`
     matches those tool names; `record_run` cannot reach them because it keys on

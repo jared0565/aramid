@@ -179,18 +179,30 @@ def resolve_departed(ledger, run_id: str, at: str, *, root, tool: str,
     Opting in per producer keeps that impossible: a producer that does not call
     this keeps findings open, which is the safe direction.
 
+    OPTED IN: `red-proof`, `tdd`, `mutation` -- see the tuple in
+    `pipeline.run_gate`. A name qualifies only if its findings are anchored to
+    a real repo-relative path, which is the whole admission criterion.
+
     NOT OPTED IN, and each for a reason worth re-checking rather than
     assuming:
       - `llm-review` needs nothing -- `auto_resolve_llm` fires when the stored
         evidence quote is absent from HEAD, and deleting the file removes it.
-      - `mutation`, `js-mutation`, `fuzz` DO have this bug: their findings are
-        anchored to real repo-relative source paths, and their resolvers key on
-        the push having touched the file, which a deletion never satisfies
-        (discovery filters `--diff-filter=ACMR`). Left out of the 2026-08-09
-        change as unevidenced scope, not as settled -- opting them in is one
-        call each.
-      - `dast` must NEVER opt in: its `file` is a method+endpoint, so departure
-        is not a question that has an answer.
+      - `js-mutation` and `fuzz` DO have this bug, and a larger one: they have
+        NO resolver at all. Nothing matches those tool names, `record_run`
+        cannot reach them (runner labels only), and `drain._consume_item`
+        passes empty scopes deliberately. Their findings never resolve for ANY
+        reason -- not merely after a deletion, but after a genuine fix. Opting
+        them in here would fix only the deletion half and leave the real defect
+        standing, so they want a resolver of their own, keyed on what the
+        consumer actually re-examined. A design question, not a one-liner.
+      - `dast` must NEVER opt in: its `file` is a method+endpoint
+        ("GET /login"), so departure is not a question that has an answer, and
+        the string does not exist as a path -- it would read as departed and
+        clear live security findings.
+      - `mutation-score` is synthesized at gate time from stored scores rather
+        than persisted like the others; whether it holds resolvable open
+        findings at all is unchecked, so it is deliberately uncharacterised
+        rather than assumed safe.
 
     `present_ids` skips anything this run's producer re-fired, for the same
     reason `auto_resolve_red_proof` does: resolution runs after `record_run`,

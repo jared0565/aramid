@@ -1688,18 +1688,24 @@ def _mut_repo(tmp_path):
     (r / "src" / "real.py").write_text("x = 1\n", encoding="utf-8")
     subprocess.run(["git", "add", "."], cwd=r, check=True)
     subprocess.run(["git", "commit", "-q", "-m", "c1"], cwd=r, check=True)
+    # ghost.py EXISTS but is deliberately left UNTRACKED -- written after the
+    # commit and never `git add`ed. Both halves are load-bearing, and the file
+    # used to be simply ABSENT:
+    #   exists    -> ledger._departed is False, so `mutation` opting in to
+    #                ledger.resolve_departed cannot clear the seeded finding.
+    #                While absence was the only thing keeping these tests
+    #                honest, the opt-in resolved it before the assertions ran.
+    #   untracked -> not in ctx.files under mode "all", so it is not a changed
+    #                file and auto_resolve_mutation's own rule stays quiet.
+    # A TRACKED ghost.py satisfies the first and breaks the second.
+    (r / "src" / "pkg").mkdir()
+    (r / "src" / "pkg" / "ghost.py").write_text("x = 1\n", encoding="utf-8")
     return r
 
 
 def _seed_mut(led, fid="g" * 64, file="src/pkg/ghost.py"):
-    # ghost.py is NOT in the repo -> auto_resolve_mutation never resolves it.
-    # It is also not `git rm`d, merely absent: `mutation` is a producer and so
-    # never appears in scope_tools, which is what keeps record_run's
-    # departed-file path from reaching it. `mutation` has NOT opted in to
-    # ledger.resolve_departed (see its docstring -- it is a real gap there,
-    # left as unevidenced scope), so absence stays inert here. Opting it in
-    # would resolve this seeded finding and break these tests, which is the
-    # signal to give it a present-but-untracked file instead.
+    # ghost.py is present-but-untracked (see _mut_repo), so neither
+    # auto_resolve_mutation nor the departed-file route can resolve this.
     f = Finding(id=fid, tool="mutation", rule="flip_comparison",
                 severity_raw="medium", severity=Severity.MEDIUM,
                 verdict=Verdict.WARN, file=file, line=7,
@@ -1856,6 +1862,46 @@ def test_gate_resolves_a_producer_finding_whose_file_left_the_repo(tmp_path, mon
         # satisfy the assertion above. The one on a file that still exists
         # must survive.
         assert state[present]["status"] == "open"
+    finally:
+        led.close()
+
+
+def test_gate_resolves_a_mutation_finding_whose_file_left_the_repo(tmp_path, monkeypatch):
+    """`mutation` opted in to `ledger.resolve_departed` after `red-proof` and
+    `tdd`, and for the same reason: a surviving mutant in a file that no longer
+    exists cannot survive anything, and nothing could ever clear it.
+
+    `auto_resolve_mutation` fires only when the push TOUCHES the file, and git
+    discovery filters `--diff-filter=ACMR` -- Deleted is excluded, so a deleted
+    path is never in `changed_files`. `record_run` cannot help either: mutation
+    findings are recorded by the DRAIN, which passes no `root` and empty
+    scopes on purpose, and at gate time "mutation" is never in `scope_tools`
+    because that set holds runner labels. So the finding was immortal.
+
+    Safe to opt in where `dast` is not: mutation stores a real repo-relative
+    source path (`consumers/mutation.py`), so "has this file left the repo" is
+    a question with an answer. And resolution here is strictly more
+    conservative than the resolver mutation already has, which is liberal by
+    design -- a wrong resolve re-fires on the next drain.
+    """
+    r = _mut_repo(tmp_path)
+    monkeypatch.setattr(pipeline, "GATE_RUNNER_KEYS",
+                        {**pipeline.GATE_RUNNER_KEYS, Gate.PRE_PUSH: []})
+    cfg = config.load_config(r)
+    led = Ledger(r / ".aramid" / "ledger.db")
+    gone = "z" * 64
+    try:
+        _seed_mut(led, fid=gone, file="src/deleted_module.py")
+        assert not (r / "src" / "deleted_module.py").exists()
+        pipeline.run_gate(r, Gate.PRE_PUSH, "all", cfg, led)
+        state = led.open_findings()
+        assert state[gone]["status"] == "fixed"
+        # NON-VACUITY: `_mut_repo` also leaves a present-but-untracked
+        # ghost.py, and the default-seeded finding on it must NOT resolve --
+        # otherwise "resolves everything" would satisfy the assertion above.
+        _seed_mut(led)
+        pipeline.run_gate(r, Gate.PRE_PUSH, "all", cfg, led)
+        assert led.open_findings()["g" * 64]["status"] == "open"
     finally:
         led.close()
 

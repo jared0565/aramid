@@ -865,26 +865,31 @@ def run_gate(root: Path, gate: Gate, mode: str, cfg: config_mod.Config, ledger: 
     # a disarmed (WARN) finding is ratchet-exempt and never auto-escalates.
     if gate is Gate.PRE_PUSH:
         review_mod.auto_resolve_llm(root, ledger, run_id, at)
-        # Departed-file resolution for the two synchronous producers. Sits HERE
-        # and not in the `mode == "range"` nest below for the same reason
-        # auto_resolve_llm does: the guards there protect resolvers that read
-        # scope_files, and this one derives nothing from the range -- it asks
-        # only whether a path still exists, which is true or false identically
-        # under "all", "staged", and a rangeless "range".
+        # Departed-file resolution. Sits HERE and not in the `mode == "range"`
+        # nest below for the same reason auto_resolve_llm does: the guards
+        # there protect resolvers that read scope_files, and this one derives
+        # nothing from the range -- it asks only whether a path still exists,
+        # which is true or false identically under "all", "staged", and a
+        # rangeless "range".
         #
-        # Neither producer's own rule can clear a finding whose FILE is gone:
-        # red-proof needs a base-tree pytest run on it, tdd needs the push to
-        # have touched it, and a deleted path is never in scope_files
-        # (discovery filters --diff-filter=ACMR). record_run cannot either --
-        # it gates on `tool in scope_tools`, which holds runner labels, and
-        # these two emit no RunnerResult.
+        # No listed producer's own rule can clear a finding whose FILE is gone:
+        # red-proof needs a base-tree pytest run on it; tdd and mutation need
+        # the push to have touched it, and a deleted path is never in
+        # scope_files (discovery filters --diff-filter=ACMR). record_run cannot
+        # either -- it gates on `tool in scope_tools`, which holds runner
+        # labels, and none of these emit a RunnerResult. mutation is further
+        # out of reach because the DRAIN records it, passing no root at all.
         #
-        # OPT-IN, one name at a time. Relaxing record_run's tool gate instead
-        # would cover them in one line and silently resolve every producer
-        # whose stored `file` is not a path -- dast writes "GET /login", which
-        # does not exist and reads as departed. See ledger.resolve_departed.
+        # OPT-IN, ONE NAME AT A TIME, and the list is a whitelist on purpose.
+        # Relaxing record_run's tool gate instead would cover every producer in
+        # one line and silently resolve those whose stored `file` is not a path
+        # -- dast writes "GET /login", which does not exist, joins to
+        # root/GET/login, passes containment, and reads as departed. A name
+        # belongs here only if its findings are anchored to a real
+        # repo-relative path. See ledger.resolve_departed for who is still out
+        # and why.
         _departed_present = {f.id for f in findings}
-        for _producer in ("red-proof", "tdd"):
+        for _producer in ("red-proof", "tdd", "mutation"):
             ledger_mod.resolve_departed(ledger, run_id, at, root=root,
                                         tool=_producer,
                                         present_ids=_departed_present)

@@ -275,14 +275,12 @@ aramid ledger mark-unreachable <id> --reason "no python stack in this repo anymo
 
 Deleting a file closes its findings automatically — nothing can re-report on a path that is gone, so the next gate run marks them fixed. If the file comes back, they re-open on the next scan.
 
-That has always held for findings from a **runner** (ruff, semgrep, gitleaks, …). Since 2026-08-09 it also holds for `red-proof` and `tdd`, whose findings previously stayed open forever: their own resolvers need the file to be present (red-proof re-runs pytest against it, tdd waits for the push to touch it), and git file discovery excludes deletions, so a deleted path never entered scope for either.
+That has always held for findings from a **runner** (ruff, semgrep, gitleaks, …). Since 2026-08-09 it also holds for `red-proof`, `tdd` and `mutation`, whose findings previously stayed open forever: their own resolvers need the file to be present (red-proof re-runs pytest against it; tdd and mutation wait for the push to touch it), and git file discovery excludes deletions, so a deleted path never entered scope for any of them.
 
-Three producers are **not** covered, for two different reasons — close their findings by hand with `aramid override`:
+Two producers are still **not** covered — close their findings by hand with `aramid override`:
 
-- `mutation` has a resolver, but it only fires when the push *touches* the file, and git file discovery excludes deletions. Deleting the file leaves the finding open.
-- `js-mutation` and `fuzz` have **no resolver at all**. Nothing in the gate matches those tool names, `record_run` cannot reach them (it keys on runner labels, and these are consumers), and the drain deliberately records detections without resolving anything. Their findings stay open permanently — not just after a deletion, but *even once you fix the crash or kill the surviving mutant*. Same for `dast`.
-
-`dast` is additionally excluded from deletion-based resolution by design, not oversight: its findings are anchored to an endpoint (`GET /login`) rather than a file, so "was this file deleted?" has no answer for them — and because that string does not exist as a path, treating it as one would silently clear live security findings.
+- `js-mutation` and `fuzz` have **no resolver at all**, which is a bigger problem than deletions. Nothing in the gate matches those tool names, `record_run` cannot reach them (it keys on runner labels, and these are consumers), and the drain deliberately records detections without resolving anything. Their findings stay open permanently — not just after a deletion, but *even once you fix the crash or kill the surviving mutant*. Giving them deletion-resolution alone would paper over that, so they need a resolver of their own instead.
+- `dast` is excluded by design, not oversight: its findings are anchored to an endpoint (`GET /login`) rather than a file, so "was this file deleted?" has no answer for them — and because that string does not exist as a path, treating it as one would silently clear live security findings.
 
 ### Overriding a WARN finding
 
