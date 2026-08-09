@@ -73,10 +73,25 @@ to publish a tag that disagrees with it.
 
   So a producer that never opts in keeps its findings open: fail-safe by
   default, rather than a denylist of shapes each new consumer must remember to
-  join. `mutation`, `js-mutation` and `fuzz` have the same bug and are
-  deliberately **not** opted in here — unevidenced scope, not settled; each is
-  one call. `llm-review` needs nothing, since `auto_resolve_llm` already fires
-  when the stored evidence quote leaves `HEAD`. `dast` must never opt in.
+  join. `llm-review` needs nothing, since `auto_resolve_llm` already fires when
+  the stored evidence quote leaves `HEAD`. `dast` must never opt in.
+
+  Deliberately **not** opted in, as unevidenced scope rather than a settled
+  question — and the two cases are not equivalent:
+
+  - `mutation` has a resolver that simply cannot see deletions (it fires only
+    when the push touches the file, and discovery filters `--diff-filter=ACMR`).
+    One call fixes it.
+  - `js-mutation` and `fuzz` turn out to have **no resolver at all**, which is
+    a strictly larger defect found while checking this one. No `auto_resolve_*`
+    matches those tool names; `record_run` cannot reach them because it keys on
+    runner labels and these are consumers; and `commands/drain._consume_item`
+    passes empty tool/file scopes on purpose ("record detections but resolve
+    NOTHING", so a narrow pack ruleset cannot clear a full-gate finding). Their
+    findings are therefore immortal outright — not only after a deletion, but
+    after a genuine fix. `dast` is in the same position. Reported, not fixed
+    here: the right resolution rule for a fuzz crash is a design question, not
+    a one-line opt-in.
 
 - **A whole-project runner could record findings as `fixed` in files the gate
   never scoped.** `ledger.record_run` **replaced** the gate's `scope_files`
