@@ -1,4 +1,6 @@
-# Reviewed, committed BLOCK-tier suppressions for aramid's own repo.
+# Reviewed, committed suppressions for aramid's own repo. Every entry below
+# happens to be BLOCK-tier; the file itself accepts ANY tier (see the tier note
+# at the bottom).
 #
 # WHY THIS FILE EXISTS. `aramid override` deliberately refuses BLOCK-tier
 # findings and points here instead, because suppressing a blocking security
@@ -102,3 +104,15 @@ tool = "gitleaks"
 rule = "private-key"
 path = "docs/superpowers/plans/2026-07-13-aramid-phase2b.md"
 reason = "The same ellipsis-bodied PEM quoted in the phase-2b plan. No base64 payload."
+
+# --- Tier note (design doc section 6 amendment, 2026-08-09) -----------------
+# This file takes ANY verdict, not only BLOCK. Until 2026-08-09 it applied to
+# BLOCK findings only, which made a WARN entry here a silent no-op: it matched
+# nothing and was not reported stale either, because its id IS among the
+# findings. The file could authorize the dangerous suppression and not the safe
+# one. The ledger (`aramid override`) is still WARN-only, and for a reason that
+# is not symmetric -- `.aramid/` is gitignored, so a BLOCK hidden there is a
+# decision nobody can review.
+#
+#   ledger override    "quiet this for me, on this machine."   WARN only.
+#   this file          "the team decided this, reviewably."    Any tier.

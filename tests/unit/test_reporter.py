@@ -113,8 +113,14 @@ def test_stale_override_renders_reaffirm_line(tmp_path):
 
     out = reporter.render_console(result, ledger)
 
-    assert ("stale override stale1 — re-affirm with `aramid override stale1 --reason` "
-            "(WARN) or update .aramid-suppressions.toml (BLOCK)") in out
+    # The tier tags this line used to carry -- "(WARN)" on the ledger route,
+    # "(BLOCK)" on the file -- became wrong when the committed file went
+    # tier-agnostic: the file is now the right answer at EITHER tier, and it
+    # is the only one a teammate ever sees. The routes differ in reach, so
+    # that is what the line names.
+    assert ("stale override stale1 — re-affirm it: `aramid override stale1 --reason` "
+            "(WARN only, machine-local) or an entry in .aramid-suppressions.toml "
+            "(any tier, committed)") in out
     ledger.close()
 
 

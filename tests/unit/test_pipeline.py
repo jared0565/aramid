@@ -2018,6 +2018,72 @@ def test_ratchet_escalates_a_natively_warn_finding_too(tmp_path, monkeypatch):
     ledger.close()
 
 
+def test_a_committed_warn_suppression_survives_the_ratchet(tmp_path, monkeypatch):
+    """The team scenario the tier-agnostic suppressions file exists for, end
+    to end through run_gate -- not just apply_overrides in isolation.
+
+    A brand-new WARN is escalated to BLOCK by the ratchet on first sighting,
+    so "it's only a warning" is no defence: a teammate's fresh clone blocks on
+    it. The team's reviewed judgement lives in the committed
+    `.aramid-suppressions.toml`, and until 2026-08-09 a WARN id there did
+    NOTHING -- the entry matched neither branch of apply_overrides and was not
+    even reported stale.
+
+    Ordering is what makes this work and is worth pinning: apply_overrides
+    runs BEFORE the PRE_PUSH ratchet, so a suppressed WARN is already INFO
+    when the escalation pass looks for WARNs. Move the ratchet earlier and
+    this goes red.
+
+    Run 2 uses a SECOND, EMPTY ledger rather than re-running against the
+    first. Re-running would make the finding non-new, and the ratchet ignores
+    non-new findings anyway -- so it would pass with or without the
+    suppression, proving nothing. A fresh ledger keeps the finding NEW, which
+    is the only state in which the ratchet has any teeth. Finding ids are
+    salt-free content fingerprints, so the id is identical across both runs.
+    """
+    root = _repo(tmp_path)
+    cfg = _cfg(root, tmp_path, monkeypatch)
+    cfg.semgrep_block_armed = False
+
+    class _Warnish(_OneFindingSemgrep):
+        rule = "javascript.lang.best-practice.no-console-log"
+        severity_raw = "low"
+
+    monkeypatch.setitem(pipeline.RUNNERS, "semgrep", _Warnish)
+    monkeypatch.setitem(pipeline.GATE_RUNNER_KEYS, Gate.PRE_PUSH, ["semgrep"])
+
+    # Run 1 -- no suppressions file. The new WARN ratchets to BLOCK.
+    ledger = _ledger(tmp_path, "l1.db")
+    first = pipeline.run_gate(root, Gate.PRE_PUSH, "all", cfg, ledger, run_id="ratchet-1")
+    ledger.close()
+    blocked = [f for f in first.findings if f.tool == "semgrep"]
+    assert blocked and blocked[0].verdict is Verdict.BLOCK
+    assert first.exit_code == 1
+    finding_id = blocked[0].id
+
+    # The team reviews it and commits the judgement.
+    (root / ".aramid-suppressions.toml").write_text(
+        "[[suppress]]\n"
+        f'id = "{finding_id}"\n'
+        'tool = "semgrep"\n'
+        'rule = "javascript.lang.best-practice.no-console-log"\n'
+        'path = "a.py"\n'
+        'reason = "house style; console logging is intentional in this module"\n',
+        encoding="utf-8")
+
+    # Run 2 -- fresh ledger, so the finding is NEW again and the ratchet is
+    # live. The committed entry must neutralize it.
+    ledger2 = _ledger(tmp_path, "l2.db")
+    second = pipeline.run_gate(root, Gate.PRE_PUSH, "all", cfg, ledger2, run_id="ratchet-2")
+    ledger2.close()
+
+    sg = [f for f in second.findings if f.tool == "semgrep"]
+    assert sg and sg[0].id == finding_id
+    assert sg[0].verdict is Verdict.INFO, "the committed WARN suppression did not apply"
+    assert second.exit_code == 0
+    assert second.stale_overrides == []
+
+
 class _WarningDeps:
     """deps stand-in emitting one newly-appeared RUSTSEC informational
     warning, the shape of an upstream publication event."""

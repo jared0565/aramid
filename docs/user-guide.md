@@ -277,7 +277,35 @@ aramid ledger mark-unreachable <id> --reason "no python stack in this repo anymo
 aramid override <id> --reason "false positive, confirmed by security team"
 ```
 
-`--reason` is required (non-empty). This refuses (exit `3`) for any BLOCK-tier finding — including a confirmed-critical LLM finding, even before `[llm].llm_block_armed` is set, since arming applies retroactively — and directs you to `.aramid-suppressions.toml` for a reviewed, committed suppression instead.
+`--reason` is required (non-empty). This refuses (exit `3`) for any BLOCK-tier finding — including a confirmed-critical LLM finding, even before `[llm].llm_block_armed` is set, since arming applies retroactively — and prints the exact `.aramid-suppressions.toml` entry to add instead, ready to paste.
+
+### Suppressing a finding for the whole team — `.aramid-suppressions.toml`
+
+`aramid override` writes to the ledger in `.aramid/`, which is gitignored. That is deliberate — it is the "quiet this for me, on this machine" channel, and because nobody else can review it, it is limited to WARN-tier findings.
+
+The decision a *team* makes goes in `.aramid-suppressions.toml` at the repo root. **Commit it.** It is a plain TOML list, and it accepts any tier:
+
+```toml
+[[suppress]]
+id = "a1b2c3d4e5f60718"
+tool = "gitleaks"
+rule = "aws-access-key-id"
+path = "tests/fixtures/creds.env"
+reason = "test fixture, never live; rotated out of the org 2026-08-01"
+```
+
+- **`id`** is the finding's content fingerprint. Copy it — don't retype it — from `aramid ledger list`, from `aramid check --json`, or from the snippet `aramid override` prints when it refuses a BLOCK. (`aramid status` prints ids too, but only for secret findings and unreachable candidates.) It is salt-free, so it is the same id in every clone.
+- **`reason`** is mandatory. An entry without one is **dropped** — it suppresses nothing — and aramid raises a WARN finding against the file itself, so a reasonless entry is loud rather than silent.
+- `tool`, `rule` and `path` are what **stale detection** matches on. If the finding moves (the code changed, so the fingerprint changed) but the same tool still fires the same rule on the same file, the finding **re-fires at its normal tier** and the entry is reported stale. A suppression cannot outlive the thing it was written about.
+
+The two channels differ in reach, not in strength:
+
+| | where | reviewable | tiers |
+|---|---|---|---|
+| `aramid override <id>` | `.aramid/ledger.db`, gitignored | no | WARN only |
+| `.aramid-suppressions.toml` | repo root, committed | yes, in the diff | **any** |
+
+Before 0.2.0 the file quietly ignored WARN entries. If you have one that never seemed to take effect, it works now — no change to the entry is needed.
 
 ### `aramid rebaseline` — recovering from a fingerprint change
 
@@ -580,7 +608,9 @@ aramid check --gate pre-push --all --strict --json
 
 **You need to get past a degraded run without waiting** — `aramid check --accept-degraded --reason "why"`, or set `ARAMID_ACCEPT_DEGRADED` in the environment (hooks inherit it automatically from the parent git process).
 
-**You want to suppress a finding you've reviewed** — `aramid override <id> --reason "..."` for WARN-tier findings. For BLOCK-tier findings, `override` refuses on purpose; use a reviewed, committed entry in `.aramid-suppressions.toml` instead.
+**You want to suppress a finding you've reviewed** — `aramid override <id> --reason "..."` for a WARN-tier finding you only need quiet on your own machine. For a BLOCK-tier finding, `override` refuses on purpose and prints the entry to paste into `.aramid-suppressions.toml`. Use that committed file for anything the team should see — it takes **any** tier, not just BLOCK.
+
+**You added a WARN entry to `.aramid-suppressions.toml` and the finding still fires** — before 0.2.0 the file applied only to BLOCK-tier findings, and a WARN entry was a silent no-op: no effect, and no stale report either. Upgrade; the entry starts working as written. If it still fires on 0.2.0+, the finding has moved — check `aramid check --json` for a stale-suppression report and refresh the `id`.
 
 **`aramid drain` exits 3 with a lock error** — another drain is running, or the lock at `~/.aramid/drain.lock` is stale. A stale lock (dead PID, or older than `2 × [drain].wall_clock_budget_s`) is broken automatically on the next attempt.
 

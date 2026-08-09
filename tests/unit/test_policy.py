@@ -196,11 +196,21 @@ def test_override_does_not_downgrade_block_finding():
     assert out[0].verdict is Verdict.BLOCK  # overrides only downgrade WARN, not BLOCK
 
 
-def test_suppression_does_not_downgrade_warn_finding():
+def test_suppression_downgrades_a_warn_finding_too():
+    # The tracked file is tier-AGNOSTIC. This deliberately reverses the
+    # original partition (`suppressions only downgrade BLOCK, not WARN`),
+    # which was pinned by this test under its old name. That partition was
+    # measured to make a WARN entry here a SILENT NO-OP: it matched neither
+    # branch of apply_overrides, and it was not reported stale either,
+    # because its id IS among the findings so the stale loop skips it. A
+    # team recording a WARN judgement in the reviewable file -- the natural
+    # thing to try, and strictly SAFER than the BLOCK entries the file has
+    # always accepted -- got no effect and no diagnostic.
     f = _finding("id-4", "ruff", "E501", "a.py", Verdict.WARN)
     rec = policy.OverrideRecord(id="id-4", tool="ruff", rule="E501", path="a.py", reason="x")
     out, stale = policy.apply_overrides([f], overrides=[], suppressions=[rec])
-    assert out[0].verdict is Verdict.WARN  # suppressions only downgrade BLOCK, not WARN
+    assert out[0].verdict is Verdict.INFO
+    assert stale == []
 
 
 def test_stale_override_near_miss_finding_refires():
@@ -220,6 +230,40 @@ def test_unmatched_override_with_no_near_miss_is_not_stale():
     rec = policy.OverrideRecord(id="id-old", tool="ruff", rule="E501", path="gone.py", reason="x")
     out, stale = policy.apply_overrides([], overrides=[rec], suppressions=[])
     assert stale == []
+
+
+def test_stale_suppression_near_miss_warn_finding_refires():
+    # Stale detection took no code change when the tracked file went
+    # tier-agnostic -- `matched_ids` was always tier-blind, and the old
+    # partition's damage was that a WARN entry landed in the `continue`
+    # branch (id present => not stale) while ALSO doing nothing. Pinned
+    # here rather than assumed: a WARN entry whose finding has MOVED still
+    # re-fires at WARN and is still reported stale.
+    f = _finding("id-new", "ruff", "E501", "a.py", Verdict.WARN)
+    rec = policy.OverrideRecord(id="id-old", tool="ruff", rule="E501", path="a.py",
+                                 reason="stale reason")
+    out, stale = policy.apply_overrides([f], overrides=[], suppressions=[rec])
+    assert out[0].verdict is Verdict.WARN
+    assert stale == [rec]
+
+
+def test_a_ledger_override_still_cannot_hide_a_block_finding_when_both_channels_carry_it():
+    # The dangerous collapse of apply_overrides' two branches is
+    # `if f.id in suppress_ids or f.id in override_ids`. The single-channel
+    # guard above catches it, but this pins the mixed case too: the id is in
+    # BOTH lists, for DIFFERENT findings. Only the file-suppressed one may
+    # go INFO.
+    blocked = _finding("id-block", "gitleaks", "aws-key", "c.py", Verdict.BLOCK)
+    suppressed = _finding("id-supp", "semgrep", "owasp.sqli", "b.py", Verdict.BLOCK)
+    ledger_rec = policy.OverrideRecord(id="id-block", tool="gitleaks", rule="aws-key",
+                                        path="c.py", reason="x")
+    file_rec = policy.OverrideRecord(id="id-supp", tool="semgrep", rule="owasp.sqli",
+                                      path="b.py", reason="reviewed")
+    out, _ = policy.apply_overrides([blocked, suppressed], overrides=[ledger_rec],
+                                     suppressions=[file_rec])
+    by_id = {f.id: f.verdict for f in out}
+    assert by_id["id-block"] is Verdict.BLOCK
+    assert by_id["id-supp"] is Verdict.INFO
 
 
 def test_stale_suppression_near_miss_block_finding_refires():

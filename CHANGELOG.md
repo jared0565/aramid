@@ -436,6 +436,24 @@ First release published to PyPI. 0.1.0 exists as a GitHub Release only, so
 
 ### Added
 
+- **`aramid override`'s BLOCK refusal now prints the ready-to-paste
+  `[[suppress]]` entry.** It always named `.aramid-suppressions.toml` as the
+  correct channel and then left the operator to hand-assemble the entry from
+  `aramid ledger list` output — including `id`, an opaque content fingerprint
+  and the one field nobody can retype. Both ways of getting it wrong are
+  quiet ones: a missing `reason` makes the loader **drop** the entry entirely,
+  and a wrong `id` reads as a stale near-miss.
+
+  The emitted TOML is escaped, because `--reason` is free user text — a quote
+  or a Windows path's backslash would otherwise produce a snippet that fails to
+  parse, or parses into something other than what was typed. Both guards assert
+  by **round-trip** rather than substring: the emitted text is written to a real
+  `.aramid-suppressions.toml`, loaded through the real `load_suppressions`, and
+  required to yield a record matching the finding.
+
+- A `.aramid-suppressions.toml` section in the user guide. The file was
+  referenced four times as the thing to use and its format appeared nowhere.
+
 - **PyPI publishing is wired up, and the package metadata that makes it worth
   doing.** `[project]` carried name, version, `requires-python` and
   dependencies — and nothing else. `twine check` said `long_description
@@ -601,6 +619,50 @@ First release published to PyPI. 0.1.0 exists as a GitHub Release only, so
   rather than left as a comment asserting them.
 
 ### Changed
+
+- **`.aramid-suppressions.toml` is now tier-agnostic: it accepts a reasoned
+  WARN entry as readily as a BLOCK one.** The committed file was BLOCK-only,
+  and the ledger (`aramid override`) WARN-only, as a strict partition. That
+  made a WARN id in the committed file a **silent no-op** — measured, not
+  inferred: it matched neither branch of `policy.apply_overrides`, *and* it was
+  not reported stale either, because its id **is** among the findings, so the
+  stale loop's `continue` skipped it. No effect and no diagnostic, which is the
+  exact failure shape this tool exists to catch.
+
+  The file could authorize the *dangerous* suppression (silencing a BLOCK) but
+  not the *safe* one. Design doc section 6 never asked for that: "a BLOCK
+  **requires** the committed file" is a floor on what BLOCK needs, and it was
+  implemented as a ceiling on what the file may carry. The section now carries
+  a dated amendment saying so.
+
+  **"It's only a warning" was never a defence, which is what makes this worth
+  fixing rather than noting.** A brand-new WARN is escalated to BLOCK by the
+  pre-push ratchet on first sighting, so a teammate's fresh clone *blocks* on a
+  finding the team had already reviewed and thought they had recorded. The
+  new end-to-end test drives `run_gate` twice against a second, empty ledger —
+  keeping the finding NEW, the only state in which the ratchet has teeth — and
+  its red-proof against the old code returns **BLOCK**, not WARN.
+  `apply_overrides` running before the ratchet is what makes the suppression
+  work, and that ordering is now pinned.
+
+  The ledger stays WARN-only, and `aramid override` still refuses BLOCK-tier
+  findings — `.aramid/` is gitignored, so a BLOCK hidden there is an
+  unreviewable decision. The resulting rule: **ledger override** = "quiet this
+  for me, on this machine"; **suppressions file** = "the team decided this,
+  reviewably", any tier.
+
+  The two branches are deliberately *not* collapsed into
+  `if f.id in suppress_ids or f.id in override_ids` — that one-line
+  simplification would let a machine-local ledger entry hide a BLOCK finding,
+  re-granting one layer down exactly what the CLI refuses.
+  `test_override_does_not_downgrade_block_finding` was verified to fail against
+  that shape before the real fix went in, and a second test pins the mixed case
+  where one id sits in each channel.
+
+  Stale detection needed no change and was pinned rather than edited:
+  `matched_ids` was always tier-blind. `init._scan_history` is likewise
+  unaffected — it filters on the id set directly and never calls
+  `apply_overrides`.
 
 - **The 20 remaining `S`-family findings in `src/` are triaged and
   documented.** Each was assessed individually and each turned out to be a

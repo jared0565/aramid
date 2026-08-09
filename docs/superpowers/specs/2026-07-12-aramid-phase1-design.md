@@ -323,6 +323,34 @@ must survive review is suppression of blocks, which lives in the committed file.
   `.aramid-suppressions.toml` — visible in diff review, permanently attributed, with a
   reason. A suppression without a reason is itself a WARN finding.
 
+> **Amendment, 2026-08-09 — the tiers constrain the CHANNEL, not the FILE.**
+> As first implemented, `apply_overrides` read the two bullets above as a strict
+> partition: the ledger downgraded WARN only, and the committed file downgraded
+> **BLOCK only**. That second half was never what this section said. "A BLOCK
+> *requires* the committed file" is a floor on what BLOCK needs; it was read as a
+> ceiling on what the file may carry.
+>
+> The consequence was measured, not theorised: a WARN id written into
+> `.aramid-suppressions.toml` matched neither branch and did nothing — and was
+> not reported stale either, because its id **is** among the findings, so the
+> stale loop skipped it. A team recording a WARN judgement in the reviewable
+> file — the natural thing to reach for, and strictly *safer* than the BLOCK
+> entries the file had always accepted — got no effect and no diagnostic. The
+> file could authorize the dangerous suppression but not the safe one.
+>
+> The committed file is therefore **tier-agnostic**: any verdict, always with a
+> reason, always in diff review. The ledger stays **WARN-only** — `.aramid/` is
+> gitignored, so a BLOCK hidden there would be an unreviewable decision, which is
+> the thing this section exists to prevent. `aramid override`'s refusal of
+> BLOCK-tier findings is unchanged; it now also prints the ready-to-paste
+> `[[suppress]]` entry, since the `id` is an opaque content fingerprint nobody
+> can retype.
+>
+> Restated as the operative rule:
+>
+> - **ledger override** — "quiet this for me, on this machine." WARN only.
+> - **suppressions file** — "the team decided this, reviewably." Any tier.
+
 ---
 
 ## 7. Configuration

@@ -207,14 +207,36 @@ class OverrideRecord:
 
 def apply_overrides(findings: list[Finding], overrides: list[OverrideRecord],
                      suppressions: list[OverrideRecord]) -> tuple[list[Finding], list[OverrideRecord]]:
+    """Downgrade suppressed findings to INFO. The two channels are NOT
+    symmetric, and the asymmetry is the whole point of design doc section 6:
+
+      `.aramid-suppressions.toml`  -- tracked, reviewed, reason mandatory.
+                                      ANY tier. "The team decided this."
+      ledger overrides             -- `.aramid/` is gitignored, so this is a
+                                      machine-local, unreviewable decision.
+                                      WARN ONLY. "Quiet this for me, here."
+
+    The tracked file was BLOCK-only until 2026-08-09, which made a WARN entry
+    there a silent no-op (see the test of that name) -- it could authorize the
+    dangerous suppression but not the safe one. Section 6 says a BLOCK
+    *requires* the committed file; that is a floor on what BLOCK needs, never
+    a ceiling on what the file may carry.
+
+    Do NOT collapse these into `if f.id in override_ids or f.id in
+    suppress_ids`. That one-line "simplification" would let a machine-local
+    ledger entry hide a BLOCK finding -- exactly the capability
+    `commands/override.py` refuses at the CLI, re-granted silently one layer
+    down. `test_override_does_not_downgrade_block_finding` is the guard;
+    it must keep failing on that shape.
+    """
     override_ids = {o.id for o in overrides}
     suppress_ids = {s.id for s in suppressions}
 
     downgraded: list[Finding] = []
     for f in findings:
-        if f.verdict is Verdict.WARN and f.id in override_ids:
+        if f.id in suppress_ids:
             downgraded.append(replace(f, verdict=Verdict.INFO))
-        elif f.verdict is Verdict.BLOCK and f.id in suppress_ids:
+        elif f.verdict is Verdict.WARN and f.id in override_ids:
             downgraded.append(replace(f, verdict=Verdict.INFO))
         else:
             downgraded.append(f)

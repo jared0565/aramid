@@ -418,7 +418,7 @@ Sweep registered repos, catch-up-triage, pop the highest-scored queued item(s), 
 - Bare `aramid ledger` — usage line, exit 3.
 
 ### `aramid override <id> --reason REASON`
-Suppress a WARN-tier finding, ledger-logged. `--reason` required (non-empty after stripping). Refuses (exit 3) for any BLOCK-tier finding, including a confirmed+critical LLM finding even if unarmed (arming is retroactive) — directs the operator to `.aramid-suppressions.toml` instead.
+Suppress a WARN-tier finding, ledger-logged. `--reason` required (non-empty after stripping). Refuses (exit 3) for any BLOCK-tier finding, including a confirmed+critical LLM finding even if unarmed (arming is retroactive) — and prints the ready-to-paste `[[suppress]]` entry (escaped TOML, `id`/`tool`/`rule`/`path`/`reason` filled from the ledger record) for `.aramid-suppressions.toml` instead. The tier limit is on this CHANNEL, not that file: `.aramid/` is gitignored so a ledger decision is unreviewable, while the committed file is tier-agnostic and takes any verdict (design doc §6 amendment, 2026-08-09).
 
 ### `aramid pack list|add <id>|compile`
 - `list` — existing pack rule ids.

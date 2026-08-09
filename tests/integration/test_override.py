@@ -69,6 +69,79 @@ def test_block_id_errors_and_directs_to_suppressions_file(tmp_path, capsys):
         ledger.close()
 
 
+def _snippet_from(err: str) -> str:
+    assert "[[suppress]]" in err, f"no TOML snippet in refusal:\n{err}"
+    return err[err.index("[[suppress]]"):]
+
+
+def test_the_refusal_emits_a_snippet_that_actually_suppresses_the_finding(tmp_path, capsys):
+    """The refusal tells the user to add an entry to .aramid-suppressions.toml
+    but historically left them to hand-assemble it from `aramid status`
+    output -- and the `id` is an opaque content fingerprint, the one field
+    nobody can retype from memory.
+
+    Asserted by ROUND-TRIP, not by substring. A snippet can contain every
+    expected word and still be unusable: wrong key names, an unquoted
+    fingerprint, a missing `reason` (which load_suppressions drops, silently
+    suppressing nothing). So this writes the emitted text to the real file,
+    loads it through the real loader, and requires a record that matches the
+    finding -- the same path the gate takes.
+    """
+    import tomllib
+
+    from aramid import config as config_mod
+
+    root: Path = tmp_path
+    ledger = _ledger(root)
+    ledger.record_run("r1", "t1", "pre-push", {"gitleaks"}, {"src/db.py"},
+                       [_f("fp-abc123", tool="gitleaks", rule="aws-key",
+                           verdict=Verdict.BLOCK, file="src/db.py")])
+    ledger.close()
+
+    rc = cmd_override(root, "fp-abc123", "test fixture credential, rotated 2026-08-01")
+    snippet = _snippet_from(capsys.readouterr().err)
+
+    assert rc == 3
+    tomllib.loads(snippet)  # parses standalone, before any file surgery
+    (root / ".aramid-suppressions.toml").write_text(snippet, encoding="utf-8")
+    records, warnings = config_mod.load_suppressions(root)
+
+    assert warnings == []  # a reasonless entry would land here instead
+    assert len(records) == 1
+    rec = records[0]
+    assert rec.id == "fp-abc123"
+    assert rec.tool == "gitleaks"
+    assert rec.rule == "aws-key"
+    assert rec.path == "src/db.py"
+    assert "rotated 2026-08-01" in rec.reason
+
+
+def test_the_emitted_snippet_survives_a_reason_containing_toml_metacharacters(tmp_path):
+    """`--reason` is free user text interpolated into generated TOML. A
+    double quote or a backslash (Windows paths in a justification are
+    ordinary) would otherwise produce a snippet that fails to parse, or --
+    worse -- one that parses into something other than what was typed.
+    """
+    import tomllib
+
+    root: Path = tmp_path
+    ledger = _ledger(root)
+    ledger.record_run("r1", "t1", "pre-push", {"gitleaks"}, {"a.py"},
+                       [_f("b1", tool="gitleaks", rule="aws-key", verdict=Verdict.BLOCK)])
+    ledger.close()
+
+    nasty = 'sample key from "vendor docs" at C:\\refs\\keys.md\tnot live'
+    import io
+    import contextlib
+    buf = io.StringIO()
+    with contextlib.redirect_stderr(buf):
+        cmd_override(root, "b1", nasty)
+    snippet = _snippet_from(buf.getvalue())
+
+    parsed = tomllib.loads(snippet)
+    assert parsed["suppress"][0]["reason"] == nasty
+
+
 def test_unknown_id_errors(tmp_path, capsys):
     root: Path = tmp_path
     rc = cmd_override(root, "nope", "some reason")

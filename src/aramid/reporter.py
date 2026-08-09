@@ -79,9 +79,15 @@ def render_console(result: GateResult, ledger: Ledger) -> str:
     lines.append(_open_count_line(ledger))
 
     for record in result.stale_overrides:
+        # Named by REACH, not by tier. These used to read "(WARN)" and
+        # "(BLOCK)", which stopped being true when the committed file went
+        # tier-agnostic (design doc section 6 amendment, 2026-08-09) -- the
+        # file is now the correct answer at either tier, and it is the only
+        # one of the two a teammate ever sees.
         lines.append(
-            f"stale override {record.id} — re-affirm with `aramid override {record.id} --reason` "
-            "(WARN) or update .aramid-suppressions.toml (BLOCK)"
+            f"stale override {record.id} — re-affirm it: `aramid override {record.id} --reason` "
+            "(WARN only, machine-local) or an entry in .aramid-suppressions.toml "
+            "(any tier, committed)"
         )
 
     return "\n".join(lines)

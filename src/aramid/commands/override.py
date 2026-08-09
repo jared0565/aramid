@@ -4,6 +4,15 @@ requires a reviewed, committed entry in `.aramid-suppressions.toml`
 instead, visible in diff review with a reason -- this command actively
 refuses and says so rather than silently no-op'ing.
 
+The tiers constrain THIS CHANNEL, not that file. `.aramid/` is gitignored, so
+a ledger override is a machine-local, unreviewable decision and is WARN-only
+for that reason. The committed file is tier-AGNOSTIC (section 6 amendment,
+2026-08-09) -- it accepts a reasoned WARN entry as readily as a BLOCK one, and
+carrying the whole judgement there is how it reaches a teammate at all. So the
+refusal below is a redirect to a channel that is strictly more capable, not a
+dead end; it prints the ready-to-paste entry because the `id` is an opaque
+content fingerprint and is the one field an operator cannot retype.
+
 LLM confirmed-critical findings are ALSO BLOCK-tier for this purpose (the
 whole-branch adversarial review's must-fix; the parallel fix to check.py's
 `_has_genuine_block`, task 13b, closed the same gap for the fresh-ledger
@@ -41,6 +50,45 @@ def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+_TOML_ESCAPES = {"\\": "\\\\", '"': '\\"', "\b": "\\b", "\t": "\\t",
+                 "\n": "\\n", "\f": "\\f", "\r": "\\r"}
+
+
+def _toml_str(value: str) -> str:
+    """A TOML basic string. `--reason` is free user text pasted straight into
+    generated TOML, so a quote or a Windows path's backslash would otherwise
+    emit a snippet that fails to parse -- or parses into something other than
+    what the operator typed. Remaining control characters are illegal in a
+    basic string and go out as \\uXXXX."""
+    out = []
+    for ch in value:
+        if ch in _TOML_ESCAPES:
+            out.append(_TOML_ESCAPES[ch])
+        elif ch < "\x20" or ch == "\x7f":
+            out.append(f"\\u{ord(ch):04x}")
+        else:
+            out.append(ch)
+    return '"' + "".join(out) + '"'
+
+
+def _suppression_snippet(finding_id: str, rec: dict, reason: str) -> str:
+    """The entry the operator is being told to write. Emitted in full because
+    `id` is an opaque content fingerprint -- the one field nobody can retype,
+    and the one that makes the difference between a suppression that binds and
+    a stale near-miss the gate re-fires. `reason` is mandatory in
+    load_suppressions: an entry missing it is DROPPED and suppresses nothing,
+    so carrying the already-supplied --reason through keeps the paste
+    fail-safe rather than fail-silent."""
+    return (
+        "[[suppress]]\n"
+        f"id = {_toml_str(finding_id)}\n"
+        f"tool = {_toml_str(str(rec.get('tool', '')))}\n"
+        f"rule = {_toml_str(str(rec.get('rule', '')))}\n"
+        f"path = {_toml_str(str(rec.get('file', '')))}\n"
+        f"reason = {_toml_str(reason)}\n"
+    )
+
+
 def cmd_override(root, finding_id: str, reason: str) -> int:
     root = Path(root)
     reason = (reason or "").strip()
@@ -70,7 +118,9 @@ def cmd_override(root, finding_id: str, reason: str) -> int:
         if rec.get("verdict") == "block" or is_llm_confirmed_critical:
             print(f"aramid: override: {finding_id} is a BLOCK-tier finding -- a local "
                   f"override is not permitted; add a reasoned entry to "
-                  f".aramid-suppressions.toml instead (design doc section 6)", file=sys.stderr)
+                  f".aramid-suppressions.toml instead (design doc section 6).\n"
+                  f"Append this, review it, and commit it:\n", file=sys.stderr)
+            print(_suppression_snippet(finding_id, rec, reason), file=sys.stderr)
             return 3
 
         ledger.append(Event(EventType.FINDING_OVERRIDDEN, uuid.uuid4().hex, _now(),
