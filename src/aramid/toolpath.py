@@ -101,7 +101,22 @@ def _same_file(a: Path, b: Path) -> bool:
         return a.resolve() == b.resolve()
 
 
-def divergence(name: str) -> Divergence | None:
+PROVENANCE_TOOLS = frozenset({"gitleaks", "ruff", "semgrep"})
+"""Runner registry keys that are ALSO the name of the binary aramid resolves
+through this module, so provenance can be recorded for them without a second
+resolution path.
+
+`eslint`, `clippy`, `typecheck`, `deps` and `tests` are deliberately absent:
+they are keys, not executables. There is no `tests.exe` -- that slot runs
+pytest, npm, cargo or go depending on the stack, and each runner works out its
+own command. Probing the KEY as a binary name is not a slow success but a
+wrong question; it was also expensive, at ~110ms per miss on a Windows PATH
+with 72 entries. Naming their real binaries here would mean duplicating each
+runner's command construction, which is the second-resolution-path arrangement
+this module exists to prevent."""
+
+
+def divergence(name: str, resolved: Path | None = None) -> Divergence | None:
     """Is aramid about to run a DIFFERENT copy of a declared dependency than
     the one pip installed alongside it? Returns None when it is not, when
     `name` is not a declared dependency, or when either copy is absent.
@@ -131,11 +146,17 @@ def divergence(name: str) -> Divergence | None:
     `resolve()`: `resolve()` returns on the `shutil.which` hit and never
     computes bucket 2 at all, so the question "what would the dependency copy
     have been?" has no answer to borrow.
+
+    `resolved` lets a caller that has ALREADY resolved hand the answer in.
+    Without it every gate run paid `shutil.which` twice per dependency tool --
+    ~100ms each on a Windows PATH with 72 entries -- for a value it was
+    holding. Omit it and this resolves for itself, unchanged.
     """
     if name not in DEPENDENCY_TOOLS:
         return None
     try:
-        resolved = resolve(name)
+        if resolved is None:
+            resolved = resolve(name)
         if resolved is None:
             return None
         for d in scripts_dirs():

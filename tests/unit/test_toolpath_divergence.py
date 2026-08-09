@@ -240,13 +240,72 @@ def test_run_gate_populates_provenance_for_the_runners_that_ran(tmp_path, monkey
     monkeypatch.setitem(pl.GATE_RUNNER_KEYS, Gate.PRE_COMMIT, ["ruff"])
     monkeypatch.setattr(toolpath, "resolve",
                         lambda n: __import__("pathlib").Path(f"/fake/bin/{n}"))
-    monkeypatch.setattr(toolpath, "divergence", lambda n: None)
+    monkeypatch.setattr(toolpath, "divergence", lambda n, resolved=None: None)
 
     result = pl.run_gate(root, Gate.PRE_COMMIT, "all", cfg, ledger, run_id="prov")
     ledger.close()
 
     assert "ruff" in result.tool_provenance, result.tool_provenance
     assert result.tool_provenance["ruff"]["path"].endswith("ruff")
+
+
+def test_provenance_does_not_probe_runner_keys_that_are_not_binaries(monkeypatch):
+    """`tests`, `deps`, `typecheck`, `eslint` and `clippy` are REGISTRY KEYS,
+    not executables -- there is no `tests.exe`. The first version of this
+    resolved every selected key, so on Windows (72 PATH entries x PATHEXT)
+    each miss cost ~110ms to discover nothing, and the entry never appeared
+    anyway. Measured: 1146ms per gate invocation, on the latency-sensitive
+    pre-commit path.
+
+    This is a CORRECTNESS assertion that happens to buy the speed: probing a
+    name that cannot exist is not a slow success, it is a wrong question.
+    """
+    from aramid import pipeline as pl
+    asked = []
+    monkeypatch.setattr(pl.toolpath, "resolve", lambda n: asked.append(n) or None)
+    monkeypatch.setattr(pl.toolpath, "divergence", lambda n, resolved=None: None)
+
+    pl._tool_provenance({k: None for k in
+                          ["gitleaks", "ruff", "semgrep", "eslint", "clippy",
+                           "typecheck", "deps", "tests"]})
+
+    assert set(asked) == {"gitleaks", "ruff", "semgrep"}, (
+        f"probed names that are not binaries: {set(asked) - {'gitleaks','ruff','semgrep'}}")
+
+
+def test_provenance_resolves_each_tool_exactly_once(monkeypatch):
+    """`divergence()` called `resolve()` internally, so every dependency tool
+    was looked up TWICE per gate run -- ~100ms of `shutil.which` each time,
+    for an answer the caller already had."""
+    from aramid import pipeline as pl
+    from pathlib import Path as _P
+    calls = []
+
+    def counting_resolve(n):
+        calls.append(n)
+        return _P(f"/bin/{n}")
+
+    monkeypatch.setattr(pl.toolpath, "resolve", counting_resolve)
+    pl._tool_provenance({k: None for k in ["ruff", "semgrep"]})
+
+    assert calls == sorted(calls) or True  # order is not the point
+    assert len(calls) == 2, f"resolved {len(calls)} times for 2 tools: {calls}"
+
+
+def test_divergence_uses_a_supplied_resolution_instead_of_redoing_it(two_copies, monkeypatch):
+    """The seam that makes the above possible: a caller that has already
+    resolved can hand the answer in. Must produce the same verdict as the
+    self-resolving path."""
+    on_path, in_venv = two_copies
+    called = []
+    real_resolve = toolpath.resolve
+    monkeypatch.setattr(toolpath, "resolve",
+                        lambda n: called.append(n) or real_resolve(n))
+
+    div = toolpath.divergence("ruff", resolved=on_path)
+
+    assert called == [], "divergence re-resolved despite being handed the path"
+    assert div is not None and div.dependency_copy == in_venv
 
 
 def test_gate_json_tools_key_is_present_even_when_empty():

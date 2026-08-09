@@ -55,6 +55,28 @@ to publish a tag that disagrees with it.
   stale in silence. `gitleaks` is deliberately excluded — it is a binary
   aramid downloads, and PATH beating it is the documented intent.
 
+  **The first version of the provenance lookup added 1,146 ms to every gate
+  invocation**, including the latency-sensitive pre-commit path — measured
+  only because it was asked for, having shipped unmeasured in `d6167f8`. Two
+  causes, and the larger one was a correctness bug wearing a performance
+  costume:
+
+  - It resolved **every selected runner key as a binary name**. `tests`,
+    `deps`, `typecheck`, `eslint` and `clippy` are registry keys, not
+    executables — there is no `tests.exe`; that slot runs pytest, npm, cargo
+    or go depending on stack. Each was ~110 ms of `shutil.which` across a
+    72-entry Windows `PATH` to discover nothing, and no entry was ever
+    produced. Probing a name that cannot exist is a wrong question, not a slow
+    success, so `PROVENANCE_TOOLS` now names only the keys that *are* the
+    binary. Naming the others' real commands would mean duplicating each
+    runner's own command construction — the second resolution path `toolpath`
+    exists to prevent.
+  - `divergence()` re-resolved internally, so every dependency tool was looked
+    up twice per run for a value the caller already held. It now accepts
+    `resolved=`.
+
+  1,146 ms → **288 ms** at pre-push, **187 ms** at pre-commit.
+
 ### Fixed
 
 - **The README told everyone `pip install aramid` does not work.** It opened

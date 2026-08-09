@@ -126,12 +126,14 @@ def _tool_provenance(selected) -> dict:
     path vanishing between the two calls and nothing else."""
     out: dict = {}
     for key in selected:
+        if key not in toolpath.PROVENANCE_TOOLS:
+            continue
         try:
             resolved = toolpath.resolve(key)
             if resolved is None:
                 continue
             entry = {"path": str(resolved)}
-            div = toolpath.divergence(key)
+            div = toolpath.divergence(key, resolved=resolved)
             if div is not None:
                 entry["dependency_copy"] = str(div.dependency_copy)
             out[key] = entry
