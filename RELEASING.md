@@ -109,8 +109,28 @@ Configuring one does **not** configure the other.
    "Pending" is the right kind: it authorises a project that does not exist
    yet, which is the case until the first upload.
 
-2. **test.pypi.org** — the same form, if you want to rehearse first. A separate
-   account and a separate pending publisher.
+2. **test.pypi.org** — the same form, on a **separate account**. This one is
+   **not optional**: `publish-pypi` declares `needs: [release,
+   publish-testpypi]`, so without it every release stops before PyPI.
+
+   | field | value |
+   | --- | --- |
+   | PyPI project name | `aramid` |
+   | Owner | `jared0565` |
+   | Repository | `aramid` |
+   | Workflow name | `release.yml` |
+   | Environment | `testpypi` |
+
+   It was optional until 0.2.0, and offered a rehearsal no job performed. It is
+   now a gate, because the publish path cannot safely run for the first time
+   against a destination that claims the name permanently and forbids
+   re-uploading any version. The rehearsal exercises the three things nothing
+   else can: the `gated-dist` upload/download round-trip, the OIDC exchange,
+   and the rendered package page — go and look at
+   <https://test.pypi.org/project/aramid/> before the real name is claimed.
+
+   Note the environments differ (`testpypi` vs `pypi`); a publisher registered
+   against the wrong one silently fails to authorise.
 
 Optionally add a required reviewer to the `pypi` GitHub environment; the job is
 already gated on it, so no workflow change is needed.

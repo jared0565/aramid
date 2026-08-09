@@ -84,6 +84,59 @@ def test_publish_pypi_consumes_the_distribution_release_uploaded():
         f"downloads {down_name!r} -- the publish job would find no files")
 
 
+def _needs(job: str) -> list[str]:
+    n = _workflow()["jobs"][job].get("needs", [])
+    return [n] if isinstance(n, str) else list(n)
+
+
+def test_the_real_publish_is_gated_on_the_testpypi_rehearsal():
+    """PyPI's first upload claims the name permanently and no version can be
+    re-uploaded, so this must not be the first time the publish path runs.
+    `needs` is what makes the rehearsal a gate rather than a parallel job that
+    can fail unnoticed."""
+    assert "publish-testpypi" in _workflow()["jobs"], (
+        "the TestPyPI rehearsal job is gone -- RELEASING.md offers a rehearsal "
+        "and this job is the only thing that performs one")
+    assert "publish-testpypi" in _needs("publish-pypi"), (
+        "publish-pypi no longer waits on the rehearsal, so a broken publish "
+        f"path would first be discovered against PyPI. needs="
+        f"{_needs('publish-pypi')}")
+
+
+def test_the_rehearsal_publishes_the_same_gated_artifact():
+    """A rehearsal against different bytes rehearses nothing."""
+    downloads = _uses(_steps("publish-testpypi"), "actions/download-artifact")
+    uploads = _uses(_steps("release"), "actions/upload-artifact")
+
+    assert len(downloads) == 1, "the rehearsal must consume the gated artifact"
+    assert downloads[0].get("with", {}).get("name") == \
+        uploads[0].get("with", {}).get("name")
+
+
+def test_only_the_rehearsal_may_skip_an_existing_version():
+    """TestPyPI also forbids re-uploading a version, so `skip-existing` is what
+    lets a re-run of a partially-failed release proceed there. On PyPI the same
+    flag would turn a failed publish into a silent no-op that exits green --
+    success indistinguishable from a check that never ran."""
+    rehearsal = _uses(_steps("publish-testpypi"), "pypa/gh-action-pypi-publish")[0]
+    real = _uses(_steps("publish-pypi"), "pypa/gh-action-pypi-publish")[0]
+
+    assert rehearsal["with"]["skip-existing"] is True
+    assert real["with"]["skip-existing"] is False, (
+        "skip-existing on PyPI makes a failed publish look like a success")
+
+
+def test_the_rehearsal_targets_testpypi_and_the_real_job_does_not():
+    """A missing `repository-url` defaults to real PyPI -- so a typo here does
+    not fail, it publishes to production twice."""
+    rehearsal = _uses(_steps("publish-testpypi"), "pypa/gh-action-pypi-publish")[0]
+    real = _uses(_steps("publish-pypi"), "pypa/gh-action-pypi-publish")[0]
+
+    assert "test.pypi.org" in rehearsal["with"]["repository-url"]
+    assert "repository-url" not in real.get("with", {}), (
+        "the production job must not carry a repository-url override")
+
+
 def test_an_empty_upload_fails_instead_of_publishing_nothing():
     """`if-no-files-found` defaults to `warn`, which would hand the publish job
     an empty directory. A no-op publish that exits green is exactly the

@@ -183,11 +183,45 @@ jobs:
           if-no-files-found: error
           retention-days: 1
 
-  # Separate job so the irreversible step cannot run unless every gate in
-  # `release` passed. `needs` gives the ordering; `environment` is what lets a
-  # required reviewer be added on the PyPI side without touching this file.
-  publish-pypi:
+  # THE REHEARSAL, and the reason it is a gate rather than an option.
+  #
+  # PyPI's first upload claims the name permanently and no version can ever be
+  # re-uploaded, so the one path that must not run for the first time against
+  # production is this one. TestPyPI exercises the parts nothing else can: the
+  # gated-dist upload/download round-trip, the OIDC trusted-publishing
+  # exchange, and the rendered package page -- which a maintainer can actually
+  # look at before the real name is claimed. RELEASING.md used to offer this as
+  # "if you want to rehearse first" with no job to do it, i.e. a setup step
+  # that did nothing.
+  #
+  # `skip-existing: true` here and NOT on PyPI below, deliberately. TestPyPI
+  # also forbids re-uploading a version, so without it any re-run of a
+  # partially-failed release is dead on arrival. On PyPI a skip would be a
+  # silent no-op that exits green -- the one shape this repo exists to prevent.
+  publish-testpypi:
     needs: release
+    runs-on: ubuntu-latest
+    environment: testpypi
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5.0.0
+        with:
+          name: gated-dist
+          path: dist
+
+      - uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33 # v1.14.2
+        with:
+          repository-url: https://test.pypi.org/legacy/
+          skip-existing: true
+          print-hash: true
+
+  # Separate job so the irreversible step cannot run unless every gate in
+  # `release` passed AND the same artifact published cleanly to TestPyPI.
+  # `needs` gives the ordering; `environment` is what lets a required reviewer
+  # be added on the PyPI side without touching this file.
+  publish-pypi:
+    needs: [release, publish-testpypi]
     runs-on: ubuntu-latest
     environment: pypi
     permissions:
