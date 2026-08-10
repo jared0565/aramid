@@ -81,7 +81,11 @@ Issues = "https://github.com/jared0565/aramid/issues"
 # Python packaging itself does (PEP 440 normalization). It was already present
 # transitively via pip-audit/semgrep; declared explicitly so the test suite does
 # not rest on another package's dependency choices.
-dev = ["pytest>=8", "pyyaml>=6", "packaging>=23"]
+# `build` is here so tests/e2e/test_wheel_packaging.py can never degrade into a
+# skip: a packaging test that quietly does not run looks exactly like one that
+# passed. CI installed it as a separate step, which covered CI and left a fresh
+# dev environment unable to run that test at all.
+dev = ["pytest>=8", "pyyaml>=6", "packaging>=23", "build>=1"]
 
 [project.scripts]
 aramid = "aramid.cli:main"

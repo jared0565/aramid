@@ -50,6 +50,44 @@ to publish a tag that disagrees with it.
 - **`[mutation].test_command`**, falling back to `[tests].command`. The two
   answer different questions and had to stop sharing one knob — see below.
 
+### Added
+
+- **Three CI-only checks moved into the suite**, so they run on every push
+  instead of costing a matrix round-trip. All three are
+  environment-independent, which is exactly why they had no business being
+  CI-only — unlike the seven-leg matrix, nothing about them needs another
+  machine to discover.
+
+  - **ruff over every tracked file.** `ruff` is PRE_COMMIT-tier only
+    (`GATE_RUNNER_KEYS[PRE_PUSH]` has no ruff) and the local pre-commit hook
+    sees the *staged* scope, so a finding in an untouched file surfaced only in
+    CI. Teeth-checked by planting an `S110`: **untracked it passed vacuously,
+    tracked it went red** — a live reminder that repo-wide guards only see what
+    git tracks.
+  - **Semgrep is in the pre-push tier and selected.** CI asserts post-hoc that
+    the run actually completed semgrep; a test cannot inspect its own enclosing
+    run, so this asserts the property that makes that assertion meaningful.
+    Honest about strength: measured, `selected_tool_names` returns semgrep even
+    for a JS-only repo, so the *tier membership* half is the discriminating one.
+  - **Wheel build + packaged-data.** Expected files are derived from
+    `pyproject`'s own globs rather than CI's three literals, so a new data file
+    joins the expectation automatically. `build` is now in the `[dev]` extra so
+    the test can never degrade into a skip.
+
+  **A measured finding about the CI step this replaces:** it is weaker than it
+  reads. Three perturbations — dropping `rules/*.yml` from package-data,
+  reducing the globs to `data/*.toml`, and setting `include-package-data =
+  false` alongside — each *verified to have actually landed* before building,
+  and `owasp.yml` shipped every time. Under this backend every file under
+  `src/aramid/` is packaged regardless of configuration, so that step cannot
+  fail via the config it appears to guard. The test is kept for the regressions
+  that would really bite (a data file moved or renamed out of the package
+  directory, a build-backend change), with its limits written down.
+
+  Not attempted, and not claimed: the matrix. Interpreter and platform
+  differences cannot be reproduced on one machine, so CI stays the authority
+  and a green local run is a filter rather than a proof.
+
 ### Changed
 
 - **The pre-push gate now runs CI's whole test tree**, not `tests/unit`.
