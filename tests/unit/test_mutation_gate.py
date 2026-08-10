@@ -194,3 +194,84 @@ def test_resolution_before_materialize_no_double_surface(tmp_path):
     finally:
         led.close()
     assert got == []
+
+
+# --- the mapped-test rule, and what bounds it -------------------------------
+#
+# `test_<module>.py` / `<module>_test.py` alone cannot express how this repo --
+# or most Python repos -- names tests for a module inside a SUBPACKAGE. Two
+# conventions it missed, both load-bearing here:
+#
+#   src/aramid/consumers/base.py    <- tests/unit/test_consumers_base.py
+#   src/aramid/commands/doctor.py   <- tests/unit/test_doctor_version_parsing.py
+#
+# Measured 2026-08-10, and this is not hypothetical: FOUR of aramid's five open
+# findings were mutants on those two files that the repo's own tests provably
+# KILL -- applying each mutant by hand turns the mapped test file red. They sat
+# open only because nothing could map the fix back to the finding, which is the
+# state that teaches an operator to ignore the tool.
+#
+# The rule is deliberately anchored rather than "module name appears anywhere":
+# `base` is a stem THREE source files share (consumers/, providers/, runners/),
+# so an unanchored rule would let one subpackage's test clear another's finding
+# -- and for mutation_score_gate it would suppress an armed BLOCK regression on
+# a module nobody tested. Qualifying by the module's own parent directory keeps
+# those three apart.
+
+def test_maps_a_package_qualified_test_to_its_module(tmp_path):
+    """test_<parent>_<module>.py -- how this repo names tests for a module in
+    a subpackage. Was the reason four findings could never resolve."""
+    led = Ledger(tmp_path / "l.db")
+    try:
+        _seed(led, _mut_finding(file="src/aramid/consumers/base.py"))
+        resolved = mutation_gate.auto_resolve_mutation(
+            led, "r1", NOW, {"tests/unit/test_consumers_base.py"})
+    finally:
+        led.close()
+    assert resolved == ["m" * 64]
+
+
+def test_maps_a_purpose_suffixed_test_to_its_module(tmp_path):
+    """test_<module>_<aspect>.py -- a test file scoped to one aspect of a
+    module, which is how the doctor findings' killing tests are named."""
+    led = Ledger(tmp_path / "l.db")
+    try:
+        _seed(led, _mut_finding(file="src/aramid/commands/doctor.py"))
+        resolved = mutation_gate.auto_resolve_mutation(
+            led, "r1", NOW, {"tests/unit/test_doctor_version_parsing.py"})
+    finally:
+        led.close()
+    assert resolved == ["m" * 64]
+
+
+def test_a_sibling_subpackages_test_does_not_resolve_the_other_base(tmp_path):
+    """THE BOUNDARY, and the only test here that fails under the obvious
+    over-wide rule ("module name is a token of the test name"). `base` is
+    shared by consumers/, providers/ and runners/ -- so an unanchored rule
+    resolves all three findings when any one of their tests changes, and a
+    module nobody tested comes back clean."""
+    led = Ledger(tmp_path / "l.db")
+    try:
+        _seed(led, _mut_finding(file="src/aramid/consumers/base.py"))
+        resolved = mutation_gate.auto_resolve_mutation(
+            led, "r1", NOW, {"tests/unit/test_runners_base.py"})
+        state = led.open_findings()
+    finally:
+        led.close()
+    assert resolved == []
+    assert state["m" * 64]["status"] == "open"
+
+
+def test_an_unrelated_purpose_suffixed_test_does_not_resolve(tmp_path):
+    """The suffix rule is PREFIX-anchored: `test_doctor_*` maps to doctor,
+    but `test_predoctor_*` and `test_x_doctor_*` do not. Without the anchor,
+    substring matching would make almost every test map to almost every
+    module."""
+    led = Ledger(tmp_path / "l.db")
+    try:
+        _seed(led, _mut_finding(file="src/aramid/commands/doctor.py"))
+        resolved = mutation_gate.auto_resolve_mutation(
+            led, "r1", NOW, {"tests/unit/test_predoctor_helpers.py"})
+    finally:
+        led.close()
+    assert resolved == []

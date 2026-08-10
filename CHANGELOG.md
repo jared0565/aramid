@@ -108,6 +108,50 @@ to publish a tag that disagrees with it.
 
 ### Fixed
 
+- **A mutation finding could not be resolved by the test that kills it, unless
+  that test was named `test_<module>.py`.** `_module_tests` returned exactly
+  `{test_<stem>, <stem>_test}`, so a module inside a subpackage was
+  unreachable: nothing mapped `test_consumers_base.py` back to
+  `consumers/base.py`, or `test_doctor_version_parsing.py` back to
+  `commands/doctor.py`.
+
+  Not theoretical — measured 2026-08-10 against aramid's own ledger. **Four of
+  its five open findings were mutants the repo's own tests provably kill**;
+  applying each mutant by hand turns the mapped test file red. They had been
+  open for hours with the fix already committed, because a resolver that cannot
+  see the fix leaves a finding immortal until someone happens to touch the
+  source file again. That is the state that teaches an operator to ignore a
+  security tool, and it was self-inflicted.
+
+  `_maps_to_module(test_stem, module_path)` replaces it with three anchored
+  forms: the original pair, `test_<parent>_<module>` for a subpackage, and
+  prefix-anchored `test_<module>_<aspect>`.
+
+  **The anchoring is the design, not a detail.** The obvious wider rule — "the
+  module name appears as a token of the test name" — resolves
+  `consumers/base.py` from `test_runners_base.py`, because `base` is a stem
+  three source files share here (`consumers/`, `providers/`, `runners/`; a
+  stem-frequency count over all 79 modules found `base` ×3, `mutation` ×2,
+  `mutation_score` ×2). Qualifying on the module's own parent directory keeps
+  them apart. Two of the four new tests are that boundary, and they are the
+  ones that fail under the over-wide rule rather than under the old one.
+
+  Applied to **both** call sites. `mutation_score_gate_findings` uses the same
+  mapping as an ephemeral escape valve for a transition regression, and it was
+  broken in exactly the same way — a developer who changed
+  `test_consumers_base.py` and hit an armed BLOCK regression on
+  `consumers/base.py` had no valve at all. Leaving one site strict would have
+  kept a known-broken valve and split "the module-mapped test" into two
+  different notions. `_stage1_argv` is deliberately untouched: it reaches these
+  files already via its `-k <module>` fallback, and changing which tests run
+  per mutant would change kill detection itself.
+
+  Verified by replaying the real `auto_resolve_mutation` against a **copy** of
+  the live ledger with the two test paths as `changed_files`: 4 of 4 map, where
+  0 of 4 did before. The findings are not cleared by hand — the next push that
+  touches those tests clears them legitimately, and until then the count
+  honestly stays at 5.
+
 - **`.aramid-suppressions.toml` now reaches the ledger-synthesized findings —
   and reports itself stale when it doesn't.** Carried as a known defect earlier
   the same day; the deferral reason was that fixing it changes a security-gate

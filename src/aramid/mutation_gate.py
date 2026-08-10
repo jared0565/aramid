@@ -59,11 +59,48 @@ def mutation_gate_findings(cfg, ledger, gate: Gate) -> list[Finding]:
     return out
 
 
-def _module_tests(module: str) -> set[str]:
-    """Mapped-test basenames for a source module stem, per the
-    consumers/mutation.py::_stage1_argv convention (test_<module>.py and
-    <module>_test.py)."""
-    return {f"test_{module}", f"{module}_test"}
+def _maps_to_module(test_stem: str, module_path: str) -> bool:
+    """Is `test_stem` a test file basename for the source module at
+    `module_path`? Three anchored forms, in the order they were needed:
+
+        test_<module> / <module>_test        the original pair
+        test_<parent>_<module>               a module inside a SUBPACKAGE
+        test_<module>_<anything>             a test scoped to one aspect
+
+    The last two are not embellishment. `test_<module>.py` alone cannot name a
+    test for `consumers/base.py` without colliding with `runners/base.py`, so
+    real repos qualify by package -- and a module big enough to mutate usually
+    has more than one test file. Measured 2026-08-10 on aramid itself: FOUR of
+    five open findings were mutants that the repo's own tests provably kill,
+    left open because nothing mapped `test_consumers_base.py` back to
+    `consumers/base.py` or `test_doctor_version_parsing.py` back to
+    `commands/doctor.py`.
+
+    ANCHORING IS THE WHOLE DESIGN, not a detail. The obvious wider rule --
+    "the module name appears as a token of the test name" -- resolves
+    `consumers/base.py` from `test_runners_base.py`, because `base` is a stem
+    THREE source files share here. Qualifying on the module's own parent
+    directory keeps them apart, and prefix-anchoring the suffix form stops
+    `test_predoctor_helpers` mapping to `doctor`.
+
+    Residual, accepted and narrower than what it replaced: `test_<stem>_*`
+    still cannot tell three `base.py` files apart, so a `test_base_*.py` would
+    map to all of them. No such file exists here, and the alternative -- full
+    dotted-path matching -- would break the plain `test_<module>.py` form that
+    most repos actually use.
+    """
+    p = Path(module_path)
+    module, parent = p.stem, p.parent.name
+    if test_stem in (f"test_{module}", f"{module}_test"):
+        return True
+    if parent and test_stem == f"test_{parent}_{module}":
+        return True
+    return test_stem.startswith(f"test_{module}_")
+
+
+def _has_mapped_test(module_path: str, test_stems) -> bool:
+    """Did any of these changed test basenames map to this source module?"""
+    return any(_maps_to_module(s, module_path) for s in test_stems)
 
 
 def auto_resolve_mutation(ledger, run_id: str, at: str, changed_files) -> list[str]:
@@ -88,9 +125,8 @@ def auto_resolve_mutation(ledger, run_id: str, at: str, changed_files) -> list[s
             path = rec.get("file", "")
             if not path:
                 continue                            # malformed: no file -> skip
-            module = Path(path).stem
             source_touched = normalize_path(path) in changed_norm
-            test_added = bool(_module_tests(module) & changed_test_stems)
+            test_added = _has_mapped_test(path, changed_test_stems)
             if source_touched or test_added:
                 ledger.append(Event(EventType.FINDING_RESOLVED, run_id, at,
                                     finding_id=fid,

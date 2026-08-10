@@ -16,7 +16,8 @@ armed AND rule == "transition"); the two one-line rules must agree.
 
 Ephemeral test-mapped suppression (transitions only -- WARNs need no escape
 valve): a push whose changed_files touch the module-mapped test
-(test_<module>/<module>_test, per mutation_gate._module_tests) drops the
+(per mutation_gate._maps_to_module: test_<module>, <module>_test,
+test_<parent>_<module>, or test_<module>_<aspect>) drops the
 transition for THIS gate run only. No ledger write; a bare source-touch
 never suppresses -- that is exactly the 1b auto-resolve hole 2b closes.
 changed_files is the push's scope ONLY under mode "range"; pipeline passes
@@ -40,7 +41,7 @@ from pathlib import Path
 from aramid import diagnostics, gitutil, mutation_score
 from aramid.fingerprint import compute_fingerprint
 from aramid.models import Finding, Gate, Severity, Source, Verdict
-from aramid.mutation_gate import _module_tests
+from aramid.mutation_gate import _has_mapped_test
 
 TOOL = "mutation-score"
 
@@ -74,7 +75,7 @@ def mutation_score_gate_findings(cfg, ledger, gate: Gate,
             if not rel or not sep or not func:
                 continue                    # malformed target key: skip
             if r.kind == "transition":
-                if _module_tests(Path(rel).stem) & changed_test_stems:
+                if _has_mapped_test(rel, changed_test_stems):
                     continue    # ephemeral suppression, this gate run only
                 verdict = Verdict.BLOCK if armed else Verdict.WARN
                 severity_raw, severity = "high", Severity.HIGH
