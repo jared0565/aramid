@@ -175,11 +175,19 @@ to publish a tag that disagrees with it.
   **Correcting a second overclaim made while writing this**: the pooled
   composition was first justified as preventing a *false* stale report for
   suppressions, on the reasoning that a record binding a synthesized finding
-  near-misses in the first list. Measured, and it does not — swapping the pool
-  for a plain concatenation leaves every test green, because near-miss requires
-  TOOL equality and the two lists' tool namespaces are disjoint. Pooling is
-  kept for being correct by construction rather than by that coincidence, and
-  the docstrings say so instead of citing a failure mode that cannot occur.
+  near-misses in the first list. It does not. The reason is structural — a
+  near miss requires TOOL equality, and no runner emits `mutation`,
+  `mutation-score` or `llm-review`, so no record can near-miss in one list and
+  match in the other. Pooling is kept for being correct by construction rather
+  than by that coincidence.
+
+  Precision about what was actually measured, since the first version of this
+  paragraph said "leaves every test green" and that was never run: swapping the
+  pool for a plain concatenation was measured against the three tests then in
+  `test_suppress_synthesized_findings.py`, before the channel-scoping change
+  above, and left all three green. It has not been re-run against the full
+  suite or against the scoped design. The claim above rests on the structural
+  argument, not on that measurement.
 
   **What this newly permits, stated rather than slipped in:** a tracked
   suppression can now downgrade an armed, confirmed-critical **LLM BLOCK**.
