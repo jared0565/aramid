@@ -150,6 +150,22 @@ to publish a tag that disagrees with it.
   subsystems, an undocumented consequence is indistinguishable from an
   unintended one.** It now names both.
 
+- **The `skipped` counter in `auto_resolve_mutation` is pinned on its rendered
+  output.** `skipped = 0 -> 1` and `skipped += 1 -> 2` both survived every test
+  and were deferred once as "diagnostics only". That was the wrong reading:
+  `diagnostics.note_skipped` is silent at zero and prints to stderr otherwise,
+  so the first mutant makes **every clean run** tell the operator their ledger
+  holds a malformed record when it does not. A security tool inventing a
+  complaint about the user's own data is the noise that trains people to stop
+  reading its output.
+
+  Asserted on the stderr text, not the counter — the counter is not the
+  contract, the message is the only part anyone sees. Needed a record that
+  genuinely raises inside the `try` (`file` non-str and truthy, so
+  `normalize_path` raises); a `None` file is caught by `if not path: continue`
+  first and counts no skip, which is why the pre-existing "skips malformed rec"
+  test could never have pinned this.
+
 - **`auto_resolve_mutation`'s tool/status filter could be inverted without
   failing a single test.** `or -> and` on
   `if rec.get("tool") != TOOL or rec.get("status") != "open"` survived all 18

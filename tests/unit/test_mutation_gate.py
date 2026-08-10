@@ -353,3 +353,56 @@ def test_does_not_resolve_a_mutation_finding_that_is_not_open(tmp_path):
         led.close()
     assert resolved == []
     assert state["m" * 64]["status"] == "overridden"
+
+
+# --- the skipped counter, which is user-visible output ----------------------
+#
+# `skipped = 0` -> 1 and `skipped += 1` -> 2 both survived every test here.
+# They were deferred once as "diagnostics only"; that was the wrong reading.
+# `diagnostics.note_skipped` is SILENT at zero and prints to stderr otherwise,
+# so under the first mutant every clean run tells the operator their ledger
+# holds a malformed record when it does not, and under the second the count is
+# doubled. A security tool inventing a complaint about the user's own data is
+# not a cosmetic defect -- it is the noise that trains people to stop reading
+# the output.
+#
+# Asserted on the RENDERED stderr rather than on the counter, because the
+# counter is not the contract; the message is the only part anyone sees.
+
+def _raising_rec(led, fid):
+    """A record that genuinely raises INSIDE the try -- `file` non-str and
+    truthy, so `normalize_path` raises AttributeError. A `None` file does not
+    do this: `if not path: continue` catches it first and counts no skip,
+    which is why the pre-existing 'skips malformed rec' test could never have
+    pinned this counter."""
+    _seed_raw(led, fid, {"tool": "mutation", "file": 123, "rule": "flip",
+                         "severity": "medium", "line": 1, "message": "m",
+                         "evidence": "", "verdict": "warn"})
+
+
+def test_resolve_says_nothing_when_no_record_is_malformed(tmp_path, capsys):
+    """Kills `skipped = 0` -> 1: the clean path must stay quiet."""
+    led = Ledger(tmp_path / "l.db")
+    try:
+        _seed(led, _mut_finding())
+        mutation_gate.auto_resolve_mutation(led, "r1", NOW, {"src/pkg/x.py"})
+    finally:
+        led.close()
+    err = capsys.readouterr().err
+    assert "malformed" not in err, (
+        f"a clean run reported a malformed record: {err!r}")
+
+
+def test_resolve_reports_exactly_one_malformed_record(tmp_path, capsys):
+    """Kills `skipped += 1` -> 2: the count must be the number of records that
+    actually failed, not a multiple of it."""
+    led = Ledger(tmp_path / "l.db")
+    try:
+        _seed(led, _mut_finding())
+        _raising_rec(led, "d" * 64)
+        mutation_gate.auto_resolve_mutation(led, "r1", NOW, {"src/pkg/x.py"})
+    finally:
+        led.close()
+    err = capsys.readouterr().err
+    assert "skipped 1 malformed record" in err, (
+        f"expected exactly one skip to be reported, got: {err!r}")
