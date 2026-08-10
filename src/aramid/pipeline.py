@@ -920,22 +920,54 @@ def run_gate(root: Path, gate: Gate, mode: str, cfg: config_mod.Config, ledger: 
                     tdd.auto_resolve_tdd(ledger, run_id, at, scope_files, present_ids)
                 red_proof.auto_resolve_red_proof(ledger, run_id, at,
                                                  rp_proven_red, present_ids)
-        findings = [*findings,
-                    *review_mod.llm_gate_findings(cfg, ledger, gate),
-                    *mutation_gate.mutation_gate_findings(cfg, ledger, gate),
-                    # 2b: derived mutation-score regressions. changed_files
-                    # only for a GENUINE push delta, which needs both halves
-                    # of the resolver guard above: under "all"/"staged" --
-                    # and equally under "range" with no upstream --
-                    # scope_files is the whole tree / staged set, so every
-                    # module-mapped test looks "just changed" and the
-                    # test-mapped suppression silences every regression.
-                    # Ephemeral only (no ledger write), so unlike its two
-                    # siblings this costs one quiet run, not a durable
-                    # false resolve -- still wrong, just recoverable.
-                    *mutation_score_gate.mutation_score_gate_findings(
-                        cfg, ledger, gate,
-                        scope_files if (mode == "range" and rng) else None)]
+        synthesized = [
+            *review_mod.llm_gate_findings(cfg, ledger, gate),
+            *mutation_gate.mutation_gate_findings(cfg, ledger, gate),
+            # 2b: derived mutation-score regressions. changed_files
+            # only for a GENUINE push delta, which needs both halves
+            # of the resolver guard above: under "all"/"staged" --
+            # and equally under "range" with no upstream --
+            # scope_files is the whole tree / staged set, so every
+            # module-mapped test looks "just changed" and the
+            # test-mapped suppression silences every regression.
+            # Ephemeral only (no ledger write), so unlike its two
+            # siblings this costs one quiet run, not a durable
+            # false resolve -- still wrong, just recoverable.
+            *mutation_score_gate.mutation_score_gate_findings(
+                cfg, ledger, gate,
+                scope_files if (mode == "range" and rng) else None)]
+        # SECOND override pass, for these three only. They are materialized
+        # from ledger state rather than parsed from a RunnerResult, so they do
+        # not exist yet at step 6 where `apply_overrides` ran -- and they must
+        # stay out of `record_run` above, being a derived VIEW of the ledger
+        # rather than a fresh detection. The consequence was that a tracked,
+        # reviewed, reason-bearing `.aramid-suppressions.toml` entry naming
+        # tool `llm-review`, `mutation` or `mutation-score` bound NOTHING, and
+        # was not reported stale either -- stale detection only ever saw the
+        # list apply_overrides was handed. Silent in both directions.
+        #
+        # Scope of what this newly permits: the tracked file can now downgrade
+        # an armed confirmed-critical LLM BLOCK. Deliberate -- section 6 gives
+        # the committed file ANY tier, as it already had over gitleaks and
+        # semgrep BLOCKs. The machine-local ledger-override channel is NOT
+        # widened: apply_overrides keeps its `elif f.verdict is Verdict.WARN`
+        # branch, so an unreviewable `.aramid/` entry still cannot hide a
+        # BLOCK. (It could not reach these three anyway -- both synthesizers
+        # skip a record whose status is not "open".)
+        synthesized, _ = policy.apply_overrides(synthesized, overrides,
+                                                suppress_records)
+        findings = [*findings, *synthesized]
+        # Recomputed over BOTH lists rather than concatenated with the step-6
+        # result, so `matched_ids` is the union. Measured: concatenating is
+        # indistinguishable today (near-miss needs tool equality, and the two
+        # lists' tool namespaces are disjoint) -- this is correct by
+        # construction, not by that coincidence. See policy.stale_records.
+        #
+        # This recompute is also what finally makes a genuinely dead entry for
+        # these three REPORTABLE: before it, no mutation/llm-review finding was
+        # ever in the list stale detection saw, so a suppression whose id had
+        # rotted stayed silent forever.
+        stale = policy.stale_records(findings, overrides, suppress_records)
 
     # 8. exit code.
     degraded_tools = sorted({r.tool for r in flat_results if r.state in _BAD_STATES})

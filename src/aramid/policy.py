@@ -241,6 +241,31 @@ def apply_overrides(findings: list[Finding], overrides: list[OverrideRecord],
         else:
             downgraded.append(f)
 
+    return downgraded, stale_records(findings, overrides, suppressions)
+
+
+def stale_records(findings: list[Finding], overrides: list[OverrideRecord],
+                  suppressions: list[OverrideRecord]) -> list[OverrideRecord]:
+    """Records that bind nothing here but ALMOST do -- same tool, rule and
+    path, different id. That near-miss requirement is what keeps this quiet
+    about a suppression for code you simply did not scan this run.
+
+    Split out of `apply_overrides` because the pipeline downgrades in TWO
+    passes: runner findings at step 6, then the ledger-SYNTHESIZED producers
+    (llm-review / mutation / mutation-score), which do not exist yet at that
+    point. The caller recomputes this ONCE over the combined list so
+    `matched_ids` is the union of both.
+
+    HONEST LIMIT ON THAT RATIONALE, measured 2026-08-10: concatenating the two
+    passes' stale lists instead is currently INDISTINGUISHABLE -- swapping the
+    union for a concatenation leaves every test green. Near-miss requires TOOL
+    equality, and the two lists carry disjoint tool namespaces (no runner emits
+    `mutation`, `mutation-score` or `llm-review`), so no record can near-miss
+    in one list and match in the other. The union is kept because it is correct
+    by construction rather than by that coincidence; do not cite a test as
+    proof it is needed, because none of them can tell. A runner emitting one of
+    those three tool names is what would make the difference real.
+    """
     matched_ids = {f.id for f in findings}
     stale: list[OverrideRecord] = []
     for record in (*overrides, *suppressions):
@@ -254,7 +279,7 @@ def apply_overrides(findings: list[Finding], overrides: list[OverrideRecord],
         if near_miss:
             stale.append(record)
 
-    return downgraded, stale
+    return stale
 
 
 def escalate_degraded(verdict_exit: int, degraded_block_tier: bool, gate: Gate) -> int:

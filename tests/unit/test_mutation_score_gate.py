@@ -196,3 +196,73 @@ def test_twin_rule_seam_and_classify_agree(tmp_path):
             _sev, verdict = policy.classify(f.tool, f.rule, f.severity_raw,
                                             Gate.PRE_PUSH, cfg)
             assert f.verdict is verdict, (f.rule, armed)
+
+
+# --- id stability, which is what makes these SUPPRESSIBLE -------------------
+#
+# These findings are EPHEMERAL: unlike its two siblings, this producer writes
+# nothing to the ledger, so the id is recomputed from scratch every run. Since
+# `.aramid-suppressions.toml` binds on ID, an id that moved with the score
+# would make an entry against a mutation-score regression a silent no-op --
+# valid on the run it was written, dead on the next. That is precisely the
+# defect the suppressions work exists to remove, so it is pinned rather than
+# read off `compute_fingerprint(TOOL, r.kind, rel, func, 0)` and assumed.
+#
+# Deliberately NOT asserting a literal digest: that would pin the hash and
+# force an edit here whenever fingerprinting changes, while proving nothing
+# about stability. What matters is that the id does not MOVE when the things
+# that legitimately vary between runs vary.
+
+def _transition_ledger_worse(base, target="src/calc.py::is_adult"):
+    """Same file, same function, same rule -- WORSE score. Two previously
+    killed mutants now survive instead of one, so message and evidence both
+    differ from _transition_ledger's."""
+    led = Ledger(base / "l.db")
+    led.append(_crf(0, target, 3, 0, True, killed_fps=[FP, "other", "third"]))
+    led.append(_crf(1, target, 1, 2, True, killed_fps=["third"],
+                    survivor_fps=[FP, "other"]))
+    return led
+
+
+def _only(findings, rule):
+    got = [f for f in findings if f.rule == rule]
+    assert len(got) == 1, f"expected exactly one {rule} finding, got {len(got)}"
+    return got[0]
+
+
+def test_a_mutation_score_finding_id_does_not_move_when_the_score_does(tmp_path):
+    mild = _only(_findings(_transition_ledger(tmp_path / "mild"),
+                           _cfg(armed=True)), "transition")
+    worse = _only(_findings(_transition_ledger_worse(tmp_path / "worse"),
+                            _cfg(armed=True)), "transition")
+
+    assert mild.message != worse.message, (
+        "the two fixtures must actually differ in score, or this test compares "
+        "a run with itself and proves determinism instead of stability")
+    assert mild.id == worse.id, (
+        "the id moved with the score -- a suppression written against a "
+        "mutation-score regression would be dead on the next run")
+
+
+def test_a_mutation_score_finding_id_does_not_move_with_the_changed_file_scope(
+        tmp_path):
+    """`changed_files` is passed only for a genuine push delta, so the SAME
+    regression is graded with it on one push and without it on the next
+    (`check --all`, or a rangeless range). An id keyed on scope would give one
+    finding two identities.
+
+    WEAKER THAN ITS SIBLING, measured rather than assumed. Perturbing the id to
+    vary with the score turns the sibling above red and leaves this one GREEN
+    -- `changed_files` only filters today, so nothing short of deliberately
+    threading it into the fingerprint can move this. It is a forward guard on a
+    property that currently holds by construction; its only live protection is
+    `_only`, which fails if the fixture stops producing the finding at all."""
+    unscoped = _only(_findings(_transition_ledger(tmp_path / "a"),
+                               _cfg(armed=True)), "transition")
+    # A changed set that does NOT contain the mapped test, so the finding
+    # survives rather than being scope-suppressed.
+    scoped = _only(_findings(_transition_ledger(tmp_path / "b"),
+                             _cfg(armed=True),
+                             changed_files={"src/unrelated.py"}), "transition")
+
+    assert unscoped.id == scoped.id

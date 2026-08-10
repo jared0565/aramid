@@ -106,11 +106,13 @@ to publish a tag that disagrees with it.
   never finished. `test_this_repos_mutation_baseline_is_not_the_whole_tree`
   fails if the two ever converge again.
 
-### Known — measured, not yet fixed
+### Fixed
 
-- **`.aramid-suppressions.toml` cannot suppress a ledger-synthesized finding,
-  and does not report itself stale when it fails to.** Measured 2026-08-10
-  against a real `mutation` finding, three parts:
+- **`.aramid-suppressions.toml` now reaches the ledger-synthesized findings —
+  and reports itself stale when it doesn't.** Carried as a known defect earlier
+  the same day; the deferral reason was that fixing it changes a security-gate
+  semantic, so it got its own increment. Measured 2026-08-10 against a real
+  `mutation` finding, three parts:
 
   1. `policy.apply_overrides` *would* downgrade it to INFO — the entry is
      correctly formed and the mechanism works when handed the finding.
@@ -133,12 +135,54 @@ to publish a tag that disagrees with it.
   more capable — binds nothing. Same silent-no-op class as the pre-2026-08-09
   BLOCK-only bug, one layer further out.
 
-  Not fixed here on purpose: the obvious repair (re-apply overrides after the
-  synthesized findings are appended) changes when a suppression can silence an
-  **LLM confirmed-critical BLOCK** finding, which is gate semantics for a
-  security control and wants its own increment and its own tests.
+  **The tool strings are `llm-review`, `mutation`, `mutation-score`.** The
+  version of this entry written before the fix said "llm", which is not a tool
+  aramid emits — anyone acting on it would have written a second silent no-op.
+  Binding is by **id**, so a wrong `tool` here does not break the suppression;
+  it breaks the *stale report*, which is the only thing that would have said
+  so. Same NAME≠TOOL trap as `consumers.base.Repaired` (`js_mutation` emits
+  `tool="js-mutation"`).
 
-### Fixed
+  **The repair:** the three synthesized producers get their own
+  `apply_overrides` pass, and `stale` is then recomputed over **both** lists
+  (`policy.stale_records`, split out for it) so `matched_ids` is the union.
+  That second pass is what finally makes part 3 above reportable: a suppression
+  whose id has rotted now near-misses the synthesized finding and is announced,
+  where before it stayed silent forever. Report-only today (`reporter.py` is
+  its sole consumer; no exit code reads it).
+
+  **Correcting an overclaim made while writing this**: the union composition
+  was first justified as preventing a *false* stale report, on the reasoning
+  that a record binding a synthesized finding near-misses in the first list.
+  Measured, and it does not — swapping the union for a plain concatenation
+  leaves every test green. Near-miss requires TOOL equality and the two lists'
+  tool namespaces are disjoint, so no record can near-miss in one and match in
+  the other. The union is kept for being correct by construction rather than by
+  that coincidence, and both docstrings now say so instead of citing a failure
+  mode that cannot currently occur.
+
+  **What this newly permits, stated rather than slipped in:** a tracked
+  suppression can now downgrade an armed, confirmed-critical **LLM BLOCK**.
+  Deliberate — section 6 gives the committed file *any* tier, which it already
+  exercised over gitleaks and semgrep BLOCKs. What is **not** widened is the
+  other channel: `apply_overrides` keeps its `elif f.verdict is Verdict.WARN`
+  branch, so a machine-local `.aramid/` override still cannot hide a BLOCK
+  (`test_override_does_not_downgrade_block_finding` remains the guard). The
+  ledger-override channel never reached these three anyway — both synthesizers
+  skip a record whose `status` is not `"open"`, and `commands/override.py`
+  refuses a confirmed-critical LLM finding at the CLI, armed or not.
+
+  Covered by `tests/integration/test_suppress_synthesized_findings.py` (four
+  tests, all red first — the three binding ones assert the armed BLOCK *before*
+  suppressing it, so none can pass against a gate that never blocked; the
+  fourth pins the stale report, and fails pre-fix with an empty
+  `stale_overrides`, which is the silence itself). `mutation-score`
+  findings are ephemeral — no ledger write, id recomputed every run — so two
+  tests in `test_mutation_score_gate.py` pin that the id does not move with the
+  score or the changed-file scope; without that, a suppression against one
+  would be valid the day it was written and dead the next. The score half was
+  teeth-checked by perturbation; the scope half stays green under that same
+  perturbation and is a forward guard only, which its docstring records.
 
 - **A producer could not prove a repair — only guess at one.**
   `mutation_gate.auto_resolve_mutation` already clears mutation findings at
