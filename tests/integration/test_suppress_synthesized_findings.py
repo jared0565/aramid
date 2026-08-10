@@ -43,7 +43,8 @@ from aramid import config as config_mod
 from aramid import pipeline
 from aramid.commands.check import cmd_check
 from aramid.ledger import Ledger
-from aramid.models import Finding, Gate, Severity, Source, Verdict
+from aramid.models import (Event, EventType, Finding, Gate, Severity, Source,
+                           Verdict)
 
 NOW = "2026-08-10T12:00:00+00:00"
 
@@ -266,3 +267,69 @@ def test_a_stale_mutation_suppression_is_now_reported_instead_of_silent(
     assert [s.id for s in res.stale_overrides] == [dead_id], (
         "a suppression naming a mutation finding that no longer exists was "
         f"not reported stale: {res.stale_overrides}")
+
+
+def test_a_working_ledger_override_is_not_reported_stale_by_a_sibling(
+        tmp_path, monkeypatch):
+    """THE TWO CHANNELS BIND BY DIFFERENT MECHANISMS, and only one of them can
+    be judged against the synthesized list.
+
+    A suppression binds by ID while the finding is still in the list, so its
+    target is present and `matched_ids` sees it. A ledger override binds by
+    flipping the ledger STATUS -- and both synthesizers skip a record whose
+    status is not "open", so an override's target is *absent from the list
+    precisely because the override is working*. Absence is therefore ambiguous
+    for overrides and unambiguous for suppressions.
+
+    Found by dogfooding, not by reasoning: the first push carrying the
+    second-pass fix reported aramid's own override on
+    `doctor.py:176 mutation/int-bound` as stale, because a DIFFERENT surviving
+    mutant at line 180 shares its tool, rule and path. Permanent -- it would
+    fire every push -- and the remedy it prints ("re-affirm it") would mint a
+    second override for a dead id.
+
+    So the recompute is scoped to the SUPPRESSION channel; overrides keep
+    being judged against the runner findings alone, exactly as before. That
+    leaves a genuinely dead override on a synthesized producer unreported,
+    which is the pre-existing behaviour and not a regression -- the gate cannot
+    tell it apart from a working one, and inventing a guess is worse than the
+    silence."""
+    _no_runners(monkeypatch)
+    r = _repo_with_upstream(tmp_path)
+    _arm(r, "mutation")
+
+    sibling_id = "5" * 64
+    led = Ledger(r / ".aramid" / "ledger.db")
+    try:
+        def _mut(fid, line, msg):
+            return Finding(id=fid, tool="mutation", rule="flip_arith",
+                           severity_raw="medium", severity=Severity.MEDIUM,
+                           verdict=Verdict.WARN, file="src/widget.py",
+                           line=line, message=msg, evidence="",
+                           gate=Gate.ALL, source=Source.DETERMINISTIC)
+        # Same tool + rule + path, two different lines: one gets overridden,
+        # the other stays open and becomes the near-miss.
+        led.record_run("r0", NOW, "drain", set(), set(),
+                       [_mut(MUTANT_ID, 2, "mutant survived: a - b"),
+                        _mut(sibling_id, 3, "mutant survived: a * b")])
+        led.append(Event(EventType.FINDING_OVERRIDDEN, "r0", NOW,
+                         finding_id=MUTANT_ID,
+                         payload={"reason": "equivalent mutant"}))
+    finally:
+        led.close()
+    _commit_unrelated(r)
+
+    cfg = config_mod.load_config(r)
+    led = Ledger(r / ".aramid" / "ledger.db")
+    try:
+        res = pipeline.run_gate(r, Gate.PRE_PUSH, "range", cfg, led)
+    finally:
+        led.close()
+
+    assert any(f.id == sibling_id for f in res.findings), (
+        "premise: the open sibling must be synthesized, or there is no "
+        "near-miss for the override to be falsely matched against")
+    assert MUTANT_ID not in [s.id for s in res.stale_overrides], (
+        "a WORKING ledger override was reported stale because a different "
+        "finding shares its tool/rule/path -- it binds by flipping status, so "
+        "its target is absent from the list exactly when it is doing its job")

@@ -956,18 +956,22 @@ def run_gate(root: Path, gate: Gate, mode: str, cfg: config_mod.Config, ledger: 
         # skip a record whose status is not "open".)
         synthesized, _ = policy.apply_overrides(synthesized, overrides,
                                                 suppress_records)
-        findings = [*findings, *synthesized]
-        # Recomputed over BOTH lists rather than concatenated with the step-6
-        # result, so `matched_ids` is the union. Measured: concatenating is
-        # indistinguishable today (near-miss needs tool equality, and the two
-        # lists' tool namespaces are disjoint) -- this is correct by
-        # construction, not by that coincidence. See policy.stale_records.
+        # Recomputed with the synthesized list passed SEPARATELY, not merged:
+        # `stale_records` judges the suppression channel against both pools and
+        # the override channel against the runner findings alone, because an
+        # override binds by flipping ledger status and so is absent from
+        # `synthesized` exactly when it is working. Merging the lists here
+        # reports every working override on these three producers as stale,
+        # forever, whenever any sibling finding shares its tool/rule/path --
+        # measured against aramid's own ledger. See policy.stale_records.
         #
-        # This recompute is also what finally makes a genuinely dead entry for
-        # these three REPORTABLE: before it, no mutation/llm-review finding was
-        # ever in the list stale detection saw, so a suppression whose id had
-        # rotted stayed silent forever.
-        stale = policy.stale_records(findings, overrides, suppress_records)
+        # This second pass is also what finally makes a genuinely dead
+        # SUPPRESSION for these three reportable: before it, no mutation or
+        # llm-review finding was ever in the list stale detection saw, so an
+        # entry whose id had rotted stayed silent forever.
+        stale = policy.stale_records(findings, overrides, suppress_records,
+                                     synthesized)
+        findings = [*findings, *synthesized]
 
     # 8. exit code.
     degraded_tools = sorted({r.tool for r in flat_results if r.state in _BAD_STATES})

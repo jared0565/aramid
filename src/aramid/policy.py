@@ -245,7 +245,8 @@ def apply_overrides(findings: list[Finding], overrides: list[OverrideRecord],
 
 
 def stale_records(findings: list[Finding], overrides: list[OverrideRecord],
-                  suppressions: list[OverrideRecord]) -> list[OverrideRecord]:
+                  suppressions: list[OverrideRecord],
+                  synthesized: list[Finding] = ()) -> list[OverrideRecord]:
     """Records that bind nothing here but ALMOST do -- same tool, rule and
     path, different id. That near-miss requirement is what keeps this quiet
     about a suppression for code you simply did not scan this run.
@@ -253,33 +254,59 @@ def stale_records(findings: list[Finding], overrides: list[OverrideRecord],
     Split out of `apply_overrides` because the pipeline downgrades in TWO
     passes: runner findings at step 6, then the ledger-SYNTHESIZED producers
     (llm-review / mutation / mutation-score), which do not exist yet at that
-    point. The caller recomputes this ONCE over the combined list so
-    `matched_ids` is the union of both.
+    point. `synthesized` is that second list.
 
-    HONEST LIMIT ON THAT RATIONALE, measured 2026-08-10: concatenating the two
-    passes' stale lists instead is currently INDISTINGUISHABLE -- swapping the
-    union for a concatenation leaves every test green. Near-miss requires TOOL
-    equality, and the two lists carry disjoint tool namespaces (no runner emits
-    `mutation`, `mutation-score` or `llm-review`), so no record can near-miss
-    in one list and match in the other. The union is kept because it is correct
-    by construction rather than by that coincidence; do not cite a test as
-    proof it is needed, because none of them can tell. A runner emitting one of
-    those three tool names is what would make the difference real.
+    THE TWO CHANNELS ARE JUDGED AGAINST DIFFERENT POOLS, and collapsing them
+    is a live bug, not a tidiness question. They bind by different mechanisms:
+
+      suppression -- binds by ID while the finding is still in the list. Its
+                     target is PRESENT, so `matched_ids` sees it and absence
+                     really does mean the record is dead. Safe to judge
+                     against `findings + synthesized`.
+      override    -- binds by flipping the ledger STATUS, and both synthesizers
+                     skip a record whose status is not "open". Its target is
+                     absent from `synthesized` EXACTLY WHEN IT IS WORKING, so
+                     absence proves nothing. Judged against `findings` alone,
+                     which is what it has always been judged against.
+
+    Found by dogfooding rather than reasoning: the first push carrying the
+    second pass reported aramid's own working override on
+    `doctor.py:176 mutation/int-bound` as stale, because a different surviving
+    mutant at line 180 shares its tool, rule and path. Permanent, and the
+    remedy it printed would have minted a second override for a dead id.
+
+    ACCEPTED LIMIT: a genuinely dead override on one of those three producers
+    stays unreported. That is the pre-existing behaviour, not a regression --
+    nothing here can distinguish it from a working one, and a guess is worse
+    than the silence.
+
+    A NOTE ON A REJECTED SIMPLIFICATION, measured 2026-08-10: for the
+    SUPPRESSION pool, concatenating the two passes' results instead of pooling
+    them is currently indistinguishable -- near-miss requires TOOL equality and
+    the two lists carry disjoint tool namespaces (no runner emits `mutation`,
+    `mutation-score` or `llm-review`), so no record can near-miss in one and
+    match in the other. Pooling is kept for being correct by construction
+    rather than by that coincidence; do not cite a test as proof it is needed,
+    because none of them can tell.
     """
-    matched_ids = {f.id for f in findings}
-    stale: list[OverrideRecord] = []
-    for record in (*overrides, *suppressions):
-        if record.id in matched_ids:
-            continue
-        near_miss = any(
-            f.tool == record.tool and f.rule == record.rule
-            and normalize_path(f.file) == normalize_path(record.path)
-            for f in findings
-        )
-        if near_miss:
-            stale.append(record)
+    def _stale(records, pool):
+        matched_ids = {f.id for f in pool}
+        out = []
+        for record in records:
+            if record.id in matched_ids:
+                continue
+            near_miss = any(
+                f.tool == record.tool and f.rule == record.rule
+                and normalize_path(f.file) == normalize_path(record.path)
+                for f in pool
+            )
+            if near_miss:
+                out.append(record)
+        return out
 
-    return stale
+    # Order preserved: overrides then suppressions, as when this was one loop.
+    return [*_stale(overrides, findings),
+            *_stale(suppressions, [*findings, *synthesized])]
 
 
 def escalate_degraded(verdict_exit: int, degraded_block_tier: bool, gate: Gate) -> int:

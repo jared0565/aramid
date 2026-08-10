@@ -151,15 +151,35 @@ to publish a tag that disagrees with it.
   where before it stayed silent forever. Report-only today (`reporter.py` is
   its sole consumer; no exit code reads it).
 
-  **Correcting an overclaim made while writing this**: the union composition
-  was first justified as preventing a *false* stale report, on the reasoning
-  that a record binding a synthesized finding near-misses in the first list.
-  Measured, and it does not — swapping the union for a plain concatenation
-  leaves every test green. Near-miss requires TOOL equality and the two lists'
-  tool namespaces are disjoint, so no record can near-miss in one and match in
-  the other. The union is kept for being correct by construction rather than by
-  that coincidence, and both docstrings now say so instead of citing a failure
-  mode that cannot currently occur.
+  **The two channels are judged against different pools, and the first cut of
+  this got it wrong.** `701b6bd` pooled everything, and the very next push
+  reported aramid's own *working* override on
+  `doctor.py:176 mutation/int-bound` as stale — because a different surviving
+  mutant at line 180 shares its tool, rule and path. It would have fired on
+  every push forever, and the remedy it printed ("re-affirm it") would have
+  minted a second override for a dead id.
+
+  The mechanism is the asymmetry: a **suppression** binds by ID while the
+  finding is still in the list, so its target is present and absence really
+  does mean the record is dead. An **override** binds by flipping the ledger
+  *status*, and both synthesizers skip a record whose status is not `"open"` —
+  so an override's target is absent from the synthesized list *exactly when it
+  is working*. Absence is unambiguous for one channel and meaningless for the
+  other. Suppressions are now judged against both pools; overrides against the
+  runner findings alone, as they always were.
+
+  Accepted limit: a genuinely dead override on one of these three producers
+  stays unreported. Pre-existing behaviour, not a regression — nothing at this
+  layer can tell it from a working one, and a guess is worse than the silence.
+
+  **Correcting a second overclaim made while writing this**: the pooled
+  composition was first justified as preventing a *false* stale report for
+  suppressions, on the reasoning that a record binding a synthesized finding
+  near-misses in the first list. Measured, and it does not — swapping the pool
+  for a plain concatenation leaves every test green, because near-miss requires
+  TOOL equality and the two lists' tool namespaces are disjoint. Pooling is
+  kept for being correct by construction rather than by that coincidence, and
+  the docstrings say so instead of citing a failure mode that cannot occur.
 
   **What this newly permits, stated rather than slipped in:** a tracked
   suppression can now downgrade an armed, confirmed-critical **LLM BLOCK**.
@@ -172,11 +192,13 @@ to publish a tag that disagrees with it.
   skip a record whose `status` is not `"open"`, and `commands/override.py`
   refuses a confirmed-critical LLM finding at the CLI, armed or not.
 
-  Covered by `tests/integration/test_suppress_synthesized_findings.py` (four
+  Covered by `tests/integration/test_suppress_synthesized_findings.py` (five
   tests, all red first — the three binding ones assert the armed BLOCK *before*
   suppressing it, so none can pass against a gate that never blocked; the
   fourth pins the stale report, and fails pre-fix with an empty
-  `stale_overrides`, which is the silence itself). `mutation-score`
+  `stale_overrides`, which is the silence itself; the fifth is the working
+  override above, and came from dogfooding rather than from reasoning about the
+  design). `mutation-score`
   findings are ephemeral — no ledger write, id recomputed every run — so two
   tests in `test_mutation_score_gate.py` pin that the id does not move with the
   score or the changed-file scope; without that, a suppression against one
