@@ -23,6 +23,27 @@ class DrainContext:
 
 
 @dataclass
+class Repaired:
+    """A producer's POSITIVE claim that specific finding identities are fixed.
+
+    Not "I ran and didn't re-report it" -- the drain refuses that inference on
+    purpose (`_consume_item` passes empty scopes, because a narrow ruleset
+    re-reporting nothing proves nothing). This is the other direction: the
+    consumer re-derived these exact fingerprints and DISPROVED them. Mutation
+    re-mutates the same line with the same operator and the suite kills it.
+
+    `tool` is the string the FINDINGS carry, which is not always the consumer's
+    NAME -- `js_mutation` emits `tool="js-mutation"`. Getting that wrong makes
+    the claim a silent no-op, so it is stated rather than inferred.
+    `reason` lands in the ledger as `auto_resolved`, so it must read as a cause
+    ("mutant_killed"), not as a restatement of the outcome.
+    """
+    tool: str
+    reason: str
+    ids: tuple = ()
+
+
+@dataclass
 class ConsumerResult:
     consumer: str
     state: str
@@ -30,6 +51,9 @@ class ConsumerResult:
     duration_s: float = 0.0
     cost: float = 0.0
     note: str = ""
+    # Absent by default: a consumer that says nothing resolves nothing, which
+    # is what keeps this opt-in per producer rather than a global rule.
+    repaired: Repaired | None = None
     # Auto-learn (autolearn spec section 6): structured payload merged into
     # the CONSUMER_RUN_FINISHED event by the drain (setdefault -- core keys
     # always win). llm_review puts its `selection` telemetry dict here.

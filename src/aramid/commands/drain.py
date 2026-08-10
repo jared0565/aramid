@@ -20,6 +20,7 @@ from typing import Callable
 from aramid import autolearn
 from aramid import config as config_mod
 from aramid import gitutil, policy, queue, redact, registry, triage
+from aramid import ledger as ledger_mod
 from aramid.consumers.base import CONSUMERS, ConsumerResult, DrainContext
 from aramid.fingerprint import normalize_path
 from aramid.ledger import Ledger
@@ -129,6 +130,20 @@ def _consume_item(root: Path, cfg, ledger, item, clock) -> bool:
             # the pack findings still fires (detection doesn't depend on
             # scope).
             ledger.record_run(run_id, clock(), "drain", set(), set(), findings)
+        # ...and the empty scope above is exactly why this exists. Scope-based
+        # resolution INFERS repair from absence, which a narrow ruleset cannot
+        # support. A `repaired` claim is the opposite: the consumer re-derived
+        # those specific fingerprints and disproved them (mutation re-mutates
+        # the same line and the suite kills it). Nothing is inferred from
+        # silence, so the reason the scope is empty does not apply. Without
+        # this, a consumer finding could never resolve for ANY reason short of
+        # its file leaving the repo -- a genuine fix changed nothing.
+        if result.repaired and result.repaired.ids:
+            ledger_mod.resolve_repaired(ledger, run_id, clock(),
+                                        tool=result.repaired.tool,
+                                        reason=result.repaired.reason,
+                                        ids=result.repaired.ids,
+                                        present_ids={f.id for f in findings})
         payload = {"consumer": name, "item_id": item.id,
                    "state": result.state,
                    "duration_s": round(duration, 3),

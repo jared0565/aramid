@@ -12,6 +12,53 @@ to publish a tag that disagrees with it.
 
 ### Fixed
 
+- **A consumer finding could never resolve — a genuine fix changed nothing.**
+  `record_run` resolves on `rec["tool"] in scope_tools`, and that set holds
+  *runner labels* (`Path(argv[0]).name`); no consumer emits a `RunnerResult`,
+  so no consumer name can ever appear in it. `drain._consume_item` passes
+  `set(), set()` on top of that, deliberately and correctly — the drain runs a
+  narrow ruleset, and semgrep's pack findings share a tool name with its OWASP
+  findings, so "ran and didn't re-report" proves nothing. `resolve_departed`
+  closed one narrow half (the file *left* the repo). The other half — someone
+  wrote the missing test — had no mechanism at all.
+
+  Measured on this repo's own ledger: mutation reported three survivors in
+  `doctor._version_of`; two were real test gaps, the tests are now written and
+  the mutants are dead, and all three findings were still `open` with nothing
+  in the product able to change that. A WARN tier that only ever grows is a
+  tier that stops being read.
+
+  `ConsumerResult.repaired` is a **positive assertion**, which is why it is
+  safe where scope-based resolution is not: the producer hands back the exact
+  fingerprints it *re-derived and disproved*, and nothing is inferred from
+  silence. Mutation re-mutates the same line with the same operator and the
+  suite kills it — `killed_fps` was already computed and thrown away. A
+  producer that claims nothing resolves nothing, so the mechanism stays opt-in
+  per producer, like `resolve_departed`.
+
+  Two traps worth recording. The claim carries its **tool** explicitly rather
+  than reusing the consumer's `NAME`: `js_mutation`'s NAME is `js_mutation`
+  while its findings are `tool="js-mutation"`, and inferring it would have made
+  that consumer's claims a silent no-op. And the identity that makes cross-run
+  matching work — `_mutant_fp` computing the same `compute_fingerprint` as
+  `normalize` — is pinned by the **drain** test, not by the fingerprint-
+  stability test whose name sounds like it: perturbing `_mutant_fp` leaves the
+  latter green, because both sides shift together. Measured, and both
+  docstrings now say which property they actually hold.
+
+- **Two mutants that survived a real mutation run in `doctor._version_of`.**
+  `(cp.stdout or cp.stderr)` — a tool answering `--version` on stderr read as
+  *version unknown*; and `out.splitlines()[0]` — a notice line read as the
+  version. 1598 tests missed both because every caller-level test in
+  `test_toolpath_divergence.py` monkeypatches `_version_of` itself; measured,
+  not assumed, by re-applying each mutant alone and watching all four stay
+  green. The user-visible consequence is now pinned too: under the `or → and`
+  mutant, `doctor` cries DRIFT over two copies of the **same** version — the
+  exact notice the existing (vacuous) guard exists to prevent. The third
+  survivor, `timeout 15 → 16`, is an equivalent mutant and deliberately gets no
+  test; what is pinned instead is the docstring's load-bearing promise that
+  `_version_of` never raises.
+
 - **Mutation testing had never once run.** 44 attempts on this repo, **zero
   findings**, `degraded` on 38 of them, every time reporting
   `"baseline failing @ <sha>"`. The suite was never red — the baseline never

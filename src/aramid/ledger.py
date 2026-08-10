@@ -247,6 +247,68 @@ def resolve_departed(ledger, run_id: str, at: str, *, root, tool: str,
     return resolved
 
 
+def resolve_repaired(ledger, run_id: str, at: str, *, tool: str, reason: str,
+                     ids, present_ids) -> list[str]:
+    """Resolve one producer's open findings that it has PROVED repaired.
+
+    The counterpart to `resolve_departed`, and the general answer to the gap
+    that one only half-closed: a producer whose finding is genuinely fixed --
+    not deleted, fixed -- had no way to say so. `record_run` cannot help
+    (`scope_tools` holds runner labels from `Path(argv[0]).name`, and no
+    consumer emits a RunnerResult), and `drain._consume_item` passes empty
+    scopes on purpose. So a mutant killed by a newly written test stayed open
+    forever, which makes the WARN tier accumulate lies.
+
+    POSITIVE ASSERTION, NOT INFERRED ABSENCE -- this is the whole reason it is
+    safe where scope-based resolution is not. The drain refuses to resolve
+    because it runs a narrow ruleset: semgrep's pack findings and its OWASP
+    findings share a tool name, so "ran and didn't re-report" proves nothing.
+    Here the producer hands over the exact fingerprints it RE-DERIVED and
+    disproved. `consumers/mutation.py` re-mutates the same line with the same
+    operator and computes the identical `compute_fingerprint(...)` the finding
+    would carry (`_mutant_fp`, and `PIN_OCCURRENCE` makes both sides use
+    occurrence 0); an id only appears in `killed_fps` when the suite actually
+    failed on that mutant. Silence proves nothing here and is used for nothing.
+
+    Consequently a producer that reports NOTHING resolves nothing -- the safe
+    direction, and the same opt-in property `resolve_departed` has. The tool
+    gate is redundant against the fingerprint, which already binds the tool
+    name, but it is not redundant against a caller passing the wrong list.
+
+    `present_ids` skips anything this run re-reported, for the reason
+    `resolve_departed` documents: resolution runs after `record_run`, so a
+    live finding has already been re-detected. Never raises; a malformed
+    record is skipped and counted through `diagnostics`, not swallowed.
+    """
+    wanted = set(ids or ())
+    if not wanted:
+        return []
+    resolved: list[str] = []
+    skipped = 0
+    # Driven by the CLAIM, not by the ledger: a producer proves a bounded
+    # handful of identities per run (mutation is capped at `max_mutants`)
+    # while the open set is unbounded. Sorted so a run's resolution events
+    # land in a stable order -- the ledger is append-only, and a diff of two
+    # runs should show what changed, not how a dict happened to iterate.
+    state = ledger.open_findings()
+    for fid in sorted(wanted):
+        if fid in present_ids:
+            continue
+        try:
+            rec = state.get(fid)
+            if rec is None or rec.get("tool") != tool or rec.get("status") != "open":
+                continue
+            ledger.append(Event(EventType.FINDING_RESOLVED, run_id, at,
+                                finding_id=fid,
+                                payload={"auto_resolved": reason}))
+            resolved.append(fid)
+        except Exception:
+            skipped += 1
+            continue
+    diagnostics.note_skipped(f"{tool}-repaired-resolve", skipped)
+    return resolved
+
+
 def _detect_payload(f: Finding) -> dict:
     return {"tool": f.tool, "file": f.file, "rule": f.rule, "verdict": str(f.verdict),
             "severity": str(f.severity), "line": f.line, "message": f.message,

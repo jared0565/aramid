@@ -596,3 +596,120 @@ def test_a_whole_command_run_never_gets_the_per_mutant_budget(tmp_path, monkeypa
         assert c["timeout_s"] == pytest.approx(240.0), (
             f"whole-command run given {c['timeout_s']}s; the per-mutant "
             "budget here is 60s and this command needs the larger one")
+
+
+# --- closing the loop: a mutant a newly written test now kills --------------
+#
+# Until now a mutation finding could never resolve, for any reason. The drain
+# records consumer findings with an EMPTY scope on purpose (a narrow ruleset
+# must not clear findings it never looks for), and `resolve_departed` only
+# covers a file LEAVING the repo. So "someone wrote the missing test" -- the
+# entire point of the tier -- produced no state change at all, and the WARN
+# list grew monotonically. Measured on aramid's own ledger: three survivors in
+# `doctor._version_of`, two of them since genuinely fixed, all three still
+# open with nothing in the product able to change that.
+#
+# The consumer already had the evidence and threw it away: `killed_fps` is the
+# exact fingerprint each killed mutant WOULD have carried as a finding.
+
+def _fps(res, key: str) -> set:
+    out = set()
+    for t in res.extra["mutation_scores"]["targets"].values():
+        out |= set(t[key])
+    return out
+
+
+def test_the_identity_that_survives_a_weak_suite_is_the_one_a_strong_suite_kills(
+        tmp_path, monkeypatch):
+    """Cross-run STABILITY of the fingerprint: the id recorded for a survivor
+    under a weak suite is the same id recorded as killed under a strong one.
+    Both repos hold byte-identical `calc.py` and differ only in their tests --
+    exactly the change an operator makes when closing a test gap. Without
+    this, a repair claim could never match a finding from an earlier drain.
+
+    Deliberately NOT claiming more than it checks. It does not pin that the
+    fingerprint equals the id `normalize` gives the finding: measured by
+    perturbing `_mutant_fp`, this test stays GREEN (both sides shift together)
+    while `test_a_drained_repair_flips_the_open_finding_to_fixed` goes red.
+    That test is what holds the two computations together; this one holds the
+    fingerprint stable across runs. Two different properties, one each."""
+    weak_r, wb, wh = _repo(tmp_path / "weak", WEAK_TEST)
+    weak = _consume(weak_r, wb, wh, monkeypatch, tmp_path)
+    survived = _fps(weak, "survivor_fps")
+    assert survived, f"fixture produced no survivor: {weak.note}"
+
+    strong_r, sb, sh = _repo(tmp_path / "strong", STRONG_TEST)
+    strong = _consume(strong_r, sb, sh, monkeypatch, tmp_path)
+
+    assert survived <= _fps(strong, "killed_fps"), (
+        "the mutant that survived the weak suite was not reported killed by "
+        "the strong one, so no repair could ever be proved")
+
+
+def test_a_consumer_reports_the_identities_it_proved_repaired(tmp_path, monkeypatch):
+    """The consumer's side of the contract: killed mutants are handed back as
+    a positive repair claim, tagged with the tool the findings carry and the
+    reason that reaches the audit trail."""
+    r, base, head = _repo(tmp_path, STRONG_TEST)
+
+    res = _consume(r, base, head, monkeypatch, tmp_path)
+
+    assert res.repaired is not None, "a run that killed mutants proved nothing"
+    assert res.repaired.tool == "mutation"
+    assert res.repaired.reason == "mutant_killed"
+    assert set(res.repaired.ids) == _fps(res, "killed_fps")
+
+
+def test_a_run_that_kills_nothing_claims_no_repair(tmp_path, monkeypatch):
+    """The safe direction, pinned: proving nothing must clear nothing. A
+    producer that reports an empty claim is indistinguishable from one that
+    never ran, which is what makes the mechanism opt-in."""
+    r, base, head = _repo(tmp_path, WEAK_TEST)
+
+    res = _consume(r, base, head, monkeypatch, tmp_path)
+
+    assert not (res.repaired and res.repaired.ids)
+
+
+def test_a_drained_repair_flips_the_open_finding_to_fixed(tmp_path, monkeypatch):
+    """End to end through the REAL drain, one shared ledger, nothing
+    replicated: the weak repo records a genuine finding (id computed by
+    `normalize`, not by the test), then the strong repo proves that same id
+    repaired and the ledger says `fixed`.
+
+    Passing both roots through `_consume_item` is what makes this a wiring
+    test -- the consumer being right is worth nothing if the drain drops the
+    claim on the floor, and every other test here stops at the consumer's
+    return value."""
+    from aramid.commands import drain as drain_mod
+
+    weak_r, wb, wh = _repo(tmp_path / "weak", WEAK_TEST)
+    strong_r, sb, sh = _repo(tmp_path / "strong", STRONG_TEST)
+    monkeypatch.setattr(drain_mod, "CONSUMERS", {"mutation": mut_consumer})
+    monkeypatch.setattr(config_mod, "_user_config_path",
+                        lambda: tmp_path / "no-user.toml")
+
+    led = Ledger(tmp_path / "shared.db")
+    try:
+        drain_mod._consume_item(
+            weak_r, config_mod.load_config(weak_r), led,
+            QueueItem(id="q1", base=wb, head=wh, score=55, reasons=("t",),
+                      state="queued", created_at="t", updated_at="t"),
+            lambda: "2026-08-10T00:00:00+00:00")
+
+        open_now = {fid: rec for fid, rec in led.open_findings().items()
+                    if rec.get("tool") == "mutation" and rec["status"] == "open"}
+        assert open_now, "the weak suite recorded no open mutation finding"
+
+        drain_mod._consume_item(
+            strong_r, config_mod.load_config(strong_r), led,
+            QueueItem(id="q2", base=sb, head=sh, score=55, reasons=("t",),
+                      state="queued", created_at="t", updated_at="t"),
+            lambda: "2026-08-10T01:00:00+00:00")
+
+        after = led.open_findings()
+        assert all(after[fid]["status"] == "fixed" for fid in open_now), (
+            "a mutant killed by a newly written test stayed open: "
+            f"{ {fid: after[fid]['status'] for fid in open_now} }")
+    finally:
+        led.close()

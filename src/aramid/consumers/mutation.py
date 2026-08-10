@@ -317,9 +317,21 @@ def consume(item, ctx: DrainContext) -> ConsumerResult:
         note += " (truncated: budget/cap hit, remainder dropped)"
     extra = dict(stats)
     extra["mutation_scores"] = _finalize_scores(scores)
+    # Every killed mutant is a finding identity DISPROVED. `_mutant_fp` is the
+    # same `compute_fingerprint` call `normalize` makes for a survivor (same
+    # tool/op/path, the line content read at the item's head on both sides,
+    # and PIN_OCCURRENCE forcing occurrence 0), so these ids are exactly the
+    # ones an earlier drain would have recorded. Only genuine kills qualify:
+    # timeouts and errors are unattributable and never land in `killed_fps`,
+    # and a stage-1 kill is a real test failure, which is why survival -- not
+    # death -- is the direction that needs stage-2 confirmation.
+    killed = tuple(fp for t in scores.values() for fp in t["killed_fps"])
     return ConsumerResult(consumer=NAME, state="ok", findings=findings,
                           duration_s=time.monotonic() - started, cost=0.0,
-                          note=note, extra=extra)
+                          note=note, extra=extra,
+                          repaired=base.Repaired(tool="mutation",
+                                                 reason="mutant_killed",
+                                                 ids=killed) if killed else None)
 
 
 base.CONSUMERS[NAME] = sys.modules[__name__]
