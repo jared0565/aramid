@@ -108,6 +108,48 @@ to publish a tag that disagrees with it.
 
 ### Fixed
 
+- **Turning on CI parity silently turned OFF every range-scoped auto-resolver.**
+  `[hooks].pre_push_match_ci = true` runs the pre-push shim as
+  `check --gate pre-push --all --strict`; `--all` resolves to `mode == "all"`;
+  and mutation, tdd and red-proof resolution all sat behind
+  `if mode == "range"`. So the flag was an off-switch for auto-resolution, with
+  no output anywhere saying so, for as long as it was set.
+
+  **This is the root cause of the two zero-yield resolvers reported below, and
+  it supersedes them.** The mapped-test rule really was too narrow — that was
+  measured by replay and is fixed — but fixing it changed nothing observable,
+  because the call site was unreachable. Two locks on one door; the mapping was
+  the second.
+
+  How it was caught: `gap_addressed` and `test_added` had fired **zero** times
+  across 182 `FINDING_RESOLVED` events, while `evidence_gone` (12),
+  `red_proven` (3) and `suite_completed_clean` (2) — the resolvers that derive
+  no range — had all fired. Then a prediction failed: a push whose delta
+  contained `tests/unit/test_mutation_gate.py` should have cleared the three
+  findings on `mutation_gate.py` and did not, while replaying the same resolver
+  over a ledger copy cleared all three. Replay disagreeing with reality is what
+  pointed at the call site rather than the function.
+
+  **The guard is moved, not removed.** It existed for a real hazard: under
+  `all`/`staged`, `scope_files` is the whole tracked tree, and resolving on it
+  durably clears every open finding — `FINDING_RESOLVED` is appended and cannot
+  be un-appended. `pipeline._resolution_scope` now computes the push's genuine
+  delta from git independently of the scan mode, so `--all` still widens what
+  is scanned and no longer widens what is resolved. No upstream yields the
+  **empty set** rather than a fallback, which is load-bearing:
+  `gitutil.changed_files` maps a falsy range to `HEAD`, so the check has to
+  happen at this layer.
+
+  Three tests, and the middle one is the only one that discriminates: mapped
+  test *in* the delta resolves; mapped test tracked but *outside* the delta
+  does not (an implementation that passes `scope_files` through passes the
+  first test and fails this one); no upstream resolves nothing.
+
+  The flag's own docstring documented the ratchet consequence and not this one.
+  **That asymmetry is the lesson worth keeping — when one flag feeds two
+  subsystems, an undocumented consequence is indistinguishable from an
+  unintended one.** It now names both.
+
 - **`auto_resolve_mutation`'s tool/status filter could be inverted without
   failing a single test.** `or -> and` on
   `if rec.get("tool") != TOOL or rec.get("status") != "open"` survived all 18

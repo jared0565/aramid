@@ -113,6 +113,20 @@ def _check_args(gate: Gate, match_ci: bool) -> str:
     push is blocked by findings the developer did not introduce.
     `aramid rebaseline` is the remedy, and it has to be a deliberate step
     rather than something an upgrade inflicts.
+
+    THE SECOND CONSEQUENCE, which this docstring did not mention until
+    2026-08-10 and which is exactly why it hid: `--all` resolves to
+    `mode == "all"`, and every range-scoped auto-resolver used to sit behind
+    `if mode == "range"`. Turning CI parity ON therefore turned mutation, tdd
+    and red-proof auto-resolution OFF -- silently, with no output saying so,
+    for as long as the flag was set. Measured on aramid's own ledger:
+    `gap_addressed` and `test_added` had fired zero times across 182
+    resolutions while the resolvers deriving no range had all fired.
+    `pipeline._resolution_scope` now computes the push's real delta
+    independently of the scan mode, so the two are decoupled and this flag
+    costs nothing but scan breadth. A ratchet consequence was documented and a
+    resolution consequence was not, which is the asymmetry to watch for when
+    one flag feeds two subsystems.
     """
     hook = "pre-commit" if gate is Gate.PRE_COMMIT else "pre-push"
     if match_ci and gate is not Gate.PRE_COMMIT:

@@ -185,6 +185,37 @@ def _discover_files(root: Path, mode: str) -> tuple[list[str], str | None]:
     raise ValueError(f"unknown mode: {mode!r}")
 
 
+def _resolution_scope(root: Path, mode: str, rng: str | None,
+                      scope_files) -> set[str]:
+    """The push's GENUINE delta, for auto-resolvers only -- never the set of
+    files that happened to be scanned.
+
+    `--all` widens what is SCANNED on purpose (a finding in a file this push
+    did not touch is worth catching locally rather than on CI). It must not
+    widen what is RESOLVED: resolution appends FINDING_RESOLVED, which cannot
+    be un-appended, so a resolver handed the whole tracked tree clears every
+    open finding on it -- permanently, on one push.
+
+    Under mode "range" with a real range, the scan scope already IS the delta;
+    reuse it rather than shelling out to git a second time. Otherwise ask git
+    directly, and treat "there is no upstream" as EMPTY rather than falling
+    back. That last clause is the load-bearing one: `gitutil.changed_files`
+    maps a falsy range to `HEAD`, which would diff against the root commit and
+    hand back most of the repo, so the check must happen here and not there.
+    """
+    if mode == "range":
+        # Falsy rng is FULL_HISTORY_RNG (""): no upstream, and _discover_files
+        # returned the whole tracked tree rather than a delta.
+        return set(scope_files) if rng else set()
+    resolve_rng = gitutil.resolve_range(root)
+    if not resolve_rng:
+        return set()
+    try:
+        return set(gitutil.changed_files(root, resolve_rng))
+    except Exception:
+        return set()
+
+
 def _ref_for_builder(mode: str, root: Path, rng: str | None) -> Callable[[str], str]:
     if mode == "staged":
         return lambda f: ":"
@@ -893,33 +924,37 @@ def run_gate(root: Path, gate: Gate, mode: str, cfg: config_mod.Config, ledger: 
             ledger_mod.resolve_departed(ledger, run_id, at, root=root,
                                         tool=_producer,
                                         present_ids=_departed_present)
-        # EVERY scope_files-driven resolver below needs BOTH guards, for two
-        # independent reasons -- each has its own regression test naming this
-        # nest by shape, so keep it nested rather than collapsing to one
-        # condition. Both reduce to "scope_files is not the push's delta":
-        #   mode: under "all"/"staged" it is the whole tracked tree / the
-        #         staged set.
-        #   rng:  under "range" with no upstream it is ALSO the whole tree.
-        # Resolving on either durably clears every open finding on tracked
-        # source -- FINDING_RESOLVED is persisted and cannot be un-appended.
-        # Surfacing below still runs in all modes so a full audit shows open
-        # findings. auto_resolve_llm above needs neither guard: it resolves on
-        # whether the evidence quote still exists at HEAD, deriving no range.
-        if mode == "range":
-            if rng:
-                # mode == "range" is NOT enough: with no upstream and no
-                # origin/HEAD, _discover_files returns the whole tracked tree
-                # with rng == FULL_HISTORY_RNG (""), so scope_files is the
-                # repo, not the push's delta. Truthy rng == genuine range.
-                mutation_gate.auto_resolve_mutation(ledger, run_id, at, scope_files)
-                # 1a-F2: the two synchronous producers resolve too. present_ids
-                # skips anything re-fired THIS run (these producers, unlike the
-                # drain's, fire in the run being resolved).
-                present_ids = {f.id for f in findings}
-                if getattr(cfg, "tdd", {}).get("enabled", True):
-                    tdd.auto_resolve_tdd(ledger, run_id, at, scope_files, present_ids)
-                red_proof.auto_resolve_red_proof(ledger, run_id, at,
-                                                 rp_proven_red, present_ids)
+        # RESOLUTION SCOPE IS NOT SCAN SCOPE. These resolvers need the push's
+        # genuine delta; `scope_files` is whatever was SCANNED, and the two
+        # coincide only under mode "range" with an upstream.
+        #
+        # This used to read `if mode == "range": if rng:`, which answered the
+        # hazard by refusing to run -- and that made `[hooks].pre_push_match_ci`
+        # a silent off-switch for every resolver here, because it runs the shim
+        # with `--all` and `--all` means mode "all". Measured on aramid's own
+        # ledger: `gap_addressed` and `test_added` had fired ZERO times in the
+        # repo's history while the resolvers that derive no range had all
+        # fired. Findings whose fixes were committed could never clear.
+        #
+        # The hazard is real and is NOT removed, only answered properly: under
+        # "all"/"staged" `scope_files` is the whole tracked tree, and resolving
+        # on that durably clears every open finding on tracked source --
+        # FINDING_RESOLVED is appended and cannot be un-appended. So the delta
+        # is recomputed from git instead of inferred from the scan, and the
+        # no-upstream case yields the empty set rather than a fallback.
+        # auto_resolve_llm above needs none of this: it resolves on whether the
+        # evidence quote still exists at HEAD, deriving no range at all.
+        resolve_scope = _resolution_scope(root, mode, rng, scope_files)
+        if resolve_scope:
+            mutation_gate.auto_resolve_mutation(ledger, run_id, at, resolve_scope)
+            # 1a-F2: the two synchronous producers resolve too. present_ids
+            # skips anything re-fired THIS run (these producers, unlike the
+            # drain's, fire in the run being resolved).
+            present_ids = {f.id for f in findings}
+            if getattr(cfg, "tdd", {}).get("enabled", True):
+                tdd.auto_resolve_tdd(ledger, run_id, at, resolve_scope, present_ids)
+            red_proof.auto_resolve_red_proof(ledger, run_id, at,
+                                             rp_proven_red, present_ids)
         synthesized = [
             *review_mod.llm_gate_findings(cfg, ledger, gate),
             *mutation_gate.mutation_gate_findings(cfg, ledger, gate),
