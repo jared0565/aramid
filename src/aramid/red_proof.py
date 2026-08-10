@@ -53,12 +53,13 @@ finding's status is 'fixed'), this does NOT self-heal -- rc 0 is
 unreachable under such a gate, so the producer can never re-fire the
 fingerprint to reopen the finding.
 The base run's import path is forced to the base worktree by
-_base_import_env; without it the run imports the INSTALLED package, which
-under a pip editable install is the live source the push is changing --
-see that helper for why this inverted the producer rather than merely
-adding noise."""
+runners.base.worktree_import_env; without it the run imports the INSTALLED
+package, which under a pip editable install is the live source the push is
+changing -- see that helper for why this inverted the producer rather than
+merely adding noise. It was a private `_base_import_env` here until
+2026-08-10, with one caller and no tests, which is how consumers/mutation.py
+came to carry the identical bug unfixed."""
 import ast
-import os
 import shutil
 import sys
 import tempfile
@@ -69,7 +70,7 @@ from aramid import diagnostics, gitutil
 from aramid.fingerprint import normalize_path
 from aramid.models import Event, EventType
 from aramid.normalizer import RawFinding
-from aramid.runners.base import ToolState, run_subprocess
+from aramid.runners.base import ToolState, run_subprocess, worktree_import_env
 from aramid.tdd import _split_range
 
 RULE = "test-not-red"
@@ -116,41 +117,6 @@ def _new_test_def_lines(content: str) -> set[int]:
            and node.name.startswith("test"):
             lines.add(node.lineno)
     return lines
-
-
-def _base_import_env(wt: Path) -> dict[str, str]:
-    """Put the BASE worktree's own source ahead of everything else on the
-    child's import path.
-
-    Without this the base run imports whatever is already INSTALLED -- and
-    under a pip editable install (a .pth file naming the LIVE source dir)
-    that is precisely the code the push is changing, so the base run
-    exercises head source. A src-layout package is never reached by
-    pytest's cwd insertion either (the package sits at <root>/src/<pkg>,
-    not <root>/<pkg>), so the installed copy wins outright: a genuinely
-    red-first test PASSES on base and the producer emits a never-red
-    finding. That is a false alarm -- the exact failure mode the whole-file
-    design and the T-4 content gate exist to keep out short of a defect
-    like this one (see the README's Red-first proof limitations) -- and it
-    fires for every changed test file, so under a normal editable-install
-    dev setup the check is not merely noisy, it is inverted.
-
-    PREPENDED, never assigned: run_subprocess merges this over os.environ,
-    so replacing PYTHONPATH outright would silently drop whatever the
-    developer's environment already puts there and break imports the base
-    run legitimately needs. Both <wt>/src and <wt> are added, covering
-    src-layout and flat-layout repos alike; a path that does not exist is
-    simply inert on sys.path.
-
-    Does NOT defeat a PEP 660 *strict* editable install, which installs a
-    MetaPathFinder rather than a sys.path entry -- no PYTHONPATH entry
-    outranks a meta-path hook. That case remains a live limitation.
-    """
-    parts = [str(wt / "src"), str(wt)]
-    existing = os.environ.get("PYTHONPATH", "")
-    if existing:
-        parts.append(existing)
-    return {"PYTHONPATH": os.pathsep.join(parts)}
 
 
 def scan_scoped(ctx, cfg) -> tuple[list[RawFinding], set[str]]:
@@ -243,7 +209,7 @@ def scan_scoped(ctx, cfg) -> tuple[list[RawFinding], set[str]]:
                 dest.write_text(content, encoding="utf-8")
                 res = run_subprocess(
                     [sys.executable, "-m", "pytest", "-q", rel],
-                    wt, test_timeout, env=_base_import_env(wt))
+                    wt, test_timeout, env=worktree_import_env(wt))
                 if res.state is ToolState.OK and res.returncode == 0:
                     out.append(RawFinding(
                         tool=_TOOL, rule=RULE, severity_raw="medium",

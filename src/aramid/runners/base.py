@@ -174,6 +174,46 @@ def _kill_tree(proc: subprocess.Popen):
     except Exception:
         proc.kill()
 
+def worktree_import_env(wt: Path) -> dict[str, str]:
+    """Put a WORKTREE's own source ahead of everything else on a child's import
+    path. Pass as `run_subprocess(..., env=worktree_import_env(wt))` for any
+    subprocess whose whole purpose is to exercise the code in `wt`.
+
+    WITHOUT THIS, THE RUN EXERCISES THE INSTALLED PACKAGE. Under a pip editable
+    install (a `.pth` naming the live source dir) that is the code the push is
+    changing -- so a worktree run silently tests the wrong tree. pytest's own
+    cwd insertion does not save a src-layout package either: it adds `<root>`,
+    while the package sits at `<root>/src/<pkg>`, so the installed copy wins
+    outright.
+
+    It has inverted a producer once already. `red_proof` reported every
+    genuinely red-first test as "never red" until `f462d27` added this, because
+    the base-tree run imported head source and therefore passed. The identical
+    bug then sat unfixed in `consumers/mutation.py`, which ran three worktree
+    subprocesses with no env at all: a mutant written into the worktree was
+    never the code under test, so every mutant would have been reported
+    SURVIVED. It lives here, next to `run_subprocess`, precisely so the next
+    caller does not have to rediscover it -- it was a private helper in
+    `red_proof` with one caller and no tests, which is how mutation missed it.
+
+    PREPENDED, NEVER ASSIGNED. `run_subprocess` merges this over `os.environ`,
+    so replacing PYTHONPATH would drop whatever the developer's environment
+    already puts there and break imports the run legitimately needs.
+
+    Both layouts are offered -- `<wt>/src` and `<wt>` -- because a path that
+    does not exist is simply inert on `sys.path`.
+
+    Does NOT defeat a PEP 660 *strict* editable install, which installs a
+    MetaPathFinder rather than a sys.path entry: no PYTHONPATH entry outranks a
+    meta-path hook. That case remains a live limitation.
+    """
+    parts = [str(wt / "src"), str(wt)]
+    existing = os.environ.get("PYTHONPATH", "")
+    if existing:
+        parts.append(existing)
+    return {"PYTHONPATH": os.pathsep.join(parts)}
+
+
 def run_subprocess(argv, cwd: Path, timeout_s: float, env=None) -> RunnerResult:
     tool = Path(argv[0]).name
     # Resolve through toolpath, NOT bare `shutil.which`: aramid downloads some

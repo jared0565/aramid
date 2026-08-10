@@ -64,3 +64,33 @@ pre_push = 600
 # for the ratchet to escalate. A repo turning this on for the first time
 # should pair it with `aramid rebaseline` -- see defaults.toml.
 pre_push_match_ci = true
+
+# --- Mutation testing: budgets sized to THIS repo's measured suite ---------
+#
+# Mutation ran 44 times here and produced ZERO findings, degraded 38 of those,
+# every time reporting "baseline failing @ <sha>". The suite was never red;
+# the baseline never finished. Two causes, both fixed 2026-08-10, but the
+# defaults are still wrong for a suite this size and this is where a repo is
+# supposed to say so.
+#
+# Measured on this machine, 2026-08-10:
+#   whole tree   `pytest -q`             1141 s   <- what the baseline used to run
+#   [tests].command  `pytest -q tests/unit`  305 s   <- what it runs now
+#
+# wall_budget_s is the WHOLE item, and the clock starts BEFORE the baseline.
+# At the default 600 s a 305 s baseline leaves 295 s -- less than one stage-2
+# confirm (305 s), so the loop truncated the moment it started and the fix
+# would have bought a healthy-looking `ok` with still no findings. 1800 s
+# fits the baseline, ~10 targeted stage-1 runs, and 2-3 confirms.
+#
+# This costs nothing at the gate: mutation is an async drain consumer that
+# blocks no push and no commit. It only bounds how long a 4-hourly background
+# drain may spend.
+#
+# mutant_timeout_s stays at the default 120 s. It governs TARGETED stage-1
+# runs (one test file, seconds here); the whole-command runs derive their own
+# budget from it (`* 4` = 480 s), which clears the measured 305 s with 57%
+# headroom. Re-measure before assuming that still holds -- tests/unit grows
+# with every task, and 480 s is the number that will bite when it stops.
+[mutation]
+wall_budget_s = 1800

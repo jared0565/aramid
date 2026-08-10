@@ -24,7 +24,8 @@ from aramid.consumers import base
 from aramid.consumers.base import ConsumerResult, DrainContext
 from aramid.fingerprint import compute_fingerprint
 from aramid.normalizer import RawFinding
-from aramid.runners.base import ToolState, run_subprocess
+from aramid.runners import tests as tests_runner
+from aramid.runners.base import ToolState, run_subprocess, worktree_import_env
 
 NAME = "mutation"
 _BASELINE_GIVE_UP = 3   # mirrors llm_review._MALFORMED_GIVE_UP
@@ -82,7 +83,7 @@ def _is_test_file(rel: str) -> bool:
     return name.endswith(".py") and (name.startswith("test_") or name.endswith("_test.py"))
 
 
-def _stage1_argv(wt: Path, rel: str) -> list[str]:
+def _stage1_argv(wt: Path, rel: str, cfg=None) -> list[str]:
     module = Path(rel).stem
     tests_dir = wt / "tests"
     if tests_dir.exists():
@@ -95,10 +96,33 @@ def _stage1_argv(wt: Path, rel: str) -> list[str]:
     # Unsafe -k token (pytest keyword / expression-breaking chars): pytest
     # would exit 4 (usage error) and the suite would never run. Full suite
     # is always correct, just slower.
-    return _full_argv()
+    return _full_argv(cfg)
 
 
-def _full_argv() -> list[str]:
+def _full_argv(cfg=None) -> list[str]:
+    """The repo's WHOLE test command -- `[tests].command` when configured.
+
+    This used to hardcode a bare `pytest -q`, ignoring `[tests].command`
+    outright, and that single line is why mutation testing never ran on this
+    repo: aramid scopes its own suite to `tests/unit` precisely because the
+    full tree takes ~1141 s, and the baseline below is budgeted at
+    `mutant_timeout_s * 4` = 480 s. The baseline timed out on every attempt --
+    38 degraded runs out of 44, zero findings ever -- and reported
+    "baseline failing", which reads as "your tests are red" rather than
+    "we never let them finish". Honouring the configured command brings it to
+    ~305 s, inside the budget with room to spare.
+
+    `runners.tests._argv` is reused rather than reimplemented: it already
+    handles the list-or-string form and the POSIX splitting, and a second
+    copy of that logic is how the two would drift.
+    """
+    command = None
+    if cfg is not None:
+        command = (getattr(cfg, "tests", None) or {}).get("command")
+    if command:
+        argv = tests_runner._argv(command)
+        if argv:
+            return argv
     return [sys.executable, "-m", "pytest", "-q"]
 
 
@@ -152,7 +176,18 @@ def consume(item, ctx: DrainContext) -> ConsumerResult:
             return ConsumerResult(consumer=NAME, state="error",
                                   note=f"worktree add failed: {(cp.stderr or '').strip()[:200]}")
 
-        base_res = run_subprocess(_full_argv(), wt, mutant_timeout * 4)
+        full_argv = _full_argv(ctx.cfg)
+        # A run of the WHOLE configured command gets the whole-command
+        # budget; only a TARGETED run gets the per-mutant one. Pointing the
+        # confirm below at a ~305 s command inside `mutant_timeout` (120 s)
+        # would move the timeout from the baseline to stage 2, where it is
+        # counted as an unattributable timeout and emits NO finding -- so
+        # mutation would report `ok` with permanently zero findings instead
+        # of `degraded`. Healthy-looking and silent is worse than broken
+        # and loud, and is the exact failure class this tool exists to stop.
+        full_timeout = mutant_timeout * 4
+        base_res = run_subprocess(full_argv, wt, full_timeout,
+                                  env=worktree_import_env(wt))
         if base_res.state is ToolState.OK and base_res.returncode == _PYTEST_NO_TESTS_RC:
             # Permanent structural absence, not a failing baseline: the note
             # deliberately keeps the "no python test stack" wording used by
@@ -204,7 +239,11 @@ def consume(item, ctx: DrainContext) -> ConsumerResult:
                 stats["tested"] += 1
                 try:
                     src_path.write_text(m.source, encoding="utf-8")
-                    s1 = run_subprocess(_stage1_argv(wt, rel), wt, mutant_timeout)
+                    s1_argv = _stage1_argv(wt, rel, ctx.cfg)
+                    s1 = run_subprocess(
+                        s1_argv, wt,
+                        full_timeout if s1_argv == full_argv else mutant_timeout,
+                        env=worktree_import_env(wt))
                     if s1.state is ToolState.TIMEOUT:
                         stats["timeouts"] += 1
                         _tgt(scores, rel, m.func)["timeouts"] += 1
@@ -230,7 +269,8 @@ def consume(item, ctx: DrainContext) -> ConsumerResult:
                         stats["truncated"] = True
                         continue
                     confirms_used += 1
-                    s2 = run_subprocess(_full_argv(), wt, mutant_timeout)
+                    s2 = run_subprocess(full_argv, wt, full_timeout,
+                                        env=worktree_import_env(wt))
                     if s2.state is ToolState.TIMEOUT:
                         stats["timeouts"] += 1
                     elif s2.state is ToolState.OK and s2.returncode == 0:

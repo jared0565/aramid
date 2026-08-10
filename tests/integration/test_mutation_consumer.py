@@ -9,6 +9,7 @@ at the clamp point). is_adult(age >= 18) is boundary-observable: cmp-flip
 (>= -> >) and int-bound (18 -> 19) BOTH flip is_adult(18) -- killable by
 any test that pins the boundary. (Real repos WILL produce occasionally-
 equivalent mutants; that inherent noise is why 2c-1 is WARN-only.)"""
+import os
 import subprocess
 
 import pytest
@@ -496,3 +497,102 @@ def test_mutation_findings_classify_warn_never_block(tmp_path, monkeypatch):
     assert str(verdict) != "block"
     assert not any("mutation" in key for key in cfg.block_rules), \
         "block_rules must have no mutation entry (spec invariant 3)"
+
+
+# ---------------------------------------------------------------------------
+# WHAT EVERY TEST ABOVE IS BLIND TO, and why the bugs below survived 44 runs.
+#
+# `_repo` builds a FLAT-layout fixture with a conftest.py that manually
+# inserts the repo root on sys.path. aramid itself is SRC-layout and installed
+# editable. So the fixture can reach its own source with no help, while the
+# real repo cannot -- every scenario above passes whether or not the worktree
+# runs are import-isolated, and whether or not they honour `[tests].command`.
+# Two production defects lived entirely inside that blind spot:
+#
+#   * the baseline ran a hardcoded bare `pytest -q` -- the WHOLE 1595-test
+#     tree, ~1141 s -- against `mutant_timeout_s * 4` = 480 s, so it timed out
+#     on every attempt (38 degraded runs of 44, zero findings ever) and
+#     reported "baseline failing", which reads as "your tests are red".
+#   * no worktree run passed `env=`, so a mutant written into the worktree was
+#     never the code under test and every mutant would read as SURVIVED.
+#
+# These assert on the CALLS rather than the outcome, because the outcome is
+# exactly what cannot distinguish them here.
+
+def _capture_runs(monkeypatch):
+    """Record every run_subprocess the consumer makes, and answer each one so
+    the loop proceeds: baseline green, stage 1 green (putative survivor),
+    stage 2 green (confirmed)."""
+    from aramid.runners.base import RunnerResult, ToolState
+    calls = []
+
+    def fake(argv, cwd, timeout_s, env=None):
+        calls.append({"argv": list(argv), "cwd": cwd,
+                      "timeout_s": timeout_s, "env": env})
+        return RunnerResult(tool="pytest", state=ToolState.OK, returncode=0)
+
+    monkeypatch.setattr(mut_consumer, "run_subprocess", fake)
+    return calls
+
+
+def _with_test_command(r, command_toml):
+    txt = (r / "aramid.toml").read_text(encoding="utf-8")
+    (r / "aramid.toml").write_text(f"{txt}\n[tests]\ncommand = {command_toml}\n",
+                                   encoding="utf-8")
+
+
+def test_the_baseline_runs_the_repo_s_configured_test_command(tmp_path, monkeypatch):
+    """`[tests].command` is the repo's own statement of what its suite IS.
+    Ignoring it is what made the baseline unrunnable here."""
+    r, base, head = _repo(tmp_path, WEAK_TEST)
+    _with_test_command(r, '["python", "-m", "pytest", "-q", "tests/unit"]')
+    calls = _capture_runs(monkeypatch)
+    _consume(r, base, head, monkeypatch, tmp_path)
+
+    assert calls, "consumer made no subprocess calls at all"
+    assert calls[0]["argv"] == ["python", "-m", "pytest", "-q", "tests/unit"], (
+        f"baseline ignored [tests].command; ran {calls[0]['argv']}")
+
+
+def test_every_worktree_run_is_import_isolated_to_the_worktree(tmp_path, monkeypatch):
+    """THE INVISIBLE ONE. Without `env`, the worktree runs import the INSTALLED
+    package -- under an editable install, the live tree -- so the mutant is
+    never the code under test and every mutant reads as survived. Asserting on
+    the outcome cannot see this; asserting on the env can."""
+    r, base, head = _repo(tmp_path, WEAK_TEST)
+    calls = _capture_runs(monkeypatch)
+    _consume(r, base, head, monkeypatch, tmp_path)
+
+    assert calls
+    for c in calls:
+        env = c["env"] or {}
+        assert "PYTHONPATH" in env, (
+            f"worktree run with no import isolation: {c['argv']}")
+        first = env["PYTHONPATH"].split(os.pathsep)[0]
+        assert first == str(c["cwd"] / "src"), (
+            f"PYTHONPATH does not lead with the worktree's own src: {first}")
+
+
+def test_a_whole_command_run_never_gets_the_per_mutant_budget(tmp_path, monkeypatch):
+    """The trap in fixing the above. The confirm run executes the SAME whole
+    command as the baseline; giving it `mutant_timeout_s` (120 s) while the
+    command needs ~305 s moves the timeout from the baseline into stage 2 --
+    where it is counted as an unattributable timeout and emits NO finding. The
+    consumer would flip from `degraded` to `ok` with permanently zero
+    findings: healthy-looking and silent, strictly worse than the bug."""
+    r, base, head = _repo(tmp_path, WEAK_TEST)
+    _with_test_command(r, '["python", "-m", "pytest", "-q", "tests/unit"]')
+    calls = _capture_runs(monkeypatch)
+    _consume(r, base, head, monkeypatch, tmp_path)
+
+    whole = ["python", "-m", "pytest", "-q", "tests/unit"]
+    whole_runs = [c for c in calls if c["argv"] == whole]
+    assert len(whole_runs) >= 2, (
+        "expected at least a baseline and one stage-2 confirm running the "
+        f"whole command; got {len(whole_runs)}")
+    # aramid.toml in _repo sets mutant_timeout_s = 60, so the whole-command
+    # budget is 240 and the per-mutant one is 60.
+    for c in whole_runs:
+        assert c["timeout_s"] == pytest.approx(240.0), (
+            f"whole-command run given {c['timeout_s']}s; the per-mutant "
+            "budget here is 60s and this command needs the larger one")
