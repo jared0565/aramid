@@ -10,6 +10,38 @@ to publish a tag that disagrees with it.
 
 ## [Unreleased]
 
+### Known — measured, not yet fixed
+
+- **`.aramid-suppressions.toml` cannot suppress a ledger-synthesized finding,
+  and does not report itself stale when it fails to.** Measured 2026-08-10
+  against a real `mutation` finding, three parts:
+
+  1. `policy.apply_overrides` *would* downgrade it to INFO — the entry is
+     correctly formed and the mechanism works when handed the finding.
+  2. It is never handed the finding. `apply_overrides` runs at
+     `pipeline.py:755`; `mutation_gate.mutation_gate_findings`,
+     `mutation_score_gate.…` and `review.llm_gate_findings` are appended at
+     ~`:925`, *after*. Nothing re-applies overrides to them.
+  3. Staleness cannot catch it either: a record is reported stale only on a
+     **near miss** (same tool+rule+path present in that same finding list).
+     No `mutation` finding is in the list at `:755`, so there is no near miss
+     and no warning. The file's own docstring promises the opposite — "this
+     entry stops matching, and aramid reports it as a stale suppression rather
+     than silently covering nothing" — which holds for gitleaks fixtures and
+     not for this class.
+
+  The consequence inverts design doc section 6. For these three producers the
+  *machine-local* `aramid override` is the only channel that works (it flips
+  the ledger status, and the synthesizers require `status == "open"`), while
+  the tracked, reviewed, tier-agnostic file — the one section 6 calls strictly
+  more capable — binds nothing. Same silent-no-op class as the pre-2026-08-09
+  BLOCK-only bug, one layer further out.
+
+  Not fixed here on purpose: the obvious repair (re-apply overrides after the
+  synthesized findings are appended) changes when a suppression can silence an
+  **LLM confirmed-critical BLOCK** finding, which is gate semantics for a
+  security control and wants its own increment and its own tests.
+
 ### Fixed
 
 - **A producer could not prove a repair — only guess at one.**

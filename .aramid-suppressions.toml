@@ -116,27 +116,3 @@ reason = "The same ellipsis-bodied PEM quoted in the phase-2b plan. No base64 pa
 #
 #   ledger override    "quiet this for me, on this machine."   WARN only.
 #   this file          "the team decided this, reviewably."    Any tier.
-
-# --- Equivalent mutant (WARN tier, mutation) --------------------------------
-# The first non-BLOCK entry in this file, and the reason the tier note above
-# matters: this judgement is a property of the SOURCE, not of a machine, so it
-# would otherwise re-fire on every clone that drains doctor.py. A machine-local
-# `aramid override` would bury it where no teammate could see it.
-#
-# Verified against src/aramid/commands/doctor.py:176 on 2026-08-10, which reads
-#   encoding="utf-8", errors="replace", timeout=15, env=env)
-#
-# Deliberately NOT claiming "no observable difference" -- that is falsifiable
-# and false. A tool whose `--version` takes between 15 and 16 seconds would be
-# distinguished. The claim is narrower: no legitimate test can kill it. One
-# asserting `timeout == 15` pins a literal rather than a behaviour, and one
-# constructing a 15.5-second hang is a timing race. The behaviour worth pinning
-# here -- that a hanging tool returns "" instead of failing a doctor run -- IS
-# tested (test_doctor_version_parsing.py), and it cannot distinguish 15 from 16.
-
-[[suppress]]
-id = "e63288ce7fe23d9a1050576444e68581c5e6be9dd6c9033e4061f38e1d8196a2"
-tool = "mutation"
-rule = "int-bound"
-path = "src/aramid/commands/doctor.py"
-reason = "Equivalent mutant: timeout 15 -> 16 on a `<tool> --version` probe. Distinguishable only by a tool that answers in 15-16s, so any killing test is either a pinned literal or a timing race. The never-raises behaviour this timeout exists for is tested and cannot see the difference."
