@@ -108,6 +108,28 @@ to publish a tag that disagrees with it.
 
 ### Fixed
 
+- **`auto_resolve_mutation`'s tool/status filter could be inverted without
+  failing a single test.** `or -> and` on
+  `if rec.get("tool") != TOOL or rec.get("status") != "open"` survived all 18
+  tests over that function. Under the mutant the skip fires only when the tool
+  is wrong *and* the status is not open — so **any open finding of any tool**
+  is processed, and is resolved when the push touches its file. A mutation
+  resolver would clear gitleaks and semgrep findings on sight, and the
+  re-drain backstop this resolver leans on does not cover that: it re-reports
+  mutants, not secrets.
+
+  Reported by aramid's own drain against code committed minutes earlier, and
+  confirmed by hand before being believed — the mutant was applied and all 36
+  tests still passed. Two tests now reject it: another tool's open finding on a
+  touched file, and an overridden mutation finding on a touched file.
+
+  **Third instance in one day of a single shape** — after
+  `consumers/base.py::open_findings_for`'s two filters: *a compound filter is
+  only tested by data it is supposed to reject.* Every test seeded exactly one
+  record of the right tool in the right status, so the rejecting branch was
+  never executed. Worth treating as a review checklist item rather than three
+  coincidences.
+
 - **`auto_resolve_tdd` carried a fourth, inline copy of the mapped-test rule,
   and the fix below missed it.** `tdd.py` spelled
   `{f"test_{module}", f"{module}_test"}` in place rather than calling the

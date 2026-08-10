@@ -299,3 +299,57 @@ def test_a_longer_modules_test_also_maps_to_the_shorter_prefix_module(tmp_path):
     assert resolved == ["m" * 64], (
         "if this now returns [] the mapping was tightened -- that may be an "
         "improvement, but it is a behaviour change and wants its own note")
+
+
+# --- the tool/status filter, which nothing rejected data reached ------------
+#
+# `if rec.get("tool") != TOOL or rec.get("status") != "open": continue` had 18
+# tests over it and `or -> and` survived every one, because each seeded exactly
+# one finding of the right tool in the right status. Third instance in a single
+# day of the same shape (see consumers/base.py::open_findings_for and its two
+# filters): A COMPOUND FILTER IS ONLY TESTED BY DATA IT IS SUPPOSED TO REJECT.
+#
+# Not cosmetic. Under `and`, the skip fires only when the tool is wrong AND the
+# status is not open -- so any OPEN finding of ANY tool is processed, and gets
+# resolved when the push touches its file. A mutation resolver would clear
+# gitleaks and semgrep findings on sight. The re-drain backstop this resolver
+# leans on does not apply: it re-reports mutants, not secrets.
+
+def test_does_not_resolve_another_tools_open_finding(tmp_path):
+    """Kills `or -> and` on the tool half. The seeded gitleaks finding is on a
+    file the push DID touch, so only the tool check stands between it and a
+    resolve."""
+    led = Ledger(tmp_path / "l.db")
+    try:
+        secret = Finding(
+            id="s" * 64, tool="gitleaks", rule="generic-api-key",
+            severity_raw="critical", severity=Severity.CRITICAL,
+            verdict=Verdict.BLOCK, file="src/pkg/x.py", line=7,
+            message="secret detected", evidence="", gate=Gate.ALL,
+            source=Source.DETERMINISTIC)
+        _seed(led, secret)
+        resolved = mutation_gate.auto_resolve_mutation(
+            led, "r1", NOW, {"src/pkg/x.py"})
+        state = led.open_findings()
+    finally:
+        led.close()
+    assert resolved == [], "the mutation resolver cleared a gitleaks finding"
+    assert state["s" * 64]["status"] == "open"
+
+
+def test_does_not_resolve_a_mutation_finding_that_is_not_open(tmp_path):
+    """Kills `or -> and` on the status half, and pins that an operator's
+    override is not quietly rewritten into a `fixed` by a later push."""
+    led = Ledger(tmp_path / "l.db")
+    try:
+        _seed(led, _mut_finding())
+        led.append(Event(EventType.FINDING_OVERRIDDEN, "r0", NOW,
+                         finding_id="m" * 64,
+                         payload={"reason": "equivalent mutant"}))
+        resolved = mutation_gate.auto_resolve_mutation(
+            led, "r1", NOW, {"src/pkg/x.py"})
+        state = led.open_findings()
+    finally:
+        led.close()
+    assert resolved == []
+    assert state["m" * 64]["status"] == "overridden"
