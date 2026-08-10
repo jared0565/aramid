@@ -251,13 +251,32 @@ def resolve_repaired(ledger, run_id: str, at: str, *, tool: str, reason: str,
                      ids, present_ids) -> list[str]:
     """Resolve one producer's open findings that it has PROVED repaired.
 
-    The counterpart to `resolve_departed`, and the general answer to the gap
-    that one only half-closed: a producer whose finding is genuinely fixed --
-    not deleted, fixed -- had no way to say so. `record_run` cannot help
-    (`scope_tools` holds runner labels from `Path(argv[0]).name`, and no
-    consumer emits a RunnerResult), and `drain._consume_item` passes empty
-    scopes on purpose. So a mutant killed by a newly written test stayed open
-    forever, which makes the WARN tier accumulate lies.
+    The counterpart to `resolve_departed`: a producer whose finding is
+    genuinely fixed -- not deleted, fixed -- proving it directly. `record_run`
+    cannot carry this (`scope_tools` holds runner labels from
+    `Path(argv[0]).name`, and no consumer emits a RunnerResult), and
+    `drain._consume_item` passes empty scopes on purpose.
+
+    WHAT THIS IS *NOT*. `mutation_gate.auto_resolve_mutation` already resolves
+    mutation findings at pre-push, and this does not replace it. That one is
+    deliberately OPTIMISTIC -- it resolves on INTENT (the push touched the
+    source, or added a test whose basename is `test_<module>.py`) so a dev who
+    wrote the test is not blocked, and names the re-drain as its authoritative
+    backstop. The backstop could only ever RE-REPORT; it had no way to confirm
+    a repair. This is that missing half: resolution on PROOF, recorded as
+    `mutant_killed` rather than `gap_addressed`.
+
+    The gap between intent and proof is not theoretical. The module mapping
+    matches only `test_<module>.py` / `<module>_test.py`, so tests added in any
+    other file do not register -- `test_doctor_version_parsing.py`, closing two
+    real gaps in `doctor._version_of`, resolved nothing. Proof does not care
+    what the file is called.
+
+    NOT YET USED BY, and each still genuinely resolverless: `js-mutation`,
+    `fuzz`, `dast` have no auto-resolver of any kind (only `mutation`,
+    `red-proof`, `tdd`, `llm-review` and `tests` do). They are the cases this
+    mechanism exists to make possible; wiring them needs each consumer to
+    re-derive its own identities, which is real work per producer.
 
     POSITIVE ASSERTION, NOT INFERRED ABSENCE -- this is the whole reason it is
     safe where scope-based resolution is not. The drain refuses to resolve

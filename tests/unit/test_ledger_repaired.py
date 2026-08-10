@@ -1,20 +1,27 @@
 """A producer must be able to record that a finding is genuinely REPAIRED.
 
-THE BUG. Consumer findings could never resolve, for any reason. `record_run`
-resolves on `rec["tool"] in scope_tools`, and `drain._consume_item` passes
-`set(), set()` deliberately -- the drain runs a narrow ruleset, and a scope of
-{semgrep} x {scanned files} would spuriously clear an OWASP finding the pack
-ruleset never re-detects. Correct, and it makes every consumer finding
-immortal as a side effect. `resolve_departed` closed one narrow half (the file
-LEFT the repo); a mutant that a newly-written test now kills stayed open
-forever.
+THE GAP -- and it is narrower than the first draft of this file claimed, which
+is worth recording because the wrong version is the more tempting story.
+Mutation findings are NOT unresolvable: `mutation_gate.auto_resolve_mutation`
+clears them at pre-push. But it is deliberately OPTIMISTIC, resolving on
+INTENT -- the push touched the source file, or added a test whose basename is
+`test_<module>.py` -- so a dev who wrote the test is not blocked by a stale
+finding. Its own docstring names the async re-drain as the authoritative
+backstop. The backstop could only ever RE-REPORT; nothing could CONFIRM a
+repair, so the ledger recorded a guess (`gap_addressed`), never a proof.
 
-Measured, on aramid's own ledger: mutation reported three survivors in
-`doctor._version_of` on 2026-08-09. Two were real test gaps, tests were
-written, and the mutants are dead -- and all three findings were still `open`,
-with no mechanism in the product that could ever change that. A WARN finding
-that cannot clear is a permanent lie about the state of the repo, and enough
-of them is how a whole tier stops being read.
+The distance between intent and proof is not theoretical. The mapping matches
+only `test_<module>.py` / `<module>_test.py`. Measured here: mutation reported
+three survivors in `doctor._version_of`, two were real test gaps, and the
+tests were written in `test_doctor_version_parsing.py` -- which the mapping
+does not match, so nothing resolved. A resolver keyed on a filename convention
+misses every fix that does not follow it.
+
+`resolve_departed` covers a third case (the file LEFT the repo). This covers
+the one nothing did. `js-mutation`, `fuzz` and `dast` still have no resolver
+of ANY kind -- only `mutation`, `red-proof`, `tdd`, `llm-review` and `tests`
+do -- which is why this is a general mechanism rather than another bespoke
+one.
 
 WHY THIS IS NOT WHAT THE DRAIN COMMENT FORBIDS. Scope-based resolution infers
 repair from ABSENCE: the tool ran, it didn't re-report, so assume fixed. That

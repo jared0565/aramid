@@ -135,9 +135,13 @@ def _consume_item(root: Path, cfg, ledger, item, clock) -> bool:
         # support. A `repaired` claim is the opposite: the consumer re-derived
         # those specific fingerprints and disproved them (mutation re-mutates
         # the same line and the suite kills it). Nothing is inferred from
-        # silence, so the reason the scope is empty does not apply. Without
-        # this, a consumer finding could never resolve for ANY reason short of
-        # its file leaving the repo -- a genuine fix changed nothing.
+        # silence, so the reason the scope is empty does not apply.
+        #
+        # This is the authoritative half of a pair, not a replacement:
+        # `mutation_gate.auto_resolve_mutation` resolves at the GATE on intent
+        # (source touched, or a `test_<module>.py` added) so a dev is not
+        # blocked, and names this re-drain as its backstop. The backstop could
+        # only ever re-REPORT; here it can also CONFIRM.
         if result.repaired and result.repaired.ids:
             ledger_mod.resolve_repaired(ledger, run_id, clock(),
                                         tool=result.repaired.tool,

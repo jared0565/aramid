@@ -12,21 +12,34 @@ to publish a tag that disagrees with it.
 
 ### Fixed
 
-- **A consumer finding could never resolve — a genuine fix changed nothing.**
-  `record_run` resolves on `rec["tool"] in scope_tools`, and that set holds
-  *runner labels* (`Path(argv[0]).name`); no consumer emits a `RunnerResult`,
-  so no consumer name can ever appear in it. `drain._consume_item` passes
-  `set(), set()` on top of that, deliberately and correctly — the drain runs a
-  narrow ruleset, and semgrep's pack findings share a tool name with its OWASP
-  findings, so "ran and didn't re-report" proves nothing. `resolve_departed`
-  closed one narrow half (the file *left* the repo). The other half — someone
-  wrote the missing test — had no mechanism at all.
+- **A producer could not prove a repair — only guess at one.**
+  `mutation_gate.auto_resolve_mutation` already clears mutation findings at
+  pre-push, and deliberately does so on **intent**: the push touched the
+  source, or added a test whose basename is `test_<module>.py`. That is right
+  for the gate — a dev who wrote the test should not be blocked — and its own
+  docstring names the async re-drain as the authoritative backstop. But the
+  backstop could only ever *re-report* a finding; nothing in the product could
+  **confirm** a repair, so the ledger recorded `gap_addressed` (a guess) and
+  never `mutant_killed` (a proof).
 
-  Measured on this repo's own ledger: mutation reported three survivors in
-  `doctor._version_of`; two were real test gaps, the tests are now written and
-  the mutants are dead, and all three findings were still `open` with nothing
-  in the product able to change that. A WARN tier that only ever grows is a
-  tier that stops being read.
+  The distance between the two is not theoretical: the mapping matches only
+  `test_<module>.py` / `<module>_test.py`. Measured here — mutation reported
+  three survivors in `doctor._version_of`, two were real test gaps, and the
+  tests were written in `test_doctor_version_parsing.py`, which the mapping
+  does not match. Nothing resolved. **A resolver keyed on a filename
+  convention misses every fix that does not follow it**; proof does not care
+  what the file is called.
+
+  `record_run` cannot carry this (`scope_tools` holds *runner labels* from
+  `Path(argv[0]).name`, and no consumer emits a `RunnerResult`), and
+  `drain._consume_item` passes empty scopes deliberately — the drain runs a
+  narrow ruleset, and semgrep's pack findings share a tool name with its OWASP
+  findings, so "ran and didn't re-report" proves nothing there.
+
+  `js-mutation`, `fuzz` and `dast` still have **no** resolver of any kind
+  (only `mutation`, `red-proof`, `tdd`, `llm-review` and `tests` do). They are
+  why this landed as a general mechanism rather than another bespoke one;
+  wiring each needs that consumer to re-derive its own identities.
 
   `ConsumerResult.repaired` is a **positive assertion**, which is why it is
   safe where scope-based resolution is not: the producer hands back the exact
