@@ -55,6 +55,21 @@ def _mutant_fp(rel: str, op: str, line: int, lines: list[str]) -> str:
     return compute_fingerprint("mutation", op, rel, lc, 0)
 
 
+def _open_finding_ids(ledger) -> set:
+    """Ids of this producer's currently-OPEN findings.
+
+    Read for one reason only: to know which kills are load-bearing. A kill
+    that matches nothing open changes no state, so it needs no confirmation
+    and costs nothing -- which is almost every kill, and is what keeps the
+    confirmation below affordable. Never raises: an unreadable ledger yields
+    an empty set, i.e. no claims, which is the safe direction."""
+    try:
+        return {fid for fid, rec in ledger.open_findings().items()
+                if rec.get("tool") == "mutation" and rec.get("status") == "open"}
+    except Exception:
+        return set()
+
+
 def _new_target() -> dict:
     return {"generated": 0, "killed_s1": 0, "survived_s1": 0,
             "timeouts": 0, "errors": 0, "killed_fps": [], "survivor_fps": []}
@@ -165,8 +180,10 @@ def consume(item, ctx: DrainContext) -> ConsumerResult:
     started = time.monotonic()
     stats = {"generated": 0, "tested": 0, "killed_s1": 0, "killed_s2": 0,
              "survived": 0, "confirmed": 0, "timeouts": 0, "errors": 0,
-             "truncated": False}
+             "unconfirmed_kills": 0, "truncated": False}
     scores: dict[str, dict] = {}
+    open_ids = _open_finding_ids(ctx.ledger)
+    repaired_ids: set = set()
     findings: list[RawFinding] = []
     tmp = Path(tempfile.mkdtemp(prefix="aramid-mut-"))
     wt = tmp / "wt"
@@ -254,7 +271,32 @@ def consume(item, ctx: DrainContext) -> ConsumerResult:
                         stats["killed_s1"] += 1
                         t = _tgt(scores, rel, m.func)
                         t["killed_s1"] += 1
-                        t["killed_fps"].append(_mutant_fp(rel, m.op, m.line, lines))
+                        fp = _mutant_fp(rel, m.op, m.line, lines)
+                        t["killed_fps"].append(fp)
+                        # A stage-1 kill is a SCORE anywhere else, but here it
+                        # would resolve a finding -- so it needs the same
+                        # confirmation a survivor needs, for the same reason
+                        # and in the other direction. rc 2 is a collection
+                        # error, so a test file that merely fails to IMPORT
+                        # reads as "the suite killed this", and stage 1
+                        # selects exactly one file by module name. Claiming
+                        # that as a repair writes a fix that never happened
+                        # into an append-only ledger.
+                        if fp in open_ids:
+                            if confirms_used >= confirm_cap:
+                                stats["truncated"] = True
+                                continue
+                            confirms_used += 1
+                            s2 = run_subprocess(full_argv, wt, full_timeout,
+                                                env=worktree_import_env(wt))
+                            if s2.state is ToolState.OK and s2.returncode in (1, 2):
+                                repaired_ids.add(fp)
+                            else:
+                                # Timeout, pass, or a non-verdict outcome: the
+                                # narrow selection produced that exit code,
+                                # not a new test. No claim -- the finding
+                                # stays open, which keeps a real gap visible.
+                                stats["unconfirmed_kills"] += 1
                         continue
                     if s1.state is ToolState.OK and s1.returncode not in (0, 5):
                         # 3 = internal error, 4 = usage error: argv's fault,
@@ -283,8 +325,11 @@ def consume(item, ctx: DrainContext) -> ConsumerResult:
                             message=f"mutant survived: {m.description}"))
                     elif s2.state is ToolState.OK and s2.returncode in (1, 2):
                         stats["killed_s2"] += 1
-                        _tgt(scores, rel, m.func)["killed_fps"].append(
-                            _mutant_fp(rel, m.op, m.line, lines))
+                        fp = _mutant_fp(rel, m.op, m.line, lines)
+                        _tgt(scores, rel, m.func)["killed_fps"].append(fp)
+                        # Already a full-suite verdict -- this IS the
+                        # confirmation the stage-1 branch has to go and buy.
+                        repaired_ids.add(fp)
                     else:
                         # Non-verdict full-suite outcome (internal/usage error,
                         # crash): the putative survivor is NOT reported -- a
@@ -317,15 +362,14 @@ def consume(item, ctx: DrainContext) -> ConsumerResult:
         note += " (truncated: budget/cap hit, remainder dropped)"
     extra = dict(stats)
     extra["mutation_scores"] = _finalize_scores(scores)
-    # Every killed mutant is a finding identity DISPROVED. `_mutant_fp` is the
-    # same `compute_fingerprint` call `normalize` makes for a survivor (same
+    # A repair claim is a FULL-SUITE-CONFIRMED kill, which is a strictly
+    # smaller set than `killed_fps`. `_mutant_fp` is the same
+    # `compute_fingerprint` call `normalize` makes for a survivor (same
     # tool/op/path, the line content read at the item's head on both sides,
     # and PIN_OCCURRENCE forcing occurrence 0), so these ids are exactly the
-    # ones an earlier drain would have recorded. Only genuine kills qualify:
-    # timeouts and errors are unattributable and never land in `killed_fps`,
-    # and a stage-1 kill is a real test failure, which is why survival -- not
-    # death -- is the direction that needs stage-2 confirmation.
-    killed = tuple(fp for t in scores.values() for fp in t["killed_fps"])
+    # ones an earlier drain recorded. Timeouts and errors are unattributable
+    # and never get here at all.
+    killed = tuple(sorted(repaired_ids))
     return ConsumerResult(consumer=NAME, state="ok", findings=findings,
                           duration_s=time.monotonic() - started, cost=0.0,
                           note=note, extra=extra,

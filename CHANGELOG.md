@@ -36,6 +36,19 @@ to publish a tag that disagrees with it.
   producer that claims nothing resolves nothing, so the mechanism stays opt-in
   per producer, like `resolve_departed`.
 
+  **A kill is not a repair until the full suite says so.** Stage 2 already
+  existed so narrow stage-1 selection "can never manufacture a false test-gap
+  finding" — it guards *survival*. Nothing guarded the *kill* direction,
+  because until repair claims existed a false kill was free: it only meant no
+  finding was emitted. It does not take a flake to fire — `s1.returncode in
+  (1, 2)` counts **2 = collection error** as a kill, and stage 1 selects
+  exactly one file by module name, so a test file that merely fails to
+  *import* reads as "the suite killed this" for every mutant in that module.
+  A kill is now confirmed by a full-suite run before it may be claimed, and
+  only when it matches an id that is actually open — which is almost never, so
+  the common case pays nothing. Pinned on the CALLS, since an outcome-level
+  assertion cannot tell a skipped confirmation from a cheap one.
+
   Two traps worth recording. The claim carries its **tool** explicitly rather
   than reusing the consumer's `NAME`: `js_mutation`'s NAME is `js_mutation`
   while its findings are `tool="js-mutation"`, and inferring it would have made

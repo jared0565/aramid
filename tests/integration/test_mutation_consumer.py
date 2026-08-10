@@ -647,17 +647,33 @@ def test_the_identity_that_survives_a_weak_suite_is_the_one_a_strong_suite_kills
 
 
 def test_a_consumer_reports_the_identities_it_proved_repaired(tmp_path, monkeypatch):
-    """The consumer's side of the contract: killed mutants are handed back as
-    a positive repair claim, tagged with the tool the findings carry and the
-    reason that reaches the audit trail."""
-    r, base, head = _repo(tmp_path, STRONG_TEST)
+    """The whole scenario in ONE repo, with real pytest throughout: a weak
+    suite leaves a survivor, that identity is open in the ledger, someone
+    writes the test that kills it, and the next run hands the identity back as
+    a repair claim -- tagged with the tool the FINDINGS carry (not the
+    consumer's NAME, which for `js_mutation` is a different string) and the
+    reason that reaches the audit trail.
 
-    res = _consume(r, base, head, monkeypatch, tmp_path)
+    The claim is deliberately NOT compared to `killed_fps`: it is a strict
+    subset of it, since a kill is only claimed when it is confirmed by the
+    full suite AND matches something actually open."""
+    r, base, head = _repo(tmp_path, WEAK_TEST)
+    weak = _consume(r, base, head, monkeypatch, tmp_path)
+    survived = sorted(_fps(weak, "survivor_fps"))
+    assert survived, f"fixture produced no survivor: {weak.note}"
+    _seed_open(r, survived[0])
 
-    assert res.repaired is not None, "a run that killed mutants proved nothing"
+    (r / "tests" / "test_calc.py").write_text(STRONG_TEST, encoding="utf-8")
+    _git(r, "add", "-A")
+    _git(r, "commit", "-q", "-m", "close the test gap")
+
+    res = _consume(r, base, _sha(r), monkeypatch, tmp_path)
+
+    assert res.repaired is not None, "the newly written test proved nothing"
     assert res.repaired.tool == "mutation"
     assert res.repaired.reason == "mutant_killed"
-    assert set(res.repaired.ids) == _fps(res, "killed_fps")
+    assert survived[0] in set(res.repaired.ids)
+    assert set(res.repaired.ids) <= _fps(res, "killed_fps")
 
 
 def test_a_run_that_kills_nothing_claims_no_repair(tmp_path, monkeypatch):
@@ -713,3 +729,112 @@ def test_a_drained_repair_flips_the_open_finding_to_fixed(tmp_path, monkeypatch)
             f"{ {fid: after[fid]['status'] for fid in open_now} }")
     finally:
         led.close()
+
+
+# --- a repair claim is not the same thing as a kill -------------------------
+#
+# Stage 2 exists so that narrow stage-1 selection "can never manufacture a
+# false test-gap finding" -- it guards SURVIVAL. Nothing guarded the KILL
+# direction, because until repair claims existed a false kill was free: it
+# only meant no finding was emitted. Now a stage-1 kill can resolve an open
+# finding, so a false one writes a false REPAIR into an append-only audit
+# ledger -- the exact class the drain's empty-scope comment exists to prevent,
+# arriving through the door that comment does not cover.
+#
+# It does not take a flake. `s1.returncode in (1, 2)` counts 2 = collection
+# error as a kill, and stage 1 selects `tests/**/test_<module>.py` -- so a test
+# file that merely fails to IMPORT reads as "the suite killed this mutant" for
+# every mutant in that module.
+#
+# So: a kill may be claimed as a repair only if the FULL suite confirms it,
+# exactly as a survivor may only be reported if the full suite confirms that.
+# Symmetric, and cheap -- the confirm runs only when a kill matches an id
+# that is actually open, which is almost never.
+
+def _script_runs(monkeypatch, *, targeted_rc, full_rc):
+    """Answer each subprocess by SHAPE: the baseline and any confirm run the
+    whole command, a targeted stage-1 run does not. The baseline is forced
+    green so the consumer gets past it."""
+    from aramid.runners.base import RunnerResult, ToolState
+    calls = []
+    full = mut_consumer._full_argv(None)
+
+    def fake(argv, cwd, timeout_s, env=None):
+        calls.append(list(argv))
+        is_full = list(argv) == full
+        rc = 0 if len(calls) == 1 else (full_rc if is_full else targeted_rc)
+        return RunnerResult(tool="pytest", state=ToolState.OK, returncode=rc)
+
+    monkeypatch.setattr(mut_consumer, "run_subprocess", fake)
+    return calls, full
+
+
+def _seed_open(r, fp):
+    from aramid.models import Finding, Gate, Severity, Verdict
+    led = Ledger(r / ".aramid" / "ledger.db")
+    try:
+        led.record_run("seed", "2026-08-10T00:00:00+00:00", "drain", set(), set(),
+                       [Finding(id=fp, tool="mutation", rule="bool-swap",
+                                severity_raw="medium", severity=Severity.MEDIUM,
+                                verdict=Verdict.WARN, file="calc.py", line=2,
+                                message="mutant survived", evidence="",
+                                gate=Gate.ALL)])
+    finally:
+        led.close()
+
+
+def _a_killed_fp(r, base, head, monkeypatch, tmp_path):
+    """One fingerprint the consumer really does report as killed here."""
+    calls, _ = _script_runs(monkeypatch, targeted_rc=1, full_rc=1)
+    res = _consume(r, base, head, monkeypatch, tmp_path)
+    fps = sorted(_fps(res, "killed_fps"))
+    assert fps, f"scripted kill produced no killed fingerprints: {res.note}"
+    return fps[0]
+
+
+def test_a_kill_matching_no_open_finding_costs_no_confirmation(tmp_path, monkeypatch):
+    """The property that makes this affordable. Almost every killed mutant was
+    never reported in the first place -- there is nothing to repair, so there
+    is nothing to confirm, and the full suite runs exactly once (the
+    baseline). Asserted on the CALLS: an outcome-level assertion cannot tell a
+    skipped confirm from a cheap one."""
+    r, base, head = _repo(tmp_path, WEAK_TEST)
+    calls, full = _script_runs(monkeypatch, targeted_rc=1, full_rc=0)
+
+    res = _consume(r, base, head, monkeypatch, tmp_path)
+
+    assert [c for c in calls if c == full] == [full], (
+        f"a kill nobody had reported still paid for a full-suite run: {calls}")
+    assert not (res.repaired and res.repaired.ids)
+
+
+def test_a_stage1_kill_of_an_open_finding_is_confirmed_before_being_claimed(
+        tmp_path, monkeypatch):
+    r, base, head = _repo(tmp_path, WEAK_TEST)
+    fp = _a_killed_fp(r, base, head, monkeypatch, tmp_path)
+    _seed_open(r, fp)
+    calls, full = _script_runs(monkeypatch, targeted_rc=1, full_rc=1)
+
+    res = _consume(r, base, head, monkeypatch, tmp_path)
+
+    assert res.repaired is not None and fp in set(res.repaired.ids)
+    assert len([c for c in calls if c == full]) >= 2, (
+        f"the repair was claimed with no full-suite confirmation: {calls}")
+
+
+def test_a_kill_the_full_suite_does_not_reproduce_claims_no_repair(
+        tmp_path, monkeypatch):
+    """THE BUG, pinned. Stage 1 says killed; the full suite passes on the same
+    mutant, so the narrow selection -- not a new test -- produced that exit
+    code. Claiming repair here would record a fix that never happened, and the
+    ledger is append-only. The finding must stay open, which is also the
+    direction that keeps a real test gap visible."""
+    r, base, head = _repo(tmp_path, WEAK_TEST)
+    fp = _a_killed_fp(r, base, head, monkeypatch, tmp_path)
+    _seed_open(r, fp)
+    _script_runs(monkeypatch, targeted_rc=1, full_rc=0)
+
+    res = _consume(r, base, head, monkeypatch, tmp_path)
+
+    assert not (res.repaired and fp in set(res.repaired.ids)), (
+        "an unconfirmed stage-1 kill was written to the ledger as a repair")
