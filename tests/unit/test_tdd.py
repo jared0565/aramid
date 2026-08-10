@@ -201,3 +201,59 @@ def test_auto_resolve_tdd_skips_malformed_record(tmp_path):
         led.close()
     assert resolved == []
     assert state["d" * 64]["status"] == "open"
+
+
+# --- the mapped-test rule, shared with mutation_gate ------------------------
+#
+# This resolver carried its OWN inline copy of `{test_<module>, <module>_test}`
+# rather than the shared helper, so the 2026-08-10 widening that taught
+# auto_resolve_mutation about subpackage and purpose-suffixed test names missed
+# it entirely -- a call-graph query ("callers of _module_tests") cannot see a
+# duplicated implementation.
+#
+# How it was caught, which is the point worth keeping: `test_added` had fired
+# ZERO times across 182 FINDING_RESOLVED events in aramid's own ledger, while
+# evidence_gone/red_proven/suite_completed_clean had all fired. A resolver that
+# has never once fired is either unreachable or unexercised, and the existing
+# fire test could not tell you which -- it maps `a.py` to `tests/test_a.py`, an
+# input built to satisfy the rule.
+
+def test_auto_resolve_tdd_maps_a_package_qualified_test(tmp_path):
+    """The shape this repo actually produces, and could not resolve before."""
+    led = Ledger(tmp_path / "l.db")
+    try:
+        _seed(led, _tdd_finding(file="src/aramid/consumers/base.py"))
+        resolved = tdd.auto_resolve_tdd(
+            led, "r1", NOW, {"tests/unit/test_consumers_base.py"},
+            present_ids=set())
+    finally:
+        led.close()
+    assert resolved == ["f" * 64]
+
+
+def test_auto_resolve_tdd_maps_a_purpose_suffixed_test(tmp_path):
+    led = Ledger(tmp_path / "l.db")
+    try:
+        _seed(led, _tdd_finding(file="src/aramid/commands/doctor.py"))
+        resolved = tdd.auto_resolve_tdd(
+            led, "r1", NOW, {"tests/unit/test_doctor_version_parsing.py"},
+            present_ids=set())
+    finally:
+        led.close()
+    assert resolved == ["f" * 64]
+
+
+def test_auto_resolve_tdd_keeps_sibling_subpackages_apart(tmp_path):
+    """The boundary: `base` is a stem three source files share, so an
+    unanchored rule would clear a finding on a module nobody tested."""
+    led = Ledger(tmp_path / "l.db")
+    try:
+        _seed(led, _tdd_finding(file="src/aramid/consumers/base.py"))
+        resolved = tdd.auto_resolve_tdd(
+            led, "r1", NOW, {"tests/unit/test_runners_base.py"},
+            present_ids=set())
+        state = led.open_findings()
+    finally:
+        led.close()
+    assert resolved == []
+    assert state["f" * 64]["status"] == "open"

@@ -108,6 +108,34 @@ to publish a tag that disagrees with it.
 
 ### Fixed
 
+- **`auto_resolve_tdd` carried a fourth, inline copy of the mapped-test rule,
+  and the fix below missed it.** `tdd.py` spelled
+  `{f"test_{module}", f"{module}_test"}` in place rather than calling the
+  shared helper, so widening `_module_tests` repaired
+  `auto_resolve_mutation` and `mutation_score_gate_findings` and left this one
+  exactly as broken. The scoping error is worth naming: the change was scoped
+  by a call-graph query (*callers of `_module_tests`*, `decision_grade`), and a
+  **duplicated implementation is invisible to that question** — it calls
+  nothing. Scope by behaviour, not by call edges, when the thing being changed
+  is a convention.
+
+  Found by yield, not by reading: `test_added` had fired **zero** times across
+  182 `FINDING_RESOLVED` events in aramid's own ledger, while `evidence_gone`
+  (12), `red_proven` (3) and `suite_completed_clean` (2) had all fired. The
+  pre-existing fire test could not have told anyone — it resolves `a.py` from
+  `tests/test_a.py`, an input built to satisfy the rule, and so proves the
+  mechanism works in principle while it never once worked in practice.
+
+  **The generalisable signal, measured before being believed: opportunities
+  without resolutions.** Per resolver, compare findings ever detected for its
+  tool against times its reason fired. Run over this ledger it marks
+  `gap_addressed` (9 detected / 0 fired) and `test_added` (1 / 0) as suspect,
+  leaves the three working resolvers quiet, and correctly separates *never had
+  an opportunity* (`fuzz`, `dast`: 0 / 0) from *had nine and never took one*.
+  Both flags are real defects; one of them is this entry. Not yet a shipped
+  diagnostic — recorded here because it is the cheapest known detector for the
+  silent-no-op class that has produced four defects in a single day.
+
 - **A mutation finding could not be resolved by the test that kills it, unless
   that test was named `test_<module>.py`.** `_module_tests` returned exactly
   `{test_<stem>, <stem>_test}`, so a module inside a subpackage was

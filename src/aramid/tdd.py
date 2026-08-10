@@ -8,6 +8,7 @@ from pathlib import Path
 
 from aramid import diagnostics, gitutil
 from aramid.fingerprint import normalize_path
+from aramid.mutation_gate import _has_mapped_test
 from aramid.models import Event, EventType
 from aramid.normalizer import RawFinding
 
@@ -100,9 +101,8 @@ def auto_resolve_tdd(ledger, run_id: str, at: str, changed_files, present_ids) -
             path = rec.get("file", "")
             if not path:
                 continue                            # malformed: no file -> skip
-            module = Path(path).stem
             source_touched = normalize_path(path) in changed_norm
-            test_added = bool({f"test_{module}", f"{module}_test"} & changed_test_stems)
+            test_added = _has_mapped_test(path, changed_test_stems)
             if source_touched or test_added:
                 ledger.append(Event(EventType.FINDING_RESOLVED, run_id, at,
                                     finding_id=fid,
