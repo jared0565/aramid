@@ -12,6 +12,48 @@ to publish a tag that disagrees with it.
 
 ### Fixed
 
+- **Mutation testing had never once run.** 44 attempts on this repo, **zero
+  findings**, `degraded` on 38 of them, every time reporting
+  `"baseline failing @ <sha>"`. The suite was never red — the baseline never
+  *finished*. Three defects, each measured rather than argued:
+
+  1. `_full_argv()` hardcoded a bare `pytest -q`, ignoring `[tests].command`
+     outright, so the baseline ran the whole 1595-test tree — **1141 s** — inside
+     `mutant_timeout_s × 4` = **480 s**. Honouring the configured command brings
+     it to **305 s**. The note is why this survived 44 runs: *"baseline failing"*
+     reads as *your tests are red*, not *we never let them finish*.
+  2. None of the three worktree subprocesses passed `env=`, so under a pip
+     editable install they imported the **live** source rather than the mutated
+     worktree — every mutant would have been reported **survived**. This is
+     `f462d27`, fixed for `red_proof` on 2026-07-25 and never propagated: the
+     helper was a private `_base_import_env` with one caller and **no tests**,
+     which is exactly how mutation came to miss it. Now
+     `runners.base.worktree_import_env`, shared, with its first tests.
+  3. Per-site budgets are not interchangeable. Stage-2 confirm runs the *same*
+     whole command as the baseline; a 305 s command inside 120 s times out, and
+     a stage-2 timeout is counted unattributable and emits **no finding**.
+     Mutation would have flipped from `degraded` to `ok` with permanently zero
+     findings — healthy-looking and silent, strictly worse than the bug. And
+     `wall_budget_s` (600, clock starting *before* the baseline) left 295 s,
+     under a single confirm; `aramid.toml` now states a measured 1800 s.
+
+  **Why 1598 tests never caught it:** the mutation fixtures build a *flat*-layout
+  repo with a `conftest.py` that inserts the root on `sys.path`, while aramid is
+  *src*-layout and installed editable. The fixture cannot express the bug. The
+  new tests therefore assert on the **calls**, not the outcome, and their teeth
+  were proved separately and do not overlap — reverting the command handling
+  reddens the argv and budget tests only; reverting import isolation reddens the
+  isolation test only.
+
+  **Verified end to end by a real drain, not by the tests alone:** first working
+  run reported `ok`, **20 mutants tested, 3 confirmed survivors**, 1331 s (over
+  the old 600 s ceiling, inside the new one). Triaged: `timeout=15→16` is an
+  equivalent mutant — the WARN-tier noise this design accepts — while
+  `cp.stdout or cp.stderr → and` and `splitlines()[0] → [1]` are **genuine test
+  gaps** in `doctor._version_of`, a function added the previous day that had
+  passed the full suite, review and seven-leg CI. Graphite confirms
+  (`decision_grade`) it has one caller and no direct test.
+
 - **A BLOCK-tier whole-suite finding could resolve on a run that never ran the
   suite.** `ledger._departed` decided whether a finding's file had left the
   repo by asking the filesystem — and the `tests` runner reports every
