@@ -275,3 +275,27 @@ def test_an_unrelated_purpose_suffixed_test_does_not_resolve(tmp_path):
     finally:
         led.close()
     assert resolved == []
+
+
+def test_a_longer_modules_test_also_maps_to_the_shorter_prefix_module(tmp_path):
+    """A KNOWN COST of the prefix-anchored suffix form, pinned so it is not
+    rediscovered as a bug. `test_mutation_gate.py` tests `mutation_gate.py`,
+    but it also matches `test_<module>_*` for module `mutation` -- so it maps
+    to `mutation.py` too. Live in this repo: `mutation.py`/`mutation_gate.py`
+    and `mutation_score.py`/`mutation_score_gate.py` are both such pairs.
+
+    Accepted because it errs the direction this resolver's docstring licenses
+    -- a wrong resolve lets a test gap slip until the re-drain re-reports it,
+    which is never a security hole. The dangerous direction, one subpackage's
+    test clearing another's finding, is rejected: see the sibling test above.
+    Tighten this only with evidence that a real gap slipped through it."""
+    led = Ledger(tmp_path / "l.db")
+    try:
+        _seed(led, _mut_finding(file="src/aramid/mutation.py"))
+        resolved = mutation_gate.auto_resolve_mutation(
+            led, "r1", NOW, {"tests/unit/test_mutation_gate.py"})
+    finally:
+        led.close()
+    assert resolved == ["m" * 64], (
+        "if this now returns [] the mapping was tightened -- that may be an "
+        "improvement, but it is a behaviour change and wants its own note")

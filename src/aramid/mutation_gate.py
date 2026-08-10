@@ -83,11 +83,22 @@ def _maps_to_module(test_stem: str, module_path: str) -> bool:
     directory keeps them apart, and prefix-anchoring the suffix form stops
     `test_predoctor_helpers` mapping to `doctor`.
 
-    Residual, accepted and narrower than what it replaced: `test_<stem>_*`
-    still cannot tell three `base.py` files apart, so a `test_base_*.py` would
-    map to all of them. No such file exists here, and the alternative -- full
-    dotted-path matching -- would break the plain `test_<module>.py` form that
-    most repos actually use.
+    TWO RESIDUALS, both accepted, both narrower than what they replaced. State
+    them rather than discover them:
+
+    1. `test_<stem>_*` cannot tell three `base.py` files apart, so a
+       `test_base_*.py` would map to all of them. No such file exists here.
+    2. A module whose name is a PREFIX of another module's absorbs the longer
+       one's tests. Live in this repo today: `test_mutation_gate.py` maps to
+       `mutation.py` as well as to `mutation_gate.py`, and
+       `test_mutation_score_gate.py` maps to `mutation_score.py`. Pinned by
+       `test_a_longer_modules_test_also_maps_to_the_shorter_prefix_module` so
+       it reads as a known cost rather than a surprise.
+
+    Both are the liberal direction this resolver's own docstring licenses: a
+    wrong resolve lets a test-gap slip until the re-drain re-reports it. The
+    alternative -- full dotted-path matching -- would break the plain
+    `test_<module>.py` form that most repos actually use.
     """
     p = Path(module_path)
     module, parent = p.stem, p.parent.name
