@@ -280,3 +280,199 @@ def test_consumer_is_registered():
     # loop dispatches via base.CONSUMERS).
     from aramid.consumers import base
     assert base.CONSUMERS["js_mutation"] is jsc
+
+
+# --- js-mutation can prove a repair -----------------------------------------
+#
+# js-mutation had no resolver of any kind: nothing matched tool="js-mutation",
+# record_run cannot reach it (runner labels only) and drain._consume_item
+# passes empty scopes deliberately. Its findings never resolved for ANY reason,
+# not even a deletion -- so writing the killing test changed nothing.
+#
+# Single-stage is an ADVANTAGE here: `<pm> test` IS the full suite, so a
+# non-zero exit is already a full-suite verdict and needs no second stage (the
+# python consumer has to go and buy that confirmation).
+#
+# The residual risk is different, and it is the environment. If the junction or
+# node itself breaks mid-run, EVERY subsequent mutant exits non-zero and reads
+# as killed -- mass false repair from one broken link. The initial baseline
+# proves health at the start; a final clean-tree baseline proves it at the end,
+# and is only paid for when there is actually something to claim.
+
+def _seed_open(r, fid, file="calc.js", line=2):
+    from aramid.models import Finding, Gate, Severity, Verdict
+    led = Ledger(r / ".aramid" / "ledger.db")
+    try:
+        led.record_run("seed", "2026-08-10T00:00:00+00:00", "drain", set(), set(),
+                       [Finding(id=fid, tool="js-mutation", rule="cmp-flip",
+                                severity_raw="medium", severity=Severity.MEDIUM,
+                                verdict=Verdict.WARN, file=file, line=line,
+                                message="mutant survived", evidence="",
+                                gate=Gate.ALL)])
+    finally:
+        led.close()
+
+
+def _scripted_by_tree(monkeypatch, *, mutant_rc, baseline_rcs=(0,)):
+    """Answer each run by WHAT IS ON DISK, not by call index.
+
+    `_scripted` above indexes a sequence and repeats its last entry, which
+    makes any test that needs a DIFFERENT answer for a later run impossible to
+    write correctly -- the confirming baseline silently inherited the mutant's
+    exit code, and the first version of these tests read that as a bug in the
+    consumer rather than in the script.
+
+    The pristine feature line is `return age >= 18;`; every mutant of it
+    changes that text. So the tree itself says which run this is, which is the
+    same distinction the consumer is making and is robust to however many
+    mutants the generator emits. `baseline_rcs` indexes successive PRISTINE
+    runs (clamped to the last), so "green at the start, broken at the end" is
+    expressible.
+    """
+    from pathlib import Path
+    calls = {"n": 0, "baselines": 0, "mutants": 0}
+
+    def fake(argv, cwd, timeout, **kw):
+        calls["n"] += 1
+        src = (Path(cwd) / "calc.js").read_text(encoding="utf-8")
+        if "age >= 18" in src:                      # pristine tree
+            i = min(calls["baselines"], len(baseline_rcs) - 1)
+            calls["baselines"] += 1
+            rc = baseline_rcs[i]
+        else:
+            calls["mutants"] += 1
+            rc = mutant_rc
+        return RunnerResult(tool="npm", state=ToolState.OK, returncode=rc)
+
+    monkeypatch.setattr(jsc, "run_subprocess", fake)
+    monkeypatch.setattr(jsc, "_pm_test_argv", lambda pm: ["npm", "test"])
+    monkeypatch.setattr(jsc, "_link_node_modules", lambda src, wt: True)
+    monkeypatch.setattr(jsc, "_unlink_node_modules", lambda wt: None)
+    return calls
+
+
+def _a_killed_fp(r, base, head, monkeypatch, tmp_path):
+    """One fingerprint this repo really does report as killed."""
+    _scripted_by_tree(monkeypatch, mutant_rc=1)
+    res = _consume(r, base, head, monkeypatch, tmp_path)
+    fps = sorted(res.extra.get("killed_fps", []))
+    assert fps, f"scripted kill produced no fingerprints: {res.note}"
+    return fps[0]
+
+
+def test_a_killed_mutant_matching_an_open_finding_is_claimed_repaired(
+        tmp_path, monkeypatch):
+    r, base, head = _js_repo(tmp_path)
+    fp = _a_killed_fp(r, base, head, monkeypatch, tmp_path)
+    _seed_open(r, fp)
+    _scripted_by_tree(monkeypatch, mutant_rc=1)
+
+    res = _consume(r, base, head, monkeypatch, tmp_path)
+
+    assert res.repaired is not None, "a killed mutant proved nothing"
+    assert fp in set(res.repaired.ids)
+    assert res.repaired.reason == "mutant_killed"
+
+
+def test_the_claim_names_the_tool_the_findings_carry_not_the_consumer(
+        tmp_path, monkeypatch):
+    """NAME is "js_mutation"; the findings are tool="js-mutation". Inferring
+    the tool from NAME would make every claim a silent no-op -- it would match
+    no open finding and report success doing it."""
+    r, base, head = _js_repo(tmp_path)
+    fp = _a_killed_fp(r, base, head, monkeypatch, tmp_path)
+    _seed_open(r, fp)
+    _scripted_by_tree(monkeypatch, mutant_rc=1)
+
+    res = _consume(r, base, head, monkeypatch, tmp_path)
+
+    assert res.repaired.tool == "js-mutation"
+    assert res.repaired.tool != jsc.NAME
+
+
+def test_a_kill_matching_nothing_open_buys_no_confirming_run(tmp_path, monkeypatch):
+    """The affordability property. Almost every killed mutant was never
+    reported, so there is nothing to confirm and no second baseline is run.
+    Asserted on the CALLS -- an outcome assertion cannot tell a skipped
+    confirmation from a cheap one."""
+    r, base, head = _js_repo(tmp_path)
+    calls = _scripted_by_tree(monkeypatch, mutant_rc=1)
+
+    res = _consume(r, base, head, monkeypatch, tmp_path)
+
+    assert not (res.repaired and res.repaired.ids)
+    assert calls["baselines"] == 1, (
+        f"a kill that resolves nothing still paid for a confirmation: {calls}")
+
+    _seed_open(r, sorted(res.extra["killed_fps"])[0])
+    calls2 = _scripted_by_tree(monkeypatch, mutant_rc=1)
+    _consume(r, base, head, monkeypatch, tmp_path)
+
+    assert calls2["baselines"] == 2, (
+        f"a claimable kill must buy exactly one confirming baseline: {calls2}")
+
+
+def test_no_repair_is_claimed_when_the_environment_is_broken_at_the_end(
+        tmp_path, monkeypatch):
+    """THE ATTACK. The junction (or node) dies mid-run, so every subsequent
+    `<pm> test` exits non-zero and every mutant reads as killed. Those are not
+    repairs, they are one broken link -- and claiming them writes fixes that
+    never happened into an append-only ledger, for every open finding at once.
+
+    Green at the start (so the run proceeds at all), broken by the time the
+    confirming baseline runs on the restored tree."""
+    r, base, head = _js_repo(tmp_path)
+    fp = _a_killed_fp(r, base, head, monkeypatch, tmp_path)
+    _seed_open(r, fp)
+    _scripted_by_tree(monkeypatch, mutant_rc=1, baseline_rcs=(0, 1))
+
+    res = _consume(r, base, head, monkeypatch, tmp_path)
+
+    assert not (res.repaired and res.repaired.ids), (
+        "a broken environment was allowed to resolve findings as repaired")
+    assert res.extra.get("unconfirmed_kills", 0) >= 1, (
+        "the refusal must be counted, not silent")
+
+
+def test_a_drained_js_repair_flips_the_open_finding_to_fixed(tmp_path, monkeypatch):
+    """End to end through the REAL drain, one shared ledger, nothing
+    replicated: a surviving mutant is recorded as a finding (id computed by
+    `normalize`, not by this test), the suite is then strong enough to kill it,
+    and the ledger says `fixed`.
+
+    This is the ONLY test here that holds `_mutant_fp` == the id `normalize`
+    gives the finding. Every other test in this block reads both sides from
+    `_mutant_fp`, so they would all stay green if it drifted -- measured
+    exactly that way on the python consumer earlier, where a perturbed
+    fingerprint left the "identity" test passing and only the drain test red.
+    """
+    from aramid.commands import drain as drain_mod
+
+    r, base, head = _js_repo(tmp_path)
+    monkeypatch.setattr(drain_mod, "CONSUMERS", {"js_mutation": jsc})
+    monkeypatch.setattr(config_mod, "_user_config_path",
+                        lambda: tmp_path / "no-user.toml")
+    cfg = config_mod.load_config(r)
+    item = QueueItem(id="q1", base=base, head=head, score=55, reasons=("t",),
+                     state="queued", created_at="t", updated_at="t")
+
+    led = Ledger(r / ".aramid" / "ledger.db")
+    try:
+        # Survivor: the suite passes with the mutant applied.
+        _scripted_by_tree(monkeypatch, mutant_rc=0)
+        drain_mod._consume_item(r, cfg, led, item, lambda: "2026-08-10T00:00:00+00:00")
+
+        opened = {fid for fid, rec in led.open_findings().items()
+                  if rec.get("tool") == "js-mutation" and rec["status"] == "open"}
+        assert opened, "the weak suite recorded no open js-mutation finding"
+
+        # Someone writes the test: the same mutant now fails the suite.
+        _scripted_by_tree(monkeypatch, mutant_rc=1)
+        drain_mod._consume_item(r, cfg, led, item, lambda: "2026-08-10T01:00:00+00:00")
+
+        after = led.open_findings()
+        assert all(after[fid]["status"] == "fixed" for fid in opened), (
+            "a killed js mutant stayed open: "
+            f"{ {fid: after[fid]['status'] for fid in opened} }")
+    finally:
+        led.close()

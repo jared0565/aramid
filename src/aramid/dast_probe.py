@@ -213,13 +213,25 @@ def _looks_like_html(resp: _Response) -> bool:
     return head.startswith("<!doctype html") or head.startswith("<html")
 
 
-def _check_exposed(base_url: str, paths: list, timeout_s: float) -> list:
-    out = []
+def _check_exposed(base_url: str, paths: list, timeout_s: float) -> tuple[list, set]:
+    """Returns (findings, reached) where `reached` holds the "GET <path>" labels
+    this call actually got an ANSWER for.
+
+    The distinction is the whole reason resolution is safe here. A path that
+    cannot be contacted is skipped -- correct, because a closed port is not a
+    finding -- but that skip is indistinguishable from "checked and clean" in
+    the findings list alone. Anything reading absence as proof would let a
+    route that merely went DOWN clear its own exposure finding. A 404 IS an
+    answer and belongs in `reached`: the path was examined and is not exposed.
+    """
+    out: list = []
+    reached: set = set()
     for path, rule, sev, sig in _EXPOSED_CHECKS:
         try:
             r = _fetch(urljoin(base_url, path), "GET", timeout_s)
         except DastUnreachable:
             continue                       # a closed/blocked path is not a finding
+        reached.add(f"GET {path}")
         if r.status == 200 and re.search(sig, r.body):
             out.append(DastFinding(rule, "GET", path, sev,
                                    f"sensitive path {path} is exposed",
@@ -229,11 +241,12 @@ def _check_exposed(base_url: str, paths: list, timeout_s: float) -> list:
             r = _fetch(urljoin(base_url, path), "GET", timeout_s)
         except DastUnreachable:
             continue
+        reached.add(f"GET {path}")
         if r.status == 200 and not _looks_like_html(r):
             out.append(DastFinding("dast-exposed-custom", "GET", path, "medium",
                                    f"configured path {path} returns non-HTML 200",
                                    evidence="200, content is not an HTML document"))
-    return out
+    return out, reached
 
 
 def _check_banner(resp: _Response) -> list:
@@ -248,18 +261,47 @@ def _check_banner(resp: _Response) -> list:
     return out
 
 
-def probe(base_url: str, paths: list, timeout_s: float) -> list:
-    """Run all v1 check families against base_url. Raises DastUnreachable if the
-    base_url itself cannot be contacted (the consumer degrades). Findings are
-    returned sorted by (path, check) for stable truncation/fingerprints."""
+def probe_scoped(base_url: str, paths: list, timeout_s: float) -> tuple[list, set]:
+    """Run all v1 check families against base_url, returning (findings, probed).
+
+    `probed` holds the "GET <path>" labels this scan can VOUCH for having
+    examined completely -- the scope within which "no finding" means "clean"
+    rather than "did not look". It exists so a resolver can clear a fixed
+    hygiene issue without ever clearing one whose endpoint simply stopped
+    answering.
+
+    "GET /" earns its place only when the base response was actually gradeable:
+    a TLS error or a non-response still runs the transport check but SKIPS
+    headers, cookies and banner, so the families are not all in. Vouching for a
+    partial pass would silently resolve every header finding on a target whose
+    certificate just broke.
+
+    Raises DastUnreachable if the base_url itself cannot be contacted, exactly
+    as before -- an unreachable target vouches for nothing because it never
+    returns at all.
+    """
     is_https = urlsplit(base_url).scheme == "https"
     resp = _fetch(base_url, "GET", timeout_s)          # may raise DastUnreachable
     findings: list = []
+    probed: set = set()
     findings += _check_transport(base_url, resp)
     if resp.tls_error is None and resp.status > 0:
         findings += _check_headers(resp, is_https)
         findings += _check_cookies(resp, is_https)
         findings += _check_banner(resp)
-    findings += _check_exposed(base_url, list(paths), timeout_s)
+        probed.add("GET /")
+    exposed, reached = _check_exposed(base_url, list(paths), timeout_s)
+    findings += exposed
+    probed |= reached
     findings.sort(key=lambda f: (f.path, f.check))
-    return findings
+    return findings, probed
+
+
+def probe(base_url: str, paths: list, timeout_s: float) -> list:
+    """Run all v1 check families against base_url. Raises DastUnreachable if the
+    base_url itself cannot be contacted (the consumer degrades). Findings are
+    returned sorted by (path, check) for stable truncation/fingerprints.
+
+    Kept for the callers that want findings only; delegates so there is one
+    implementation rather than two that drift."""
+    return probe_scoped(base_url, paths, timeout_s)[0]

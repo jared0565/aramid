@@ -63,6 +63,29 @@ class ConsumerResult:
 CONSUMERS: dict[str, object] = {}  # populated by consumer modules (Task 16)
 
 
+def open_findings_for(ledger, tool: str) -> dict:
+    """This producer's currently-OPEN findings, keyed by id.
+
+    Read for one reason: to know which of a run's conclusions are
+    LOAD-BEARING. A producer re-deriving an identity that matches nothing open
+    changes no state, so it needs no confirmation and costs nothing -- which is
+    almost every identity, and is what keeps repair-proving affordable.
+
+    `tool` is the string the FINDINGS carry, which is not always the consumer's
+    NAME: `js_mutation` emits `tool="js-mutation"`. Passing NAME here would
+    silently match nothing and report success doing it, so every caller states
+    it.
+
+    Never raises: an unreadable ledger yields an empty map -- no claims, which
+    is the safe direction.
+    """
+    try:
+        return {fid: rec for fid, rec in ledger.open_findings().items()
+                if rec.get("tool") == tool and rec.get("status") == "open"}
+    except Exception:
+        return {}
+
+
 def prior_note_count(ledger, consumer: str, item_id: str, prefix: str) -> int:
     """How many CONSUMER_RUN_FINISHED events this consumer has already
     recorded for this queue item with a note starting with `prefix`.

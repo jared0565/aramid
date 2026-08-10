@@ -115,7 +115,17 @@ def _stage1_argv(wt: Path, rel: str, cfg=None) -> list[str]:
 
 
 def _full_argv(cfg=None) -> list[str]:
-    """The repo's WHOLE test command -- `[tests].command` when configured.
+    """Mutation's whole-suite command: `[mutation].test_command` if the repo
+    declares one, else `[tests].command`, else a bare `pytest -q`.
+
+    THE TWO ARE DIFFERENT QUESTIONS and must be separable. `[tests].command`
+    answers "what does the gate run before letting a push through", and the
+    right answer there is whatever CI runs -- the whole tree. Mutation's
+    baseline is bounded: it runs the suite once to establish green, then once
+    per stage-2 confirm, all inside `mutant_timeout_s * 4`. Aiming that at a
+    ~19-minute tree reproduces the original defect exactly -- 44 drains, zero
+    findings, every one reporting "baseline failing" when the truth was "we
+    never let it finish".
 
     This used to hardcode a bare `pytest -q`, ignoring `[tests].command`
     outright, and that single line is why mutation testing never ran on this
@@ -131,13 +141,13 @@ def _full_argv(cfg=None) -> list[str]:
     handles the list-or-string form and the POSIX splitting, and a second
     copy of that logic is how the two would drift.
     """
-    command = None
     if cfg is not None:
-        command = (getattr(cfg, "tests", None) or {}).get("command")
-    if command:
-        argv = tests_runner._argv(command)
-        if argv:
-            return argv
+        for section, key in (("mutation", "test_command"), ("tests", "command")):
+            command = (getattr(cfg, section, None) or {}).get(key)
+            if command:
+                argv = tests_runner._argv(command)
+                if argv:
+                    return argv
     return [sys.executable, "-m", "pytest", "-q"]
 
 

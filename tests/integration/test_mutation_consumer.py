@@ -19,6 +19,7 @@ from aramid.consumers import mutation as mut_consumer
 from aramid.consumers.base import DrainContext
 from aramid.ledger import Ledger
 from aramid.queue import QueueItem
+from aramid.runners import tests as tests_runner
 
 
 def _git(root, *a):
@@ -838,3 +839,71 @@ def test_a_kill_the_full_suite_does_not_reproduce_claims_no_repair(
 
     assert not (res.repaired and fp in set(res.repaired.ids)), (
         "an unconfirmed stage-1 kill was written to the ledger as a repair")
+
+
+# --- mutation's baseline is not the gate's suite ----------------------------
+#
+# `[tests].command` answers "what does the gate run before letting a push
+# through", and the honest answer is CI's whole tree. Mutation's baseline is a
+# different question with a hard budget: it runs the suite ONCE to establish
+# green and then once more per stage-2 confirm, all inside
+# `mutant_timeout_s * 4`. Pointing that at the whole tree is precisely the bug
+# that left mutation testing degraded for 44 consecutive drains with zero
+# findings, so the two are now separable.
+
+def test_mutation_prefers_its_own_test_command(tmp_path, monkeypatch):
+    r, base, head = _repo(tmp_path, WEAK_TEST)
+    _with_test_command(r, '["python", "-m", "pytest", "-q"]')
+    # Inserted INTO the existing [mutation] table -- a second `[mutation]`
+    # header is a duplicate-table TOML error, not an override.
+    txt = (r / "aramid.toml").read_text(encoding="utf-8")
+    (r / "aramid.toml").write_text(
+        txt.replace("[mutation]\n",
+                    '[mutation]\ntest_command = '
+                    '["python", "-m", "pytest", "-q", "tests/unit"]\n', 1),
+        encoding="utf-8")
+    monkeypatch.setattr(config_mod, "_user_config_path",
+                        lambda: tmp_path / "no-user.toml")
+
+    argv = mut_consumer._full_argv(config_mod.load_config(r))
+
+    assert argv[-1] == "tests/unit", (
+        f"mutation inherited the gate's whole-tree command: {argv}")
+
+
+def test_mutation_still_falls_back_to_the_tests_command(tmp_path, monkeypatch):
+    """The behaviour that must survive: a repo that declares only
+    `[tests].command` keeps getting it, so nothing is broken by not opting in."""
+    r, base, head = _repo(tmp_path, WEAK_TEST)
+    _with_test_command(r, '["python", "-m", "pytest", "-q", "tests/fast"]')
+    monkeypatch.setattr(config_mod, "_user_config_path",
+                        lambda: tmp_path / "no-user.toml")
+
+    argv = mut_consumer._full_argv(config_mod.load_config(r))
+
+    assert argv[-1] == "tests/fast"
+
+
+def test_this_repos_mutation_baseline_is_not_the_whole_tree(monkeypatch, tmp_path):
+    """A CONFIG regression guard, asserted behaviourally rather than as a
+    literal: whatever aramid's own aramid.toml says, mutation must not end up
+    running the same command the gate does. The gate's is the whole tree
+    (~19 min); mutation's budget is `mutant_timeout_s * 4`. If these ever
+    converge again, mutation silently stops finding anything -- which is
+    exactly how it failed before, reporting "baseline failing" while the truth
+    was "we never let it finish".
+    """
+    from pathlib import Path
+
+    monkeypatch.setattr(config_mod, "_user_config_path",
+                        lambda: tmp_path / "no-user.toml")
+    root = Path(__file__).resolve().parents[2]
+    cfg = config_mod.load_config(root)
+
+    gate_argv = tests_runner._argv(cfg.tests.get("command"))
+    mutation_argv = mut_consumer._full_argv(cfg)
+
+    assert gate_argv, "this repo must declare [tests].command"
+    assert mutation_argv != gate_argv, (
+        "mutation's baseline is the gate's whole-tree suite again; its budget "
+        f"cannot fit it: {mutation_argv}")

@@ -10,6 +10,64 @@ to publish a tag that disagrees with it.
 
 ## [Unreleased]
 
+### Added
+
+- **`js-mutation`, `fuzz` and `dast` can now prove a repair.** All three had no
+  resolver of *any* kind — nothing matched their tool names, `record_run`
+  cannot reach them (it keys on runner labels), and `drain._consume_item`
+  passes empty scopes deliberately. Their findings never resolved for any
+  reason, so fixing the defect changed nothing. Each proves it differently, and
+  the differences are the design:
+
+  - **`js-mutation` — positive proof.** Single-stage is an advantage here:
+    `<pm> test` *is* the full suite, so a non-zero exit is already a full-suite
+    verdict and needs no second stage. The killed mutant's fingerprint is the
+    finding's id, so no scope is involved. The residual risk is the
+    *environment* — if the node_modules junction or node dies mid-run, every
+    remaining mutant exits non-zero and reads as killed, mass false repair from
+    one broken link. A confirming clean-tree baseline settles it, and is only
+    paid for when a kill actually matches something open.
+  - **`fuzz` — deterministic replay.** `fuzzgen.case_seed(file, func, i)`
+    replays exactly the corpus that found the crash, so for a function that was
+    really *called*, "no crash" is a re-examination rather than a coverage gap.
+    The driver now reports `fuzzed` — what it actually called — because a
+    function whose type hints were removed is skipped in silence and produces
+    the same evidence as a clean run: nothing. Scoping by requested targets
+    would have resolved findings in code that stopped being *checkable*.
+  - **`dast` — complete re-scan.** Every check family runs against one
+    response, so absence means clean — but only for endpoints that **answered**.
+    `_check_exposed` silently `continue`s past a path it cannot reach, so
+    `probe_scoped` now reports what it actually reached. A 404 counts (that is
+    an answer); an unreachable route does not. Without this a target that
+    merely went **down** would clear its own security findings, which is the one
+    direction this tool may not fail in.
+
+  Scope is matched on the function named in the crash *message*, not on the line
+  number: lines move when a file is edited, which is exactly the situation a
+  repair arises in, and a shifted line can land inside a different function's
+  span.
+
+- **`[mutation].test_command`**, falling back to `[tests].command`. The two
+  answer different questions and had to stop sharing one knob — see below.
+
+### Changed
+
+- **The pre-push gate now runs CI's whole test tree**, not `tests/unit`.
+  `[tests].command` is the same command CI's test step runs, so what passes
+  locally passes there; the ~370 integration and e2e tests it used to skip are
+  the ones most likely to break on another machine. `[tests].timeout_s` and
+  `[timeouts].pre_push` are raised to match — a per-runner cap above the
+  whole-gate cap is a cap that never fires. Full parity is still not possible
+  and is not claimed: CI runs seven legs (3 OS × 4 pythons) and a local push
+  runs one, so platform-specific failures can still only surface there.
+
+  **Mutation keeps its own bounded baseline** (`[mutation].test_command` =
+  `tests/unit`). Its baseline runs inside `mutant_timeout_s * 4`; aiming that at
+  a ~19-minute tree reproduces the original defect exactly — 44 drains, zero
+  findings, every one reporting "baseline failing" when the truth was that it
+  never finished. `test_this_repos_mutation_baseline_is_not_the_whole_tree`
+  fails if the two ever converge again.
+
 ### Known — measured, not yet fixed
 
 - **`.aramid-suppressions.toml` cannot suppress a ledger-synthesized finding,
@@ -252,6 +310,13 @@ to publish a tag that disagrees with it.
     after a genuine fix. `dast` is in the same position. Reported, not fixed
     here: the right resolution rule for a fuzz crash is a design question, not
     a one-line opt-in.
+
+    **SUPERSEDED, same release** — all three now resolve, via
+    `ledger.resolve_repaired` rather than by opting into departed-file
+    resolution (see "give js-mutation, fuzz and dast their own resolvers"
+    above). The design question above is what took the work: the answer turned
+    out to be different for each of them, and `dast` in particular must never
+    opt in *here*, because its `file` is an endpoint rather than a path.
 
 - **A whole-project runner could record findings as `fixed` in files the gate
   never scoped.** `ledger.record_run` **replaced** the gate's `scope_files`

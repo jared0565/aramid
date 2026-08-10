@@ -21,10 +21,15 @@ from aramid import config as config_mod
 from aramid import detectors, gitutil, jsmutate
 from aramid.consumers import base
 from aramid.consumers.base import ConsumerResult, DrainContext
+from aramid.fingerprint import compute_fingerprint
 from aramid.normalizer import RawFinding
 from aramid.runners.base import ToolState, run_subprocess
 
 NAME = "js_mutation"
+# The string the FINDINGS carry, which is NOT `NAME` -- note the hyphen. Both
+# spellings are load-bearing and they are not interchangeable: a repair claim
+# tagged "js_mutation" would match no open finding and report success doing it.
+TOOL = "js-mutation"
 _BASELINE_GIVE_UP = 3
 _LINK_GIVE_UP = 3
 _JS_SUFFIXES = (".js", ".jsx", ".mjs", ".cjs", ".ts", ".tsx", ".mts", ".cts")
@@ -40,6 +45,21 @@ def _is_test_file(rel: str) -> bool:
         return True
     stem = name.rsplit(".", 1)[0].lower()
     return stem.endswith(".test") or stem.endswith(".spec")
+
+
+def _mutant_fp(rel: str, op: str, line: int, lines: list[str]) -> str:
+    """The id a survivor of THIS mutant would carry.
+
+    Deliberately the same `compute_fingerprint` call `normalizer.normalize`
+    makes for the RawFinding this consumer emits: same tool/op/path, the line
+    content read at the item's head on both sides (the worktree is a checkout
+    of that head), and PIN_OCCURRENCE forcing occurrence 0. That equality is
+    what lets a kill be matched against a finding an earlier drain recorded --
+    and it is pinned by the end-to-end drain test, not by any test that reads
+    both sides from here.
+    """
+    lc = lines[line - 1] if 0 <= line - 1 < len(lines) else ""
+    return compute_fingerprint(TOOL, op, rel, lc, 0)
 
 
 def _pm_test_argv(pm: str) -> list[str] | None:
@@ -139,7 +159,10 @@ def consume(item, ctx: DrainContext) -> ConsumerResult:
 
     started = time.monotonic()
     stats = {"generated": 0, "tested": 0, "killed": 0, "survived": 0,
-             "timeouts": 0, "errors": 0, "truncated": False}
+             "timeouts": 0, "errors": 0, "unconfirmed_kills": 0,
+             "killed_fps": [], "truncated": False}
+    open_ids = set(base.open_findings_for(ctx.ledger, TOOL))
+    repaired_ids: tuple = ()
     findings: list[RawFinding] = []
     tmp = Path(tempfile.mkdtemp(prefix="aramid-jsmut-"))
     wt = tmp / "wt"
@@ -205,6 +228,8 @@ def consume(item, ctx: DrainContext) -> ConsumerResult:
                     elif res.state is ToolState.OK:
                         # non-zero exit -> the suite (or compile) failed -> killed
                         stats["killed"] += 1
+                        stats["killed_fps"].append(
+                            _mutant_fp(rel, m.op, m.line, original.splitlines()))
                     else:
                         # MISSING/CRASHED mid-run: unattributable, not a survivor
                         stats["errors"] += 1
@@ -215,6 +240,28 @@ def consume(item, ctx: DrainContext) -> ConsumerResult:
                         src_path.write_text(original, encoding="utf-8")
                     except OSError:
                         stats["errors"] += 1
+
+        # A kill only has to be confirmed when it would RESOLVE something --
+        # almost never, so the confirming run below is almost never paid for.
+        #
+        # Single-stage means `<pm> test` already IS the full suite, so unlike
+        # the python consumer there is no narrow-selection doubt about the kill
+        # itself. The doubt is the ENVIRONMENT: if the node_modules junction or
+        # node dies mid-run, every remaining mutant exits non-zero and reads as
+        # killed, and claiming those would write a fix that never happened for
+        # every open finding at once. The opening baseline proved health at the
+        # start; this proves it at the end, on the restored tree.
+        #
+        # Residual, stated rather than hidden: an environment that broke and
+        # then recovered passes both ends. Bounding that would cost one run per
+        # claim and still not be airtight, so it is accepted and counted.
+        claimable = sorted({fp for fp in stats["killed_fps"] if fp in open_ids})
+        if claimable:
+            final = run_subprocess(test_argv, wt, mutant_timeout * 4)
+            if final.state is ToolState.OK and final.returncode == 0:
+                repaired_ids = tuple(claimable)
+            else:
+                stats["unconfirmed_kills"] = len(claimable)
     finally:
         try:
             if linked:
@@ -230,7 +277,10 @@ def consume(item, ctx: DrainContext) -> ConsumerResult:
         note += " (truncated: budget/cap hit, remainder dropped)"
     return ConsumerResult(consumer=NAME, state="ok", findings=findings,
                           duration_s=time.monotonic() - started, cost=0.0,
-                          note=note, extra=dict(stats))
+                          note=note, extra=dict(stats),
+                          repaired=base.Repaired(tool=TOOL, reason="mutant_killed",
+                                                 ids=repaired_ids)
+                          if repaired_ids else None)
 
 
 base.CONSUMERS[NAME] = sys.modules[__name__]

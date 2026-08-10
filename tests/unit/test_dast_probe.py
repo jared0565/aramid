@@ -401,3 +401,76 @@ def test_fetch_maps_tls_cert_error_to_tls_error(monkeypatch):
     assert resp.status == 0
     assert resp.tls_error is not None
     assert "self signed" in resp.tls_error
+
+
+# --- what the probe can VOUCH for having examined ---------------------------
+#
+# dast had no resolver of any kind, so a hygiene issue stayed open forever
+# after it was fixed. Giving it one needs a scope, and the scope is the hard
+# part: `_check_exposed` silently `continue`s past a path it cannot reach, so
+# "attempted" is emphatically not "examined". Resolving on attempted endpoints
+# would let a route that merely went DOWN clear its own security findings --
+# the exact direction a security tool must never fail in.
+#
+# `probe_scoped` returns what was actually REACHED alongside the findings, so
+# the consumer can claim repair for those and nothing else.
+
+def test_scope_names_the_base_endpoint_when_the_base_response_was_checked(harness):
+    base_url, set_routes = harness
+    set_routes({"/": (200, [("Content-Type", "text/html")], b"<html></html>")})
+
+    from aramid.dast_probe import probe_scoped
+    findings, probed = probe_scoped(base_url, [], 5.0)
+
+    assert "GET /" in probed, "the base response was checked but not vouched for"
+    assert findings, "a bare response should still produce header findings"
+
+
+def test_a_path_that_could_not_be_reached_is_not_in_scope(harness, monkeypatch):
+    """THE ATTACK. One route is down. Its findings must stay open -- an app
+    that cannot answer has not proved anything about itself, and treating
+    silence as a fix is how a live exposure gets marked resolved."""
+    base_url, set_routes = harness
+    set_routes({"/": (200, [("Content-Type", "text/html")], b"<html></html>")})
+
+    import aramid.dast_probe as dp
+    real_fetch = dp._fetch
+
+    def flaky(url, method, timeout):
+        if url.endswith("/admin"):
+            raise DastUnreachable("connection refused")
+        return real_fetch(url, method, timeout)
+
+    monkeypatch.setattr(dp, "_fetch", flaky)
+    _, probed = dp.probe_scoped(base_url, ["/admin", "/health"], 5.0)
+
+    assert "GET /admin" not in probed, "an unreachable path was vouched for"
+    assert "GET /health" in probed, "a reachable path must still be in scope"
+
+
+def test_a_path_that_answers_404_IS_in_scope(harness):
+    """The counterfactual that keeps the guard from being vacuous. A 404 is a
+    real answer -- the path was examined and is not exposed -- so a previously
+    exposed path that now 404s must be resolvable. Only an unanswered request
+    is outside the scope."""
+    base_url, set_routes = harness
+    set_routes({"/": (200, [("Content-Type", "text/html")], b"<html></html>")})
+
+    from aramid.dast_probe import probe_scoped
+    _, probed = probe_scoped(base_url, ["/gone"], 5.0)
+
+    assert "GET /gone" in probed
+
+
+def test_probe_still_returns_a_plain_finding_list(harness):
+    """`probe` has 16 callers. It keeps its signature and delegates, so there
+    is one implementation rather than two that drift."""
+    base_url, set_routes = harness
+    set_routes({"/": (200, [("Content-Type", "text/html")], b"<html></html>")})
+
+    from aramid.dast_probe import probe_scoped
+    plain = probe(base_url, [], 5.0)
+    scoped, _ = probe_scoped(base_url, [], 5.0)
+
+    assert isinstance(plain, list)
+    assert [(f.check, f.path) for f in plain] == [(f.check, f.path) for f in scoped]

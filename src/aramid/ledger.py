@@ -187,18 +187,19 @@ def resolve_departed(ledger, run_id: str, at: str, *, root, tool: str,
     assuming:
       - `llm-review` needs nothing -- `auto_resolve_llm` fires when the stored
         evidence quote is absent from HEAD, and deleting the file removes it.
-      - `js-mutation` and `fuzz` DO have this bug, and a larger one: they have
-        NO resolver at all. Nothing matches those tool names, `record_run`
-        cannot reach them (runner labels only), and `drain._consume_item`
-        passes empty scopes deliberately. Their findings never resolve for ANY
-        reason -- not merely after a deletion, but after a genuine fix. Opting
-        them in here would fix only the deletion half and leave the real defect
-        standing, so they want a resolver of their own, keyed on what the
-        consumer actually re-examined. A design question, not a one-liner.
+      - `js-mutation` and `fuzz` now resolve through `resolve_repaired`
+        instead, which was the right shape for them: they had no resolver of
+        any kind, so a genuine FIX cleared nothing, and opting them in here
+        would have fixed only the deletion half of that. They could still opt
+        in -- both are anchored to real repo-relative paths -- but a departed
+        file is a rare case next to a fixed one, and each addition here is a
+        standing invitation to the `dast` mistake below.
       - `dast` must NEVER opt in: its `file` is a method+endpoint
         ("GET /login"), so departure is not a question that has an answer, and
         the string does not exist as a path -- it would read as departed and
-        clear live security findings.
+        clear live security findings. It resolves via `resolve_repaired`, whose
+        scope is endpoints that actually ANSWERED, which is a question its
+        `file` can be asked.
       - `mutation-score` is synthesized at gate time from stored scores rather
         than persisted like the others; whether it holds resolvable open
         findings at all is unchecked, so it is deliberately uncharacterised
@@ -272,11 +273,25 @@ def resolve_repaired(ledger, run_id: str, at: str, *, tool: str, reason: str,
     real gaps in `doctor._version_of`, resolved nothing. Proof does not care
     what the file is called.
 
-    NOT YET USED BY, and each still genuinely resolverless: `js-mutation`,
-    `fuzz`, `dast` have no auto-resolver of any kind (only `mutation`,
-    `red-proof`, `tdd`, `llm-review` and `tests` do). They are the cases this
-    mechanism exists to make possible; wiring them needs each consumer to
-    re-derive its own identities, which is real work per producer.
+    USED BY all four drain producers, each proving something different, and the
+    differences are the interesting part:
+
+      - `mutation` / `js-mutation` -- POSITIVE proof. The killed mutant's
+        fingerprint IS the finding's id, so the claim needs no scope at all.
+      - `fuzz` -- deterministic replay. `case_seed(file, func, i)` reruns
+        exactly the corpus that found the crash, so for a function the driver
+        actually CALLED, "no crash" is a re-examination. Scoped by the driver's
+        `fuzzed` list, never by the targets it was asked to run.
+      - `dast` -- complete re-scan. Every check family runs against one
+        response, so absence means clean -- but only for endpoints that
+        ANSWERED, which is why `probe_scoped` reports what it reached.
+
+    The two shapes differ in where the evidence lives. Mutation names ids it
+    disproved; fuzz and dast name ids inside a scope they completely
+    re-examined and did not re-report. Both are honest, and both exclude
+    anything re-fired this run -- in the consumer AND again through
+    `present_ids` here, because a producer claiming repair for a finding it is
+    reporting in the same breath is the worst failure available to it.
 
     POSITIVE ASSERTION, NOT INFERRED ABSENCE -- this is the whole reason it is
     safe where scope-based resolution is not. The drain refuses to resolve

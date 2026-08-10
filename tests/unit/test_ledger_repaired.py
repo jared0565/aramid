@@ -18,10 +18,15 @@ does not match, so nothing resolved. A resolver keyed on a filename convention
 misses every fix that does not follow it.
 
 `resolve_departed` covers a third case (the file LEFT the repo). This covers
-the one nothing did. `js-mutation`, `fuzz` and `dast` still have no resolver
-of ANY kind -- only `mutation`, `red-proof`, `tdd`, `llm-review` and `tests`
-do -- which is why this is a general mechanism rather than another bespoke
-one.
+the one nothing did.
+
+It is a GENERAL mechanism rather than another bespoke one because three other
+producers needed it and needed it differently: `js-mutation`, `fuzz` and
+`dast` had no resolver of ANY kind, so a genuine fix cleared nothing at all.
+Each proves repair its own way -- a killed mutant's fingerprint, a
+deterministic corpus replayed against a function that really ran, a complete
+re-scan of an endpoint that actually answered -- and each hands back ids
+through this one call.
 
 WHY THIS IS NOT WHAT THE DRAIN COMMENT FORBIDS. Scope-based resolution infers
 repair from ABSENCE: the tool ran, it didn't re-report, so assume fixed. That

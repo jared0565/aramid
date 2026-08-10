@@ -45,6 +45,13 @@ def run_spec(spec: dict) -> dict:
     records, seen = [], set()
     cases_run = crashes = contract = unfuzzable = 0
     import_failures = []
+    # What was actually CALLED, as opposed to merely asked for. A function that
+    # is missing, uncallable, or has no usable hints is skipped silently, and a
+    # file that fails to import takes all of its functions with it -- every one
+    # of those produces exactly the same evidence as a clean run: no records.
+    # Anything reading "no crash" as proof of a fix therefore needs this list,
+    # not the requested targets.
+    fuzzed: list = []
 
     for target in spec.get("targets", []):
         rel = target["file"]
@@ -64,6 +71,7 @@ def run_spec(spec: dict) -> dict:
                 unfuzzable += 1
                 continue
             hints = typing.get_type_hints(fn)
+            fuzzed.append([rel, func_name])
             for i in range(cases):
                 # S311 justification: as in autolearn.decision_rng, determinism
                 # is the point. The seed is derived from (file, function, case
@@ -94,7 +102,7 @@ def run_spec(spec: dict) -> dict:
                     contract += 1
     return {"records": records, "cases_run": cases_run, "crashes": crashes,
             "contract_exceptions": contract, "unfuzzable": unfuzzable,
-            "import_failures": import_failures}
+            "import_failures": import_failures, "fuzzed": fuzzed}
 
 
 def _crash_line(exc, abs_path: str, fn) -> int:

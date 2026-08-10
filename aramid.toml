@@ -37,13 +37,26 @@ bake_started = "2026-08-02"
 # on every push across the 7-leg matrix -- so nothing is unverified, it is
 # verified a few minutes later instead of before the push.
 #
-# tests/unit is 791 tests in ~185 s locally; a measured pre-push run is ~243 s
-# wall clock (runners go concurrently). The argv form is used rather than a
-# string because POSIX splitting eats backslashes and this repo's primary dev
-# platform is Windows.
+# CI PARITY. This is deliberately the same command CI's "Run test suite" step
+# runs -- the WHOLE tree, not `tests/unit`. The point of a pre-push gate is
+# that what passes here passes there, and the ~370 integration and e2e tests
+# that `tests/unit` excludes are exactly the ones most likely to break on a
+# different machine. Scoping this narrowly bought a fast push and paid for it
+# in CI round-trips.
+#
+# What it does NOT buy is full parity, and the difference is worth stating:
+# CI runs seven legs (3 OS x 4 pythons) and this runs one, so a
+# platform-specific failure can still only be caught there.
+#
+# The argv form is used rather than a string because POSIX splitting eats
+# backslashes and this repo's primary dev platform is Windows.
 [tests]
-command = ["python", "-m", "pytest", "-q", "tests/unit"]
-timeout_s = 600
+command = ["python", "-m", "pytest", "-q"]
+# The whole tree measured ~1141 s; `tests/unit` alone was ~243 s under the old
+# 600 s cap. A timeout is not a cost -- it never slows a passing push -- but
+# too tight a one blocks EVERY push, so this keeps a similar ratio of headroom
+# to the new figure rather than a similar absolute margin.
+timeout_s = 2400
 
 # Headroom over that measured ~243 s. These are TIMEOUTS, not costs: raising
 # the cap does not slow a passing push by one second, it only widens how slow
@@ -52,7 +65,11 @@ timeout_s = 600
 # it crosses is not a warning, it is every push blocked. The only price is
 # that a genuinely hung suite takes 10 min rather than 5 to be declared hung.
 [timeouts]
-pre_push = 600
+# Raised with [tests].timeout_s for the same reason: this is the WHOLE-GATE
+# budget, so leaving it at 600 s would call a healthy push hung after ten
+# minutes while its (now legitimately ~19 min) test runner was still working.
+# A per-runner cap that exceeds the gate cap is a cap that never fires.
+pre_push = 2700
 
 [hooks]
 # Run the pre-push shim with the argv CI step 8 uses (`--all --strict`)
@@ -93,4 +110,12 @@ pre_push_match_ci = true
 # headroom. Re-measure before assuming that still holds -- tests/unit grows
 # with every task, and 480 s is the number that will bite when it stops.
 [mutation]
+# Mutation's baseline is NOT the gate's suite -- see `mutation._full_argv`.
+# `[tests].command` is now CI's whole tree (~1141 s) and the mutation baseline
+# is budgeted at `mutant_timeout_s * 4`, so inheriting it would recreate the
+# original defect exactly: 44 drains, zero findings, every one reporting
+# "baseline failing" when the truth was that it never finished. tests/unit
+# (~305 s) fits, and `test_this_repos_mutation_baseline_is_not_the_whole_tree`
+# fails if these two ever converge again.
+test_command = ["python", "-m", "pytest", "-q", "tests/unit"]
 wall_budget_s = 1800

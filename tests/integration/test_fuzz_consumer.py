@@ -280,3 +280,232 @@ def test_dropped_candidate_flagged_truncated(tmp_path, monkeypatch):
     assert res.state == "ok"
     assert res.extra["truncated"] is True
     assert "truncated" in res.note
+
+
+# --- fuzz can prove a repair ------------------------------------------------
+#
+# fuzz had no resolver of ANY kind. Nothing matched tool="fuzz", record_run
+# cannot reach it (runner labels only) and drain._consume_item passes empty
+# scopes, so a crash finding stayed open forever -- even after the crash was
+# fixed and the very same seeded case ran clean.
+#
+# What makes resolution safe here is DETERMINISM: `fuzzgen.case_seed(file,
+# func, i)` means re-fuzzing a function replays exactly the corpus that found
+# the crash. So for a function that was actually called, "no crash this time"
+# is a real re-examination rather than a gap in coverage.
+#
+# "Actually called" is the hard part, and it is why the driver now reports
+# `fuzzed`. A function whose type hints were removed is silently skipped as
+# unfuzzable, and a file that fails to import is skipped whole -- both produce
+# exactly the same evidence as "ran clean": nothing. Scoping by what was
+# ATTEMPTED would resolve findings in code that was never executed.
+
+def _seed_from(r, raw, head):
+    """Record the finding the DRAIN would have recorded, and return its id.
+
+    Normalized through the drain's own `normalize` call rather than through the
+    consumer's fingerprint helper -- the equality of those two is the property
+    the loop depends on, so a test must not assume it on both sides.
+    """
+    import functools
+
+    from aramid import policy
+    from aramid.models import Gate
+    from aramid.normalizer import normalize
+
+    cfg = config_mod.load_config(r)
+    fs = normalize([raw], r, lambda f: head, b"salt-fixed-16byt", Gate.ALL,
+                   functools.partial(policy.classify, cfg=cfg), pin_occurrence=True)
+    led = Ledger(r / ".aramid" / "ledger.db")
+    try:
+        led.record_run("seed", "2026-08-10T00:00:00+00:00", "drain",
+                       set(), set(), fs)
+    finally:
+        led.close()
+    return fs[0].id
+
+
+# Crashes on an out-of-range index; the fixed version guards it. Same function
+# name and same file both times, so the seeded corpus is identical.
+_CRASHY = ("def pick(i: int) -> int:\n"
+           "    data = [1, 2, 3]\n"
+           "    return data[i]\n")
+_FIXED = ("def pick(i: int) -> int:\n"
+          "    data = [1, 2, 3]\n"
+          "    if not 0 <= i < len(data):\n"
+          "        return 0\n"
+          "    return data[i]\n")
+_UNHINTED = ("def pick(i):\n"
+             "    data = [1, 2, 3]\n"
+             "    return data[i]\n")
+
+
+def test_the_driver_vouches_for_the_functions_it_actually_called(tmp_path):
+    """A function that cannot be fuzzed must not appear in `fuzzed`. Without
+    this an unhinted function looks exactly like a clean one -- both produce no
+    records -- and its open findings would resolve on no evidence at all."""
+    from aramid.fuzzdriver import run_spec
+
+    (tmp_path / "m.py").write_text(
+        "def hinted(x: int) -> int:\n    return x\n"
+        "def unhinted(x):\n    return x\n", encoding="utf-8")
+    out = run_spec({"root": str(tmp_path),
+                    "targets": [{"file": "m.py",
+                                 "functions": ["hinted", "unhinted"], "cases": 3}]})
+
+    fuzzed = {tuple(x) for x in out["fuzzed"]}
+    assert ("m.py", "hinted") in fuzzed
+    assert ("m.py", "unhinted") not in fuzzed, \
+        "an unfuzzable function was vouched for as examined"
+
+
+def test_a_file_that_fails_to_import_vouches_for_nothing(tmp_path):
+    from aramid.fuzzdriver import run_spec
+
+    (tmp_path / "bad.py").write_text("import definitely_not_a_module_xyz\n",
+                                     encoding="utf-8")
+    out = run_spec({"root": str(tmp_path),
+                    "targets": [{"file": "bad.py", "functions": ["anything"],
+                                 "cases": 3}]})
+
+    assert out["fuzzed"] == []
+    assert "bad.py" in out["import_failures"]
+
+
+def test_the_crash_message_names_its_function_in_the_form_scoping_reads(
+        tmp_path, monkeypatch):
+    """Scope is matched on the function named in the message, so the message
+    FORMAT is load-bearing. Pinned here so changing it breaks loudly instead of
+    silently narrowing every future repair claim to nothing."""
+    r, base, head = _repo(tmp_path, _CRASHY, filename="mod.py")
+    res = _consume(r, base, head, monkeypatch, tmp_path)
+
+    assert res.findings, f"fixture produced no crash: {res.note}"
+    assert res.findings[0].message.startswith("fuzz crash: pick(")
+    assert fuzz_consumer._names_function(res.findings[0].message, "pick")
+    assert not fuzz_consumer._names_function(res.findings[0].message, "pic")
+
+
+def test_a_crash_that_was_fixed_is_claimed_repaired(tmp_path, monkeypatch):
+    """The whole loop, real driver in a real worktree: the crashy version
+    reports a finding, the fix lands, and the next run proves that exact
+    identity gone."""
+    r, base, head = _repo(tmp_path, _CRASHY, filename="mod.py")
+    first = _consume(r, base, head, monkeypatch, tmp_path)
+    assert first.findings, f"fixture produced no crash: {first.note}"
+    fid = _seed_from(r, first.findings[0], head)
+
+    (r / "mod.py").write_text(_FIXED, encoding="utf-8")
+    _git(r, "add", "-A")
+    _git(r, "commit", "-q", "-m", "guard the index")
+    res = _consume(r, base, _sha(r), monkeypatch, tmp_path)
+
+    assert res.findings == [], f"the fix did not stop the crash: {res.findings}"
+    assert res.repaired is not None, "a fixed crash proved nothing"
+    assert res.repaired.tool == "fuzz"
+    assert res.repaired.reason == "crash_not_reproduced"
+    assert fid in set(res.repaired.ids)
+
+
+def test_a_crash_that_still_reproduces_is_never_claimed(tmp_path, monkeypatch):
+    """The counterfactual: same seeded corpus, still crashing. Claiming repair
+    for a finding being reported in the same breath is the worst thing this
+    mechanism could do."""
+    r, base, head = _repo(tmp_path, _CRASHY, filename="mod.py")
+    first = _consume(r, base, head, monkeypatch, tmp_path)
+    assert first.findings
+    fid = _seed_from(r, first.findings[0], head)
+
+    res = _consume(r, base, head, monkeypatch, tmp_path)
+
+    assert res.findings, "fixture stopped crashing; the test would be vacuous"
+    assert fid not in set(res.repaired.ids if res.repaired else ())
+
+
+def test_a_finding_in_a_function_this_run_never_fuzzed_stays_open(
+        tmp_path, monkeypatch):
+    """THE ATTACK. The type hints come off, so the driver silently skips the
+    function -- no records, exactly like a clean run. Resolving here would
+    clear a live crash finding because the code stopped being CHECKABLE, not
+    because anything was fixed."""
+    r, base, head = _repo(tmp_path, _CRASHY, filename="mod.py")
+    first = _consume(r, base, head, monkeypatch, tmp_path)
+    assert first.findings
+    fid = _seed_from(r, first.findings[0], head)
+
+    (r / "mod.py").write_text(_UNHINTED, encoding="utf-8")
+    _git(r, "add", "-A")
+    _git(r, "commit", "-q", "-m", "drop the hints")
+    res = _consume(r, base, _sha(r), monkeypatch, tmp_path)
+
+    assert res.findings == [], "an unhinted function cannot be fuzzed at all"
+    assert fid not in set(res.repaired.ids if res.repaired else ()), \
+        "removing type hints resolved a live crash finding"
+
+
+def test_a_driver_that_never_produced_a_verdict_claims_nothing(
+        tmp_path, monkeypatch):
+    """A timed-out driver produces no records -- indistinguishable from a clean
+    sweep in the output alone."""
+    from aramid.runners.base import RunnerResult, ToolState
+
+    r, base, head = _repo(tmp_path, _CRASHY, filename="mod.py")
+    first = _consume(r, base, head, monkeypatch, tmp_path)
+    assert first.findings
+    fid = _seed_from(r, first.findings[0], head)
+
+    monkeypatch.setattr(fuzz_consumer, "run_subprocess",
+                        lambda *a, **k: RunnerResult(tool="python",
+                                                     state=ToolState.TIMEOUT,
+                                                     returncode=0))
+    res = _consume(r, base, head, monkeypatch, tmp_path)
+
+    assert fid not in set(res.repaired.ids if res.repaired else ()), \
+        "a driver that never produced a verdict resolved findings anyway"
+
+
+def test_a_drained_fuzz_repair_flips_the_open_finding_to_fixed(tmp_path, monkeypatch):
+    """End to end through the REAL drain with the real driver subprocess: the
+    crash is recorded as a finding (id computed by `normalize`), the guard is
+    added, and the ledger says `fixed`.
+
+    The consumer never re-derives the id it resolves -- it names open findings
+    within a re-examined scope -- so what this holds is the whole chain:
+    detection, scoping, the drain's `present_ids` subtraction, and the ledger
+    write. None of the consumer-level tests reach past the return value.
+    """
+    from aramid.commands import drain as drain_mod
+
+    r, base, head = _repo(tmp_path, _CRASHY, filename="mod.py")
+    monkeypatch.setattr(drain_mod, "CONSUMERS", {"fuzz": fuzz_consumer})
+    monkeypatch.setattr(config_mod, "_user_config_path",
+                        lambda: tmp_path / "no-user.toml")
+    cfg = config_mod.load_config(r)
+
+    led = Ledger(r / ".aramid" / "ledger.db")
+    try:
+        drain_mod._consume_item(
+            r, cfg, led,
+            QueueItem(id="q1", base=base, head=head, score=55, reasons=("t",),
+                      state="queued", created_at="t", updated_at="t"),
+            lambda: "2026-08-10T00:00:00+00:00")
+
+        opened = {fid for fid, rec in led.open_findings().items()
+                  if rec.get("tool") == "fuzz" and rec["status"] == "open"}
+        assert opened, "the crashy version recorded no open fuzz finding"
+
+        (r / "mod.py").write_text(_FIXED, encoding="utf-8")
+        _git(r, "add", "-A")
+        _git(r, "commit", "-q", "-m", "guard the index")
+        drain_mod._consume_item(
+            r, cfg, led,
+            QueueItem(id="q2", base=base, head=_sha(r), score=55, reasons=("t",),
+                      state="queued", created_at="t", updated_at="t"),
+            lambda: "2026-08-10T01:00:00+00:00")
+
+        after = led.open_findings()
+        assert all(after[fid]["status"] == "fixed" for fid in opened), (
+            "a fixed crash stayed open: "
+            f"{ {fid: after[fid]['status'] for fid in opened} }")
+    finally:
+        led.close()
