@@ -12,6 +12,55 @@ to publish a tag that disagrees with it.
 
 ### Fixed
 
+- **`check --all` did not scan for secrets, and marked secrets already found
+  as fixed.** The most serious defect found so far, in the BLOCK tier, and
+  found only by running the published wheel against a throwaway repo.
+
+  `pipeline._discover_files` returns `rng = None` for `mode == "all"`, and
+  `rng` overloaded `None` to mean **both** "staged" and "not range-based" —
+  so gitleaks fell through to `git --staged`, met an empty index, scanned
+  **nothing**, and reported `ToolState.OK`.
+
+  Reporting `OK` is what made it dangerous rather than merely useless. `OK`
+  puts gitleaks in `scope_tools`, and `record_run` then resolves any open
+  gitleaks finding whose file is in scope — which under `--all` is the whole
+  tracked tree. Measured end to end on 0.2.0: two committed secrets that
+  gitleaks finds when run directly, `check --all` reporting "no findings",
+  and both prior BLOCK findings written `finding_resolved` while the secrets
+  sat untouched in the files. **Committing a leak is what marked it fixed**,
+  permanently, into an append-only audit trail. Language-independent — the
+  `.py` file was missed the same way. `--all` is the CI-parity mode
+  `[hooks].pre_push_match_ci` runs on every push.
+
+  Three changes, each forced by measuring the previous one:
+
+  - `RunContext.full_tree` (set for `mode == "all"`) routes gitleaks to
+    `gitleaks dir`, its working-tree scan. Range mode still wins, because
+    only a history scan can attribute a leak to the commit that introduced
+    it.
+  - **Scan wide, report narrow.** `gitleaks dir` takes a single path and
+    walks everything under it, *including files git ignores*: 24 hits here,
+    of which 14 were in `.superpowers/` local review artifacts and
+    `__pycache__/`. `--all` means all **tracked** files, and a finding in a
+    path that can never be committed is one nobody can ever fix or retire.
+    Filtered in `parse` rather than by narrowing the scan because passing a
+    file list to `gitleaks dir` is silently ignored and it rescans the whole
+    tree — confirmed rather than assumed.
+  - **The budget follows the work, not only the gate tier.** A full-tree scan
+    takes 9.4 s here and the pre-commit budget is **5 s**, because a commit
+    hook has to feel instant — so `aramid check --all`, whose gate *defaults*
+    to pre-commit, degraded the secret scanner on every run. `_BUDGET_KEY`
+    already carried the intent (`Gate.ALL` → `pre_push`) but `Gate.ALL` is
+    unreachable from the CLI. Now keyed on mode, so the ordinary staged
+    pre-commit path keeps its tight budget.
+
+  Verified on this repo: `degraded: []`, 10 findings reported (not 24), all
+  matching already-triaged `not_a_secret` entries, so **zero new blocks**.
+  And on the throwaway repo the wrongly-resolved finding comes back as
+  "STILL BLOCKING — seen before, and still failing this gate".
+
+### Fixed
+
 - **A broken fuzz driver no longer reports itself healthy, and no longer eats
   the queue item.** Both driver-failure paths in `consumers/fuzz.py` returned
   `state="ok"` — one for a non-zero exit, one for output it could not parse.

@@ -173,3 +173,53 @@ def test_run_clean_exit_with_missing_report_file_is_ok(tmp_path, monkeypatch):
     result = gitleaks.run(RunContext(root=tmp_path))
     assert result.state is ToolState.OK
     assert gitleaks.parse(result, RunContext(root=tmp_path)) == []
+
+
+def test_full_tree_mode_scans_the_tree_not_the_empty_index():
+    """`--all` must not route the secret scanner to `git --staged`.
+
+    MEASURED against the published 0.2.0 wheel on a synthetic repo. `--all`
+    sets `rng = None` (pipeline._discover_files), and `None` meant "staged"
+    -- the one value that also meant "not range-based". So under `--all`,
+    with nothing staged, gitleaks scanned NOTHING and reported ToolState.OK.
+
+    Reporting OK is what made it dangerous rather than merely useless. OK
+    puts gitleaks in `scope_tools`, and `record_run` then resolves any open
+    gitleaks finding whose file is in scope -- which under `--all` is the
+    whole tracked tree. Observed end to end: two committed secrets that
+    gitleaks finds when run directly, `aramid check --all` reporting "no
+    findings", and both prior BLOCK findings written `finding_resolved` in
+    the ledger. Committing a secret is what marked it fixed, permanently,
+    into an append-only audit trail.
+
+    `--all` is the CI-parity mode `[hooks].pre_push_match_ci` runs on every
+    push, and gitleaks is the BLOCK tier."""
+    ctx = RunContext(root=Path("."), rng=None, full_tree=True)
+
+    argv = gitleaks._build_argv(ctx, Path("r.json"))
+
+    assert argv[1] == "dir", f"expected a working-tree scan, got {argv[:3]}"
+    assert "--staged" not in argv
+
+
+def test_staged_mode_is_unchanged_when_not_full_tree():
+    """The pre-commit path still scans the index, and must: that is the only
+    place a secret can be caught BEFORE it enters history."""
+    ctx = RunContext(root=Path("."), rng=None)
+
+    argv = gitleaks._build_argv(ctx, Path("r.json"))
+
+    assert argv[1] == "git"
+    assert "--staged" in argv
+
+
+def test_a_range_still_wins_over_full_tree():
+    """Range mode is the pre-push path and scans real commits. `full_tree`
+    must not shadow it -- a range scan attributes a leak to the commit that
+    introduced it, which a directory scan cannot do."""
+    ctx = RunContext(root=Path("."), rng="@{u}..HEAD", full_tree=True)
+
+    argv = gitleaks._build_argv(ctx, Path("r.json"))
+
+    assert argv[1] == "git"
+    assert "--log-opts" in argv

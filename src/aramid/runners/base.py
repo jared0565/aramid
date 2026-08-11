@@ -73,6 +73,17 @@ class RunContext:
       <=24h cache -- a CVE that appeared inside the window is not masked. The
       interactive gates (pre-commit/pre-push) leave it False and keep the
       cache. Additive field: default False keeps every construction site valid.
+    full_tree: mode=="all" -- scan the whole working tree rather than a git
+      revision or the index. Exists because `rng=None` was overloaded to mean
+      BOTH "staged" and "not range-based", and `--all` is the second while
+      needing the opposite behaviour of the first. gitleaks read that None,
+      fell back to `git --staged`, found an empty index, scanned NOTHING and
+      reported OK -- which put it in `scope_tools` and let `record_run`
+      resolve open secret findings across the whole tracked tree. Measured on
+      the published 0.2.0 wheel: two committed secrets invisible to
+      `check --all`, and both prior BLOCK findings written `finding_resolved`
+      while the secrets were still in the files. Additive field: default
+      False keeps every construction site valid, and only gitleaks reads it.
     test_command / test_timeout_s / tests_enabled: the `[tests]` config
       section (plus the legacy top-level `test_command`), resolved by
       aramid.pipeline.run_gate. The Runner protocol is `run(ctx)` -- ctx is
@@ -150,6 +161,7 @@ class RunContext:
     stacks: set[str] = field(default_factory=set)
     extra_semgrep_configs: tuple[str, ...] = ()
     force_refresh: bool = False
+    full_tree: bool = False
     test_command: str | list[str] | None = None
     test_timeout_s: float | None = None
     tests_enabled: bool = True

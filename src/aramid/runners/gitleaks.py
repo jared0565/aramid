@@ -20,6 +20,7 @@ from pathlib import Path
 
 from aramid.normalizer import RawFinding
 from aramid.runners.base import RunnerResult, ToolState, run_subprocess
+from aramid.fingerprint import normalize_path
 from aramid.runners._util import relativize
 
 NAME = "gitleaks"
@@ -48,6 +49,24 @@ def _build_argv(ctx, report_path: Path) -> list[str]:
     if ctx.rng is not None:
         return [
             "gitleaks", "git", "--log-opts", ctx.rng,
+            "--report-format", "json", "--report-path", str(report_path),
+        ]
+    # `--all` (mode "all") also arrives here with rng None, because None was
+    # overloaded to mean both "staged" and "not range-based". Scanning the
+    # index in that mode means scanning an EMPTY index -- and reporting OK
+    # for it, which is worse than useless: OK puts gitleaks in `scope_tools`,
+    # so `record_run` then resolves open secret findings across the whole
+    # tracked tree. Measured on the 0.2.0 wheel: two committed secrets that
+    # gitleaks finds when run directly were invisible to `check --all`, and
+    # both prior BLOCK findings were written `finding_resolved` while the
+    # secrets sat untouched in the files. Committing a leak marked it fixed.
+    #
+    # `dir` is gitleaks' working-tree scan. It cannot attribute a leak to the
+    # commit that introduced it, which is why range mode above still wins --
+    # that attribution is the whole value of the pre-push path.
+    if getattr(ctx, "full_tree", False):
+        return [
+            "gitleaks", "dir", str(ctx.root),
             "--report-format", "json", "--report-path", str(report_path),
         ]
     return [
@@ -90,16 +109,34 @@ def parse(result: RunnerResult, ctx) -> list[RawFinding]:
     # always leaves RawFinding.commit as None (its Commit field, if present
     # at all, carries no meaningful ref there).
     is_history_scan = ctx.rng is not None
-    return [
-        RawFinding(
+    # SCAN WIDE, REPORT NARROW. `gitleaks dir` takes a single path and walks
+    # everything under it -- including files git ignores. Measured on this
+    # repo: 24 hits, of which 14 were in `.superpowers/` local review
+    # artifacts and `__pycache__/`. Reporting those would be wrong twice
+    # over: `--all` is defined as all TRACKED files (`all_tracked_files`), and
+    # a finding in a path that can never be committed is a finding nobody can
+    # ever fix or retire.
+    #
+    # Filtering here rather than narrowing the scan because `gitleaks dir`
+    # accepts one path only -- passing a file list is silently ignored and it
+    # rescans the whole tree, which is how this was confirmed rather than
+    # assumed.
+    scope = None
+    if getattr(ctx, "full_tree", False) and ctx.files:
+        scope = {normalize_path(f) for f in ctx.files}
+    out = []
+    for item in items:
+        rel = relativize(item["File"], ctx.root)
+        if scope is not None and normalize_path(rel) not in scope:
+            continue
+        out.append(RawFinding(
             tool=NAME,
             rule=item["RuleID"],
             severity_raw=_SEVERITY_RAW,
-            file=relativize(item["File"], ctx.root),
+            file=rel,
             line=item["StartLine"],
             message=item.get("Description") or item["RuleID"],
             secret=item["Secret"],
             commit=(item.get("Commit") or None) if is_history_scan else None,
-        )
-        for item in items
-    ]
+        ))
+    return out
