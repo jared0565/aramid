@@ -2307,3 +2307,30 @@ def test_run_gate_stays_quiet_when_every_stack_is_rooted(tmp_path, monkeypatch, 
 
     assert "are NOT running for this repo" not in capsys.readouterr().err
     ledger.close()
+
+
+def test_all_mode_gets_the_pre_push_budget_not_the_interactive_one():
+    """`--all` scans the whole tracked tree, which cannot fit the pre-commit
+    budget -- 5 s by default, because a commit hook has to feel instant.
+
+    Measured: a full-tree gitleaks scan of this repo takes 9.4 s, so
+    `aramid check --all` (whose gate DEFAULTS to pre-commit) degraded the
+    BLOCK-tier secret scanner on every run and printed it as "skipped
+    (degraded tools): gitleaks". A secret scanner that always skips is the
+    failure this whole area keeps producing.
+
+    Keyed on MODE, not gate, so the ordinary staged pre-commit path -- the
+    one that runs on every commit -- keeps its tight budget.
+
+    Calls the PRODUCTION selector. An earlier version of this test
+    reimplemented the rule inline and would have passed against any
+    pipeline.py at all -- two computations that agree only because they are
+    the same computation twice.
+    """
+    from aramid.models import Gate
+
+    assert pipeline._budget_key(Gate.PRE_COMMIT, "all") == "pre_push", "--all must not run on 5 s"
+    assert pipeline._budget_key(Gate.PRE_COMMIT, "staged") == "pre_commit", "commits stay fast"
+    assert pipeline._budget_key(Gate.PRE_COMMIT, "range") == "pre_commit"
+    assert pipeline._budget_key(Gate.PRE_PUSH, "range") == "pre_push"
+    assert pipeline._budget_key(Gate.PRE_PUSH, "all") == "pre_push"

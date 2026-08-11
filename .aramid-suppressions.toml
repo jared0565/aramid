@@ -75,6 +75,45 @@ rule = "aws-access-token"
 path = "docs/superpowers/plans/2026-07-20-aramid-release-hardening.md"
 reason = "The same invented key ID quoted in a plan document that describes the gitleaks test above. Documentation of a fixture, not a credential."
 
+# --- The SAME two fixtures again, under a newer gitleaks ---------------------
+# Not duplicates. The invented access-key ID in the two files named below --
+# quoted here by DESCRIPTION only, because a suppressions file that contains a
+# secret-shaped literal blocks on itself, which is how this paragraph was
+# first written and immediately caught -- is classified `aws-access-token` by
+# gitleaks 8.21.2 (the version `doctor --fix` pins and installs) and
+# `generic-api-key` by 8.28.0 (the version CI pins). The rule name is an
+# ingredient of the fingerprint, so ONE fixture has TWO ids and needs two
+# entries -- otherwise the gate blocks on whichever version the reader is not
+# running.
+#
+# Measured the hard way: a full-tree scan shipped green here on 8.21.2 and
+# turned CI red on all seven legs, because the local ledger had these triaged
+# and a fresh clone has no ledger at all. Seven of the nine ids matched the
+# entries above unchanged -- only these two moved, and only because the rule
+# moved with them.
+#
+# Neither entry goes stale on the version that does not produce it: stale
+# detection needs a NEAR MISS (same tool+rule+path, different id), and the
+# whole point here is that the rule differs. Verified by running both.
+#
+# `toolpath` resolves PATH-first, so users genuinely run whichever gitleaks
+# they have. Covering both versions is the honest answer; forcing them to
+# agree would only move the problem to whoever upgrades first.
+
+[[suppress]]
+id = "1b69cfde1341b71ffc5ced79464c0c19b591ce0343a5b58e180a13ef671006d6"
+tool = "gitleaks"
+rule = "generic-api-key"
+path = "tests/integration/test_gitleaks_live.py"
+reason = "Same invented access-key ID as the aws-access-token entry above, which gitleaks 8.28.0 classifies as generic-api-key instead. No secret half exists in the repository, and an access-key ID alone cannot authenticate."
+
+[[suppress]]
+id = "26aa5637b8361ec0bafa64a01937954ba150053994df2468754075832ce19408"
+tool = "gitleaks"
+rule = "generic-api-key"
+path = "docs/superpowers/plans/2026-07-20-aramid-release-hardening.md"
+reason = "The same invented key ID quoted in the plan document that describes the gitleaks test, under gitleaks 8.28.0's classification. Documentation of a fixture, not a credential."
+
 # --- Non-credential shapes --------------------------------------------------
 
 [[suppress]]
