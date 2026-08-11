@@ -414,7 +414,9 @@ This command closes that hole by recording what each resolver **looked at**, not
 
 The split is the whole point, and it is narrower than you might expect. "Zero" is normal for a JavaScript mutation resolver in a Python-only repo, and a five-alarm fire for a resolver whose producer has eleven findings open.
 
-**Only the two mechanism faults are defects.** `NEVER RAN` and `BLIND` both mean the resolver *could not* have worked — it was not called, or its filter matches nothing. "Saw candidates and cleared none" is an outcome, and outcomes are confounded: it overwhelmingly means the findings have not been fixed, which is no fault of the gate's. Aramid's own repo carries two mutation findings suppressed with proof that their mutants are already dead; a suppression binds by id at report time without flipping ledger status, so those findings stay open and no resolver will ever clear them, by design. Grading that a defect would put a permanent false alarm on the tool's own tree.
+**Only the two mechanism faults are defects.** `NEVER RAN` and `BLIND` both mean the resolver *could not* have worked — it was not called, or its filter matches nothing. "Saw candidates and cleared none" is an outcome, and outcomes are confounded: it overwhelmingly means the findings have not been fixed, which is no fault of the gate's.
+
+The clearest case is `file_departed`, which clears a finding only when its file has left the repository. In a healthy repo it walks the open set on every run and correctly resolves nothing, indefinitely — so treating "cleared none" as a defect would brand a resolver broken for doing a rare job right.
 
 `BLIND` deserves a note: it catches a resolver whose **filter** never matches — for example one keyed on a tool name that has since been renamed. Counting clears structurally cannot catch that, because a filter matching nothing never produces a candidate to decline.
 

@@ -42,15 +42,26 @@ to publish a tag that disagrees with it.
 
   **Only mechanism faults are defects, and that boundary was moved by
   measurement.** A first draft also flagged "saw candidates, cleared none".
-  Replaying one real gate's worth of yields over a copy of this repo's live
-  ledger graded **three rows a defect on a healthy tree** — two of them
-  `.aramid-suppressions.toml` entries carrying proof that their mutants are
-  already dead. A suppression binds by id at report time and does *not* flip
-  ledger status, so those findings stay open and no resolver will ever clear
-  them, by design; the third was an ordinary unfixed advisory. All three are
-  "findings not fixed", not "resolver broken", and a grade cannot tell those
-  apart. That grade is now informational. `NEVER RAN` and `BLIND` survive
-  because both say the resolver *could not* have worked.
+  The first instrumented gate run in this repo returned two such rows, neither
+  a fault: `evidence_gone/llm-review` (2 considered, 0 resolved — two ordinary
+  WARN advisories nobody has fixed) and `file_departed/mutation` (2, 0). The
+  second is the decisive one, because it is **near-permanent**: that resolver
+  clears a finding only when its file has left the repository, so in a healthy
+  repo it walks the open set every run and correctly resolves nothing, for
+  ever. Flagging it brands a resolver broken for doing a rare job right.
+  "Nothing cleared" is overwhelmingly "nothing was fixed", and a grade cannot
+  tell those apart. That grade is now informational; `NEVER RAN` and `BLIND`
+  survive because both say the resolver *could not* have worked.
+
+  A correction worth recording, since it was shipped for one commit: the
+  paragraph above previously argued the same conclusion from the two
+  suppressed mutation findings, on the theory that a suppression binds by id
+  without flipping ledger status and so its target can never resolve. **The
+  first real run refuted that** — both resolved through `gap_addressed`,
+  because the push touched their source file. The claim came from a replay
+  that had *hard-coded* `resolved=0` rather than deriving what the resolver
+  would do: asserting the input instead of computing it, which is the mistake
+  the replay technique exists to prevent.
 
   Two distinctions a first draft would have merged. **`BLIND` is not
   redundant with counting clears**: a filter that matches nothing never

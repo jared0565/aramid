@@ -55,14 +55,30 @@ BLIND = "BLIND"
 # confounded: overwhelmingly it means the findings have not been fixed, which
 # is not a fault in the gate.
 #
-# That is measured, not argued. Replaying one real gate's worth of yields over
-# a copy of this repo's live ledger graded three rows as defects on a healthy
-# tree -- two of them `.aramid-suppressions.toml` entries carrying proof that
-# their mutants are already dead. A suppression binds by ID at report time and
-# does NOT flip ledger status, so those findings stay open and no resolver
-# will ever clear them, by design. Flagging that is a permanent false alarm on
-# the tool's own repository, and a report that cries wolf on day one is a
-# report nobody reads -- the exact failure this module exists to end.
+# That is measured, not argued. On the first instrumented gate run in this
+# repo, two rows came back with candidates and no clears, and neither is a
+# fault:
+#
+#   evidence_gone/llm-review   2 considered, 0 resolved
+#       Two ordinary WARN advisories nobody has fixed yet. The resolver is
+#       working perfectly; there is simply nothing to clear.
+#   file_departed/mutation     2 considered, 0 resolved
+#       And this one is near-PERMANENT. It clears a finding only when its
+#       file has left the repository, so in any healthy repo it walks the
+#       whole open set every run and correctly resolves nothing, forever.
+#
+# A resolver whose job is rare would be branded broken for doing it right.
+# "Nothing cleared" is overwhelmingly "nothing was fixed", a grade cannot tell
+# those apart, and a report that cries wolf on its own tree is one nobody
+# reads -- the exact failure this module exists to end.
+#
+# (An earlier draft of this comment justified the same decision with the two
+# suppressed mutation findings, claiming a suppression's target can never
+# resolve because suppressions bind by ID without flipping ledger status. The
+# first real run refuted it: they resolved, via `gap_addressed`, because the
+# push touched their source file. The prediction came from a replay that had
+# hard-coded `resolved=0` instead of deriving it. Conclusion unchanged,
+# reasoning replaced.)
 _DEFECTS = frozenset({NEVER_RAN, BLIND})
 
 

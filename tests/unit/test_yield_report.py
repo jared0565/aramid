@@ -144,25 +144,31 @@ def test_a_resolver_whose_filter_never_matches_anything_open_is_blind(led):
 
 def test_a_resolver_that_sees_candidates_and_clears_none_is_reported_not_accused(led):
     """`no clears yet` is INFORMATIONAL, and the reason is measured rather
-    than argued. Replaying one real gate's worth of yields over a copy of this
-    repo's live ledger graded three rows a defect on a healthy tree:
+    than argued. On the FIRST instrumented gate run in this repo, two rows
+    came back with candidates and no clears, and neither is a fault:
 
-      gap_addressed/mutation    considered 2, resolved 0
-      file_departed/mutation    considered 2, resolved 0
-      evidence_gone/llm-review  considered 2, resolved 0
+      evidence_gone/llm-review  2 considered, 0 resolved
+      file_departed/mutation    2 considered, 0 resolved
 
-    None is a defect. The two mutation findings are suppressed in
-    `.aramid-suppressions.toml` with proof that the mutants are already dead,
-    and a suppression binds by ID at report time WITHOUT flipping ledger
-    status -- so they stay open, and no resolver will ever clear them, by
-    design. The llm-review pair are ordinary WARN advisories nobody has fixed
-    yet.
+    The first is two ordinary WARN advisories nobody has fixed yet -- the
+    resolver works, there is nothing to clear. The second is near-PERMANENT:
+    `file_departed` clears a finding only when its file has left the
+    repository, so in a healthy repo it walks the open set every run and
+    correctly resolves nothing, forever. Flagging that brands a resolver
+    broken for doing a rare job right.
 
-    All three are "findings not fixed", not "resolver broken", and a grade
-    cannot tell those apart: it sees only that nothing cleared. Flagging it
-    would put two permanent false alarms on this repo forever, and a report
-    that cries wolf on its own tree is one nobody reads. The count is still
-    printed -- it is genuinely worth seeing -- it just does not accuse."""
+    "Nothing cleared" is overwhelmingly "nothing was fixed", a grade cannot
+    tell those apart, and a report that cries wolf on its own tree is one
+    nobody reads. The count is still printed -- it is worth seeing -- it just
+    does not accuse.
+
+    An earlier draft justified the same decision with the two suppressed
+    mutation findings, on the theory that a suppression binds by ID without
+    flipping ledger status so its target can never resolve. The first real run
+    refuted it: they resolved through `gap_addressed`, because the push
+    touched their source file. That prediction came from a replay which had
+    hard-coded `resolved=0` rather than deriving it -- asserting the input
+    instead of computing it. Conclusion unchanged, reasoning replaced."""
     _seed_findings(led, _finding("a" * 64))
     _yield(led, "gap_addressed", "mutation", considered=3, resolved=0)
     _yield(led, "gap_addressed", "mutation", considered=2, resolved=0, run="r2")
