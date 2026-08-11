@@ -468,10 +468,28 @@ def consume(item, ctx: DrainContext) -> ConsumerResult:
             print(f"aramid: mutation: worktree cleanup leaked at {wt}",
                   file=sys.stderr)
 
-    note = (f"{stats['confirmed']} confirmed survivor(s) of "
-            f"{stats['tested']} mutant(s) tested")
-    if stats["truncated"]:
-        note += " (truncated: budget/cap hit, remainder dropped)"
+    if stats["tested"] == 0 and stats["generated"] > 0:
+        # CERTIFIED NOTHING. `0 confirmed survivor(s) of 0 mutant(s) tested`
+        # is literally true and reads as a clean result, which is how a repo
+        # spent 690s per drain generating 18 mutants, testing none, and
+        # reporting `ok` with no degraded streak and no stand-down.
+        #
+        # The cause is structural rather than a bad number: `wall_budget_s`
+        # covers the WHOLE item and its clock starts before the baseline, so a
+        # baseline that nearly fills it leaves nothing for the mutants it just
+        # generated. Raising `baseline_timeout_s` alone makes this MORE likely,
+        # not less -- it converts a loud stand-down into this silent success,
+        # which is why the two had to be fixed together.
+        note = (f"no mutants tested: {stats['generated']} generated, 0 certified"
+                f" -- the {wall_budget:.0f}s wall budget covers the whole item and"
+                f" the baseline alone took {baseline_s:.0f}s. Raise"
+                f" [mutation].wall_budget_s, or point [mutation].test_command at a"
+                f" narrower suite.")
+    else:
+        note = (f"{stats['confirmed']} confirmed survivor(s) of "
+                f"{stats['tested']} mutant(s) tested")
+        if stats["truncated"]:
+            note += " (truncated: budget/cap hit, remainder dropped)"
     extra = dict(stats)
     extra["mutation_scores"] = _finalize_scores(scores)
     # How long the configured suite actually took, measured. Recorded so an

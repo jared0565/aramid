@@ -800,6 +800,47 @@ def test_a_recovered_consumer_is_not_reported_as_stood_down(tmp_path, monkeypatc
     assert "stood down" not in capsys.readouterr().out
 
 
+def test_status_surfaces_a_consumer_that_certifies_nothing(tmp_path, monkeypatch,
+                                                            capsys):
+    """R66. `state: ok` with mutants generated and none tested -- no degraded
+    streak, no stand-down, full cost every drain. Invisible until now."""
+    root = _repo(tmp_path)
+    _no_user_config(tmp_path, monkeypatch)
+    _write_toml(root, armed=True, bake_started=None)
+    lg = Ledger(root / ".aramid" / "ledger.db")
+    for _ in range(3):
+        _consumer_run(lg, "mutation", "ok",
+                      "no mutants tested: 18 generated, 0 certified -- the 600s "
+                      "wall budget covers the whole item and the baseline alone "
+                      "took 686s. Raise [mutation].wall_budget_s, or point "
+                      "[mutation].test_command at a narrower suite.",
+                      duration_s=690.1)
+    lg.close()
+
+    assert cmd_status(root) == 0
+
+    out = capsys.readouterr().out
+    assert "consumers doing no work:" in out
+    assert "3 run(s) certified nothing" in out
+    assert "2070s spent" in out, "recurring cost is the reason to act"
+    assert "wall_budget_s" in out
+
+
+def test_a_consumer_that_resumes_real_work_clears_the_no_work_line(
+        tmp_path, monkeypatch, capsys):
+    root = _repo(tmp_path)
+    _no_user_config(tmp_path, monkeypatch)
+    _write_toml(root, armed=True, bake_started=None)
+    lg = Ledger(root / ".aramid" / "ledger.db")
+    _consumer_run(lg, "mutation", "ok", "no mutants tested: 18 generated, 0 certified")
+    _consumer_run(lg, "mutation", "ok", "2 confirmed survivor(s) of 11 mutant(s) tested")
+    lg.close()
+
+    assert cmd_status(root) == 0
+
+    assert "doing no work" not in capsys.readouterr().out
+
+
 def test_an_ordinary_healthy_consumer_reports_nothing(tmp_path, monkeypatch, capsys):
     """Falsifiability guard for the two tests above: if `stood down` appeared
     for any `ok` run, they would pass without detecting anything."""

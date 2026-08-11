@@ -12,6 +12,47 @@ to publish a tag that disagrees with it.
 
 ### Fixed
 
+- **A new vendored rule namespace was not registered, so its findings carried a
+  machine-dependent id.** Introduced by the SQLi rule in `6c86ec9` and caught by
+  the consumer repo that verified it (interop round 66): they queried the rule
+  id we documented and got a clean, confident `[]`.
+
+  `_canonical_rule_id` strips semgrep's config-path prefix by looking for a
+  known namespace in `VENDORED_RULE_PREFIXES`. `injection-dataflow.` was never
+  added, so live check_ids kept the prefix —
+  `F.Projects.aramid.src.aramid.rules.injection-dataflow.…`, the absolute path
+  of whoever's checkout produced them. `semgrep.py` documents this requirement
+  in a comment directly above the tuple; the rule was added without it.
+
+  Worse than the wrong report: **`compute_fingerprint` takes `rule` as an
+  ingredient**, so the finding *id* was machine-dependent too, and a suppression
+  or override written on one checkout would have bound nothing on another.
+
+  The existing guard could not catch it — it iterated `VENDORED_RULE_PREFIXES`
+  and checked those entries, validating the list against itself. The new test
+  derives namespaces from the shipped `owasp.yml` and fails until each is
+  registered, so the next new namespace cannot repeat this.
+
+- **A mutation run that generated mutants and tested none reported `ok`.** The
+  third instance of this round's defect class, and one that only appeared *after*
+  the first two were fixed: with `baseline_timeout_s` raised, the baseline
+  succeeds, the wall budget — whose clock starts before the baseline — is then
+  already spent, and the run ends `state: ok`, `finding_count: 0`, note
+  `0 confirmed survivor(s) of 0 mutant(s) tested`. Measured downstream at 18
+  mutants generated, 0 tested, 690 s per drain, with neither a degraded streak
+  nor a stand-down in `status`.
+
+  **This is why raising the default budget alone would have been the wrong
+  move**: it converts a loud stand-down into a silent success. The note now says
+  `no mutants tested: N generated, 0 certified`, names `wall_budget_s` and the
+  baseline's measured cost, and `status` gained a `consumers doing no work:`
+  section — a streak, self-clearing, with the recurring cost stated.
+
+  The drain state stays `ok` deliberately. `degraded` would stop the item being
+  marked drained; the reporting repo measured a queue item stuck for **61 hours**
+  from exactly that. Drain state and report answer different questions, and
+  conflating them is what produced this bug and the give-up bug both.
+
 - **A finding's recorded line froze at first detection while the code moved
   around it.** Reported from a consumer repo (interop round 64 item 6) auditing
   26 findings: the ledger named `storage.py:892` while the site had moved to

@@ -192,6 +192,54 @@ def test_canonical_rule_id_strips_every_vendored_namespace():
             f"{prefix} must normalise, or its findings carry a per-machine id")
 
 
+def test_every_namespace_in_the_shipped_ruleset_is_registered():
+    """The test above cannot catch a MISSING namespace -- it iterates the very
+    tuple it is checking, so it validates the list against itself and passes
+    whatever the list happens to say.
+
+    That gap shipped a real defect. `injection-dataflow.` was added to
+    owasp.yml without being registered here, so `_canonical_rule_id` left
+    semgrep's config-path prefix attached and every finding from the new rule
+    carried an id namespaced with the ABSOLUTE PATH of the rules file. A
+    consumer repo hit it querying `ledger filter --rule <documented id>` and
+    got a clean, confident `[]`.
+
+    The blast radius is wider than a wrong report: `compute_fingerprint` takes
+    the RULE as an ingredient, so an unstripped id makes the FINDING ID itself
+    machine-dependent -- suppressions and overrides written on one checkout
+    bind nothing on another, silently.
+
+    So this test derives the namespaces from the shipped YAML, which is the
+    source of truth for which rules exist, and asserts each is registered.
+    Adding a rule under a new namespace fails here until it is.
+    """
+    import re
+
+    from aramid.runners.semgrep import (
+        VENDORED_RULES_PATH,
+        VENDORED_RULE_PREFIXES,
+        _canonical_rule_id,
+    )
+
+    ids = re.findall(r"^\s*-\s*id:\s*(\S+)\s*$",
+                     VENDORED_RULES_PATH.read_text(encoding="utf-8"), re.MULTILINE)
+    assert ids, "no rule ids parsed -- the regex, not the ruleset, is what broke"
+
+    namespaces = {rid.split(".", 1)[0] + "." for rid in ids}
+    unregistered = sorted(ns for ns in namespaces if ns not in VENDORED_RULE_PREFIXES)
+    assert not unregistered, (
+        f"namespace(s) {unregistered} ship in owasp.yml but are absent from "
+        f"VENDORED_RULE_PREFIXES -- their findings will carry a machine-dependent "
+        f"id built from the rules file's absolute path")
+
+    # And prove the consequence is actually gone, not merely that the tuple was
+    # edited: every shipped id must survive a round trip through a realistic
+    # live check_id.
+    for rid in ids:
+        live = f"F.Projects.aramid.src.aramid.rules.{rid}"
+        assert _canonical_rule_id(live) == rid, f"{rid} keeps a per-machine prefix"
+
+
 def test_canonical_rule_id_still_prefers_the_rightmost_occurrence():
     """Unchanged guarantee: a checkout path that itself embeds a namespace
     literal must not truncate the real id early."""

@@ -361,6 +361,13 @@ def _consumer_health_lines(ledger: Ledger) -> list[str]:
 # goes unreported here rather than breaking anything.
 _GIVE_UP_MARK = "giving up"
 
+# A run that finished cleanly and certified nothing. Distinct from a give-up:
+# the consumer has NOT stopped, it will run again next drain and burn the same
+# time again. Reported because `state` cannot carry it -- `degraded` would pin
+# the queue item and stall the drain (measured downstream at 61 hours), so
+# these runs are legitimately `ok` and would otherwise be invisible.
+_NO_WORK_MARK = "no mutants tested"
+
 
 def _stood_down_lines(ledger: Ledger) -> list[str]:
     """Consumers that have permanently STOPPED, which `degraded` cannot show.
@@ -415,6 +422,47 @@ def _stood_down_lines(ledger: Ledger) -> list[str]:
     return ["  consumers stood down:", *faults] if faults else []
 
 
+def _no_work_lines(ledger: Ledger) -> list[str]:
+    """Consumers that keep finishing cleanly while certifying nothing.
+
+    The third instance of this round's defect class, and the one that only
+    appeared after the first two were fixed: raising `baseline_timeout_s` lets
+    the baseline succeed, the wall budget is then already spent, and mutation
+    reports `ok` having generated mutants and tested none. No degraded streak
+    (it is `ok`), no stand-down (it has not given up) -- healthy-looking, and
+    recurring every drain at full cost.
+
+    A streak, so it self-clears the moment a run does real work, and the cost
+    is stated because recurring-cost-for-no-result is the whole point.
+
+    Never raises.
+    """
+    try:
+        runs: dict[str, list[tuple[str, float]]] = defaultdict(list)
+        for e in ledger.events():
+            if e.type is EventType.CONSUMER_RUN_FINISHED:
+                runs[str(e.payload.get("consumer", "?"))].append(
+                    (str(e.payload.get("note", "")),
+                     float(e.payload.get("duration_s") or 0.0)))
+    except Exception:
+        return []
+
+    faults = []
+    for name in sorted(runs):
+        seq = runs[name]
+        if not seq or _NO_WORK_MARK not in seq[-1][0]:
+            continue
+        count, spent = 0, 0.0
+        for note, duration in reversed(seq):
+            if _NO_WORK_MARK not in note:
+                break
+            count += 1
+            spent += duration
+        faults.append(f"    {name}: {count} run(s) certified nothing, "
+                      f"{spent:.0f}s spent -- {seq[-1][0]}")
+    return ["  consumers doing no work:", *faults] if faults else []
+
+
 def _resolver_defect_lines(ledger: Ledger) -> list[str]:
     """One line, only when something is wrong, pointing at the full report.
 
@@ -466,6 +514,7 @@ def cmd_status(root) -> int:
         lines.extend(_resolver_defect_lines(ledger))
         lines.extend(_consumer_health_lines(ledger))
         lines.extend(_stood_down_lines(ledger))
+        lines.extend(_no_work_lines(ledger))
 
         streaks = _skip_streak_lines(ledger)
         if streaks:

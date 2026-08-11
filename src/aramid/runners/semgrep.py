@@ -51,7 +51,21 @@ _CANONICAL_RULE_PREFIX = "owasp-top-ten."
 # Each namespace must be listed here or `_canonical_rule_id` leaves the
 # config-path prefix attached, and that path is machine-dependent -- which
 # would make fingerprints, overrides and suppressions differ per checkout.
-VENDORED_RULE_PREFIXES = (_CANONICAL_RULE_PREFIX, "rust-memory-safety.")
+# `injection-dataflow.` was added in 6c86ec9 and NOT registered here, which is
+# the defect this comment now exists to prevent repeating. Findings from that
+# rule carried ids beginning
+# `F.Projects.aramid.src.aramid.rules.injection-dataflow....` -- the absolute
+# path of whoever's checkout produced them. A consumer repo queried the
+# documented rule id and got a clean, confident `[]`. Worse than the wrong
+# report: `compute_fingerprint` takes `rule` as an ingredient, so the FINDING
+# ID was machine-dependent too, and a suppression written on one checkout would
+# have bound nothing on another.
+#
+# `test_every_namespace_in_the_shipped_ruleset_is_registered` now derives the
+# namespaces from owasp.yml and fails until each appears here -- the previous
+# test iterated THIS TUPLE, so it could only confirm what was already listed.
+VENDORED_RULE_PREFIXES = (_CANONICAL_RULE_PREFIX, "rust-memory-safety.",
+                          "injection-dataflow.")
 
 # The regression pack (aramid.pack, Task 13/15, spec §5) is a second
 # `--config` file replayed alongside the vendored OWASP ruleset -- its rule

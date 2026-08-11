@@ -587,6 +587,69 @@ def test_successful_baseline_records_its_measured_duration(tmp_path, monkeypatch
     assert res.extra["baseline_s"] > 0
 
 
+# ------------------------- generated 18, tested 0, reported ok (R66) --------
+# Reported after the timeout fix landed: raising `baseline_timeout_s` let the
+# baseline SUCCEED, and then the wall budget -- whose clock starts BEFORE the
+# baseline -- was already spent, so 18 mutants were generated and 0 were tested.
+# `state: ok`, `finding_count: 0`, and `status` showed neither a degraded streak
+# nor a stand-down. 690s per drain, certifying nothing, looking healthy.
+#
+# That is the SAME defect class as the timeout-reported-as-failure this round
+# began with: a condition wearing a label that belongs to a different condition.
+# Raising the default budget without fixing this would move every affected repo
+# from a loud stand-down to a silent no-op -- strictly worse.
+
+def _tiny_wall_budget(r):
+    (r / "aramid.toml").write_text(
+        "schema_version = 1\n[mutation]\nmax_mutants = 3\nconfirm_cap = 3\n"
+        "wall_budget_s = 0.001\nmutant_timeout_s = 60\n", encoding="utf-8")
+
+
+def test_a_run_that_tested_nothing_does_not_read_as_success(tmp_path, monkeypatch):
+    r, base, head = _repo(tmp_path, WEAK_TEST)
+    _tiny_wall_budget(r)
+
+    res = _consume(r, base, head, monkeypatch, tmp_path)
+
+    assert res.extra["generated"] > 0, "fixture must actually generate mutants"
+    assert res.extra["tested"] == 0, "fixture must exhaust the wall budget first"
+    # The note is what a human and `status` both read.
+    assert "0 confirmed survivor(s)" not in res.note, \
+        "'0 survivors of 0 tested' reads as a clean result; it certified nothing"
+    assert "no mutants tested" in res.note.lower()
+    # Name the knob, same contract as the timeout note.
+    assert "wall_budget_s" in res.note
+
+
+def test_a_run_that_tested_nothing_still_drains(tmp_path, monkeypatch):
+    """Deliberately still `ok`, and this is the half that is easy to get wrong.
+
+    `degraded` would stop the drain marking the item drained -- the reporting
+    repo measured a queue item stuck for 61 HOURS from exactly that. So the
+    drain state stays drainable and the VISIBILITY is the report's job. Drain
+    state and report are different questions; conflating them is what produced
+    both this bug and item 3's.
+    """
+    r, base, head = _repo(tmp_path, WEAK_TEST)
+    _tiny_wall_budget(r)
+
+    res = _consume(r, base, head, monkeypatch, tmp_path)
+
+    assert res.state == "ok", "degraded here would pin the queue item and stall the drain"
+
+
+def test_a_run_that_did_test_mutants_keeps_the_ordinary_note(tmp_path, monkeypatch):
+    """Control. The new wording must not leak onto healthy runs, or it becomes
+    the noise that teaches an operator to stop reading the report."""
+    r, base, head = _repo(tmp_path, WEAK_TEST)
+
+    res = _consume(r, base, head, monkeypatch, tmp_path)
+
+    assert res.extra["tested"] > 0
+    assert "no mutants tested" not in res.note.lower()
+    assert "confirmed survivor(s)" in res.note
+
+
 def test_pin_occurrence_declared_only_on_variable_set_consumers():
     from aramid.consumers import fuzz as fz
     import aramid.consumers.regression_pack as rp
