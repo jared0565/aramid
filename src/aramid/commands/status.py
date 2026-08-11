@@ -82,27 +82,51 @@ def _aging_line(ledger: Ledger, state: dict) -> str:
 
 
 def _skip_streak_lines(ledger: Ledger) -> list[str]:
-    """For every tool that has ever appeared in a run's recorded scope,
-    count how many of the most recent consecutive runs it was ABSENT from
-    (skipped/degraded that run) -- design doc section 8's skip-visibility
-    requirement ('semgrep: skipped last N runs')."""
+    """For every tool eligible for a gate, how many of that gate's most recent
+    consecutive runs it was ABSENT from -- design doc section 8's
+    skip-visibility requirement ('semgrep: skipped last N runs').
+
+    SCOPED PER GATE, and that is the whole subtlety. `GATE_RUNNER_KEYS` gives
+    each gate a different runner set: ruff is pre-commit only, semgrep and
+    tests are pre-push only. A global streak therefore counts ruff as
+    "skipped" on every pre-push run, which is not a skip -- it is the gate
+    working exactly as designed. Reported to us from a downstream repo as an
+    unexplained `ruff: skipped last 1 run(s)` whose `ruff check .` passed by
+    hand, and reproduced in aramid's own `status` at the same time.
+
+    One word cannot carry both "ran and failed" and "not part of this gate":
+    the first is a hole in the gate, the second is the gate being correct. So a
+    tool's universe is the set of tools that have ACTUALLY appeared in a run of
+    that gate. A tool that never appears at a gate is not eligible for it, and
+    so cannot be skipped by it -- no runner table to keep in sync, and the
+    tests-runner alias ("tests" the key, "python" the recorded label) needs no
+    special case because both are read from the same recorded field.
+
+    The gate is named in the line for the same reason: it tells the reader
+    which set of runs the count is over.
+    """
     runs = [e for e in ledger.events() if e.type is EventType.RUN_STARTED]
     if not runs:
         return []
 
-    all_tools: set[str] = set()
+    by_gate: dict[str, list] = defaultdict(list)
     for e in runs:
-        all_tools.update(e.payload.get("tools", []))
+        by_gate[str(e.payload.get("gate", "?"))].append(e)
 
     lines = []
-    for tool in sorted(all_tools):
-        streak = 0
-        for e in reversed(runs):
-            if tool in e.payload.get("tools", []):
-                break
-            streak += 1
-        if streak:
-            lines.append(f"  {tool}: skipped last {streak} run(s)")
+    for gate in sorted(by_gate):
+        gate_runs = by_gate[gate]
+        eligible: set[str] = set()
+        for e in gate_runs:
+            eligible.update(e.payload.get("tools", []))
+        for tool in sorted(eligible):
+            streak = 0
+            for e in reversed(gate_runs):
+                if tool in e.payload.get("tools", []):
+                    break
+                streak += 1
+            if streak:
+                lines.append(f"  {tool}: skipped last {streak} {gate} run(s)")
     return lines
 
 

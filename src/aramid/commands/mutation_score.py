@@ -44,11 +44,31 @@ def cmd_mutation_score(root, *, as_json: bool = False) -> int:
             print(arm_line)
             return 0
         lines = ["aramid mutation-score:", arm_line]
+        # AN ABSENT MEASUREMENT IS NOT A BAD ONE. `rate` is None exactly when no
+        # mutant was tested for a target, and this used to render as
+        # `kill-rate n/a (0/0) (partial)` -- which sits in a column of real
+        # rates and reads as "coverage is poor". A consumer repo read it that
+        # way, and the truth was the opposite: nothing had been measured at all,
+        # because their mutation baseline could never finish.
+        #
+        # The two demand opposite responses -- write tests, versus fix the
+        # engine -- so they must not share a rendering. A genuine 0.00 (mutants
+        # tested, none killed) is a real finding about the tests and is
+        # deliberately left loud.
+        if not any(latest[t].rate is not None for t in latest):
+            lines.append("  no target has been measured -- mutation recorded scores "
+                         "but tested no mutants. This is an ABSENT measurement, not "
+                         "a low one; `aramid status` reports why (look for a degraded "
+                         "or stood-down mutation consumer).")
         for target in sorted(latest):
             s = latest[target]
-            rate = f"{s.rate:.2f}" if s.rate is not None else "n/a"
+            if s.rate is None:
+                # No rate, and no `(partial)` either: partial-vs-complete is a
+                # statement about a measurement that happened.
+                lines.append(f"  {target}: not measured (0 mutants tested)")
+                continue
             fm = "" if s.fully_mutated else " (partial)"
-            lines.append(f"  {target}: kill-rate {rate} "
+            lines.append(f"  {target}: kill-rate {s.rate:.2f} "
                          f"({s.killed_s1}/{s.killed_s1 + s.survived_s1}){fm}")
         if regressions:
             lines.append("  regressions:")

@@ -3,9 +3,76 @@ import uuid
 from aramid.ledger import Ledger
 from aramid.models import Event, EventType, Finding, Severity, Verdict, Gate
 
-def _f(fid, tool="ruff", file="a.py", historical=False):
+def _f(fid, tool="ruff", file="a.py", historical=False, line=1):
     return Finding(fid, tool, "S102", "high", Severity.HIGH, Verdict.WARN,
-                   file, 1, "m", "e", Gate.PRE_PUSH, historical=historical)
+                   file, line, "m", "e", Gate.PRE_PUSH, historical=historical)
+
+
+# --------------------------------------- a finding's line follows the code ---
+# R64-6, reported by a consumer repo auditing 26 findings: the ledger named
+# `storage.py:892` while the site had moved to line 905, so auditing by the
+# recorded number reads the WRONG CODE. They had to match by content across all
+# 26 by hand.
+#
+# The IDENTITY was never the problem -- `compute_fingerprint` hashes the line's
+# CONTENT, not its number, which is exactly why those findings survived the move
+# and stayed matched. Only the reported number went stale, because `record_run`
+# appends `finding_detected` solely for findings that are new or resurrecting,
+# and `_materialize` copies the payload only from that event. A finding that is
+# simply still there gets no event, so its line is frozen at first sight forever.
+
+def test_a_re_detected_finding_updates_its_line(tmp_path):
+    led = Ledger(tmp_path / "l.db")
+    led.record_run("r1", "t", "pre-push", {"ruff"}, {"a.py"}, [_f("id1", line=892)])
+    assert led.open_findings()["id1"]["line"] == 892
+
+    # Same finding (same content -> same id), now further down the file.
+    led.record_run("r2", "t", "pre-push", {"ruff"}, {"a.py"}, [_f("id1", line=905)])
+
+    assert led.open_findings()["id1"]["line"] == 905, \
+        "the recorded line must follow the code, or auditing by it reads the wrong site"
+
+
+def test_moving_a_finding_does_not_disturb_its_status(tmp_path):
+    """The trap in this fix, and why re-emitting `finding_detected` is wrong.
+
+    `_materialize` rebuilds a finding's whole record from a `finding_detected`
+    payload and resets `status` to open. `record_run` guards against that on
+    purpose -- it re-detects only new or fixed/unreachable findings. So the
+    obvious implementation of this feature would silently UN-OVERRIDE every
+    overridden finding the next time its line moved, which for the reporting
+    repo would have quietly re-armed all 26 of the findings they had just
+    triaged.
+    """
+    led = Ledger(tmp_path / "l.db")
+    led.record_run("r1", "t", "pre-push", {"ruff"}, {"a.py"}, [_f("id1", line=10)])
+    led.append(Event(EventType.FINDING_OVERRIDDEN, uuid.uuid4().hex, "t2",
+                     finding_id="id1", payload={"reason": "audited, false positive"}))
+    assert led.open_findings()["id1"]["status"] == "overridden"
+
+    led.record_run("r2", "t", "pre-push", {"ruff"}, {"a.py"}, [_f("id1", line=42)])
+
+    rec = led.open_findings()["id1"]
+    assert rec["status"] == "overridden", "a move must never resurrect a triaged finding"
+    assert rec["reason"] == "audited, false positive"
+    assert rec["line"] == 42, "...but the line still has to be right"
+
+
+def test_an_unmoved_finding_appends_nothing(tmp_path):
+    """Bounded event growth. This fires on every gate run for every open
+    finding, so emitting unconditionally would append one row per finding per
+    run forever -- turning a stale-number bug into an unbounded-ledger bug."""
+    led = Ledger(tmp_path / "l.db")
+    led.record_run("r1", "t", "pre-push", {"ruff"}, {"a.py"}, [_f("id1", line=7)])
+    before = len(led.events())
+
+    led.record_run("r2", "t", "pre-push", {"ruff"}, {"a.py"}, [_f("id1", line=7)])
+    after = len(led.events())
+
+    # r2 legitimately appends run_started + run_finished; nothing per-finding.
+    moved = [e for e in led.events() if e.type.value == "finding_moved"]
+    assert moved == [], "no move event when the line did not change"
+    assert after - before <= 2
 
 def test_absent_finding_resolved_only_when_in_scope(tmp_path):
     led = Ledger(tmp_path / "l.db")

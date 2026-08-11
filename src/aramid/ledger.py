@@ -439,6 +439,13 @@ def _materialize(events):
             if e.finding_id in state:
                 state[e.finding_id]["status"] = "not_a_secret"
                 state[e.finding_id]["reason"] = e.payload.get("reason", "")
+        elif e.type.value == "finding_moved":
+            # Line only. Never status, never tool/file/rule -- `file` and the
+            # line's CONTENT are fingerprint ingredients, so a change to either
+            # produces a different finding id and arrives here as a genuinely
+            # new finding rather than as a move.
+            if e.finding_id in state:
+                state[e.finding_id]["line"] = e.payload.get("line")
         elif e.type.value == "finding_unreachable":
             if e.finding_id in state:
                 state[e.finding_id]["status"] = "unreachable"
@@ -487,6 +494,20 @@ class Ledger:
             if f.id not in state or state[f.id]["status"] in ("fixed", "unreachable"):
                 self.append(Event(EventType.FINDING_DETECTED, run_id, at,
                                   finding_id=f.id, payload=_detect_payload(f)))
+            elif state[f.id].get("line") != f.line:
+                # RE-ANCHOR. A finding that is merely still present gets no
+                # detect event -- correct, since re-detecting would reset its
+                # status -- so its recorded line was frozen at first sight and
+                # drifted as the file changed around it. A consumer repo
+                # auditing 26 findings had to match every one by content
+                # because the numbers pointed at the wrong code.
+                #
+                # Guarded on an actual change, not emitted unconditionally:
+                # this runs for every open finding on every gate run, so the
+                # unguarded version trades a stale number for a ledger that
+                # grows one row per finding per run.
+                self.append(Event(EventType.FINDING_MOVED, run_id, at,
+                                  finding_id=f.id, payload={"line": f.line}))
             if f.id not in seen:
                 new_ids.append(f.id)
         for fid, rec in state.items():
@@ -618,7 +639,18 @@ class Ledger:
                 if finding_id not in last_terminal or seq > last_terminal[finding_id]:
                     last_terminal[finding_id] = seq
 
-        keep = set(last_detect.values()) | set(last_terminal.values())
+        # Latest FINDING_MOVED per finding, and only one after that finding's
+        # latest detect -- a detect carries its own line, so any move before it
+        # is already superseded. Keeping just the newest is sufficient because
+        # the event is absolute (the current line), not a delta.
+        last_moved: dict[str, int] = {}
+        for seq, type_, finding_id, _payload in rows:
+            if type_ == EventType.FINDING_MOVED.value and finding_id \
+               and finding_id in last_detect and seq > last_detect[finding_id]:
+                last_moved[finding_id] = seq
+
+        keep = set(last_detect.values()) | set(last_terminal.values()) \
+            | set(last_moved.values())
         for seq, type_, finding_id, _payload in rows:
             if type_ == EventType.BASELINE_SNAPSHOT.value:
                 keep.add(seq)

@@ -40,6 +40,12 @@ class EventType(StrEnum):
     # EventType member name/value, not a credential.
     FINDING_NOT_A_SECRET = "finding_not_a_secret"  # noqa: S105
     FINDING_UNREACHABLE = "finding_unreachable"
+    # The same finding, at a new line. Its own event type rather than a
+    # re-issued FINDING_DETECTED because `_materialize` rebuilds a finding's
+    # WHOLE record from a detect payload and resets `status` to open -- so
+    # re-detecting on a move would silently un-override every triaged finding
+    # whose code shifted. This one touches `line` and nothing else.
+    FINDING_MOVED = "finding_moved"
     INFRASTRUCTURE_BYPASS = "infrastructure_bypass"
     BASELINE_SNAPSHOT = "baseline_snapshot"
 

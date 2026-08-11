@@ -239,9 +239,72 @@ def test_status_reports_per_tool_skip_streak(tmp_path, monkeypatch, capsys):
     out = capsys.readouterr().out
 
     assert rc == 0
-    assert "semgrep: skipped last 2 run(s)" in out
+    # The gate is named as of R64-8: the streak is now counted over that gate's
+    # runs only, so the line has to say which set of runs it counted.
+    assert "semgrep: skipped last 2 pre-push run(s)" in out
     assert "gitleaks" not in [ln.strip().split(":")[0] for ln in out.splitlines()
                               if "skipped" in ln]
+
+
+def test_a_tool_from_another_gates_tier_is_not_called_skipped(tmp_path, monkeypatch,
+                                                               capsys):
+    """R64-8. `ruff: skipped last 1 run(s)` was reported to us as a puzzle: the
+    reporter's `ruff check .` passed when run by hand, and nothing was broken.
+
+    Nothing was. `GATE_RUNNER_KEYS` puts ruff at PRE-COMMIT only and semgrep and
+    tests at PRE-PUSH only, so a pre-push run legitimately has no ruff in it --
+    and the streak counted that absence as a skip. One word was covering "ran
+    and failed" and "not part of this gate", which are opposite things: the
+    first is a hole in the gate, the second is the gate working as designed.
+
+    Fixed by scoping the tool universe PER GATE. A tool that has never appeared
+    in any run of this gate is not eligible for it, so it cannot be skipped by
+    it.
+    """
+    root = _repo(tmp_path)
+    _no_user_config(tmp_path, monkeypatch)
+    _write_toml(root, armed=True, bake_started=None)
+
+    ledger = Ledger(root / ".aramid" / "ledger.db")
+    # ruff runs at pre-commit; the pre-push runs that follow never include it.
+    ledger.append(Event(EventType.RUN_STARTED, "c1", "2026-01-01T00:00:00+00:00",
+                         payload={"gate": "pre-commit", "tools": ["gitleaks", "ruff"]}))
+    ledger.append(Event(EventType.RUN_STARTED, "p1", "2026-01-02T00:00:00+00:00",
+                         payload={"gate": "pre-push", "tools": ["gitleaks", "semgrep"]}))
+    ledger.append(Event(EventType.RUN_STARTED, "p2", "2026-01-03T00:00:00+00:00",
+                         payload={"gate": "pre-push", "tools": ["gitleaks", "semgrep"]}))
+    ledger.close()
+
+    assert cmd_status(root) == 0
+
+    out = capsys.readouterr().out
+    assert "ruff: skipped" not in out, \
+        "ruff is pre-commit tier; its absence from a pre-push run is not a skip"
+
+
+def test_a_tool_that_really_stopped_running_is_still_reported_with_its_gate(
+        tmp_path, monkeypatch, capsys):
+    """Control for the test above. Suppressing the false positive must not
+    suppress the true one -- a tool that DID run at this gate and then stopped
+    is exactly what the streak exists to surface, and naming the gate is what
+    tells the two apart at a glance."""
+    root = _repo(tmp_path)
+    _no_user_config(tmp_path, monkeypatch)
+    _write_toml(root, armed=True, bake_started=None)
+
+    ledger = Ledger(root / ".aramid" / "ledger.db")
+    ledger.append(Event(EventType.RUN_STARTED, "p1", "2026-01-01T00:00:00+00:00",
+                         payload={"gate": "pre-push", "tools": ["gitleaks", "semgrep"]}))
+    ledger.append(Event(EventType.RUN_STARTED, "p2", "2026-01-02T00:00:00+00:00",
+                         payload={"gate": "pre-push", "tools": ["gitleaks"]}))
+    ledger.append(Event(EventType.RUN_STARTED, "p3", "2026-01-03T00:00:00+00:00",
+                         payload={"gate": "pre-push", "tools": ["gitleaks"]}))
+    ledger.close()
+
+    assert cmd_status(root) == 0
+
+    out = capsys.readouterr().out
+    assert "semgrep: skipped last 2 pre-push run(s)" in out
 
 
 # ------------------------------------------------- unrotated historical ----

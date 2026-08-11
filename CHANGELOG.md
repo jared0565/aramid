@@ -12,6 +12,55 @@ to publish a tag that disagrees with it.
 
 ### Fixed
 
+- **A finding's recorded line froze at first detection while the code moved
+  around it.** Reported from a consumer repo (interop round 64 item 6) auditing
+  26 findings: the ledger named `storage.py:892` while the site had moved to
+  905, so auditing by the recorded number reads the *wrong code*. They matched
+  all 26 by content, by hand.
+
+  The identity was never at fault — `compute_fingerprint` hashes the line's
+  **content**, not its number, which is exactly why those findings survived the
+  move and stayed matched. Only the reported number was stale, because
+  `record_run` appends `finding_detected` solely for findings that are new or
+  resurrecting, and `_materialize` copies the payload only from that event.
+
+  New `FINDING_MOVED` event, emitted when a re-detected finding's line differs,
+  applied by `_materialize` to `line` and nothing else. **Re-issuing
+  `finding_detected` would have been the obvious fix and is wrong**:
+  `_materialize` rebuilds a finding's whole record from that payload and resets
+  `status` to open, so a move would silently un-override every triaged finding —
+  which for the reporting repo would have quietly re-armed all 26 they had just
+  audited. Guarded on an actual change, since this runs for every open finding
+  on every gate run and the unguarded version trades a stale number for a ledger
+  that grows a row per finding per run.
+
+- **`mutation-score` rendered an absent measurement identically to a bad one.**
+  Round 64 item 4's remainder. `kill-rate n/a (0/0) (partial)` for essentially
+  every function reads as "coverage is poor" when it actually means nothing was
+  measured at all — in the reporting repo, because the mutation baseline could
+  never finish. Unmeasured targets now render `not measured (0 mutants tested)`,
+  and when *no* target has a measurement the report says so once at the top and
+  points at `aramid status`, where the degraded or stood-down consumer explains
+  why. A genuine `0.00` — mutants tested, none killed — is deliberately left
+  loud, and a test pins that it is not softened.
+
+- **`status` called a tool "skipped" when it simply belongs to another gate's
+  tier.** Round 64 item 8, reported as a puzzle rather than a bug: a persistent
+  `ruff: skipped last 1 run(s)` whose `ruff check .` passed by hand.
+
+  Nothing was broken. `GATE_RUNNER_KEYS` puts ruff at pre-commit only and
+  semgrep/tests at pre-push only, and `_skip_streak_lines` counted absence from
+  `RUN_STARTED.tools` across *all* runs — so every pre-push run read as a ruff
+  skip. One word was carrying both "ran and failed" (a hole in the gate) and
+  "not part of this gate" (the gate working as designed).
+
+  The tool universe is now scoped **per gate**, derived from what has actually
+  appeared in that gate's runs — so no runner table to keep in sync, and the
+  tests-runner alias (`tests` the key, `python` the recorded label) needs no
+  special case. The line names the gate. Confirmed on aramid's own `status`,
+  which was reporting the identical false `ruff: skipped last 2 run(s)` and now
+  reports nothing.
+
 - **A mutation baseline TIMEOUT was reported as a baseline FAILURE**, so
   mutation testing was dead for three days in a consumer repo while `status`
   told the reader to go looking for a broken test. Reported from that repo

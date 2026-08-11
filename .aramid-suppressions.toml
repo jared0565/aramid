@@ -184,6 +184,32 @@ reason = "The same ellipsis-bodied PEM quoted in the phase-2b plan. No base64 pa
 # and aramid reports them stale -- which is the intended outcome, since the
 # proof above would no longer apply to the new code.
 
+# --- two survivors in cli.py, false for TWO DIFFERENT REASONS ---------------
+#
+# Worth separating, because the correct response to each is opposite. The first
+# is an ENGINE SCOPE artifact -- a real test kills it, the engine just never
+# runs that test -- and it retires by widening `[mutation].test_command`. The
+# second is an EQUIVALENT MUTANT: no test can ever kill it, because it cannot
+# change what the program does. Filing both as "false positive" would lose that,
+# and the second would sit on a to-do list forever waiting for a test nobody can
+# write.
+#
+# Both were verified by APPLYING the mutant, not by reading the code.
+
+[[suppress]]
+id = "af7b77d42b82da8d3121d008387e516429c7902ef79091d8d99309cd6a8d3b28"
+tool = "mutation"
+rule = "not-drop"
+path = "src/aramid/cli.py"
+reason = "False survivor, ENGINE SCOPE. `if not stream.isatty()` -> `if stream.isatty()` in _force_utf8_on_redirect. Applied and verified: tests/integration/test_ledger_cmd.py::test_redirected_ledger_output_is_valid_utf8 FAILS with UnicodeDecodeError, which is precisely the defect the guard exists to prevent. Unreported only because [mutation].test_command is `pytest -q tests/unit`, which excludes tests/integration. Retire by widening that command, not by editing this."
+
+[[suppress]]
+id = "c5326a9cd4ae9c97e2381ad3d0e0b90328a07cbd46b3e43eb89ee94484687e43"
+tool = "mutation"
+rule = "int-bound"
+path = "src/aramid/cli.py"
+reason = "EQUIVALENT MUTANT -- unkillable by construction, not a test gap. `code = exc.code if isinstance(exc.code, int) else 1` -> `else 2`. `code` is a local, assigned on that line and read exactly once, on the next line: `return 0 if code == 0 else 3`. Both 1 and 2 are non-zero, so every input yields exit 3 either way. Applied and verified: all 42 tests in tests/integration/test_cli_dispatch.py pass identically with and without it. No test can distinguish them, so none should be written."
+
 [[suppress]]
 id = "e2f50e25a1c0acdbbd6ec0c7d95583c053fa77b38e9cb0fcdd1c8436e0580ca4"
 tool = "mutation"

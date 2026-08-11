@@ -35,6 +35,62 @@ def test_cmd_empty_history(tmp_path, capsys):
     assert "no mutation scores recorded" in capsys.readouterr().out
 
 
+# ------------------- an absent measurement is not a bad measurement (R64-4) --
+# Reported from a consumer repo: every function printed `kill-rate n/a (0/0)
+# (partial)`, which they read as "coverage is poor". It is not a low score, it
+# is NO SCORE -- nothing was ever measured, because their mutation baseline
+# could not finish. The two demand opposite responses (write tests / fix the
+# engine) and the report rendered them alike.
+
+def test_an_unmeasured_target_does_not_render_like_a_low_score(tmp_path, capsys):
+    led = Ledger(tmp_path / ".aramid" / "ledger.db")
+    _seed(led, 0, "m.py::f", 0, 0, False)      # nothing tested at all
+    led.close()
+
+    rc = cmd_mutation_score(tmp_path)
+    out = capsys.readouterr().out
+
+    assert rc == 0
+    assert "not measured" in out
+    assert "kill-rate" not in out, \
+        "printing a kill-rate for a target with no mutants invites reading 0/0 as bad"
+
+
+def test_a_real_zero_still_reads_as_a_real_zero(tmp_path, capsys):
+    """The control, and the line this whole item turns on. A target where
+    mutants WERE tested and none were killed is a genuine 0.00 -- a real
+    finding about the tests -- and must NOT be softened into 'not measured'."""
+    led = Ledger(tmp_path / ".aramid" / "ledger.db")
+    _seed(led, 0, "m.py::f", 0, 5, True)       # 5 tested, 0 killed
+
+    led.close()
+
+    rc = cmd_mutation_score(tmp_path)
+    out = capsys.readouterr().out
+
+    assert rc == 0
+    assert "kill-rate 0.00 (0/5)" in out
+    assert "not measured" not in out
+
+
+def test_nothing_measured_at_all_says_so_once_at_the_top(tmp_path, capsys):
+    """With every target unmeasured, the per-target lines are noise and the
+    real signal is a single fact about the engine: it produced no measurements.
+    That is the sentence that sends someone to `aramid status`, where a
+    stood-down or degraded mutation consumer explains why."""
+    led = Ledger(tmp_path / ".aramid" / "ledger.db")
+    _seed(led, 0, "m.py::f", 0, 0, False)
+    _seed(led, 1, "m.py::g", 0, 0, False)
+    led.close()
+
+    rc = cmd_mutation_score(tmp_path)
+    out = capsys.readouterr().out
+
+    assert rc == 0
+    assert "no target has been measured" in out
+    assert "aramid status" in out, "name where the reason is visible"
+
+
 def test_cmd_json_is_latest_per_target(tmp_path, capsys):
     led = Ledger(tmp_path / ".aramid" / "ledger.db")
     _seed(led, 0, "m.py::f", 3, 0, True)
