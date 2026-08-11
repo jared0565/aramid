@@ -114,6 +114,29 @@ def _stage1_argv(wt: Path, rel: str, cfg=None) -> list[str]:
     return _full_argv(cfg)
 
 
+def _suite_label(argv) -> str:
+    """How the confirmation suite reads inside a finding's message.
+
+    A survivor is only ever "survived THE SUITE THAT RAN", and that suite is
+    `[mutation].test_command`, which is deliberately NOT the whole tree -- the
+    baseline is budgeted at `mutant_timeout_s * 4` and this repo's full suite
+    does not fit. So a mutant killed only by a test outside that scope is
+    reported as surviving, truthfully for the run and misleadingly for the
+    reader: "mutant survived" reads as "you have a test gap" when it can also
+    mean "the engine never ran your test".
+
+    Measured 2026-08-11: two mutants in `pipeline._resolution_scope` were
+    reported as survivors while `tests/integration/test_resolution_scope.py`
+    kills both -- the scope is `tests/unit`. Naming the scope in the message is
+    what lets a reader tell the two cases apart without re-deriving it.
+
+    Drops the interpreter path and `-m`: they are constant noise, and the
+    interpreter is an absolute path that would differ per machine and per
+    worktree, making otherwise-identical findings read as different ones.
+    """
+    return " ".join(p for p in argv[1:] if p != "-m") or "the configured suite"
+
+
 def _full_argv(cfg=None) -> list[str]:
     """Mutation's whole-suite command: `[mutation].test_command` if the repo
     declares one, else `[tests].command`, else a bare `pytest -q`.
@@ -332,7 +355,8 @@ def consume(item, ctx: DrainContext) -> ConsumerResult:
                         findings.append(RawFinding(
                             tool="mutation", rule=m.op, severity_raw="medium",
                             file=rel, line=m.line,
-                            message=f"mutant survived: {m.description}"))
+                            message=(f"mutant survived: {m.description}"
+                                     f" (unkilled by: {_suite_label(full_argv)})")))
                     elif s2.state is ToolState.OK and s2.returncode in (1, 2):
                         stats["killed_s2"] += 1
                         fp = _mutant_fp(rel, m.op, m.line, lines)

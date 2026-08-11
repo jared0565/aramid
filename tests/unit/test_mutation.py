@@ -108,3 +108,38 @@ def test_finalize_scores_partial_not_fully_mutated():
     scores["m.py::f"].update(generated=3, killed_s1=1, survived_s1=1, timeouts=1)
     out = mut_consumer._finalize_scores(scores)
     assert out["targets"]["m.py::f"]["fully_mutated"] is False
+
+
+# --- a survivor is only ever "survived THE SUITE THAT RAN" ------------------
+
+def test_suite_label_renders_the_scope_a_survivor_was_checked_against():
+    """The whole message is asserted, not a substring, because the point is
+    that it READS correctly to someone triaging a finding -- a substring check
+    would confirm only what I already believed about my own format."""
+    import sys
+
+    from aramid.consumers.mutation import _suite_label
+
+    argv = [sys.executable, "-m", "pytest", "-q", "tests/unit"]
+    msg = f"mutant survived: flip a+b -> a-b (unkilled by: {_suite_label(argv)})"
+    assert msg == "mutant survived: flip a+b -> a-b (unkilled by: pytest -q tests/unit)"
+
+
+def test_suite_label_omits_the_interpreter_path():
+    """The interpreter is an absolute path that differs per machine and per
+    mutation worktree. Leaving it in would make the same finding read
+    differently on two machines, and inside the worktree it is a temp dir."""
+    from aramid.consumers.mutation import _suite_label
+
+    label = _suite_label([r"C:\some\tmp\wt\.venv\Scripts\python.exe",
+                          "-m", "pytest", "-q", "tests/unit"])
+    assert label == "pytest -q tests/unit"
+    assert "python" not in label
+
+
+def test_suite_label_degrades_to_a_phrase_rather_than_an_empty_paren():
+    """`(unkilled by: )` is worse than saying nothing useful -- it reads like
+    a bug in aramid rather than a suite it could not name."""
+    from aramid.consumers.mutation import _suite_label
+
+    assert _suite_label(["python"]) == "the configured suite"

@@ -150,6 +150,37 @@ to publish a tag that disagrees with it.
   subsystems, an undocumented consequence is indistinguishable from an
   unintended one.** It now names both.
 
+- **A mutation survivor now names the suite it survived.** `[mutation]
+  .test_command` is `pytest -q tests/unit`, deliberately bounded — the whole
+  tree (~1141 s) does not fit the `mutant_timeout_s * 4` baseline budget, and
+  inheriting it recreated the "44 drains, zero findings" defect. The
+  consequence was never written down: **any code whose only coverage is an
+  integration or e2e test reports survivors forever**, and the message
+  "mutant survived" reads as *you have a test gap* when it can equally mean
+  *the engine never ran your test*.
+
+  Proven, not inferred: two mutants in `pipeline._resolution_scope` were
+  reported as survivors, and applying each by line number makes
+  `tests/integration/test_resolution_scope.py` fail — including the
+  no-upstream case that exists for exactly that inversion. The findings were
+  true for the run and false as a claim about coverage.
+
+  Messages now read `mutant survived: <op> (unkilled by: pytest -q tests/unit)`.
+  The interpreter path is dropped: it is absolute, differs per machine, and
+  inside a mutation worktree is a temp dir, so leaving it in would make one
+  finding read as several. Asserted on the whole rendered string rather than a
+  substring — a substring check confirms only what the author already believed
+  about their own format.
+
+  The two findings are suppressed in `.aramid-suppressions.toml` with the proof
+  in the reason. **They are that file's first non-BLOCK entries and the first
+  to reach a ledger-synthesized producer at all** — until yesterday it could
+  not bind a mutation finding whatever it said. Suppressed rather than left
+  open because a finding proven false is precisely the noise that teaches an
+  operator to stop reading the tool; the correct way to retire them is to widen
+  the mutation suite, and if `_resolution_scope` changes, both ids change and
+  aramid reports the entries stale.
+
 - **`prior_note_count` had no direct test, and `probe_tool`'s PATH prepend had
   none at all.** Found by re-probing the two modules whose findings were still
   open, rather than by waiting for a drain — mutation only mutates files inside

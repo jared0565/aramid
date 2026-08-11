@@ -116,3 +116,45 @@ reason = "The same ellipsis-bodied PEM quoted in the phase-2b plan. No base64 pa
 #
 #   ledger override    "quiet this for me, on this machine."   WARN only.
 #   this file          "the team decided this, reviewably."    Any tier.
+
+# --- false survivors from a bounded mutation suite --------------------------
+#
+# THE FIRST NON-BLOCK ENTRIES IN THIS FILE, and the first that reach a
+# ledger-SYNTHESIZED producer at all -- until 2026-08-10 this file could not
+# bind a mutation finding no matter what it said (fixed in 701b6bd/ca584d1).
+#
+# Both are proven false, first-hand and not inherited: each mutant was applied
+# to `src/aramid/pipeline.py` by line number and
+# `tests/integration/test_resolution_scope.py` failed, killing it. They are
+# reported as survivors because `[mutation].test_command` is `pytest -q
+# tests/unit` -- deliberately bounded, since the whole tree (~1141 s) does not
+# fit the `mutant_timeout_s * 4` baseline budget and inheriting it recreated
+# the "44 drains, zero findings" defect. The engine never runs the test that
+# kills these.
+#
+# So this is a KNOWN ENGINE LIMITATION, not a test gap, and the class is
+# general: any code whose only coverage is an integration or e2e test will
+# report survivors here forever. Findings now name the suite they were checked
+# against ("unkilled by: pytest -q tests/unit") so the next reader can tell
+# "you have a gap" from "the engine did not run your test" without re-deriving
+# it. Suppressed rather than left open because a finding proven false is the
+# noise that teaches an operator to stop reading the tool.
+#
+# THE CORRECT WAY TO RETIRE THESE is to widen the mutation suite, not to edit
+# them. If `_resolution_scope` changes, both ids change, these stop matching,
+# and aramid reports them stale -- which is the intended outcome, since the
+# proof above would no longer apply to the new code.
+
+[[suppress]]
+id = "e2f50e25a1c0acdbbd6ec0c7d95583c053fa77b38e9cb0fcdd1c8436e0580ca4"
+tool = "mutation"
+rule = "cmp-flip"
+path = "src/aramid/pipeline.py"
+reason = "False survivor. `mode == \"range\"` -> `!=` at pipeline.py:206. Applied by line number and verified: tests/integration/test_resolution_scope.py fails (1 failed, 2 passed). Unreported because [mutation].test_command is `pytest -q tests/unit`, which excludes tests/integration."
+
+[[suppress]]
+id = "4fc8c13ca4f9eaf15386dd49d4092c21616854ce5243c2c1ba97ba576ef13e5e"
+tool = "mutation"
+rule = "not-drop"
+path = "src/aramid/pipeline.py"
+reason = "False survivor. `if not resolve_rng` -> `if resolve_rng` at pipeline.py:211 -- the no-upstream guard. Applied by line number and verified: tests/integration/test_resolution_scope.py fails (1 failed, 2 passed), specifically the no-upstream case that exists for exactly this inversion. Unreported because [mutation].test_command excludes tests/integration."
