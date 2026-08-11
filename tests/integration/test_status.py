@@ -598,11 +598,11 @@ def test_status_stays_silent_when_every_resolver_is_healthy(tmp_path, monkeypatc
 
 # ------------------------------------ a degraded consumer reaches the eye --
 
-def _consumer_run(lg, consumer, state, note, run="r"):
+def _consumer_run(lg, consumer, state, note, run="r", duration_s=0.0):
     lg.append(Event(EventType.CONSUMER_RUN_FINISHED, run,
                     datetime.now(timezone.utc).isoformat(),
                     payload={"consumer": consumer, "state": state, "note": note,
-                             "finding_count": 0}))
+                             "duration_s": duration_s, "finding_count": 0}))
 
 
 def test_status_shows_a_consumer_stuck_in_degraded(tmp_path, monkeypatch, capsys):
@@ -664,3 +664,91 @@ def test_the_streak_line_names_the_note_so_it_is_actionable(tmp_path, monkeypatc
 
     assert "mutation: degraded last 1 run(s) -- baseline failing @ 8abc418da153" \
         in capsys.readouterr().out
+
+
+# ---------------------------------- a consumer that STOOD DOWN is visible --
+# R64-3/4. A give-up returns `ok` on purpose -- `degraded` would stop the drain
+# marking the item drained and stall the queue. But `ok` also ends the degraded
+# streak above, so a consumer that has permanently stopped working reports
+# exactly like a healthy one. Making the timeout latch actually hold (R64-1)
+# turns that from a rare accident into the STEADY STATE, so the latch and this
+# report have to ship together: otherwise the fix for a loud waste of 8 minutes
+# every 4 hours is a silent no-op forever, which is strictly worse.
+
+def test_status_shows_a_consumer_that_gave_up(tmp_path, monkeypatch, capsys):
+    root = _repo(tmp_path)
+    _no_user_config(tmp_path, monkeypatch)
+    _write_toml(root, armed=True, bake_started=None)
+    lg = Ledger(root / ".aramid" / "ledger.db")
+    for _ in range(3):
+        _consumer_run(lg, "mutation", "degraded",
+                      "baseline timeout: pytest -q did not finish within the 240s budget",
+                      duration_s=241.0)
+    _consumer_run(lg, "mutation", "ok",
+                  "mutation giving up: pytest -q does not fit the 240s baseline "
+                  "budget after 3 attempts -- raise [mutation].baseline_timeout_s",
+                  duration_s=0.2)
+    lg.close()
+
+    assert cmd_status(root) == 0
+
+    out = capsys.readouterr().out
+    assert "stood down" in out, \
+        "a consumer that has permanently stopped must not read as healthy"
+    assert "baseline_timeout_s" in out, "the remedy must reach the eye"
+
+
+def test_stood_down_line_states_what_it_cost(tmp_path, monkeypatch, capsys):
+    """Cost is the number that makes it worth acting on. Downstream this was
+    ~8 minutes every 4 hours for three days producing nothing, and none of
+    that was visible anywhere -- the report said only that a consumer existed.
+    """
+    root = _repo(tmp_path)
+    _no_user_config(tmp_path, monkeypatch)
+    _write_toml(root, armed=True, bake_started=None)
+    lg = Ledger(root / ".aramid" / "ledger.db")
+    for _ in range(4):
+        _consumer_run(lg, "mutation", "degraded", "baseline timeout: x", duration_s=100.0)
+    _consumer_run(lg, "mutation", "ok", "mutation giving up: nope", duration_s=0.0)
+    lg.close()
+
+    assert cmd_status(root) == 0
+
+    out = capsys.readouterr().out
+    assert "5 run(s)" in out, "the give-up run counts too -- it is part of the waste"
+    assert "400s" in out
+
+
+def test_a_recovered_consumer_is_not_reported_as_stood_down(tmp_path, monkeypatch,
+                                                             capsys):
+    """Self-clearing, same contract as the degraded streak. A give-up followed
+    by a real run means the operator fixed it -- raised the budget, narrowed
+    the suite -- and a line that never goes away is one nobody reads."""
+    root = _repo(tmp_path)
+    _no_user_config(tmp_path, monkeypatch)
+    _write_toml(root, armed=True, bake_started=None)
+    lg = Ledger(root / ".aramid" / "ledger.db")
+    _consumer_run(lg, "mutation", "ok", "mutation giving up: nope")
+    _consumer_run(lg, "mutation", "ok", "2 confirmed survivor(s) of 9 mutant(s) tested")
+    lg.close()
+
+    assert cmd_status(root) == 0
+
+    assert "stood down" not in capsys.readouterr().out
+
+
+def test_an_ordinary_healthy_consumer_reports_nothing(tmp_path, monkeypatch, capsys):
+    """Falsifiability guard for the two tests above: if `stood down` appeared
+    for any `ok` run, they would pass without detecting anything."""
+    root = _repo(tmp_path)
+    _no_user_config(tmp_path, monkeypatch)
+    _write_toml(root, armed=True, bake_started=None)
+    lg = Ledger(root / ".aramid" / "ledger.db")
+    _consumer_run(lg, "mutation", "ok", "3 confirmed survivor(s) of 12 mutant(s) tested")
+    lg.close()
+
+    assert cmd_status(root) == 0
+
+    out = capsys.readouterr().out
+    assert "stood down" not in out
+    assert "degraded consumer runs" not in out

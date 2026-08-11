@@ -101,6 +101,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_filter.add_argument("--rule")
     p_filter.add_argument("--status")
     p_filter.add_argument("--severity")
+    p_filter.add_argument("--json", action="store_true")
     p_rotated = ledger_sub.add_parser("mark-rotated")
     p_rotated.add_argument("id")
     p_rotated.add_argument("--reason", required=True)
@@ -166,7 +167,41 @@ def _check_mode(args: argparse.Namespace) -> str:
     return "staged" if args.gate == "pre-commit" else "range"
 
 
+def _force_utf8_on_redirect() -> None:
+    """Make REDIRECTED output valid UTF-8 regardless of the locale encoding.
+
+    Windows picks the ANSI code page (cp1252 here, measured) for a stdout that
+    is a pipe or a file rather than a console. Any non-ASCII character then
+    goes out as a legacy single byte -- U+2014 as 0x97 -- which is not valid
+    UTF-8 in any position, so a consumer doing the obvious `decode("utf-8")`
+    gets an exception or replacement characters. That is how round 64 item 5b
+    reached us: a downstream repo's audit script mis-parsed a redirected
+    `ledger filter`.
+
+    Findings carry tool-authored text -- semgrep messages, code snippets, file
+    paths -- so non-ASCII arrives from outside this codebase and cannot be
+    fixed by keeping our own strings ASCII. The encoding of the STREAM is the
+    only place to fix it once.
+
+    Deliberately only when the stream is NOT a tty: a console already renders
+    correctly through its own code page, and reconfiguring it can break that.
+    An explicit PYTHONIOENCODING is overridden on purpose -- redirected output
+    is machine-facing, and a stable UTF-8 contract is worth more than honouring
+    a setting whose only reachable effect here is to emit undecodable bytes.
+
+    Never raises: a stream that has been replaced (pytest capture, a
+    non-TextIOWrapper) simply keeps whatever encoding it has.
+    """
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            if not stream.isatty():
+                stream.reconfigure(encoding="utf-8")
+        except (AttributeError, ValueError, OSError):
+            pass
+
+
 def main(argv: list[str] | None = None) -> int:
+    _force_utf8_on_redirect()
     parser = build_parser()
     try:
         args = parser.parse_args(argv)
@@ -219,7 +254,8 @@ def main(argv: list[str] | None = None) -> int:
             return cmd_ledger_show(root, args.id)
         if args.ledger_command == "filter":
             return cmd_ledger_filter(root, tool=args.tool, rule=args.rule,
-                                      status=args.status, severity=args.severity)
+                                      status=args.status, severity=args.severity,
+                                      as_json=args.json)
         if args.ledger_command == "mark-rotated":
             return cmd_ledger_mark_rotated(root, args.id, args.reason)
         if args.ledger_command == "mark-not-a-secret":

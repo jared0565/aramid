@@ -19,7 +19,7 @@ from pathlib import Path
 
 from aramid import config as config_mod
 from aramid import detectors, gitutil, jsmutate
-from aramid.consumers import base
+from aramid.consumers import base, mutation
 from aramid.consumers.base import ConsumerResult, DrainContext
 from aramid.fingerprint import compute_fingerprint
 from aramid.normalizer import RawFinding
@@ -32,6 +32,7 @@ NAME = "js_mutation"
 TOOL = "js-mutation"
 _BASELINE_GIVE_UP = 3
 _LINK_GIVE_UP = 3
+_TIMEOUT_GIVE_UP = 3
 _JS_SUFFIXES = (".js", ".jsx", ".mjs", ".cjs", ".ts", ".tsx", ".mts", ".cts")
 
 # See consumers/mutation.py: budget-truncated batches -> pin occurrence_index 0.
@@ -147,6 +148,25 @@ def consume(item, ctx: DrainContext) -> ConsumerResult:
         return ConsumerResult(consumer=NAME, state="ok",
                               note="node_modules not installed (js mutation skipped)")
 
+    # Same split as consumers/mutation.py, and it reuses that module's
+    # `timeout_note_prefix` rather than restating the format: this consumer was
+    # cloned from the Python one and inherited the exact defect -- a TIMEOUT
+    # merged into the failing-baseline branch below. Only the Python path was
+    # exercised downstream, so fixing that one alone would have left the same
+    # bug armed here with nothing to find it.
+    baseline_budget = float(mcfg.get("baseline_timeout_s", mutant_timeout * 4))
+    suite = " ".join(test_argv)
+
+    if base.note_count_any_item(
+            ctx.ledger, NAME,
+            mutation.timeout_note_prefix(baseline_budget, suite)) >= _TIMEOUT_GIVE_UP:
+        return ConsumerResult(
+            consumer=NAME, state="ok",
+            note=(f"js mutation giving up: {suite} does not fit the "
+                  f"{baseline_budget:.0f}s baseline budget after "
+                  f"{_TIMEOUT_GIVE_UP} attempts -- raise "
+                  f"[js_mutation].baseline_timeout_s"))
+
     if base.prior_note_count(ctx.ledger, NAME, item.id,
                              f"baseline failing @ {item.head[:12]}") >= _BASELINE_GIVE_UP:
         return ConsumerResult(consumer=NAME, state="ok",
@@ -180,7 +200,15 @@ def consume(item, ctx: DrainContext) -> ConsumerResult:
                                   note=f"node_modules link failing @ {item.head[:12]}: {str(exc)[:150]}",
                                   duration_s=time.monotonic() - started)
 
-        base_res = run_subprocess(test_argv, wt, mutant_timeout * 4)
+        base_res = run_subprocess(test_argv, wt, baseline_budget)
+        if base_res.state is ToolState.TIMEOUT:
+            # A timeout is a property of the repo's suite and budget, not of
+            # this commit -- see consumers/mutation.py for the full account.
+            return ConsumerResult(
+                consumer=NAME, state="degraded",
+                note=(f"{mutation.timeout_note_prefix(baseline_budget, suite)}"
+                      f" (last seen @ {item.head[:12]})"),
+                duration_s=time.monotonic() - started)
         if base_res.state is not ToolState.OK or base_res.returncode != 0:
             # Load-bearing note prefix: the give-up counter matches it.
             return ConsumerResult(consumer=NAME, state="degraded",

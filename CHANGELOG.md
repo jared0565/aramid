@@ -12,6 +12,112 @@ to publish a tag that disagrees with it.
 
 ### Fixed
 
+- **A mutation baseline TIMEOUT was reported as a baseline FAILURE**, so
+  mutation testing was dead for three days in a consumer repo while `status`
+  told the reader to go looking for a broken test. Reported from that repo
+  (interop round 64) with the evidence that made it obvious in hindsight: 11
+  consecutive baseline runs between 482.8 s and 486.6 s — **under 1 % spread,
+  which is the shape of a budget, not of a failing suite** — against a suite
+  that passes standalone in 985 s.
+
+  `consumers/mutation.py` tested `base_res.state is not ToolState.OK or
+  returncode != 0`, which swallowed `ToolState.TIMEOUT` into the
+  failing-baseline branch. The two states demand opposite responses — fix a
+  test, versus raise a budget — so one note for both is the whole defect.
+  Fixing only the wording would have left mutation dead; fixing only the
+  budget would have left the next timeout equally illegible.
+
+  - The timeout branch is split out and names the budget it exceeded. The
+    **elapsed time is deliberately not reported**: the process is killed *at*
+    the budget, so "elapsed" there restates a number you already set. The real
+    measurement is now recorded on runs that finish, as `extra["baseline_s"]`.
+  - New `[mutation].baseline_timeout_s` (and `[js_mutation].baseline_timeout_s`),
+    defaulting to the previous `mutant_timeout_s * 4`. A per-mutant timeout
+    pressed into service as a whole-suite budget is a guess, and a repo whose
+    suite legitimately exceeds it needs a setting it can point at. An
+    auto-derived budget was considered and rejected: a suite that times out
+    never yields a measurement to derive from.
+  - **`consumers/js_mutation.py` carried the identical merged branch** and was
+    fixed with it. Only the Python path was exercised downstream, so fixing one
+    would have shipped the same bug alive on the other with nothing to find it.
+
+- **The give-up path never latched, so a dead consumer kept running forever.**
+  Same report. `consumers/base.prior_note_count` filters on `item_id`, and the
+  mutation give-up prefix embedded `item.head[:12]`, giving the counter **two
+  independent reset paths**: an advancing head changed the prefix, and a
+  give-up returning `ok` let the drain drain the item so the next drain arrived
+  with a fresh id and a count of zero. Downstream that produced exactly one
+  give-up event, after which the same ~8-minute run resumed every 4 hours.
+
+  A timeout give-up is now **repo-scoped** via the new
+  `base.note_count_any_item`, because "this suite does not fit this budget" is
+  a property of the repo and no commit changes it. The failing-baseline give-up
+  stays head-scoped, because new code genuinely can fix a red suite.
+
+  Repo-scoped means permanent, so the note is **keyed on (suite command,
+  budget)** — the two things an operator can change. Raising the budget or
+  narrowing the command stops the prefix matching and mutation retries. Without
+  that release valve this would be a one-way door.
+
+  The give-up deliberately still returns **`ok`, not `degraded`**: the drain
+  refuses to mark an item drained while any consumer is degraded, so degrading
+  here would pin the queue item and re-run every other consumer on it forever,
+  trading a wasteful loop for a total stall.
+
+- **A consumer that gave up reported as healthy.** Because a give-up returns
+  `ok`, it ends the degraded streak `status` reports — so the moment a consumer
+  permanently stopped, it started looking exactly like a working one. Making
+  the latch above actually hold turns that from a rare accident into the steady
+  state, so `aramid status` gained a `consumers stood down:` section, shipped in
+  the same change. It states the cost (`stood down after N run(s), Xs spent`)
+  and carries the note, which names the setting that clears it. Self-clearing,
+  like the degraded streak beside it.
+
+- **`aramid ledger list`/`filter` emitted invalid UTF-8 on redirect.**
+  `_render_row` used a literal `—` (U+2014); Windows selects the ANSI code page
+  for a redirected stdout, which writes it as the bare byte `0x97` — not valid
+  UTF-8 in any position. A consumer repo's audit script got mojibake off a
+  redirected `ledger filter`. Fixed at both levels: the separator is now ASCII
+  `--`, matching every other rendered line in the codebase, and `cli.main`
+  forces UTF-8 on non-tty streams so tool-authored text (semgrep messages,
+  paths, snippets) cannot reintroduce the class.
+
+- **`aramid ledger filter --json`**, which `mutation-score` already had. The
+  one-line text row puts id, `tool:rule`, `file:line` and a free-text message on
+  a single line, so a consumer splitting on whitespace swallows the message into
+  the file field — that silently mis-tagged a downstream repo's first batch of
+  26 overrides. An empty result prints `[]`, not prose, because a caller forced
+  to special-case "no matching findings" is a caller that starts guessing.
+
+### Security
+
+- **aramid's own vendored SQL-injection rule missed the most common shape.**
+  Reported as an upstream issue; it is not — the rule ships in
+  `src/aramid/rules/owasp.yml`. All six of its patterns require the string
+  operation to be visible **at the call site**, so it sees `execute(f"...")`
+  and is blind to `q = f"..."` followed by `execute(q)`. Measured against a
+  7-form fixture: **3/3 inline caught, 0/4 assign-then-execute caught.**
+
+  New rule `injection-dataflow.python-query-built-then-executed` closes the
+  assign-then-execute class; coverage on that fixture goes 3/7 → 6/7, with zero
+  hits across five safe forms (parameterized queries, and an f-string that
+  never reaches `execute`).
+
+  It is **WARN tier, and its id is a tier decision**: `block_rules.toml`'s
+  `[semgrep].block` list is fnmatch and contains the substring glob `*sqli*`,
+  so the obvious name would have made a deliberately-broader rule blocking
+  everywhere `semgrep_block_armed` is on. The repo that reported this had
+  audited all 26 hits of the narrow rule and found 26 false positives, so a
+  wider net at blocking tier would stop pushes on correct code — and a blocking
+  rule people cannot satisfy is one they turn off, taking the true positives
+  with it. `tests/unit/test_policy.py` pins the WARN classification **with
+  blocking armed**, so a well-meaning rename cannot promote it silently.
+
+  Remaining gap, stated rather than implied: a query assembled via
+  `"".join(parts)` or through more than one intermediate variable is still
+  missed. Closing it needs taint mode, which also re-reports every inline case
+  and cannot tell a constant table name from a request parameter.
+
 - **`check --all` did not scan for secrets, and marked secrets already found
   as fixed.** The most serious defect found so far, in the BLOCK tier, and
   found only by running the published wheel against a throwaway repo.

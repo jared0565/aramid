@@ -70,11 +70,11 @@ def _js_repo(tmp_path, with_node_modules=True, wire_pkg=False):
     return r, base, _sha(r)
 
 
-def _consume(r, base, head, monkeypatch, tmp_path):
+def _consume(r, base, head, monkeypatch, tmp_path, item_id="q1"):
     monkeypatch.setattr(config_mod, "_user_config_path", lambda: tmp_path / "no-user.toml")
     cfg = config_mod.load_config(r)
     led = Ledger(r / ".aramid" / "ledger.db")
-    item = QueueItem(id="q1", base=base, head=head, score=55, reasons=("t",),
+    item = QueueItem(id=item_id, base=base, head=head, score=55, reasons=("t",),
                      state="queued", created_at="t", updated_at="t")
     try:
         return jsc.consume(item, DrainContext(root=r, cfg=cfg, ledger=led, clock=lambda: "t"))
@@ -204,6 +204,55 @@ def test_give_up_after_three_baseline_failures_head_scoped(tmp_path, monkeypatch
     res = _consume(r, base, head, monkeypatch, tmp_path)
     assert res.state == "ok"
     assert "giving up" in res.note
+
+
+def test_baseline_timeout_is_not_reported_as_a_failure(tmp_path, monkeypatch):
+    """Parity with the Python consumer (R64-1).
+
+    This module was cloned from consumers/mutation.py and inherited its exact
+    defect: `state is not ToolState.OK` swallows TIMEOUT into the
+    failing-baseline branch. Only the Python path was exercised downstream, so
+    without this test the same bug ships alive on the JS path with nothing
+    that would ever find it.
+    """
+    r, base, head = _js_repo(tmp_path)
+    _scripted(monkeypatch, [(ToolState.TIMEOUT, 0)])   # baseline times out
+
+    res = _consume(r, base, head, monkeypatch, tmp_path)
+
+    assert res.state == "degraded"
+    assert not res.note.startswith("baseline failing"), \
+        "a timeout must not join the failing-baseline note family"
+    assert "timeout" in res.note
+
+
+def test_js_timeout_giveup_is_repo_scoped_not_item_scoped(tmp_path, monkeypatch):
+    from aramid.consumers import mutation as py_mutation
+    from aramid.ledger import Ledger
+    from aramid.models import Event, EventType
+
+    r, base, head = _js_repo(tmp_path)
+    # 240.0 = the fixture's `mutant_timeout_s = 60` x 4, i.e. the default
+    # budget. Getting this wrong makes the prefix miss and the test pass for
+    # the wrong reason -- it would simply run normally and report ok.
+    prefix = py_mutation.timeout_note_prefix(240.0, "npm test")
+    led = Ledger(r / ".aramid" / "ledger.db")
+    try:
+        for i in range(3):
+            led.append(Event(EventType.CONSUMER_RUN_FINISHED, f"r{i}", "t",
+                             payload={"consumer": "js_mutation",
+                                      "item_id": "some-older-item",
+                                      "state": "degraded",
+                                      "note": prefix + " (last seen @ 000000000000)"}))
+    finally:
+        led.close()
+    _scripted(monkeypatch, [(ToolState.OK, 0)])   # would pass, but give-up first
+
+    res = _consume(r, base, head, monkeypatch, tmp_path, item_id="a-new-item")
+
+    assert res.state == "ok"
+    assert "giving up" in res.note
+    assert "baseline_timeout_s" in res.note
 
 
 def _link_raises(src, wt):

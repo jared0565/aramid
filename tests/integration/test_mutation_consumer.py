@@ -72,12 +72,12 @@ def _repo(tmp_path, test_body, extra_files=()):
     return r, base, _sha(r)
 
 
-def _consume(r, base, head, monkeypatch, tmp_path):
+def _consume(r, base, head, monkeypatch, tmp_path, item_id="q1"):
     monkeypatch.setattr(config_mod, "_user_config_path",
                          lambda: tmp_path / "no-user.toml")
     cfg = config_mod.load_config(r)
     led = Ledger(r / ".aramid" / "ledger.db")
-    item = QueueItem(id="q1", base=base, head=head, score=55, reasons=("t",),
+    item = QueueItem(id=item_id, base=base, head=head, score=55, reasons=("t",),
                      state="queued", created_at="t", updated_at="t")
     try:
         return mut_consumer.consume(item, DrainContext(root=r, cfg=cfg,
@@ -382,6 +382,209 @@ def test_baseline_giveup_is_head_scoped(tmp_path, monkeypatch):
     res = _consume(r, base, head, monkeypatch, tmp_path)
     assert res.state == "degraded", "stale-head failures must not trigger give-up"
     assert "baseline failing" in res.note
+
+
+# ------------------------------------ a TIMEOUT is not a FAILURE (R64-1) ---
+# Reported from a downstream repo: 11 consecutive baseline runs at
+# 482.8-486.6s -- under 1% spread, which is the shape of a budget, not of a
+# failing test -- every one of them reporting "baseline failing @ <sha>".
+# The reader went looking for a broken test. There wasn't one: the suite
+# passes in 985s and simply cannot fit a 483s budget.
+#
+# The two states demand OPPOSITE responses (fix a test / raise a budget), so
+# reporting them with one string is the whole defect. Fixing only the wording
+# would leave mutation dead; fixing only the budget would leave the next
+# timeout equally illegible.
+
+TIMEOUT_BUDGET = 240.0          # _repo sets mutant_timeout_s = 60; 60 * 4
+
+
+def _timeout_baseline(monkeypatch):
+    """Make the baseline (and only the baseline) time out."""
+    from aramid.runners.base import RunnerResult, ToolState
+    monkeypatch.setattr(mut_consumer, "run_subprocess",
+                         lambda *a, **kw: RunnerResult(tool="pytest",
+                                                        state=ToolState.TIMEOUT))
+
+
+def _seed_notes(r, n, note, item_id="q1"):
+    from aramid.models import Event, EventType
+    led = Ledger(r / ".aramid" / "ledger.db")
+    try:
+        for i in range(n):
+            led.append(Event(EventType.CONSUMER_RUN_FINISHED, f"seed{i}", "t",
+                             payload={"consumer": "mutation", "item_id": item_id,
+                                      "state": "degraded", "note": note}))
+    finally:
+        led.close()
+
+
+def test_baseline_timeout_is_not_reported_as_a_failure(tmp_path, monkeypatch):
+    r, base, head = _repo(tmp_path, WEAK_TEST)
+    _timeout_baseline(monkeypatch)
+
+    res = _consume(r, base, head, monkeypatch, tmp_path)
+
+    assert res.state == "degraded"
+    assert not res.note.startswith("baseline failing"), \
+        "a timeout must not join the failing-baseline note family"
+    assert "timeout" in res.note
+    # The budget is the actionable number: it is the thing the operator
+    # changes. Without it the note says a run was too slow but not too slow
+    # for WHAT.
+    assert "240s" in res.note
+
+
+def test_baseline_failure_still_reports_as_a_failure(tmp_path, monkeypatch):
+    """The other half of the split. A genuinely red suite must keep the
+    original wording -- and the original note prefix, which the head-scoped
+    give-up counter keys on."""
+    r, base, head = _repo(tmp_path, "def test_always_fails():\n    assert False\n")
+
+    res = _consume(r, base, head, monkeypatch, tmp_path)
+
+    assert res.state == "degraded"
+    assert res.note.startswith(f"baseline failing @ {head[:12]}")
+    assert "timeout" not in res.note
+
+
+def test_timeout_giveup_survives_an_advancing_head(tmp_path, monkeypatch):
+    """Latch reset path A.
+
+    The failing-baseline give-up is head-scoped on purpose: new commits
+    deserve a fresh attempt because new code can fix a red suite. A TIMEOUT is
+    not like that -- "this suite does not fit this budget" is a property of the
+    repo and the config, and no commit changes it. Head-scoping the timeout
+    give-up is what let a downstream repo burn ~8 minutes every 4 hours for
+    three days: its head advanced between drains, so the counter never reached
+    three.
+    """
+    r, base, head = _repo(tmp_path, WEAK_TEST)
+    _seed_notes(r, 3, mut_consumer.timeout_note_prefix(TIMEOUT_BUDGET,
+                                                        "pytest -q") + " (last seen @ 000000000000)")
+    monkeypatch.setattr(mut_consumer, "run_subprocess",
+                         lambda *a, **kw: (_ for _ in ()).throw(
+                             AssertionError("give-up path must not run pytest")))
+
+    res = _consume(r, base, head, monkeypatch, tmp_path)
+
+    assert res.state == "ok"
+    assert "giving up" in res.note
+    assert _no_worktrees(r)
+
+
+def test_timeout_giveup_survives_a_new_queue_item(tmp_path, monkeypatch):
+    """Latch reset path B, and the one that made the give-up event appear
+    exactly once downstream before the burn resumed.
+
+    `prior_note_count` filters on item_id. Giving up returns `ok`, so the drain
+    marks the item drained -- and the NEXT drain is a different item_id, whose
+    count starts at zero. A per-item latch therefore grants a fresh 3 x budget
+    allowance forever, which is not a latch at all.
+    """
+    r, base, head = _repo(tmp_path, WEAK_TEST)
+    _seed_notes(r, 3, mut_consumer.timeout_note_prefix(TIMEOUT_BUDGET,
+                                                        "pytest -q") + " (last seen @ 000000000000)",
+                 item_id="an-older-queue-item")
+    monkeypatch.setattr(mut_consumer, "run_subprocess",
+                         lambda *a, **kw: (_ for _ in ()).throw(
+                             AssertionError("give-up path must not run pytest")))
+
+    res = _consume(r, base, head, monkeypatch, tmp_path, item_id="a-brand-new-item")
+
+    assert res.state == "ok"
+    assert "giving up" in res.note
+
+
+def test_timeout_giveup_stays_ok_so_the_item_can_drain(tmp_path, monkeypatch):
+    """Deliberately NOT `degraded`, unlike the fuzz driver fix.
+
+    The drain refuses to mark an item drained while any consumer is degraded,
+    so degrading here would pin the queue item forever and re-run every OTHER
+    consumer on it each drain -- converting a wasteful loop into a total stall.
+    Visibility is `status`'s job (R64-4), not the drain state's.
+    """
+    r, base, head = _repo(tmp_path, WEAK_TEST)
+    _seed_notes(r, 3, mut_consumer.timeout_note_prefix(TIMEOUT_BUDGET,
+                                                        "pytest -q") + " (last seen @ 000000000000)")
+    _timeout_baseline(monkeypatch)
+
+    res = _consume(r, base, head, monkeypatch, tmp_path)
+
+    assert res.state == "ok", "degraded would pin the queue item and stall the drain"
+    assert res.findings == []
+
+
+def test_timeout_giveup_names_the_knob_that_clears_it(tmp_path, monkeypatch):
+    r, base, head = _repo(tmp_path, WEAK_TEST)
+    _seed_notes(r, 3, mut_consumer.timeout_note_prefix(TIMEOUT_BUDGET,
+                                                        "pytest -q") + " (last seen @ 000000000000)")
+    _timeout_baseline(monkeypatch)
+
+    res = _consume(r, base, head, monkeypatch, tmp_path)
+
+    assert "baseline_timeout_s" in res.note, \
+        "a permanent give-up must name the setting that un-does it"
+
+
+def test_raising_the_budget_clears_the_timeout_latch(tmp_path, monkeypatch):
+    """The latch is repo-scoped, so it needs its own release valve or it is a
+    one-way door: a suite that later fits (bigger budget, narrower command)
+    would never be retried. Keying the note on the budget makes changing the
+    budget the release.
+
+    TWO ARMS ON PURPOSE. The second arm alone passes vacuously -- a repo where
+    the latch never engaged also reports `ok` with no "giving up". Only the
+    contrast shows the seeded notes were capable of latching and that the
+    budget change is what released them.
+    """
+    r, base, head = _repo(tmp_path, WEAK_TEST)
+    _seed_notes(r, 3, mut_consumer.timeout_note_prefix(TIMEOUT_BUDGET,
+                                                        "pytest -q") + " (last seen @ 000000000000)")
+
+    # Arm 1 -- unchanged budget: the latch holds.
+    latched = _consume(r, base, head, monkeypatch, tmp_path)
+    assert "giving up" in latched.note, "control: these notes must latch at 240s"
+
+    # Arm 2 -- budget raised: the same notes no longer match, so it retries.
+    (r / "aramid.toml").write_text(
+        "schema_version = 1\n[mutation]\nmax_mutants = 3\nconfirm_cap = 3\n"
+        "wall_budget_s = 300\nmutant_timeout_s = 60\nbaseline_timeout_s = 900\n",
+        encoding="utf-8")
+
+    res = _consume(r, base, head, monkeypatch, tmp_path)
+
+    assert res.state == "ok", "a raised budget must let the baseline run again"
+    assert "giving up" not in res.note
+
+
+def test_baseline_timeout_budget_is_configurable(tmp_path, monkeypatch):
+    """`mutant_timeout_s * 4` is a per-mutant number pressed into service as a
+    whole-suite budget. A repo whose suite legitimately exceeds it needs a
+    setting it can point at, which is what the note now names."""
+    r, base, head = _repo(tmp_path, WEAK_TEST)
+    (r / "aramid.toml").write_text(
+        "schema_version = 1\n[mutation]\nmax_mutants = 3\nconfirm_cap = 3\n"
+        "wall_budget_s = 300\nmutant_timeout_s = 60\nbaseline_timeout_s = 777\n",
+        encoding="utf-8")
+    _timeout_baseline(monkeypatch)
+
+    res = _consume(r, base, head, monkeypatch, tmp_path)
+
+    assert "777s" in res.note
+
+
+def test_successful_baseline_records_its_measured_duration(tmp_path, monkeypatch):
+    """You cannot measure a suite by timing it out -- the only number a
+    timeout yields is the budget you already knew. The one run that CAN
+    measure it is a successful one, so that is where the number is recorded."""
+    r, base, head = _repo(tmp_path, WEAK_TEST)
+
+    res = _consume(r, base, head, monkeypatch, tmp_path)
+
+    assert res.state == "ok"
+    assert isinstance(res.extra.get("baseline_s"), float)
+    assert res.extra["baseline_s"] > 0
 
 
 def test_pin_occurrence_declared_only_on_variable_set_consumers():

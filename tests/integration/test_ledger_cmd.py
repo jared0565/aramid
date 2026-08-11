@@ -1,9 +1,14 @@
 """integration: `aramid ledger list|show|filter|mark-rotated|mark-not-a-secret|
 mark-unreachable`."""
+import json
+import os
+import subprocess
+import sys
 from pathlib import Path
 
 from aramid import cli
 from aramid.commands.ledger_cmd import (
+    _render_row,
     cmd_ledger_filter,
     cmd_ledger_list,
     cmd_ledger_mark_not_a_secret,
@@ -15,8 +20,9 @@ from aramid.ledger import Ledger
 from aramid.models import Finding, Gate, Severity, Verdict
 
 
-def _f(fid, tool="ruff", rule="S102", verdict=Verdict.WARN, file="a.py", historical=False):
-    return Finding(fid, tool, rule, "high", Severity.HIGH, verdict, file, 1, "m", "e",
+def _f(fid, tool="ruff", rule="S102", verdict=Verdict.WARN, file="a.py", historical=False,
+        message="m"):
+    return Finding(fid, tool, rule, "high", Severity.HIGH, verdict, file, 1, message, "e",
                     Gate.PRE_PUSH, historical=historical)
 
 
@@ -104,6 +110,141 @@ def test_filter_with_no_matches_reports_nothing_without_error(tmp_path, capsys):
 
     assert rc == 0
     assert "no matching" in out.lower()
+
+
+# ------------------------------------------------------ filter --json ---
+# Round 64 item 5a. The one-line text row puts id, tool:rule, file:line and
+# the free-text message on a single line, so a consumer splitting on
+# whitespace swallows the message into the file field. That silently
+# mis-tagged a downstream repo's first batch of 26 overrides.
+
+def test_filter_json_emits_parseable_records(tmp_path, capsys):
+    root: Path = tmp_path
+    ledger = _ledger(root)
+    ledger.record_run("r1", "t1", "pre-push", {"ruff"}, {"a.py"},
+                       [_f("f1", message="SQL query built via string concat")])
+    ledger.close()
+
+    rc = cmd_ledger_filter(root, tool="ruff", as_json=True)
+    payload = json.loads(capsys.readouterr().out)
+
+    assert rc == 0
+    assert len(payload) == 1
+    rec = payload[0]
+    # The whole point: every field a consumer needs is separately addressable.
+    assert rec["id"] == "f1"
+    assert rec["tool"] == "ruff"
+    assert rec["rule"] == "S102"
+    assert rec["file"] == "a.py"
+    assert rec["message"] == "SQL query built via string concat"
+
+
+def test_filter_json_survives_a_message_containing_the_text_delimiter(tmp_path, capsys):
+    """The text format's actual failure mode, pinned.
+
+    A message containing ` -- ` (or a colon, or a space) is indistinguishable
+    from the row's own structure once rendered. In JSON it round-trips exactly,
+    which is the property the downstream parser needed and did not have.
+    """
+    root: Path = tmp_path
+    nasty = "a.py:1 -- looks like another row: really it is the message"
+    ledger = _ledger(root)
+    ledger.record_run("r1", "t1", "pre-push", {"ruff"}, {"a.py"},
+                       [_f("f1", message=nasty)])
+    ledger.close()
+
+    cmd_ledger_filter(root, tool="ruff", as_json=True)
+    payload = json.loads(capsys.readouterr().out)
+
+    assert payload[0]["message"] == nasty
+    assert payload[0]["file"] == "a.py"
+
+
+def test_filter_json_with_no_matches_emits_an_empty_array(tmp_path, capsys):
+    """`no matching findings` is prose, and a consumer cannot parse it. An
+    empty result must still be valid JSON or every caller needs a special
+    case -- which is exactly where a parser starts guessing."""
+    root: Path = tmp_path
+    ledger = _ledger(root)
+    ledger.record_run("r1", "t1", "pre-push", {"ruff"}, {"a.py"}, [_f("f1")])
+    ledger.close()
+
+    rc = cmd_ledger_filter(root, tool="nonexistent-tool", as_json=True)
+
+    assert rc == 0
+    assert json.loads(capsys.readouterr().out) == []
+
+
+def test_filter_json_flag_is_wired_through_the_cli(tmp_path, monkeypatch, capsys):
+    root: Path = tmp_path
+    ledger = _ledger(root)
+    ledger.record_run("r1", "t1", "pre-push", {"ruff"}, {"a.py"}, [_f("f1")])
+    ledger.close()
+    monkeypatch.chdir(root)
+
+    rc = cli.main(["ledger", "filter", "--tool", "ruff", "--json"])
+
+    assert rc == 0
+    assert json.loads(capsys.readouterr().out)[0]["id"] == "f1"
+
+
+# ------------------------------------------- redirected output is UTF-8 ---
+# Round 64 item 5b, reported by a consumer whose parser got mojibake off a
+# redirected `ledger filter`. THESE MUST BE SUBPROCESS TESTS. Under pytest,
+# captured stdout is already UTF-8, so an in-process assertion passes whether
+# or not the bug is present -- it would be a test that cannot fail.
+#
+# `PYTHONIOENCODING=cp1252` reproduces, on every platform, what Windows does
+# natively when stdout is a pipe or a file (measured on this machine:
+# `sys.stdout.encoding` is `cp1252` when redirected). Without it these would
+# pass vacuously on the Linux and macOS legs, which is precisely the shape of
+# green that hid the original defect.
+
+def _run_cli(root: Path, *args: str) -> bytes:
+    """Run the real CLI with stdout REDIRECTED, under a legacy encoding, and
+    return the raw bytes it wrote. Redirection is the whole point: it is what
+    makes Python pick the locale encoding instead of the console's."""
+    env = dict(os.environ, PYTHONIOENCODING="cp1252")
+    out_path = root / "cli-stdout.bin"
+    with open(out_path, "wb") as fh:
+        subprocess.run([sys.executable, "-m", "aramid", *args],
+                       cwd=root, stdout=fh, stderr=subprocess.PIPE, env=env)
+    return out_path.read_bytes()
+
+
+def test_redirected_ledger_output_is_valid_utf8(tmp_path):
+    """A finding whose message is non-ASCII must still come back as UTF-8.
+
+    Falsifiability: before the fix this raises UnicodeDecodeError on byte
+    0x93/0x94 (cp1252's curly quotes); the assertion cannot pass by accident,
+    because strict decoding either succeeds on the whole stream or raises.
+    """
+    root: Path = tmp_path
+    ledger = _ledger(root)
+    ledger.record_run("r1", "t1", "pre-push", {"ruff"}, {"a.py"},
+                       [_f("f1", message="unsafe “query” built in café.py")])
+    ledger.close()
+
+    raw = _run_cli(root, "ledger", "list")
+
+    text = raw.decode("utf-8")          # strict: raises on any invalid byte
+    assert "f1" in text
+    assert "café" in text
+
+
+def test_render_row_separator_is_ascii(tmp_path):
+    """The separator itself was the reported defect: a literal U+2014 that
+    cp1252 encodes as the bare byte 0x97, which is not valid UTF-8 at all.
+
+    Asserted on the row function rather than through the CLI so it stays true
+    regardless of stream encoding -- the house style everywhere else in this
+    codebase is a plain `--`, and this line was the one exception.
+    """
+    row = _render_row("f1", {"status": "open", "tool": "ruff", "rule": "S102",
+                             "file": "a.py", "line": 1, "message": "m"})
+
+    row.encode("ascii")                 # raises if a non-ASCII char crept back
+    assert "--" in row
 
 
 # ----------------------------------------------------------- mark-rotated ---

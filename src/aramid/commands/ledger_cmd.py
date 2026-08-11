@@ -16,6 +16,7 @@ tool has left this repo's live selection (de-selected, disabled, or
 genuinely removed), so no future run can ever resolve it the normal way.
 All three guards error rather than silently no-op'ing; transitions only
 ever move toward more caution, and there is no un-mark."""
+import json
 import sys
 import uuid
 from datetime import datetime, timezone
@@ -32,8 +33,16 @@ def _now() -> str:
 
 
 def _render_row(finding_id: str, rec: dict) -> str:
+    # ASCII `--`, not an em dash. This line carried a literal U+2014, which
+    # cp1252 (Windows' encoding for a REDIRECTED stdout) writes as the single
+    # byte 0x97 -- not valid UTF-8 in any position, so every programmatic
+    # consumer of `ledger list`/`filter` got mojibake or a decode error.
+    # Reported from a downstream repo, round 64 item 5b. `cli` now forces
+    # UTF-8 on redirected streams, which fixes the general class; this stays
+    # ASCII because a separator has no reason not to be, and every other
+    # rendered line in this codebase already uses `--`.
     return (f"[{rec.get('status')}] {finding_id} {rec.get('tool')}:{rec.get('rule')} "
-            f"{rec.get('file')}:{rec.get('line')} — {rec.get('message')}")
+            f"{rec.get('file')}:{rec.get('line')} -- {rec.get('message')}")
 
 
 # ------------------------------------------------------------------- list ---
@@ -81,8 +90,21 @@ def cmd_ledger_show(root, finding_id: str) -> int:
 
 # ----------------------------------------------------------------- filter ---
 
+# What `--json` promises a consumer. Mirrors the keys `ledger show` prints,
+# plus the id -- so the two commands describe a finding the same way and a
+# script does not have to learn a second vocabulary.
+#
+# `evidence` is included, and that is a checked decision rather than an
+# oversight: for a secret finding `normalizer` stores a REDACTED preview plus
+# a sha256 (normalizer.py, the `if raw.secret:` branch), never the raw
+# credential, so this cannot widen a leak beyond what `show` already prints.
+_JSON_KEYS = ("tool", "rule", "file", "line", "severity", "verdict",
+              "message", "evidence", "historical", "status", "reason")
+
+
 def cmd_ledger_filter(root, tool: str | None = None, rule: str | None = None,
-                       status: str | None = None, severity: str | None = None) -> int:
+                       status: str | None = None, severity: str | None = None,
+                       as_json: bool = False) -> int:
     root = Path(root)
     ledger = Ledger(root / ".aramid" / "ledger.db")
     try:
@@ -94,6 +116,16 @@ def cmd_ledger_filter(root, tool: str | None = None, rule: str | None = None,
             and (status is None or rec.get("status") == status)
             and (severity is None or rec.get("severity") == severity)
         }
+        if as_json:
+            # An empty match prints `[]`, NOT the prose below. A consumer that
+            # has to special-case "no matching findings" is a consumer that
+            # starts guessing -- and the text format's unparseability is the
+            # defect this flag exists to fix, so it must not survive in the
+            # one case where a caller is least likely to test.
+            print(json.dumps(
+                [{"id": fid, **{k: rec.get(k) for k in _JSON_KEYS}}
+                 for fid, rec in matched.items()], indent=2))
+            return 0
         if not matched:
             print("aramid: ledger filter: no matching findings")
             return 0

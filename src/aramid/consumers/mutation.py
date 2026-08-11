@@ -29,6 +29,30 @@ from aramid.runners.base import ToolState, run_subprocess, worktree_import_env
 
 NAME = "mutation"
 _BASELINE_GIVE_UP = 3   # mirrors llm_review._MALFORMED_GIVE_UP
+_TIMEOUT_GIVE_UP = 3    # same threshold, deliberately a DIFFERENT counter
+
+
+def timeout_note_prefix(budget: float, suite: str) -> str:
+    """The note family for "this suite does not fit this budget".
+
+    Public because it is a CONTRACT, not an implementation detail: the
+    repo-scoped give-up counter matches notes by this prefix, so the string
+    and its inputs are load-bearing in the same way `"baseline failing @ "`
+    is, and the tests assert against it rather than re-typing it.
+
+    Keyed on (suite command, budget) and NOT on the head, which is the entire
+    point. A red suite is a property of a commit and a new commit deserves a
+    fresh attempt -- that is why the failing-baseline give-up is head-scoped.
+    A suite that overruns its budget is a property of the repo's config: no
+    commit changes it, so head-scoping that counter means it never latches.
+
+    Those two inputs are also the release valve. The give-up below is
+    permanent for as long as the note matches, so it has to stop matching when
+    the operator does something about it: raise `baseline_timeout_s`, or point
+    `test_command` at a narrower suite, and the prefix changes, the count
+    falls to zero, and mutation tries again on the next drain.
+    """
+    return f"baseline timeout: {suite} did not finish within the {budget:.0f}s budget"
 _SAFE_STEM = re.compile(r"^[A-Za-z0-9_]+$")
 _K_KEYWORDS = {"not", "and", "or"}   # pytest -k expression keywords
 
@@ -199,6 +223,34 @@ def consume(item, ctx: DrainContext) -> ConsumerResult:
         # Mirrors llm_review's no-providers-installed skip. (2c-1b seam.)
         return ConsumerResult(consumer=NAME, state="ok",
                               note="no python test stack (mutation skipped)")
+    # Hoisted above the worktree: both give-up checks need the suite command
+    # and the budget, and neither needs a checkout. `_full_argv` reads config
+    # only.
+    full_argv = _full_argv(ctx.cfg)
+    suite = _suite_label(full_argv)
+    # A per-mutant timeout pressed into service as a whole-suite budget is a
+    # guess, and for any repo whose suite is genuinely long it is the wrong
+    # one. `mutant_timeout_s * 4` stays the default so nothing changes for
+    # repos it already fits; `baseline_timeout_s` is the number an operator
+    # sets when it doesn't, and the timeout note names it.
+    baseline_budget = float(mcfg.get("baseline_timeout_s", mutant_timeout * 4))
+
+    if base.note_count_any_item(
+            ctx.ledger, NAME,
+            timeout_note_prefix(baseline_budget, suite)) >= _TIMEOUT_GIVE_UP:
+        # REPO-scoped and permanent until the config changes -- see
+        # `timeout_note_prefix`. Stays `ok` for the same reason the
+        # failing-baseline give-up does: `degraded` stops the drain marking the
+        # item drained, which would pin the queue and re-run every other
+        # consumer on it forever. Loud in `status`, not in the drain state.
+        return ConsumerResult(
+            consumer=NAME, state="ok",
+            note=(f"mutation giving up: {suite} does not fit the "
+                  f"{baseline_budget:.0f}s baseline budget after "
+                  f"{_TIMEOUT_GIVE_UP} attempts -- raise "
+                  f"[mutation].baseline_timeout_s, or point "
+                  f"[mutation].test_command at a narrower suite"))
+
     if base.prior_note_count(ctx.ledger, NAME, item.id,
                              f"baseline failing @ {item.head[:12]}") >= _BASELINE_GIVE_UP:
         # A permanently-red suite must stop pinning the queue item: after 3
@@ -226,7 +278,6 @@ def consume(item, ctx: DrainContext) -> ConsumerResult:
             return ConsumerResult(consumer=NAME, state="error",
                                   note=f"worktree add failed: {(cp.stderr or '').strip()[:200]}")
 
-        full_argv = _full_argv(ctx.cfg)
         # A run of the WHOLE configured command gets the whole-command
         # budget; only a TARGETED run gets the per-mutant one. Pointing the
         # confirm below at a ~305 s command inside `mutant_timeout` (120 s)
@@ -235,7 +286,7 @@ def consume(item, ctx: DrainContext) -> ConsumerResult:
         # mutation would report `ok` with permanently zero findings instead
         # of `degraded`. Healthy-looking and silent is worse than broken
         # and loud, and is the exact failure class this tool exists to stop.
-        full_timeout = mutant_timeout * 4
+        full_timeout = baseline_budget
         base_res = run_subprocess(full_argv, wt, full_timeout,
                                   env=worktree_import_env(wt))
         if base_res.state is ToolState.OK and base_res.returncode == _PYTEST_NO_TESTS_RC:
@@ -255,12 +306,39 @@ def consume(item, ctx: DrainContext) -> ConsumerResult:
                                   note="no python test stack (mutation skipped: "
                                        "pytest collected no tests at this head)",
                                   duration_s=time.monotonic() - started)
+        if base_res.state is ToolState.TIMEOUT:
+            # A TIMEOUT IS NOT A FAILURE, and merging them is what made this
+            # invisible downstream for three days: 11 runs clustered inside 1%
+            # of each other -- the signature of a budget, not of a red suite --
+            # all reporting "baseline failing", which sends the reader looking
+            # for a broken test that does not exist.
+            #
+            # The two demand opposite responses. A failure is fixed by fixing a
+            # test, at a particular commit, so it is head-scoped and retried. A
+            # timeout is fixed by changing the budget or the command, is a
+            # property of the repo, and no commit will ever clear it -- so it
+            # gets its own repo-scoped counter above.
+            #
+            # The budget is named; the elapsed time deliberately is not. The
+            # process was killed AT the budget, so "elapsed" here would just be
+            # the budget restated -- a number that looks measured and is not.
+            # The real measurement is recorded on the runs that finish, below.
+            return ConsumerResult(
+                consumer=NAME, state="degraded",
+                note=(f"{timeout_note_prefix(baseline_budget, suite)}"
+                      f" (last seen @ {item.head[:12]})"),
+                duration_s=time.monotonic() - started)
         if base_res.state is not ToolState.OK or base_res.returncode != 0:
             # Note text is load-bearing: the give-up counter above matches
             # notes starting with "baseline failing @ <head12>".
             return ConsumerResult(consumer=NAME, state="degraded",
                                   note=f"baseline failing @ {item.head[:12]}",
                                   duration_s=time.monotonic() - started)
+        # The one run that can actually MEASURE the suite is one that finished.
+        # A timeout only ever yields the budget you set, so recording "elapsed"
+        # there would be circular; this is the number that tells an operator
+        # what to set the budget to.
+        baseline_s = float(getattr(base_res, "duration_s", 0.0) or 0.0)
 
         confirms_used = 0
         done = False
@@ -396,6 +474,10 @@ def consume(item, ctx: DrainContext) -> ConsumerResult:
         note += " (truncated: budget/cap hit, remainder dropped)"
     extra = dict(stats)
     extra["mutation_scores"] = _finalize_scores(scores)
+    # How long the configured suite actually took, measured. Recorded so an
+    # operator sizing `baseline_timeout_s` has a real number to size it
+    # against rather than doubling the budget until the timeouts stop.
+    extra["baseline_s"] = baseline_s
     # A repair claim is a FULL-SUITE-CONFIRMED kill, which is a strictly
     # smaller set than `killed_fps`. `_mutant_fp` is the same
     # `compute_fingerprint` call `normalize` makes for a survivor (same

@@ -31,6 +31,40 @@ def test_bake_demotes_semgrep_block():
     assert v2 is Verdict.BLOCK
 
 
+def test_dataflow_sqli_rule_stays_warn_even_when_semgrep_block_is_armed():
+    """The vendored `injection-dataflow.*` rule must NOT block. R64-9.
+
+    Its tier is decided by its ID, not by the `severity:` in the YAML:
+    `block_rules.toml`'s [semgrep].block list is fnmatch, and it contains the
+    SUBSTRING glob `*sqli*`. Naming this rule `...-sqli-...` -- the obvious
+    name for a SQL-injection rule -- would silently make it BLOCK-tier in every
+    repo with `semgrep_block_armed` on.
+
+    That matters because this rule is deliberately broader than the
+    high-confidence one beside it, and broader means more false positives: a
+    downstream repo audited all 26 hits of the NARROW rule and every one was a
+    false positive. Shipping a wider net at blocking tier would stop pushes on
+    code that is fine, and a blocking rule people cannot satisfy is one they
+    turn off.
+
+    This test is the only thing standing between a well-meaning rename and
+    that outcome, which is why it asserts the ARMED case.
+    """
+    _, v = policy.classify("semgrep", "injection-dataflow.python-query-built-then-executed",
+                           "warning", Gate.PRE_PUSH, _cfg(armed=True))
+    assert v is Verdict.WARN, (
+        "renaming this rule to contain 'sqli' promotes it to BLOCK via the "
+        "*sqli* glob in block_rules.toml -- see the comment above the rule")
+
+
+def test_the_narrow_sqli_rule_does_still_block_when_armed():
+    """Control for the test above. Without it, a change that broke blocking
+    for ALL sqli rules would leave that test passing and look like success."""
+    _, v = policy.classify("semgrep", "owasp-top-ten.a03-injection.python-sqli-string-concat",
+                           "error", Gate.PRE_PUSH, _cfg(armed=True))
+    assert v is Verdict.BLOCK
+
+
 # --- load_block_rules --------------------------------------------------------
 
 def test_load_block_rules_shape():

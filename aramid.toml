@@ -109,6 +109,27 @@ pre_push_match_ci = true
 # budget from it (`* 4` = 480 s), which clears the measured 305 s with 57%
 # headroom. Re-measure before assuming that still holds -- tests/unit grows
 # with every task, and 480 s is the number that will bite when it stops.
+#
+# IT BIT. Read from this repo's own ledger, 2026-08-11, while fixing the same
+# defect reported by a consumer repo:
+#
+#   2026-08-09T18:06  degraded  483.6 s  "baseline failing @ d6167f88dc77"
+#   2026-08-09T22:06  degraded  482.8 s  "baseline failing @ d6167f88dc77"
+#   2026-08-11T10:15  degraded  487.5 s  "baseline failing @ e3001743de3b"
+#
+# Three runs inside a 1% spread of the 480 s derived budget -- the signature of
+# a budget, not of a red suite, which is exactly the diagnostic the consumer
+# repo used on us. tests/unit was never red on any of those days; it had simply
+# grown past 480 s under drain conditions. aramid was carrying the very bug it
+# was reporting, in its own ledger, and reporting it in the very words the
+# report was about.
+#
+# So this is SET, not left to the derived default. 900 s against a suite
+# measured at 244 s standalone and ~480+ s in a cold worktree -- the gap is
+# worktree setup and cold imports, so size against the drain figure, not the
+# standalone one. `extra["baseline_s"]` on every successful run now records
+# what the baseline actually took, so the next revision of this number is
+# measured rather than guessed.
 [mutation]
 # Mutation's baseline is NOT the gate's suite -- see `mutation._full_argv`.
 # `[tests].command` is now CI's whole tree (~1141 s) and the mutation baseline
@@ -119,3 +140,4 @@ pre_push_match_ci = true
 # fails if these two ever converge again.
 test_command = ["python", "-m", "pytest", "-q", "tests/unit"]
 wall_budget_s = 1800
+baseline_timeout_s = 900

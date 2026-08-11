@@ -331,6 +331,66 @@ def _consumer_health_lines(ledger: Ledger) -> list[str]:
     return ["  degraded consumer runs:", *faults] if faults else []
 
 
+# A give-up note's shared marker. Every consumer that stands down says
+# "giving up" (mutation, js mutation, llm_review, fuzz, dast), so one marker
+# reaches all of them -- and a consumer that invents different wording simply
+# goes unreported here rather than breaking anything.
+_GIVE_UP_MARK = "giving up"
+
+
+def _stood_down_lines(ledger: Ledger) -> list[str]:
+    """Consumers that have permanently STOPPED, which `degraded` cannot show.
+
+    A give-up deliberately returns `ok`: `degraded` prevents the drain marking
+    the item drained, so standing down as `degraded` would pin the queue item
+    and re-run every other consumer on it forever -- trading a wasteful loop
+    for a total stall. But `ok` also ends the degraded streak
+    `_consumer_health_lines` reports, so the moment a consumer gives up it
+    starts reporting exactly like a healthy one.
+
+    That was survivable while give-ups almost never latched. Making the
+    baseline-timeout latch actually hold makes standing down the STEADY STATE,
+    so this report is not an optional extra -- without it the fix converts a
+    loud waste into a silent absence of coverage, which is the failure this
+    whole tool exists to catch.
+
+    The cost is stated because it is what makes the line worth acting on: a
+    downstream repo spent ~8 minutes every 4 hours for three days here, and
+    nothing anywhere named that number. Self-clearing for the same reason the
+    degraded streak is: one real run after a give-up means somebody fixed it.
+
+    Never raises.
+    """
+    try:
+        runs: dict[str, list[tuple[str, str, float]]] = defaultdict(list)
+        for e in ledger.events():
+            if e.type is EventType.CONSUMER_RUN_FINISHED:
+                runs[str(e.payload.get("consumer", "?"))].append(
+                    (str(e.payload.get("state", "")),
+                     str(e.payload.get("note", "")),
+                     float(e.payload.get("duration_s") or 0.0)))
+    except Exception:
+        return []
+
+    faults = []
+    for name in sorted(runs):
+        seq = runs[name]
+        if not seq or _GIVE_UP_MARK not in seq[-1][1]:
+            continue        # not currently stood down (or never was)
+        # Walk back over everything that produced nothing -- the degraded
+        # attempts AND the give-ups -- and stop at the last run that actually
+        # worked. That span is the waste, and the give-up run is part of it.
+        count, spent = 0, 0.0
+        for state, run_note, duration in reversed(seq):
+            if state not in ("degraded", "error") and _GIVE_UP_MARK not in run_note:
+                break
+            count += 1
+            spent += duration
+        faults.append(f"    {name}: stood down after {count} run(s), "
+                      f"{spent:.0f}s spent -- {seq[-1][1]}")
+    return ["  consumers stood down:", *faults] if faults else []
+
+
 def _resolver_defect_lines(ledger: Ledger) -> list[str]:
     """One line, only when something is wrong, pointing at the full report.
 
@@ -381,6 +441,7 @@ def cmd_status(root) -> int:
 
         lines.extend(_resolver_defect_lines(ledger))
         lines.extend(_consumer_health_lines(ledger))
+        lines.extend(_stood_down_lines(ledger))
 
         streaks = _skip_streak_lines(ledger)
         if streaks:

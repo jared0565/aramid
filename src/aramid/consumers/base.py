@@ -99,3 +99,29 @@ def prior_note_count(ledger, consumer: str, item_id: str, prefix: str) -> int:
                 and str(e.payload.get("note", "")).startswith(prefix)):
             n += 1
     return n
+
+
+def note_count_any_item(ledger, consumer: str, prefix: str) -> int:
+    """Like `prior_note_count`, but across EVERY queue item.
+
+    For conditions that belong to the REPOSITORY rather than to a commit
+    range. `prior_note_count` cannot express one: it filters on `item_id`, and
+    a give-up that returns `ok` lets the drain mark the item drained -- so the
+    next drain arrives with a fresh id and a count of zero. Combined with a
+    prefix carrying `item.head`, a per-item counter has two independent reset
+    paths and latches only by coincidence. Measured downstream: one give-up
+    event recorded, then the same ~8-minute run resumed every 4 hours for
+    three days.
+
+    A caller using this is asserting the condition cannot be fixed by new
+    commits, so it MUST put its own release valve in the prefix -- mutation
+    keys on (suite command, budget), the two things an operator can change.
+    Without that this is a one-way door.
+    """
+    n = 0
+    for e in ledger.events():
+        if (e.type is EventType.CONSUMER_RUN_FINISHED
+                and e.payload.get("consumer") == consumer
+                and str(e.payload.get("note", "")).startswith(prefix)):
+            n += 1
+    return n

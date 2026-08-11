@@ -21,6 +21,89 @@ rules:
           - pattern: $CURSOR.execute("..." % ($X, ...))
           - pattern: $CURSOR.execute("...".format(...))
 
+  # --- A03 Injection -- SQL built on one line, executed on the next ----------
+  # DELIBERATELY OUTSIDE the blocking namespace, and deliberately WITHOUT the
+  # token "sqli" in its id. Read `data/block_rules.toml` before renaming this:
+  # its [semgrep].block list is fnmatch against the check_id and contains the
+  # SUBSTRING glob `*sqli*`, so any id carrying that token becomes BLOCK-tier
+  # wherever `semgrep_block_armed` is on -- the id, not the `severity:` field
+  # below, is what `policy.classify` reads. The name is a tier decision.
+  #
+  # Why WARN and not BLOCK, on evidence: a downstream repo audited all 26 hits
+  # of the HIGH-confidence rule above and found 26 genuine false positives
+  # (identifier interpolation from module constants and allowlists). This rule
+  # is strictly broader, so promoting it to a push-blocking tier would add
+  # false positives at the tier where they do the most damage -- a blocking
+  # rule people cannot satisfy is a rule they disable, taking the true
+  # positives with it. `tests/unit/test_policy.py` pins the WARN classification
+  # so a future rename cannot promote it silently.
+  #
+  # Why it exists: the rule above requires the string operation to be visible
+  # AT the call site, so it sees `execute(f"...")` and is blind to
+  # `q = f"..."` followed by `execute(q)` -- which is how most people actually
+  # write it. Measured against a fixture of 7 injectable forms: the rule above
+  # caught 3/3 inline and 0/4 assign-then-execute. The two rules are disjoint
+  # by construction (this one requires the assignment), so the inline cases are
+  # not reported twice.
+  #
+  # Known remaining gap, stated rather than implied: a query assembled by
+  # `"".join(parts)` or across more than one intermediate variable is still
+  # missed. Closing it needs taint mode, which also re-reports every inline
+  # case and cannot distinguish a constant table name from a request
+  # parameter -- a bad trade at any tier until the false-positive rate above
+  # is understood.
+  - id: injection-dataflow.python-query-built-then-executed
+    languages: [python]
+    severity: WARNING
+    message: >-
+      A SQL string built by concatenation/interpolation/formatting is assigned
+      to a variable and then passed to execute(). Assigning it first does not
+      make it safe -- this is the same injection as building it inline at the
+      call site. Use a parameterized query: pass the SQL with placeholders and
+      the values through the params argument.
+    metadata:
+      confidence: MEDIUM
+      cwe: "CWE-89: Improper Neutralization of Special Elements used in an SQL Command"
+      owasp: "A03:2021 - Injection"
+    patterns:
+      - pattern-either:
+          - pattern: |
+              $Q = "..." + $X
+              ...
+              $C.execute($Q, ...)
+          - pattern: |
+              $Q = $X + "..."
+              ...
+              $C.execute($Q, ...)
+          - pattern: |
+              $Q = f"..."
+              ...
+              $C.execute($Q, ...)
+          - pattern: |
+              $Q = "..." % $X
+              ...
+              $C.execute($Q, ...)
+          - pattern: |
+              $Q = "...".format(...)
+              ...
+              $C.execute($Q, ...)
+          - pattern: |
+              $Q = "..." + $X
+              ...
+              $C.executemany($Q, ...)
+          - pattern: |
+              $Q = f"..."
+              ...
+              $C.executemany($Q, ...)
+          - pattern: |
+              $Q = "..." % $X
+              ...
+              $C.executemany($Q, ...)
+          - pattern: |
+              $Q = "...".format(...)
+              ...
+              $C.executemany($Q, ...)
+
   - id: owasp-top-ten.a03-injection.javascript-sqli-string-concat
     languages: [javascript, typescript]
     severity: ERROR
