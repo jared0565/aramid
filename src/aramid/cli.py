@@ -34,6 +34,7 @@ from aramid.commands.mutation_score import cmd_mutation_score
 from aramid.commands.override import cmd_override
 from aramid.commands.pack_cmd import cmd_pack_add, cmd_pack_compile, cmd_pack_list
 from aramid.commands.rebaseline import cmd_rebaseline
+from aramid.commands.resolvers import cmd_resolvers
 from aramid.commands.schedule import cmd_schedule
 from aramid.commands.status import cmd_status
 from aramid.commands.triage_cmd import cmd_triage
@@ -66,6 +67,12 @@ def build_parser() -> argparse.ArgumentParser:
     p_doctor.add_argument("--fix", action="store_true")
 
     sub.add_parser("status", help="report ledger/config state")
+
+    p_res = sub.add_parser("resolvers",
+                           help="grade each auto-resolver on what it SAW, not "
+                                "only on what it cleared (finds resolvers that "
+                                "silently stopped firing)")
+    p_res.add_argument("--json", action="store_true")
 
     p_ms = sub.add_parser("mutation-score",
                           help="advisory per-function mutation-score + regression report")
@@ -191,6 +198,9 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.command == "status":
         return cmd_status(root)
+
+    if args.command == "resolvers":
+        return cmd_resolvers(root, as_json=args.json)
 
     if args.command == "mutation-score":
         return cmd_mutation_score(root, as_json=args.json)

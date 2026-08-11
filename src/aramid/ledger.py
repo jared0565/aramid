@@ -152,6 +152,51 @@ def _departed(root: Path | None, file: str | None,
         return False
 
 
+def note_yield(ledger, run_id: str, at: str, *, resolver: str, tool: str,
+               considered: int, resolved: int) -> None:
+    """Record what a resolver LOOKED AT, alongside what it cleared.
+
+    A resolution writes itself into the ledger; a non-resolution writes
+    nothing, so the ledger cannot distinguish a resolver that examined a
+    hundred candidates and declined them all from one that was never called.
+    Those two want opposite responses, and four times in this repo the second
+    masqueraded as the first -- `gap_addressed` at zero lifetime fires with
+    eleven open mutation findings, because `[hooks].pre_push_match_ci` runs
+    the shim with `--all` and every range-scoped resolver sat behind
+    `if mode == "range"`. Nothing detected it. Nothing could.
+
+    `considered` is the candidate set the resolver ACTUALLY WALKED after its
+    own filters, not the open set: a resolver is not idle for declining to
+    look at another producer's findings. `tool` is the producer whose findings
+    it clears, so a reader can join a zero against that producer's volume --
+    which is the whole discriminator, because zero-of-zero is honest and
+    zero-of-eleven is a defect.
+
+    EVERY INVOCATION EMITS, INCLUDING THE EARLY RETURNS. `resolve_departed`
+    with `root=None`, `resolve_repaired` with no claimed ids, and
+    `auto_resolve_tests` on an incomplete suite all clear nothing by design
+    and all still say so. That is deliberate and load-bearing: it is what
+    reserves "no event" for "was never called", and that is the only shape
+    that catches a resolver switched off by its caller rather than broken in
+    itself. Emitting only when there is something to report would make the
+    detector blind to the exact bug it was built for.
+
+    NEVER RAISES. Every resolver instrumented here documents that it does not
+    raise into `run_gate`, and bookkeeping must not quietly withdraw that
+    guarantee -- a diagnostic that can fail a push is worse than no
+    diagnostic. A yield event lost to a broken ledger reads downstream as
+    "not called", which is the safe direction: it over-reports rather than
+    conceals.
+    """
+    try:
+        ledger.append(Event(EventType.RESOLVER_YIELD, run_id, at,
+                            payload={"resolver": resolver, "tool": tool,
+                                     "considered": int(considered),
+                                     "resolved": int(resolved)}))
+    except Exception:
+        diagnostics.note_skipped(f"{resolver}-yield", 1, noun="record")
+
+
 def resolve_departed(ledger, run_id: str, at: str, *, root, tool: str,
                      present_ids) -> list[str]:
     """Resolve one producer's open findings whose file has LEFT the repository.
@@ -228,13 +273,17 @@ def resolve_departed(ledger, run_id: str, at: str, *, root, tool: str,
     """
     base = _resolved_root(root)
     if base is None:
+        note_yield(ledger, run_id, at, resolver="file_departed", tool=tool,
+                   considered=0, resolved=0)
         return []                      # no repo to check -> clear nothing
     resolved: list[str] = []
     skipped = 0
+    considered = 0
     for fid, rec in ledger.open_findings().items():
         if rec.get("tool") != tool or rec.get("status") != "open" \
            or fid in present_ids:
             continue
+        considered += 1
         try:
             if _departed(None, rec.get("file"), base=base):
                 ledger.append(Event(EventType.FINDING_RESOLVED, run_id, at,
@@ -245,6 +294,8 @@ def resolve_departed(ledger, run_id: str, at: str, *, root, tool: str,
             skipped += 1
             continue
     diagnostics.note_skipped(f"{tool}-departed-resolve", skipped)
+    note_yield(ledger, run_id, at, resolver="file_departed", tool=tool,
+               considered=considered, resolved=len(resolved))
     return resolved
 
 
@@ -316,6 +367,8 @@ def resolve_repaired(ledger, run_id: str, at: str, *, tool: str, reason: str,
     """
     wanted = set(ids or ())
     if not wanted:
+        note_yield(ledger, run_id, at, resolver=reason, tool=tool,
+                   considered=0, resolved=0)
         return []
     resolved: list[str] = []
     skipped = 0
@@ -340,6 +393,19 @@ def resolve_repaired(ledger, run_id: str, at: str, *, tool: str, reason: str,
             skipped += 1
             continue
     diagnostics.note_skipped(f"{tool}-repaired-resolve", skipped)
+    # `wanted`, not the open set: this resolver is driven by the producer's
+    # CLAIM (see above), so what it walked is what was claimed. A claim that
+    # matches nothing open is the interesting row -- a producer proving
+    # repairs the ledger has no record of is as broken as one proving none.
+    #
+    # NOTE THE ASYMMETRY, because it changes who is at fault. Everywhere else
+    # `considered` is counted AFTER the tool/status filter, so a low number
+    # means the resolver saw little. Here it is counted BEFORE, so a high
+    # `considered` with a zero `resolved` indicts the PRODUCER -- it proved
+    # repairs for ids the ledger does not hold open -- not this function. The
+    # report grades that combination as informational for exactly that reason.
+    note_yield(ledger, run_id, at, resolver=reason, tool=tool,
+               considered=len(wanted), resolved=len(resolved))
     return resolved
 
 

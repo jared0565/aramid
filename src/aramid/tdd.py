@@ -9,6 +9,7 @@ from pathlib import Path
 from aramid import diagnostics, gitutil
 from aramid.fingerprint import normalize_path
 from aramid.mutation_gate import _has_mapped_test
+from aramid.ledger import note_yield
 from aramid.models import Event, EventType
 from aramid.normalizer import RawFinding
 
@@ -93,10 +94,12 @@ def auto_resolve_tdd(ledger, run_id: str, at: str, changed_files, present_ids) -
                           if gitutil.is_test_file(c)}
     resolved = []
     skipped = 0
+    considered = 0
     for fid, rec in ledger.open_findings().items():
         if rec.get("tool") != _TOOL or rec.get("status") != "open" \
            or fid in present_ids:
             continue
+        considered += 1
         try:
             path = rec.get("file", "")
             if not path:
@@ -112,4 +115,6 @@ def auto_resolve_tdd(ledger, run_id: str, at: str, changed_files, present_ids) -
             skipped += 1
             continue
     diagnostics.note_skipped("tdd-resolve", skipped)
+    note_yield(ledger, run_id, at, resolver="test_added", tool=_TOOL,
+               considered=considered, resolved=len(resolved))
     return resolved

@@ -49,6 +49,7 @@ single stable property shared by exactly the set of findings this exists to
 rescue, so matching on it is both narrower and more robust than a tool list
 that would silently miss the next spelling.
 """
+from aramid.ledger import note_yield
 from aramid.models import Event, EventType
 from aramid.runners.tests import _SUITE_FILE_MARKER
 
@@ -78,16 +79,27 @@ def auto_resolve_tests(ledger, run_id: str, at: str, present_ids,
     only two plain string fields with `.get`, and swallowing an exception
     would just hide a real ledger fault.
     """
+    # `tool="tests"` is the runner SLOT, not a finding's tool label -- a suite
+    # finding is labelled with the test command's argv[0] ("python" in this
+    # repo), which varies per config, so the label is no good as a stable key.
+    # The report joins this row to finding volume through SUITE_MARKER, which
+    # does not vary. See `yield_report._EXPECTED`.
     if not suite_completed:
+        note_yield(ledger, run_id, at, resolver="suite_completed_clean",
+                   tool="tests", considered=0, resolved=0)
         return []
     resolved = []
+    considered = 0
     for fid, rec in ledger.open_findings().items():
         if rec.get("status") != "open" or rec.get("file") != SUITE_MARKER:
             continue
         if fid in present_ids:
             continue
+        considered += 1
         ledger.append(Event(EventType.FINDING_RESOLVED, run_id, at,
                             finding_id=fid,
                             payload={"auto_resolved": "suite_completed_clean"}))
         resolved.append(fid)
+    note_yield(ledger, run_id, at, resolver="suite_completed_clean",
+               tool="tests", considered=considered, resolved=len(resolved))
     return resolved

@@ -390,6 +390,36 @@ aramid doctor --fix
 
 Upgrades the owned toolchain (`ruff`, `semgrep`, `pip-audit`) via `pip install --upgrade` into the current interpreter, downloads a pinned gitleaks `v8.21.2` release (sha256-verified before extraction) into `~/.aramid/tools/` if missing, then re-probes.
 
+### `aramid resolvers` — is auto-resolution actually working?
+
+```powershell
+aramid resolvers          # or --json
+```
+
+Findings are supposed to clear themselves: fix the bug, push, and the finding resolves. Several **auto-resolvers** do that — one per producer, each with its own proof (a test was added, a mutant was killed, the evidence quote is gone from the file, the suite ran clean). When one of them stops working, nothing tells you. Findings just quietly stop clearing, and the pile grows.
+
+That is not hypothetical. In aramid's own repo, `[hooks].pre_push_match_ci = true` runs the gate with `--all`, and every push-delta-scoped resolver used to sit behind a check for `--range`. Auto-resolution was **completely off** for weeks. Every test passed. Nothing in any report said a word, because **a resolver that resolves nothing writes nothing to the ledger** — its silence looks exactly like a repo with nothing to fix.
+
+This command closes that hole by recording what each resolver **looked at**, not just what it cleared, and grading the two against each other:
+
+| Grade | Meaning | Defect? |
+| --- | --- | --- |
+| `live` | cleared something | no |
+| `no data` | never ran, and this producer has never filed a finding | no |
+| `no opportunity` | ran, saw nothing, nothing open for it | no |
+| `no clears yet` | saw candidates, cleared none — usually just means nothing has been fixed | no |
+| `not instrumented` | no yield data recorded yet — run a gate first | no |
+| `NEVER RAN` | no yield events at all, but its producer **has** findings | **yes** |
+| `BLIND` | ran, but matched zero candidates while findings are open | **yes** |
+
+The split is the whole point, and it is narrower than you might expect. "Zero" is normal for a JavaScript mutation resolver in a Python-only repo, and a five-alarm fire for a resolver whose producer has eleven findings open.
+
+**Only the two mechanism faults are defects.** `NEVER RAN` and `BLIND` both mean the resolver *could not* have worked — it was not called, or its filter matches nothing. "Saw candidates and cleared none" is an outcome, and outcomes are confounded: it overwhelmingly means the findings have not been fixed, which is no fault of the gate's. Aramid's own repo carries two mutation findings suppressed with proof that their mutants are already dead; a suppression binds by id at report time without flipping ledger status, so those findings stay open and no resolver will ever clear them, by design. Grading that a defect would put a permanent false alarm on the tool's own tree.
+
+`BLIND` deserves a note: it catches a resolver whose **filter** never matches — for example one keyed on a tool name that has since been renamed. Counting clears structurally cannot catch that, because a filter matching nothing never produces a candidate to decline.
+
+`aramid status` prints a one-line pointer whenever any resolver is graded a defect, so you do not have to remember to run this. Neither command can block a push — a dead resolver is a fault in the gate's own machinery, not a verdict on your code.
+
 ### `aramid update-rules`
 
 ```powershell

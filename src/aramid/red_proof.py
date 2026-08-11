@@ -68,6 +68,7 @@ from pathlib import Path
 
 from aramid import diagnostics, gitutil
 from aramid.fingerprint import normalize_path
+from aramid.ledger import note_yield
 from aramid.models import Event, EventType
 from aramid.normalizer import RawFinding
 from aramid.runners.base import ToolState, run_subprocess, worktree_import_env
@@ -259,10 +260,12 @@ def auto_resolve_red_proof(ledger, run_id: str, at: str, proven_red, present_ids
     proven_norm = {normalize_path(p) for p in proven_red}
     resolved = []
     skipped = 0
+    considered = 0
     for fid, rec in ledger.open_findings().items():
         if rec.get("tool") != _TOOL or rec.get("status") != "open" \
            or fid in present_ids:
             continue
+        considered += 1
         try:
             if normalize_path(rec.get("file", "")) in proven_norm:
                 ledger.append(Event(EventType.FINDING_RESOLVED, run_id, at,
@@ -273,4 +276,6 @@ def auto_resolve_red_proof(ledger, run_id: str, at: str, proven_red, present_ids
             skipped += 1
             continue
     diagnostics.note_skipped("red-proof-resolve", skipped)
+    note_yield(ledger, run_id, at, resolver="red_proven", tool=_TOOL,
+               considered=considered, resolved=len(resolved))
     return resolved

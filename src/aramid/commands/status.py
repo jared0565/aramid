@@ -14,6 +14,7 @@ from pathlib import Path
 from aramid import config as config_mod
 from aramid import review
 from aramid import toolset
+from aramid import yield_report
 from aramid.ledger import Ledger
 from aramid.models import EventType
 
@@ -287,6 +288,34 @@ def _scheduled_drain_line() -> str:
         return "scheduled drain: unknown"
 
 
+def _resolver_defect_lines(ledger: Ledger) -> list[str]:
+    """One line, only when something is wrong, pointing at the full report.
+
+    THE REPORT ITSELF IS NOT THE FIX. Every silent no-op `aramid resolvers`
+    grades went unnoticed for weeks with all its evidence sitting in the
+    ledger the whole time -- what was missing was anything that SURFACED it.
+    Shipping a command that has to be remembered repeats that failure one
+    level up, so the grade reaches a command people already type.
+
+    Deliberately not a finding and deliberately not blocking: this is a
+    diagnostic about the gate's own machinery, not a verdict on the code being
+    pushed, and a false flag that stops a push gets the whole check deleted
+    rather than fixed. Silent when healthy, because a line that is always
+    there is a line nobody reads.
+
+    Never raises: a broken diagnostic must not take down `status`.
+    """
+    try:
+        flagged = [r for r in yield_report.collect(ledger) if r.flagged]
+    except Exception:
+        return []
+    if not flagged:
+        return []
+    names = ", ".join(sorted({f"{r.resolver}/{r.tool}" for r in flagged}))
+    return [f"  resolver defects: {len(flagged)} (run `aramid resolvers`)",
+            f"    {names}"]
+
+
 def cmd_status(root) -> int:
     root = Path(root)
     try:
@@ -306,6 +335,8 @@ def cmd_status(root) -> int:
             f"  {_new_since_baseline_line(ledger, state)}",
             f"  {_aging_line(ledger, state)}",
         ]
+
+        lines.extend(_resolver_defect_lines(ledger))
 
         streaks = _skip_streak_lines(ledger)
         if streaks:

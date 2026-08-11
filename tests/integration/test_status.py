@@ -10,6 +10,7 @@ import pytest
 from aramid import config as config_mod
 from aramid.commands import schedule as schedule_mod
 from aramid.commands.status import cmd_status
+from aramid import ledger as ledger_mod
 from aramid.ledger import Ledger
 from aramid.models import Event, EventType, Finding, Gate, Severity, Source, Verdict
 
@@ -549,3 +550,47 @@ def test_scheduled_drain_line_reads_cron_on_posix(monkeypatch):
     monkeypatch.setattr(schedule_mod, "_read_crontab",
                         lambda: "0 3 * * * /usr/local/bin/backup.sh\n")
     assert status_mod._scheduled_drain_line() == "scheduled drain: not installed"
+
+
+# ----------------------------------------- resolver defects reach the eye --
+
+def test_status_points_at_a_dead_resolver(tmp_path, monkeypatch, capsys):
+    """A report nobody runs is the failure it was built to detect, one level
+    up. Every one of the four silent no-ops behind `aramid resolvers` went
+    unnoticed for weeks not because the evidence was missing but because
+    nothing surfaced it, so the grading has to reach a command people already
+    type. One line, non-blocking, pointing at the full report -- `status` is
+    a diagnostic, and a diagnostic that grows teeth gets disabled."""
+    root = _repo(tmp_path)
+    _no_user_config(tmp_path, monkeypatch)
+    _write_toml(root, armed=True, bake_started=None)
+    lg = Ledger(root / ".aramid" / "ledger.db")
+    at = datetime.now(timezone.utc).isoformat()
+    lg.record_run("r0", at, "pre-push", set(), set(),
+                  [_f("a" * 64, tool="mutation", rule="bool-swap")])
+    # One unrelated resolver reporting in: that is what makes the ledger
+    # instrumented, so the silence of `gap_addressed` becomes meaningful.
+    ledger_mod.note_yield(lg, "r1", at, resolver="evidence_gone",
+                          tool="llm-review", considered=0, resolved=0)
+    lg.close()
+
+    assert cmd_status(root) == 0
+
+    out = capsys.readouterr().out
+    assert "resolver defects: 2 (run `aramid resolvers`)" in out
+
+
+def test_status_stays_silent_when_every_resolver_is_healthy(tmp_path, monkeypatch, capsys):
+    """The other half. A line that is always present is a line nobody reads."""
+    root = _repo(tmp_path)
+    _no_user_config(tmp_path, monkeypatch)
+    _write_toml(root, armed=True, bake_started=None)
+    lg = Ledger(root / ".aramid" / "ledger.db")
+    at = datetime.now(timezone.utc).isoformat()
+    ledger_mod.note_yield(lg, "r1", at, resolver="evidence_gone",
+                          tool="llm-review", considered=0, resolved=0)
+    lg.close()
+
+    assert cmd_status(root) == 0
+
+    assert "resolver defects" not in capsys.readouterr().out

@@ -51,6 +51,12 @@ class EventType(StrEnum):
     QUEUE_ITEM_EXPIRED = "queue_item_expired"
     CONSUMER_RUN_FINISHED = "consumer_run_finished"
 
+    # What a resolver SAW, not only what it cleared. Emitted once per
+    # invocation -- including the early returns -- so that no event at all
+    # means "was never called", which is the only signal that catches a
+    # resolver silently switched off upstream. See `ledger.note_yield`.
+    RESOLVER_YIELD = "resolver_yield"
+
 @dataclass(frozen=True)
 class Finding:
     id: str

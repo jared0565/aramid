@@ -936,6 +936,12 @@ def run_gate(root: Path, gate: Gate, mode: str, cfg: config_mod.Config, ledger: 
         # repo's history while the resolvers that derive no range had all
         # fired. Findings whose fixes were committed could never clear.
         #
+        # That measurement was made BY HAND, once. It is now automatic:
+        # `ledger.note_yield` records what each resolver considered as well as
+        # what it cleared, and `aramid resolvers` grades the pair -- this
+        # regression would surface as `NEVER RAN` on the next gate run rather
+        # than after weeks. The report is verified against exactly this bug.
+        #
         # The hazard is real and is NOT removed, only answered properly: under
         # "all"/"staged" `scope_files` is the whole tracked tree, and resolving
         # on that durably clears every open finding on tracked source --

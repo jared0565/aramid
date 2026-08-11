@@ -12,6 +12,78 @@ to publish a tag that disagrees with it.
 
 ### Added
 
+- **`aramid resolvers` — the gate now audits its own auto-resolvers.** Four
+  times in this repo a resolver has been alive by every test and dead in
+  production, and each was found by hand, once, by someone who happened to
+  count. The largest: `gap_addressed` at **zero lifetime fires with eleven
+  open mutation findings**, because `[hooks].pre_push_match_ci` runs the shim
+  with `--all`, `--all` means mode `"all"`, and every range-scoped resolver
+  sat behind `if mode == "range"`. Auto-resolution was entirely off for weeks
+  and nothing reported it.
+
+  Nothing *could*. **A resolution writes itself into the ledger; a
+  non-resolution writes nothing**, so a resolver that examined a hundred
+  candidates and declined them all leaves the same trace as one that was
+  never called — none. `ledger.note_yield` records the missing half:
+  `considered` alongside `resolved`, at the moment of looking, because
+  opportunity cannot be reconstructed from the event log afterwards. All
+  seven resolvers emit it.
+
+  **The grading is the product, not the counting.** Two rows in this repo's
+  real ledger both read zero — `mutant_killed` because no js-mutation
+  findings exist here, `gap_addressed` because eleven candidates walked past
+  it. Rendered identically they are noise, the report gets muted, and the
+  detector for silent no-ops becomes one. So each row is graded against what
+  was *available* to it: `live` / `no data` / `no opportunity` /
+  `no clears yet` / `not instrumented` are healthy states, and only
+  `NEVER RAN` and `BLIND` are defects. `aramid status` prints a pointer when
+  any row is a defect, because a report that has to be remembered repeats the
+  original failure one level up.
+
+  **Only mechanism faults are defects, and that boundary was moved by
+  measurement.** A first draft also flagged "saw candidates, cleared none".
+  Replaying one real gate's worth of yields over a copy of this repo's live
+  ledger graded **three rows a defect on a healthy tree** — two of them
+  `.aramid-suppressions.toml` entries carrying proof that their mutants are
+  already dead. A suppression binds by id at report time and does *not* flip
+  ledger status, so those findings stay open and no resolver will ever clear
+  them, by design; the third was an ordinary unfixed advisory. All three are
+  "findings not fixed", not "resolver broken", and a grade cannot tell those
+  apart. That grade is now informational. `NEVER RAN` and `BLIND` survive
+  because both say the resolver *could not* have worked.
+
+  Two distinctions a first draft would have merged. **`BLIND` is not
+  redundant with counting clears**: a filter that matches nothing never
+  produces a candidate to decline, so `resolved == 0` is never reached — a
+  resolver keyed on tool `"llm"` against findings labelled `"llm-review"`
+  would run forever and look healthy. That exact mistake is one commit away
+  in this repo's history. And **`NEVER RAN` joins lifetime volume while
+  `BLIND` joins the open count**: lifetime for BLIND would flag every
+  producer whose findings were legitimately fixed, and the open count for
+  NEVER RAN would miss a resolver dead for months whose backlog someone has
+  since cleared.
+
+  **Verified against the bug it exists to catch, end to end.** Two arms of a
+  synthetic repo with a real upstream, a real delta and a seeded mutation
+  finding, each running an actual `aramid check --gate pre-push --all`: at
+  HEAD `gap_addressed` grades `live` (1 considered, 1 resolved, unflagged);
+  with `if mode == "range"` restored in `pipeline.py` it grades `NEVER RAN`
+  and flags. A detector never shown going red on its target is not a check.
+
+  One thing the first live run got wrong and now handles: on a ledger older
+  than the instrumentation, **eight rows graded `NEVER RAN` — including
+  `evidence_gone`, which that same ledger records firing twelve times.** The
+  grades were right about the events and wrong about the world. Zero yield
+  events of *any* kind now grades `not instrumented` instead, which is safe
+  only because the instrumentation is all-or-nothing: one gate run emits
+  several, from resolvers that do not know about each other. The amnesty ends
+  at the first gate run, so it forgives an un-instrumented *ledger*, never an
+  un-instrumented *resolver*.
+
+  Not on the blocking path, deliberately. A dead resolver is a fault in the
+  gate's own machinery rather than a verdict on the code being pushed, and a
+  diagnostic that can fail a push gets deleted rather than fixed.
+
 - **`js-mutation`, `fuzz` and `dast` can now prove a repair.** All three had no
   resolver of *any* kind — nothing matched their tool names, `record_run`
   cannot reach them (it keys on runner labels), and `drain._consume_item`

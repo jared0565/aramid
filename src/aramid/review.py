@@ -11,6 +11,7 @@ from pathlib import Path
 from aramid import config as config_mod
 from aramid import diagnostics, gitutil, triage
 from aramid.fingerprint import compute_fingerprint, normalize_line
+from aramid.ledger import note_yield
 from aramid.models import Event, EventType, Finding, Gate, Severity, Source, Verdict
 
 
@@ -456,9 +457,11 @@ def auto_resolve_llm(root: Path, ledger, run_id: str, at: str) -> list[str]:
     does not."""
     resolved = []
     skipped = 0
+    considered = 0
     for fid, rec in ledger.open_findings().items():
         if rec.get("source") != "llm" or rec.get("status") != "open":
             continue
+        considered += 1
         # Per-record guard (fail-safe requirement): a MALFORMED rec (e.g.
         # evidence/line stored as null so `.get(k, default)` returns None,
         # not the default) must be SKIPPED -- left open for manual triage --
@@ -493,6 +496,11 @@ def auto_resolve_llm(root: Path, ledger, run_id: str, at: str) -> list[str]:
             skipped += 1
             continue
     diagnostics.note_skipped("llm-resolve", skipped)
+    # Filtered on `source == "llm"` rather than a tool name, but every record
+    # that passes that filter carries tool "llm-review" -- which is the name
+    # the report needs to join this row to finding volume.
+    note_yield(ledger, run_id, at, resolver="evidence_gone", tool="llm-review",
+               considered=considered, resolved=len(resolved))
     return resolved
 
 

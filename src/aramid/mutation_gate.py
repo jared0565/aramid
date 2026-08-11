@@ -17,6 +17,7 @@ from pathlib import Path
 
 from aramid import diagnostics, gitutil
 from aramid.fingerprint import normalize_path
+from aramid.ledger import note_yield
 from aramid.models import Event, EventType, Finding, Gate, Severity, Source, Verdict
 
 TOOL = "mutation"
@@ -129,9 +130,11 @@ def auto_resolve_mutation(ledger, run_id: str, at: str, changed_files) -> list[s
                           if gitutil.is_test_file(c)}
     resolved = []
     skipped = 0
+    considered = 0
     for fid, rec in ledger.open_findings().items():
         if rec.get("tool") != TOOL or rec.get("status") != "open":
             continue
+        considered += 1
         try:
             path = rec.get("file", "")
             if not path:
@@ -147,4 +150,6 @@ def auto_resolve_mutation(ledger, run_id: str, at: str, changed_files) -> list[s
             skipped += 1
             continue
     diagnostics.note_skipped("mutation-resolve", skipped)
+    note_yield(ledger, run_id, at, resolver="gap_addressed", tool=TOOL,
+               considered=considered, resolved=len(resolved))
     return resolved
