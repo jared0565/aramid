@@ -103,3 +103,102 @@ def test_open_findings_for_never_raises_on_an_unreadable_ledger():
     from aramid.consumers.base import open_findings_for
 
     assert open_findings_for(Boom(), "mutation") == {}
+
+
+# --- prior_note_count: the give-up counter --------------------------------
+#
+# Four consumers read this (dast, js_mutation, mutation, and llm_review via
+# _malformed_attempts) to decide whether they have already failed enough times
+# on a queue item to stop trying. Its own docstring calls the note strings
+# load-bearing.
+#
+# It had no DIRECT test. Probed 2026-08-11 by applying nine mutants -- each
+# conjunct of the four-part filter, both comparisons, the startswith, the
+# counter's init and increment, and the event-type guard -- and all nine
+# survived this file. Coverage is not absent: the wider suite kills at least
+# the inverted guard (four caller integration tests fail). It is INCIDENTAL,
+# which is a different thing and a worse one to rely on -- the contract is
+# asserted nowhere, so it can be narrowed or widened by editing a consumer.
+#
+# Both directions matter and neither is theoretical. Count too high and a
+# consumer gives up on healthy work; count too low and it retries a poisoned
+# item forever. Same shape as the three filter defects found the day before:
+# A COMPOUND FILTER IS ONLY TESTED BY DATA IT IS SUPPOSED TO REJECT.
+
+_PREFIX = "giving-up"
+
+
+def _giveup_ledger(tmp_path):
+    """One event that MUST be counted, plus one per rejection reason. Every
+    rejector differs from the match in exactly one field, so each conjunct is
+    the only thing standing between it and the count."""
+    from aramid.ledger import Ledger
+    from aramid.models import Event, EventType
+
+    led = Ledger(tmp_path / "l.db")
+
+    def ev(etype, consumer, item_id, note):
+        led.append(Event(etype, "r0", "2026-08-11T00:00:00+00:00",
+                         payload={"consumer": consumer, "item_id": item_id,
+                                  "note": note}))
+
+    ev(EventType.CONSUMER_RUN_FINISHED, "mutation", "q1", "giving-up: baseline")
+    # A different event type, everything else identical: the type guard is
+    # the only thing rejecting it.
+    ev(EventType.QUEUE_ITEM_DRAINED, "mutation", "q1", "giving-up: baseline")
+    ev(EventType.CONSUMER_RUN_FINISHED, "dast", "q1", "giving-up: baseline")
+    ev(EventType.CONSUMER_RUN_FINISHED, "mutation", "q2", "giving-up: baseline")
+    # Prefix present but at the END: separates startswith from endswith/`in`.
+    ev(EventType.CONSUMER_RUN_FINISHED, "mutation", "q1", "ran, then giving-up")
+    return led
+
+
+def test_prior_note_count_counts_only_the_fully_matching_event(tmp_path):
+    """Kills all three `and -> or`, both `== -> !=`, `startswith -> endswith`,
+    the event-type guard, and `n += 1 -> 2` in one assertion: exactly one of
+    the five seeded events satisfies every conjunct."""
+    from aramid.consumers.base import prior_note_count
+
+    led = _giveup_ledger(tmp_path)
+    try:
+        got = prior_note_count(led, "mutation", "q1", _PREFIX)
+    finally:
+        led.close()
+    assert got == 1, (
+        "expected exactly the one CONSUMER_RUN_FINISHED event for "
+        f"consumer=mutation item_id=q1 whose note STARTS with the prefix; got {got}")
+
+
+def test_prior_note_count_is_zero_when_nothing_matches(tmp_path):
+    """Kills `n = 0 -> 1`. A give-up counter that starts at one means every
+    consumer begins life one failure closer to abandoning the item, on a
+    ledger where it has never run."""
+    from aramid.consumers.base import prior_note_count
+
+    led = _giveup_ledger(tmp_path)
+    try:
+        got = prior_note_count(led, "fuzz", "q1", _PREFIX)
+    finally:
+        led.close()
+    assert got == 0
+
+
+def test_prior_note_count_accumulates_across_repeated_failures(tmp_path):
+    """The counter's actual job -- one more matching event means one more
+    strike. Pins the increment as +1 rather than merely non-zero."""
+    from aramid.ledger import Ledger
+    from aramid.models import Event, EventType
+
+    from aramid.consumers.base import prior_note_count
+
+    led = Ledger(tmp_path / "l.db")
+    try:
+        for i in range(3):
+            led.append(Event(EventType.CONSUMER_RUN_FINISHED, f"r{i}",
+                             "2026-08-11T00:00:00+00:00",
+                             payload={"consumer": "mutation", "item_id": "q1",
+                                      "note": f"giving-up: attempt {i}"}))
+        got = prior_note_count(led, "mutation", "q1", _PREFIX)
+    finally:
+        led.close()
+    assert got == 3

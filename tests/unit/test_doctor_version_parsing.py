@@ -182,3 +182,110 @@ def test_version_of_works_end_to_end_against_a_real_executable():
     assert version, "a real executable answered --version with nothing"
     assert "\n" not in version
     assert "Python" in version
+
+
+# --- two further survivors, found 2026-08-11 by re-probing the same function --
+#
+# The header above records the three mutants a real drain surfaced. Re-probing
+# `_version_of` by hand -- applying candidate mutants and running this file --
+# turned up two MORE that nothing killed. Worth stating why the drain had not:
+# mutation only mutates files inside a queue item's diff range, so a function
+# stops being re-probed as soon as the pushes stop touching it. Absence of a
+# finding is not evidence of coverage.
+
+def test_version_of_strips_before_taking_the_first_line(monkeypatch):
+    """Kills `.strip()` dropped.
+
+    Order matters and is not interchangeable: strip-then-splitlines is not
+    splitlines-then-strip. A tool whose `--version` opens with a BLANK LINE
+    (banner, deprecation notice, an empty first line from a shell wrapper)
+    makes `splitlines()[0]` the empty string, so aramid reports NO VERSION for
+    a tool that answered perfectly well -- and the notice this feeds then says
+    nothing rather than saying something wrong, which is harder to notice."""
+    monkeypatch.setattr(subprocess, "run",
+                        _answers(stdout="\n\nruff 0.16.2\n"))
+    assert doctor._version_of(Path("ruff")) == "ruff 0.16.2"
+
+
+def test_version_of_treats_whitespace_only_output_as_no_answer(monkeypatch):
+    """The other half of the same mutant. Without the strip, `out` is `"   "`
+    -- truthy -- so the `if out else ""` guard passes and the function returns
+    a string of spaces as the tool's version."""
+    monkeypatch.setattr(subprocess, "run", _answers(stdout="   \n  \n"))
+    assert doctor._version_of(Path("ruff")) == ""
+
+
+def test_version_of_puts_the_exes_own_directory_first_on_path(monkeypatch):
+    """Kills PATH prepend -> append.
+
+    The docstring calls this prepend load-bearing and names the reason:
+    semgrep's launcher shells out to a SIBLING BY BARE NAME, so if the
+    inherited PATH is searched first, some other install answers instead --
+    the same failure the packaged-wheel test found, where a PATH-first ruff
+    0.15.18 ran while 0.16.2 sat beside it and reported one finding instead of
+    three.
+
+    HONEST SCOPE: this pins the environment aramid CONSTRUCTS, not the OS's
+    resolution of it -- proving the latter needs a real wrapper that shells out
+    by bare name, which is what test_toolpath_divergence.py exists for. Order
+    is asserted positionally rather than with `in`, because `in` is true for
+    both the prepend and the append."""
+    import os as _os
+
+    seen = {}
+
+    def run(argv, **kwargs):
+        seen["PATH"] = kwargs["env"]["PATH"]
+        return subprocess.CompletedProcess(argv, 0, "x 1.0\n", "")
+
+    monkeypatch.setenv("PATH", _os.pathsep.join(["/usr/bin", "/bin"]))
+    monkeypatch.setattr(subprocess, "run", run)
+
+    exe = Path("/opt/tools/bin/semgrep")
+    doctor._version_of(exe)
+
+    first = seen["PATH"].split(_os.pathsep)[0]
+    assert first == str(exe.parent), (
+        f"the exe's own directory must be searched first, got {first!r} "
+        f"from {seen['PATH']!r}")
+
+
+def test_probe_tool_puts_the_exes_own_directory_first_on_path(monkeypatch):
+    """The SAME contract, in the other function that spells it.
+
+    `doctor.py` writes this env line twice -- `probe_tool` at 147 and
+    `_version_of` at 173 -- and only the second was covered. Mutating each line
+    separately is what showed it: the `_version_of` mutant dies against the
+    test above, the `probe_tool` mutant passed all 31 tests in both doctor
+    files.
+
+    Worth recording HOW that hid, because it nearly hid twice: probing by
+    string match with `replace(old, new, 1)` silently rewrites the FIRST
+    occurrence, so a mutant reported against `_version_of` was really applied
+    to `probe_tool`. A duplicated line makes a by-text probe report the wrong
+    subject -- mutate by LINE NUMBER when a codebase spells the same contract
+    more than once. Same family as the earlier scoping miss, where a
+    call-graph query could not see a duplicated implementation.
+
+    Same honest scope as its sibling: this pins the environment aramid
+    CONSTRUCTS, not the OS's resolution of it."""
+    import os as _os
+
+    seen = {}
+
+    def run(argv, **kwargs):
+        seen["PATH"] = kwargs["env"]["PATH"]
+        return subprocess.CompletedProcess(argv, 0, "gitleaks 8.18.0\n", "")
+
+    exe = Path("/opt/managed/bin/gitleaks")
+    monkeypatch.setattr(doctor, "_locate_gitleaks", lambda: exe)
+    monkeypatch.setenv("PATH", _os.pathsep.join(["/usr/bin", "/bin"]))
+    monkeypatch.setattr(subprocess, "run", run)
+
+    status = doctor.probe_tool("gitleaks")
+
+    assert status.present is True, "fixture must reach the subprocess call"
+    first = seen["PATH"].split(_os.pathsep)[0]
+    assert first == str(exe.parent), (
+        f"the exe's own directory must be searched first, got {first!r} "
+        f"from {seen['PATH']!r}")

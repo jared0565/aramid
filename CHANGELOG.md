@@ -150,6 +150,44 @@ to publish a tag that disagrees with it.
   subsystems, an undocumented consequence is indistinguishable from an
   unintended one.** It now names both.
 
+- **`prior_note_count` had no direct test, and `probe_tool`'s PATH prepend had
+  none at all.** Found by re-probing the two modules whose findings were still
+  open, rather than by waiting for a drain — mutation only mutates files inside
+  a queue item's diff range, so a function stops being re-probed the moment
+  pushes stop touching it. **Absence of a finding is not evidence of coverage.**
+
+  `prior_note_count` is the give-up counter four consumers read (`dast`,
+  `js_mutation`, `mutation`, and `llm_review._malformed_attempts`) to decide
+  whether they have already failed enough times on a queue item to stop trying.
+  All nine mutants against it survived its own mapped test file: each conjunct
+  of the four-part filter, both comparisons, the `startswith`, the counter's
+  init and increment, and the event-type guard inverted. Count too high and a
+  consumer abandons healthy work; too low and it retries a poisoned item
+  forever.
+
+  **Stated precisely, because the first version of this claim was too strong:**
+  its coverage was *incidental*, not absent. The wider suite does kill the
+  inverted guard — four caller integration tests fail. That is a weaker
+  guarantee than it sounds: the contract is asserted nowhere, so editing a
+  consumer can silently narrow or widen it. Three direct tests now pin it, and
+  kill all nine.
+
+  `doctor.py` gave up two more: `.strip()` dropped (a tool whose `--version`
+  opens with a blank line reports *no* version, since `splitlines()[0]` is then
+  `""`), and PATH prepend → append.
+
+  **The PATH one nearly hid twice.** That env line is written **twice** in
+  `doctor.py` — `probe_tool` at 147 and `_version_of` at 173 — and a by-text
+  probe using `replace(old, new, 1)` rewrites the *first*, so a mutant reported
+  against `_version_of` was really applied to `probe_tool`. The test looked
+  wrong when it was the probe that was. **Mutate by line number when a codebase
+  spells the same contract more than once.** Isolating the two lines showed the
+  `_version_of` mutant dying and the `probe_tool` one surviving all 31 tests in
+  both doctor files — a genuine second gap, on the prepend whose stated purpose
+  is that semgrep's launcher shells out to a sibling *by bare name*. Same
+  family as the earlier scoping miss, where a call-graph query could not see a
+  duplicated implementation.
+
 - **The `skipped` counter in `auto_resolve_mutation` is pinned on its rendered
   output.** `skipped = 0 -> 1` and `skipped += 1 -> 2` both survived every test
   and were deferred once as "diagnostics only". That was the wrong reading:
