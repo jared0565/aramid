@@ -166,26 +166,6 @@ def _default_clock() -> str:
 FULL_HISTORY_RNG = ""
 
 
-def _budget_key(gate, mode: str) -> str:
-    """Which `[timeouts]` key this run is entitled to.
-
-    THE BUDGET FOLLOWS THE WORK, NOT ONLY THE GATE TIER. `--all` scans the
-    whole tracked tree, which cannot fit the interactive pre-commit budget --
-    5 s by default, because a commit hook has to feel instant. Measured: a
-    full-tree gitleaks scan of this repo takes 9.4 s, so `aramid check --all`
-    (whose gate DEFAULTS to pre-commit) degraded the BLOCK-tier secret
-    scanner on every run and printed "skipped (degraded tools): gitleaks".
-
-    `_BUDGET_KEY` already carried the intent -- `Gate.ALL` maps to "pre_push"
-    -- but `Gate.ALL` is unreachable from the CLI, so the mode never got
-    there. Keyed on MODE rather than gate so the ordinary staged pre-commit
-    path, the one that runs on every commit, keeps its tight budget.
-    """
-    if mode == "all":
-        return "pre_push"
-    return _BUDGET_KEY.get(gate, "pre_push")
-
-
 def _discover_files(root: Path, mode: str) -> tuple[list[str], str | None]:
     if mode == "staged":
         return gitutil.staged_files(root), None
@@ -729,19 +709,7 @@ def run_gate(root: Path, gate: Gate, mode: str, cfg: config_mod.Config, ledger: 
     # included) can only ADD time before wait() starts counting, never
     # subtract it, so wait()'s effective cutoff is provably >= this
     # deadline -- never earlier.
-    # THE BUDGET FOLLOWS THE WORK, NOT ONLY THE GATE TIER. `--all` scans the
-    # whole tracked tree, which cannot fit the interactive pre-commit budget
-    # -- 5 s by default, because a commit hook has to feel instant. Measured:
-    # a full-tree gitleaks scan of this repo takes 9.4 s, so `aramid check
-    # --all` (whose gate DEFAULTS to pre-commit) degraded the BLOCK-tier
-    # secret scanner every time, and reported it as "skipped (degraded)".
-    #
-    # `_BUDGET_KEY` already carries this intent -- `Gate.ALL` maps to
-    # "pre_push" -- but `Gate.ALL` is unreachable from the CLI, so the mode
-    # never reached it. Keyed on mode rather than gate so the ORDINARY
-    # pre-commit path (staged, a handful of files) keeps its tight budget:
-    # that is the one that runs on every commit.
-    budget_s = cfg.timeouts.get(_budget_key(gate, mode), 60.0)
+    budget_s = cfg.timeouts.get(_BUDGET_KEY.get(gate, "pre_push"), 60.0)
     gate_deadline = time.monotonic() + budget_s
     # detect_tests() is a filesystem walk -- cached on RunContext (Task 4,
     # review M6+B7) so _is_applicable, _tests_config_notices, and
@@ -756,7 +724,6 @@ def run_gate(root: Path, gate: Gate, mode: str, cfg: config_mod.Config, ledger: 
                       stacks=detect_stacks(root, root),
                       extra_semgrep_configs=extra_configs,
                       force_refresh=(mode == "all"),
-                      full_tree=(mode == "all"),
                       test_command=tests_cfg.get("command", cfg.test_command),
                       test_timeout_s=tests_cfg.get("timeout_s"),
                       tests_enabled=tests_cfg.get("enabled", True),
