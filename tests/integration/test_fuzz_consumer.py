@@ -8,7 +8,9 @@ from aramid import config as config_mod
 from aramid.consumers import fuzz as fuzz_consumer
 from aramid.consumers.base import DrainContext
 from aramid.ledger import Ledger
+from aramid.models import Event, EventType
 from aramid.queue import QueueItem
+from aramid.runners.base import RunnerResult, ToolState
 
 
 def _git(root, *a):
@@ -509,3 +511,104 @@ def test_a_drained_fuzz_repair_flips_the_open_finding_to_fixed(tmp_path, monkeyp
             f"{ {fid: after[fid]['status'] for fid in opened} }")
     finally:
         led.close()
+
+
+# ------------------------------------- a broken driver must not read as ok --
+
+def _broken_driver(monkeypatch, *, state=ToolState.OK, returncode=0, raw="not json",
+                   stderr=""):
+    """Force the driver subprocess to fail in a chosen way."""
+    monkeypatch.setattr(fuzz_consumer, "run_subprocess",
+                        lambda *a, **k: RunnerResult(
+                            "fuzzdriver", state, raw=raw, returncode=returncode,
+                            stderr=stderr))
+
+
+def _seed_broken_runs(r, head, n, item_id="q1"):
+    """n prior CONSUMER_RUN_FINISHED events recording a broken driver at `head`."""
+    led = Ledger(r / ".aramid" / "ledger.db")
+    try:
+        for i in range(n):
+            led.append(Event(EventType.CONSUMER_RUN_FINISHED, f"r{i}", "t",
+                             payload={"consumer": "fuzz", "item_id": item_id,
+                                      "note": f"{fuzz_consumer._DRIVER_BROKEN}"
+                                              f"{head[:12]}: no parseable output"}))
+    finally:
+        led.close()
+
+
+def test_an_unparseable_driver_degrades_so_the_item_retries(tmp_path, monkeypatch):
+    """Measured on aramid's own ledger: 8 of 49 fuzz runs recorded
+    `state: ok` with the note "driver produced no parseable output". The drain
+    marks an item drained only when every consumer finished cleanly, so `ok`
+    here CONSUMED the queue item and threw the fuzzing opportunity away --
+    silently, and with a healthy-looking state. `degraded` is what the drain
+    already understands (`ok = False`, item not marked drained, retried), and
+    what the mutation consumer already uses for the same situation."""
+    r, base, head = _repo(tmp_path, BUGGY)
+    _broken_driver(monkeypatch, raw="<html>not json</html>")
+
+    res = _consume(r, base, head, monkeypatch, tmp_path)
+
+    assert res.state == "degraded"
+    assert res.note.startswith(fuzz_consumer._DRIVER_BROKEN)
+    assert _no_worktrees(r)
+
+
+def test_a_driver_that_errored_degrades_too(tmp_path, monkeypatch):
+    """The adjacent return, and the same lie. A driver that exited non-zero
+    produced no fuzzing at all."""
+    r, base, head = _repo(tmp_path, BUGGY)
+    _broken_driver(monkeypatch, state=ToolState.CRASHED, returncode=1,
+                   stderr="ModuleNotFoundError: no such module")
+
+    res = _consume(r, base, head, monkeypatch, tmp_path)
+
+    assert res.state == "degraded"
+    assert "ModuleNotFoundError" in res.note
+
+
+def test_a_persistently_broken_driver_gives_up_rather_than_pinning_the_queue(
+        tmp_path, monkeypatch):
+    """The other half of degrading, and it is not optional. A degraded
+    consumer keeps its item in the queue, so a permanently broken driver would
+    re-run every consumer on that item forever. Mirrors mutation's
+    `_BASELINE_GIVE_UP`: after three honest degraded attempts the run reports
+    `ok` with a permanent-skip note, letting the item drain."""
+    r, base, head = _repo(tmp_path, BUGGY)
+    _seed_broken_runs(r, head, fuzz_consumer._DRIVER_GIVE_UP)
+    _broken_driver(monkeypatch)
+
+    res = _consume(r, base, head, monkeypatch, tmp_path)
+
+    assert res.state == "ok"
+    assert res.note == "fuzz giving up: driver persistently broken"
+
+
+def test_the_give_up_is_scoped_to_the_head_not_the_item(tmp_path, monkeypatch):
+    """Queue coalescing advances `item.head` under a stable `item.id`, so a
+    give-up counted per item would let new commits inherit an old head's
+    verdict and never be fuzzed at all. Only the same code state failing three
+    times gives up."""
+    r, base, head = _repo(tmp_path, BUGGY)
+    _seed_broken_runs(r, "0" * 40, fuzz_consumer._DRIVER_GIVE_UP)  # a DIFFERENT head
+    _broken_driver(monkeypatch)
+
+    res = _consume(r, base, head, monkeypatch, tmp_path)
+
+    assert res.state == "degraded"
+
+
+def test_a_timed_out_driver_stays_ok_because_the_budget_is_the_design(
+        tmp_path, monkeypatch):
+    """Deliberately NOT changed, and pinned so it is not swept up by the
+    above. A timeout means the wall budget did its job; degrading it would put
+    every budget-limited repo into a permanent retry loop. The lost coverage
+    is visible as `timeouts` in the run's stats instead."""
+    r, base, head = _repo(tmp_path, BUGGY)
+    _broken_driver(monkeypatch, state=ToolState.TIMEOUT)
+
+    res = _consume(r, base, head, monkeypatch, tmp_path)
+
+    assert res.state == "ok"
+    assert "timed out" in res.note

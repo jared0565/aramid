@@ -39,6 +39,25 @@ PIN_OCCURRENCE = True
 # constant so the writer and the reader cannot drift.
 _CRASH_MSG = "fuzz crash: "
 
+# A BROKEN DRIVER IS NOT A CLEAN RUN, and saying otherwise cost this repo 8
+# fuzzing opportunities out of 49. Both driver-failure paths below used to
+# return state "ok" -- so the drain marked the queue item DRAINED (it does
+# that only when every consumer finished cleanly), dropped it, and never
+# retried. Zero findings from a driver that never produced parseable output is
+# indistinguishable, in every report, from zero findings on clean code.
+#
+# `degraded` is the state the drain already understands and the mutation
+# consumer already uses for exactly this: `ok = False`, the item stays queued,
+# and the next drain tries again.
+#
+# HEAD-SCOPED, and the prefix is LOAD-BEARING -- `base.prior_note_count`
+# matches on it. Scoping to the item alone would be wrong: queue coalescing
+# advances `item.head` under a stable `item.id`, so new commits would inherit
+# an old head's verdict and never be fuzzed. Mirrors mutation's
+# `_BASELINE_GIVE_UP` down to the shape.
+_DRIVER_BROKEN = "fuzz driver broken @ "
+_DRIVER_GIVE_UP = 3
+
 
 def _names_function(message, func: str) -> bool:
     """Does this stored finding belong to `func`?
@@ -139,6 +158,15 @@ def consume(item, ctx: DrainContext) -> ConsumerResult:
     batch_timeout = float(fcfg.get("batch_timeout_s", 120))
     skip_patterns = list(fcfg.get("skip_name_patterns", []))
 
+    # Checked BEFORE any worktree work: once the driver has failed three times
+    # at this head there is nothing to learn from a fourth, and a degraded
+    # consumer pins its queue item indefinitely. Giving up returns "ok" so the
+    # item can finally drain -- a permanent skip, recorded in the note.
+    if base.prior_note_count(ctx.ledger, NAME, item.id,
+                             f"{_DRIVER_BROKEN}{item.head[:12]}") >= _DRIVER_GIVE_UP:
+        return ConsumerResult(consumer=NAME, state="ok",
+                              note="fuzz giving up: driver persistently broken")
+
     changed = gitutil.diff_new_lines(ctx.root, item.base, item.head)
     files = sorted(f for f in changed
                    if f.endswith(".py") and not _is_test_file(f))
@@ -214,17 +242,18 @@ def consume(item, ctx: DrainContext) -> ConsumerResult:
                                   duration_s=time.monotonic() - started,
                                   extra=dict(stats))
         if result.state is not ToolState.OK or result.returncode != 0:
-            return ConsumerResult(consumer=NAME, state="ok",
-                                  note=f"driver error: {result.stderr.strip()[:120]}",
-                                  duration_s=time.monotonic() - started,
-                                  extra=dict(stats))
+            return ConsumerResult(
+                consumer=NAME, state="degraded",
+                note=(f"{_DRIVER_BROKEN}{item.head[:12]}: "
+                      f"{result.stderr.strip()[:100]}"),
+                duration_s=time.monotonic() - started, extra=dict(stats))
         try:
             out = json.loads(result.raw)
         except (ValueError, TypeError):
-            return ConsumerResult(consumer=NAME, state="ok",
-                                  note="driver produced no parseable output",
-                                  duration_s=time.monotonic() - started,
-                                  extra=dict(stats))
+            return ConsumerResult(
+                consumer=NAME, state="degraded",
+                note=f"{_DRIVER_BROKEN}{item.head[:12]}: no parseable output",
+                duration_s=time.monotonic() - started, extra=dict(stats))
 
         stats["cases_run"] = out.get("cases_run", 0)
         stats["crashes"] = out.get("crashes", 0)

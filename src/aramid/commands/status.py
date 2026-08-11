@@ -7,7 +7,7 @@ rules in `aramid.toml` before `aramid arm`). Pure reporting: never mutates
 the ledger, never runs a gate.
 """
 import sys
-from collections import Counter
+from collections import Counter, defaultdict
 from datetime import date, datetime, timezone
 from pathlib import Path
 
@@ -288,6 +288,49 @@ def _scheduled_drain_line() -> str:
         return "scheduled drain: unknown"
 
 
+def _consumer_health_lines(ledger: Ledger) -> list[str]:
+    """Consumers currently stuck in `degraded`, as a STREAK.
+
+    `degraded` is load-bearing: the drain marks a queue item drained only when
+    every consumer finished cleanly, so a degraded consumer keeps its item
+    queued and re-runs the whole set next drain. Until now it appeared in no
+    report at all -- `last drain:` prints one consumer's name and finding
+    count, and nothing printed state. Measured on this repo: 38 degraded
+    mutation runs, invisible from every surface.
+
+    A streak rather than a lifetime total, mirroring `_skip_streak_lines`
+    directly above. A lifetime count of a fault that has since been fixed is a
+    line that never goes away, and a line that never goes away is one nobody
+    reads -- the same reason `_resolver_defect_lines` stays silent when clean.
+
+    The note is carried because "fuzz is degraded" only sends the reader to
+    the ledger, while "driver broken @ abc123: no parseable output" tells them
+    what to fix without leaving `status`. Never raises.
+    """
+    try:
+        runs: dict[str, list[tuple[str, str]]] = defaultdict(list)
+        for e in ledger.events():
+            if e.type is EventType.CONSUMER_RUN_FINISHED:
+                runs[str(e.payload.get("consumer", "?"))].append(
+                    (str(e.payload.get("state", "")),
+                     str(e.payload.get("note", ""))))
+    except Exception:
+        return []
+
+    faults = []
+    for name in sorted(runs):
+        streak, note = 0, ""
+        for state, run_note in reversed(runs[name]):
+            if state not in ("degraded", "error"):
+                break
+            streak += 1
+            note = note or run_note
+        if streak:
+            faults.append(f"    {name}: degraded last {streak} run(s)"
+                          + (f" -- {note}" if note else ""))
+    return ["  degraded consumer runs:", *faults] if faults else []
+
+
 def _resolver_defect_lines(ledger: Ledger) -> list[str]:
     """One line, only when something is wrong, pointing at the full report.
 
@@ -337,6 +380,7 @@ def cmd_status(root) -> int:
         ]
 
         lines.extend(_resolver_defect_lines(ledger))
+        lines.extend(_consumer_health_lines(ledger))
 
         streaks = _skip_streak_lines(ledger)
         if streaks:

@@ -10,6 +10,52 @@ to publish a tag that disagrees with it.
 
 ## [Unreleased]
 
+### Fixed
+
+- **A broken fuzz driver no longer reports itself healthy, and no longer eats
+  the queue item.** Both driver-failure paths in `consumers/fuzz.py` returned
+  `state="ok"` — one for a non-zero exit, one for output it could not parse.
+  Measured on this repo's own ledger: **8 of 49 fuzz runs (16%) recorded `ok`
+  having produced nothing parseable**, while every run reported zero findings
+  and nothing anywhere distinguished that from clean code.
+
+  The cost was not cosmetic. The drain marks a queue item drained *only* when
+  every consumer finished cleanly, so `ok` from a broken driver consumed the
+  item, dropped it, and never retried — the fuzzing opportunity was gone.
+  `degraded` is the state the drain already understands (`ok = False`, item
+  stays queued) and the state `dast` and `mutation` already use for exactly
+  this. Fuzz was the sole outlier: a sweep of all six consumers found every
+  other `state="ok"` to be a genuine skip (`no pack file`, `no js files in
+  range`, `no dast target configured`) rather than a swallowed failure.
+
+  Degrading alone would have traded a silent failure for a jammed queue, so
+  the give-up comes with it: three broken attempts **at the same head** and
+  the run reports `ok` with a permanent-skip note. Head-scoped, not
+  item-scoped, because queue coalescing advances `item.head` under a stable
+  `item.id` — counting per item would let new commits inherit an old head's
+  verdict and never be fuzzed at all. This mirrors `mutation._BASELINE_GIVE_UP`
+  and `dast`'s crash prefix down to the shape.
+
+  A driver **timeout** is deliberately left `ok` and now pinned by a test: the
+  wall budget doing its job is not a fault, and degrading it would put every
+  budget-limited repo into a permanent retry loop.
+
+- **`aramid status` shows consumers stuck in `degraded`.** The state was
+  load-bearing and invisible — `last drain:` prints one consumer's name and
+  finding count, and nothing printed state at all, so this repo's 38 degraded
+  mutation runs appeared in no report. Reported as a streak of consecutive
+  most-recent failures, mirroring the per-tool skip streaks directly above it:
+  a lifetime count of a fault that has since been fixed is a line that never
+  goes away, and a line that never goes away is one nobody reads. Carries the
+  run's note, so the reader learns what broke without leaving `status`.
+
+  Related, and checked rather than assumed: fuzz's zero findings across 3450
+  cases is **honest**. Its 672 "contract exceptions" are the deliberate
+  deep-crash oracle at work — only `IndexError`, `KeyError`,
+  `ZeroDivisionError`, `AttributeError`, `UnboundLocalError`, `RecursionError`,
+  `UnicodeError` and `OverflowError` count as crashes, and a `TypeError` or
+  `ValueError` raised at fuzzed garbage is a function behaving correctly.
+
 ### Added
 
 - **`aramid resolvers` — the gate now audits its own auto-resolvers.** Four

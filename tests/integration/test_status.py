@@ -594,3 +594,73 @@ def test_status_stays_silent_when_every_resolver_is_healthy(tmp_path, monkeypatc
     assert cmd_status(root) == 0
 
     assert "resolver defects" not in capsys.readouterr().out
+
+
+# ------------------------------------ a degraded consumer reaches the eye --
+
+def _consumer_run(lg, consumer, state, note, run="r"):
+    lg.append(Event(EventType.CONSUMER_RUN_FINISHED, run,
+                    datetime.now(timezone.utc).isoformat(),
+                    payload={"consumer": consumer, "state": state, "note": note,
+                             "finding_count": 0}))
+
+
+def test_status_shows_a_consumer_stuck_in_degraded(tmp_path, monkeypatch, capsys):
+    """`degraded` is load-bearing -- the drain refuses to mark an item drained
+    while any consumer is degraded, so the item is being retried every drain
+    -- and until now it appeared in no report at all. `last drain:` prints one
+    consumer's name and finding count; nothing printed state. Measured on this
+    repo: 38 degraded mutation runs, invisible.
+
+    A STREAK, not a lifetime total, and for the same reason `status` already
+    reports per-tool skips as streaks: a lifetime count of a fault that has
+    since been fixed is a line that never goes away, and a line that never
+    goes away is one nobody reads."""
+    root = _repo(tmp_path)
+    _no_user_config(tmp_path, monkeypatch)
+    _write_toml(root, armed=True, bake_started=None)
+    lg = Ledger(root / ".aramid" / "ledger.db")
+    _consumer_run(lg, "fuzz", "ok", "0 crash finding(s)")
+    _consumer_run(lg, "fuzz", "degraded", "fuzz driver broken @ abc123456789: boom")
+    _consumer_run(lg, "fuzz", "degraded", "fuzz driver broken @ abc123456789: boom")
+    lg.close()
+
+    assert cmd_status(root) == 0
+
+    out = capsys.readouterr().out
+    assert "degraded consumer runs:" in out
+    assert "fuzz: degraded last 2 run(s)" in out
+
+
+def test_status_clears_the_streak_once_a_consumer_recovers(tmp_path, monkeypatch,
+                                                            capsys):
+    """Self-clearing is the whole reason for a streak. A consumer that failed
+    and then succeeded is not a fault worth a line."""
+    root = _repo(tmp_path)
+    _no_user_config(tmp_path, monkeypatch)
+    _write_toml(root, armed=True, bake_started=None)
+    lg = Ledger(root / ".aramid" / "ledger.db")
+    _consumer_run(lg, "fuzz", "degraded", "fuzz driver broken @ abc123456789: boom")
+    _consumer_run(lg, "fuzz", "ok", "0 crash finding(s) from 200 case(s)")
+    lg.close()
+
+    assert cmd_status(root) == 0
+
+    assert "degraded consumer runs" not in capsys.readouterr().out
+
+
+def test_the_streak_line_names_the_note_so_it_is_actionable(tmp_path, monkeypatch,
+                                                             capsys):
+    """"fuzz is degraded" sends the reader to the ledger; the note tells them
+    what broke without leaving `status`."""
+    root = _repo(tmp_path)
+    _no_user_config(tmp_path, monkeypatch)
+    _write_toml(root, armed=True, bake_started=None)
+    lg = Ledger(root / ".aramid" / "ledger.db")
+    _consumer_run(lg, "mutation", "degraded", "baseline failing @ 8abc418da153")
+    lg.close()
+
+    assert cmd_status(root) == 0
+
+    assert "mutation: degraded last 1 run(s) -- baseline failing @ 8abc418da153" \
+        in capsys.readouterr().out
