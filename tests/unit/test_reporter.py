@@ -12,6 +12,51 @@ def _f(fid, tool="ruff", rule="S102", verdict=Verdict.WARN, file="a.py", line=1)
                     file, line, "m", "e", Gate.PRE_PUSH)
 
 
+# ------------------------------------- how to suppress a semgrep finding ----
+# A downstream repo wrote 20 `# nosemgrep: <id>` markers using the rule id
+# aramid prints, and every one of them silently failed to match. semgrep
+# namespaces rule ids by CONFIG PATH, and aramid's ruleset ships inside the
+# installed package -- so the id semgrep matches against is
+# `C.Users.<username>.AppData...owasp-top-ten.a03-injection.python-sqli...`,
+# which is machine-specific and cannot be committed.
+#
+# aramid's own `_canonical_rule_id` strips that prefix so ids are stable across
+# checkouts -- which is right, and is exactly what makes the printed id
+# unusable in semgrep's own suppression syntax. Printing an id that looks
+# copy-pasteable and is not is the failure here.
+
+
+def test_a_semgrep_finding_says_how_to_actually_suppress_it(tmp_path):
+    ledger = Ledger(tmp_path / "l.db")
+    result = GateResult(
+        exit_code=1,
+        findings=[_f("sg1", tool="semgrep",
+                     rule="owasp-top-ten.a03-injection.python-sqli-string-concat",
+                     verdict=Verdict.BLOCK)],
+        degraded=[], new_ids=["sg1"], stale_overrides=[], run_id="r1")
+
+    out = reporter.render_console(result, ledger)
+
+    assert ".aramid-suppressions.toml" in out, \
+        "the portable, reviewable route has to be named"
+    assert "# nosemgrep" in out, \
+        "the route they will reach for first has to be addressed, not ignored"
+    ledger.close()
+
+
+def test_the_nosemgrep_hint_is_absent_when_no_semgrep_finding_fired(tmp_path):
+    """Control. Without this the assertions above pass on a banner printed
+    unconditionally, which would be noise on every ruff-only run."""
+    ledger = Ledger(tmp_path / "l.db")
+    result = GateResult(exit_code=1, findings=[_f("r1", verdict=Verdict.BLOCK)],
+                         degraded=[], new_ids=["r1"], stale_overrides=[], run_id="r1")
+
+    out = reporter.render_console(result, ledger)
+
+    assert "# nosemgrep" not in out
+    ledger.close()
+
+
 # ---------------------------------------------- NEW-first + baseline collapse
 
 def test_new_findings_render_before_collapsed_baseline(tmp_path):

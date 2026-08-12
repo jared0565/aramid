@@ -1165,11 +1165,53 @@ def test_mode_range_no_upstream_scans_full_tracked_set_not_empty_diff(tmp_path):
     root = _repo(tmp_path)
     assert gitutil.resolve_range(root) is None  # sanity: genuinely no upstream/origin
 
-    files, rng = pipeline._discover_files(root, "range")
+    files, rng, widened = pipeline._discover_files(root, "range")
 
     assert files == ["a.py"]
     assert rng == pipeline.FULL_HISTORY_RNG
     assert rng is not None
+    assert widened is not None, "a whole-tree scan must announce itself"
+
+
+def test_a_widened_scope_says_so_and_a_narrow_one_does_not(tmp_path):
+    """Reported from a downstream repo: a tag push scanned the WHOLE repo and
+    blocked a release on 20 pre-existing findings, thirteen minutes after a
+    branch push of the same tree reported zero. Nothing in the output said the
+    scope had changed, so it read as a regression.
+
+    The widening itself is deliberate for a genuinely new repo (the test
+    above). The defect is that the condition is much broader than the comment
+    describing it -- `resolve_range` returns None for a detached HEAD and a tag
+    checkout too, which is an ordinary release shape -- and that a whole-tree
+    scan and a delta scan were reported identically. A scan that silently
+    changes what it covers is the same class as a report that cannot
+    distinguish absent from clean.
+    """
+    root = _repo(tmp_path)
+    bare = tmp_path / "origin.git"
+    subprocess.run(["git", "init", "--bare", str(bare)],
+                   check=True, capture_output=True, text=True)
+    _git(root, "remote", "add", "origin", str(bare))
+    _git(root, "push", "-q", "-u", "origin", "main")
+
+    # CONTROL: a branch with an upstream resolves a real range and must not
+    # claim to have widened -- otherwise the assertion below proves nothing.
+    _, rng_narrow, widened_narrow = pipeline._discover_files(root, "range")
+    assert rng_narrow == "@{u}..HEAD"
+    assert widened_narrow is None
+
+    # TREATMENT: detached at a tag, which is how a release pushes one.
+    _git(root, "tag", "v1.0.0")
+    _git(root, "checkout", "-q", "--detach", "v1.0.0")
+    files, rng, widened = pipeline._discover_files(root, "range")
+
+    assert files == ["a.py"], "the whole tracked tree, not the push's delta"
+    assert rng == pipeline.FULL_HISTORY_RNG
+    assert widened is not None
+    # Must name the SCOPE and the CAUSE. "scanned 1 file" alone would leave the
+    # reader where they started: wondering what regressed.
+    assert "tracked" in widened
+    assert "upstream" in widened
 
 
 # --------------------------------------------- (i) wall-clock budget -------

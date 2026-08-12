@@ -121,6 +121,13 @@ class GateResult:
     # the disagreement shows at FIRST detection, where no staleness explanation
     # can reach it.
     ratchet_escalated: tuple = ()
+    # Non-None when this run scanned MORE than the delta it was asked about
+    # (see `_discover_files`). Carried on the result rather than logged in
+    # passing because the reader who needs it is looking at a wall of findings
+    # wondering what regressed -- and the answer is that nothing did, the scope
+    # moved. A whole-tree scan and a delta scan that print identically is the
+    # same defect class as a report that cannot tell absent from clean.
+    scope_widened: str | None = None
     # WHAT ACTUALLY RAN, identical to the set `record_run` writes to
     # RUN_STARTED. Distinct from `tool_provenance` above, which answers "which
     # BINARY backed this key" and is deliberately limited to
@@ -216,22 +223,45 @@ def _budget_key(gate, mode: str) -> str:
     return _BUDGET_KEY.get(gate, "pre_push")
 
 
-def _discover_files(root: Path, mode: str) -> tuple[list[str], str | None]:
+def _discover_files(root: Path, mode: str) -> tuple[list[str], str | None, str | None]:
+    """(files, rng, widened_reason).
+
+    `widened_reason` is non-None only when this run scanned MORE than the
+    delta it was asked about, and it exists because the widening is otherwise
+    invisible. A downstream repo pushed a branch (0 blocking), then pushed a
+    tag thirteen minutes later off the same tree and was blocked by 20
+    pre-existing findings. Nothing in the output distinguished a whole-tree
+    scan from a delta scan, so it read as a regression mid-release, at the one
+    moment a tag cannot be amended.
+    """
     if mode == "staged":
-        return gitutil.staged_files(root), None
+        return gitutil.staged_files(root), None, None
     if mode == "range":
         rng = gitutil.resolve_range(root)
         if rng is None:
-            # No upstream and no origin/HEAD yet -- brand-new repo, first
-            # push. `changed_files(root, None)` would diff the working tree
-            # against bare "HEAD", which is empty on a clean tree (nothing
-            # staged) -- effectively scanning nothing. Use the full tracked
-            # file set instead, and signal gitleaks to scan full history via
-            # FULL_HISTORY_RNG (see above).
-            return gitutil.all_tracked_files(root), FULL_HISTORY_RNG
-        return gitutil.changed_files(root, rng), rng
+            # `changed_files(root, None)` would diff the working tree against
+            # bare "HEAD", which is empty on a clean tree -- effectively
+            # scanning nothing. Fall back to the full tracked set, and signal
+            # gitleaks to scan full history via FULL_HISTORY_RNG (see above).
+            #
+            # The comment here used to say "brand-new repo, first push", which
+            # is the case this was BUILT for and only one of the cases that
+            # reach it. `resolve_range` also returns None for a detached HEAD,
+            # a tag checkout and any branch with no upstream configured -- all
+            # ordinary release shapes. The fallback stays (under-scanning is
+            # the worse failure); what changes is that it now says so.
+            files = gitutil.all_tracked_files(root)
+            return files, FULL_HISTORY_RNG, (
+                f"scanned all {len(files)} tracked file(s), not this push's "
+                f"changes: no upstream to diff against (detached HEAD, a tag "
+                f"checkout, or a first push). Pre-existing findings anywhere "
+                f"in the repo apply here")
+        return gitutil.changed_files(root, rng), rng, None
     if mode == "all":
-        return gitutil.all_tracked_files(root), None
+        # Deliberately silent: `--all` IS the request to scan everything, so
+        # announcing it tells the operator what they just typed. The field
+        # exists for the scope the operator did NOT ask for.
+        return gitutil.all_tracked_files(root), None, None
     raise ValueError(f"unknown mode: {mode!r}")
 
 
@@ -726,7 +756,7 @@ def run_gate(root: Path, gate: Gate, mode: str, cfg: config_mod.Config, ledger: 
     at = clock()
 
     # 1. file set for mode, then the always-on ignore-path filter (spec §8b).
-    raw_files, rng = _discover_files(root, mode)
+    raw_files, rng, scope_widened = _discover_files(root, mode)
     files = config_mod.filter_paths(raw_files, cfg)
 
     # 2. build the shared RunContext (stack detection feeds runner
@@ -1160,6 +1190,7 @@ def run_gate(root: Path, gate: Gate, mode: str, cfg: config_mod.Config, ledger: 
                        degraded_block_tier=degraded_block_tier,
                        tool_provenance=_tool_provenance(selected),
                        ratchet_escalated=ratchet_escalated,
+                       scope_widened=scope_widened,
                        # The SAME value record_run wrote to RUN_STARTED, not a
                        # re-derivation: the two surfaces disagreeing about what
                        # ran is the defect this closes.

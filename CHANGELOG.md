@@ -12,6 +12,51 @@ to publish a tag that disagrees with it.
 
 ### Fixed
 
+- **A push could silently scan the whole repository instead of its own
+  changes.** A downstream repo pushed a branch (0 blocking), then pushed a tag
+  off the same tree thirteen minutes later and was blocked by 20 pre-existing
+  findings in files its commits never touched — mid-release, with the tag
+  already cut and a force push off the table. Nothing in the output
+  distinguished a whole-tree scan from a delta scan, so it read as a
+  regression.
+
+  `_discover_files` falls back to the entire tracked tree whenever
+  `gitutil.resolve_range()` returns `None`, and that fallback is correct: the
+  alternative diffs against a bare `HEAD` and scans nothing, which is the worse
+  failure. The defect is that the comment describing it said "brand-new repo,
+  first push" while the actual trigger is "no upstream resolvable" — which also
+  covers **a detached HEAD, a tag checkout, and any branch without an
+  upstream**. Measured: a branch with an upstream resolves `@{u}..HEAD` and
+  scans its delta; the same repo detached at a tag scans every tracked file.
+
+  The fallback stays. What changes is that it announces itself, first, above
+  the findings:
+
+  ```
+  note: scanned all 2 tracked file(s), not this push's changes: no upstream to
+  diff against (detached HEAD, a tag checkout, or a first push). Pre-existing
+  findings anywhere in the repo apply here
+  ```
+
+  Also on `GateResult.scope_widened` and in `--json`, so a consumer diffing
+  finding counts between two runs can tell a regression from a scope change.
+  `--all` stays silent — that widening is the operator's own request.
+
+- **`# nosemgrep: <the rule id aramid prints>` could never match.** semgrep
+  namespaces rule ids by config path, and this ruleset ships inside the
+  installed package — so the id semgrep matches against contains an absolute
+  path (including the username under a wheel install), while the id aramid
+  prints is the canonical one, deliberately stripped so it is identical in
+  every clone. That stripping is what makes ids safe to commit in
+  `block_rules.toml` and a suppressions file, and it is exactly what makes the
+  printed id useless in semgrep's own suppression syntax. A repo wrote 20
+  markers with the printed id; every one silently did nothing.
+
+  A semgrep finding now says how to suppress it: `.aramid-suppressions.toml`
+  (portable, reviewed, binds by finding id), that `# nosemgrep: <rule>` will
+  not match and why, and that a bare `# nosemgrep` works but silences every
+  rule on the line. Shown only when a semgrep finding actually fired.
+
 - **A suppression could be inherited by a line nobody adjudicated.** Reported
   from a downstream repo as "suppression ids bind to position, so a cosmetic
   edit un-suppresses". The premise was right and the mechanism was not, and the

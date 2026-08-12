@@ -46,6 +46,13 @@ def _open_count_line(ledger: Ledger) -> str:
 def render_console(result: GateResult, ledger: Ledger) -> str:
     lines: list[str] = []
 
+    # FIRST, above the findings. A reader who meets twenty blocking findings
+    # before learning the scope changed spends that time hunting a regression
+    # that did not happen -- which is exactly what it cost the repo that
+    # reported this, mid-release, with the tag already cut.
+    if getattr(result, "scope_widened", None):
+        lines.append(f"note: {result.scope_widened}")
+
     new_findings = [f for f in result.findings if f.id in result.new_ids]
     baseline_findings = [f for f in result.findings if f.id not in result.new_ids]
 
@@ -81,6 +88,24 @@ def render_console(result: GateResult, ledger: Ledger) -> str:
         lines.append("skipped (degraded tools):")
         for tool in result.degraded:
             lines.append(f"  - {tool}")
+
+    # The rule id printed above is aramid's CANONICAL one -- deliberately
+    # stripped of semgrep's config-path prefix so it is identical in every
+    # checkout. That is what makes it safe to commit in block_rules.toml and a
+    # suppressions file, and also what makes it useless to paste into
+    # semgrep's own `# nosemgrep:`, which matches the un-stripped id. A repo
+    # wrote 20 markers with the printed id and every one silently did nothing.
+    if any(f.tool == "semgrep" for f in result.findings):
+        lines.append(
+            "to suppress a semgrep finding: add it to "
+            ".aramid-suppressions.toml (reviewed, committed, binds by finding "
+            "id, identical in every clone).")
+        lines.append(
+            "  `# nosemgrep: <the rule id above>` will NOT match -- semgrep "
+            "namespaces ids by config path and this ruleset ships inside the "
+            "installed package, so the id it matches contains an absolute "
+            "path. A bare `# nosemgrep` does work, but silences every rule "
+            "on that line.")
 
     lines.append(_open_count_line(ledger))
 
@@ -146,5 +171,9 @@ def render_json(result: GateResult) -> str:
         # and reasoned from an undercount. Additive on purpose -- renaming
         # `tools` would break anyone already reading the provenance map.
         "tools_ran": sorted(getattr(result, "tools_ran", ()) or ()),
+        # null on an ordinary delta scan; a sentence when this run covered more
+        # than the delta. A consumer diffing finding counts between two runs
+        # cannot otherwise tell a regression from a scope change.
+        "scope_widened": getattr(result, "scope_widened", None),
     }
     return json.dumps(payload, indent=2)
