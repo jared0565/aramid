@@ -121,13 +121,21 @@ def test_compact_preserves_giveup_consumer_rows(tmp_path):
     # prior_note_count give-up counters read per-(consumer,item) rows; compact
     # must not collapse them to one (that silently resets the counter).
     from aramid.consumers import base as consumer_base
+    from aramid.consumers import mutation as mut_consumer
     led = Ledger(tmp_path / "l.db")
     try:
         for i in range(3):
             led.append(Event(EventType.CONSUMER_RUN_FINISHED, f"r{i}", "t",
                              payload={"consumer": "mutation", "item_id": "q1",
                                       "state": "degraded",
-                                      "note": "baseline failing @ abc123"}))
+                                      # Seed a note production actually emits.
+                                      # The assertions below deliberately use a
+                                      # SHORTER prefix -- this test is about
+                                      # compaction, not wording -- which is
+                                      # exactly why the seed has to be real: a
+                                      # stale seed plus a loose assert is a test
+                                      # that cannot notice either one drifting.
+                                      "note": mut_consumer.failing_note_prefix("abc123def456")}))
         assert consumer_base.prior_note_count(led, "mutation", "q1", "baseline failing") == 3
         led.compact()
         assert consumer_base.prior_note_count(led, "mutation", "q1", "baseline failing") == 3

@@ -340,7 +340,7 @@ def _seed_baseline_failures(r, n, head):
             led.append(Event(EventType.CONSUMER_RUN_FINISHED, f"seed{i}", "t",
                              payload={"consumer": "mutation", "item_id": "q1",
                                       "state": "degraded",
-                                      "note": f"baseline failing @ {head[:12]}"}))
+                                      "note": mut_consumer.failing_note_prefix(head)}))
     finally:
         led.close()
 
@@ -436,16 +436,113 @@ def test_baseline_timeout_is_not_reported_as_a_failure(tmp_path, monkeypatch):
 
 
 def test_baseline_failure_still_reports_as_a_failure(tmp_path, monkeypatch):
-    """The other half of the split. A genuinely red suite must keep the
-    original wording -- and the original note prefix, which the head-scoped
-    give-up counter keys on."""
+    """The other half of the split. A genuinely red suite must still land in
+    the failing-baseline family -- and carry the head-scoped note the give-up
+    counter keys on, whatever that note's current spelling is."""
     r, base, head = _repo(tmp_path, "def test_always_fails():\n    assert False\n")
 
     res = _consume(r, base, head, monkeypatch, tmp_path)
 
     assert res.state == "degraded"
-    assert res.note.startswith(f"baseline failing @ {head[:12]}")
+    assert res.note.startswith(mut_consumer.failing_note_prefix(head))
     assert "timeout" not in res.note
+
+
+# ------------------------------- one grammar down the status column (R66-3) ---
+# The timeout family says "(last seen @ <sha>)"; the failing family said
+# "@ <sha>". Both land in the same `status` column, one under the other, and a
+# reader learns the grammar from whichever they meet first -- so the bare "@"
+# reads as the causal claim the timeout reword exists to avoid. The sha is
+# honest for a red baseline (that IS where the suite was red); this is about
+# the two notes agreeing, not about either being wrong.
+#
+# The string is load-bearing -- the head-scoped give-up counter matches it --
+# so `failing_note_prefix` is the single definition both the counter and the
+# emit site use. These three tests are what makes a PARTIAL change impossible
+# to land green: one pins the wording, one pins that the counter follows it,
+# and one pins the one-time cost of moving it.
+
+
+def test_note_families_are_pinned_to_their_literal_wording():
+    """The only test here that knows what the words actually are.
+
+    Every other assertion in this area compares `res.note` against
+    `failing_note_prefix(head)` -- both sides read from one function, so they
+    prove the producer is deterministic and would hold just as well if that
+    function returned "potato". Something has to pin the literal, and this is
+    it.
+
+    Worth pinning rather than leaving to the contract functions, because the
+    wording is load-bearing in two directions at once: it is what a downstream
+    reader sees in `status`, and it is what the give-up counters match against
+    ledger rows written by EARLIER versions. A silent reword is a silent latch
+    reset in every consumer's repo, which is why this change is deliberate and
+    announced rather than incidental.
+
+    The 12-character truncation is pinned here too -- the full sha is passed in
+    and must not survive into the note.
+    """
+    from aramid.consumers import js_mutation as jsc
+
+    head = "8abc418da153ffffffffffffffffffffffffffff"
+
+    assert mut_consumer.failing_note_prefix(head) == \
+        "baseline failing (last seen @ 8abc418da153)"
+    assert jsc.link_note_prefix(head) == \
+        "node_modules link failing (last seen @ 8abc418da153)"
+    # The family this grammar was borrowed FROM, pinned alongside so the three
+    # cannot drift into two grammars again.
+    assert mut_consumer.timeout_note_prefix(480.0, "pytest -q") == \
+        "baseline timeout: pytest -q did not finish within the 480s budget"
+
+
+def test_failing_baseline_note_uses_the_last_seen_grammar(tmp_path, monkeypatch):
+    r, base, head = _repo(tmp_path, "def test_always_fails():\n    assert False\n")
+
+    res = _consume(r, base, head, monkeypatch, tmp_path)
+
+    assert res.state == "degraded"
+    assert res.note == mut_consumer.failing_note_prefix(head)
+    # The discriminator. Asserting only `startswith("baseline failing")` --
+    # which is what tests/unit/test_ledger_compact.py does, correctly, because
+    # it is testing compaction and not wording -- passes on BOTH spellings and
+    # so cannot witness this change at all.
+    assert not res.note.startswith(f"baseline failing @ {head[:12]}"), \
+        "the bare '@ <sha>' spelling must be gone, not merely accompanied"
+
+
+def test_failing_giveup_counts_the_new_note_format(tmp_path, monkeypatch):
+    """The counter has to move WITH the wording or the latch silently dies."""
+    r, base, head = _repo(tmp_path, WEAK_TEST)
+    _seed_notes(r, 3, mut_consumer.failing_note_prefix(head))
+    monkeypatch.setattr(mut_consumer, "run_subprocess",
+                         lambda *a, **kw: (_ for _ in ()).throw(
+                             AssertionError("give-up path must not run pytest")))
+
+    res = _consume(r, base, head, monkeypatch, tmp_path)
+
+    assert res.state == "ok"
+    assert "giving up" in res.note
+
+
+def test_failing_giveup_ignores_the_old_note_format(tmp_path, monkeypatch):
+    """The one-time cost of the reword, pinned rather than discovered.
+
+    Notes already in a live ledger keep the old spelling, and the counter no
+    longer matches them -- so an item that had accumulated 3 strikes starts
+    again from zero and gets 3 more DEGRADED retries before standing down.
+    Bounded, one-time, and per-item; recorded here so the next reader meets it
+    as a decision instead of as a latch that looks broken.
+    """
+    r, base, head = _repo(tmp_path,
+                          "def test_always_fails():\n    assert False\n")
+    _seed_notes(r, 3, f"baseline failing @ {head[:12]}")   # pre-reword spelling
+
+    res = _consume(r, base, head, monkeypatch, tmp_path)
+
+    assert res.state == "degraded", \
+        "old-format notes no longer satisfy the counter -- this is the reset"
+    assert res.note == mut_consumer.failing_note_prefix(head)
 
 
 def test_timeout_giveup_survives_an_advancing_head(tmp_path, monkeypatch):

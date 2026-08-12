@@ -39,6 +39,21 @@ _JS_SUFFIXES = (".js", ".jsx", ".mjs", ".cjs", ".ts", ".tsx", ".mts", ".cts")
 PIN_OCCURRENCE = True
 
 
+def link_note_prefix(head: str) -> str:
+    """Stem of the "could not link node_modules into the worktree" family.
+
+    A true stem, unlike `mutation.failing_note_prefix`: the emit site appends
+    `: <exc>`, so the give-up counter matches a prefix of a longer note.
+
+    Head-scoped for the same reason the failing-baseline family is -- a link
+    failure can be a property of this checkout -- and worded to the same
+    `(last seen @ ...)` grammar, because this note shares the `status` column
+    with the other two and the whole point of that grammar is that the column
+    reads consistently. See `mutation.failing_note_prefix`.
+    """
+    return f"node_modules link failing (last seen @ {head[:12]})"
+
+
 def _is_test_file(rel: str) -> bool:
     p = rel.replace("\\", "/")
     name = p.rsplit("/", 1)[-1]
@@ -168,12 +183,12 @@ def consume(item, ctx: DrainContext) -> ConsumerResult:
                   f"[js_mutation].baseline_timeout_s"))
 
     if base.prior_note_count(ctx.ledger, NAME, item.id,
-                             f"baseline failing @ {item.head[:12]}") >= _BASELINE_GIVE_UP:
+                             mutation.failing_note_prefix(item.head)) >= _BASELINE_GIVE_UP:
         return ConsumerResult(consumer=NAME, state="ok",
                               note="js mutation giving up: baseline persistently failing")
 
     if base.prior_note_count(ctx.ledger, NAME, item.id,
-                             f"node_modules link failing @ {item.head[:12]}") >= _LINK_GIVE_UP:
+                             link_note_prefix(item.head)) >= _LINK_GIVE_UP:
         return ConsumerResult(consumer=NAME, state="ok",
                               note="js mutation giving up: node_modules link persistently failing")
 
@@ -197,7 +212,7 @@ def consume(item, ctx: DrainContext) -> ConsumerResult:
         except OSError as exc:
             # Load-bearing prefix: the give-up counter matches note.startswith(prefix).
             return ConsumerResult(consumer=NAME, state="degraded",
-                                  note=f"node_modules link failing @ {item.head[:12]}: {str(exc)[:150]}",
+                                  note=f"{link_note_prefix(item.head)}: {str(exc)[:150]}",
                                   duration_s=time.monotonic() - started)
 
         base_res = run_subprocess(test_argv, wt, baseline_budget)
@@ -210,9 +225,10 @@ def consume(item, ctx: DrainContext) -> ConsumerResult:
                       f" (last seen @ {item.head[:12]})"),
                 duration_s=time.monotonic() - started)
         if base_res.state is not ToolState.OK or base_res.returncode != 0:
-            # Load-bearing note prefix: the give-up counter matches it.
+            # Load-bearing note prefix: the give-up counter matches it. Shared
+            # with the Python consumer so the two cannot drift apart.
             return ConsumerResult(consumer=NAME, state="degraded",
-                                  note=f"baseline failing @ {item.head[:12]}",
+                                  note=mutation.failing_note_prefix(item.head),
                                   duration_s=time.monotonic() - started)
 
         done = False

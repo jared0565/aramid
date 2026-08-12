@@ -37,8 +37,8 @@ def timeout_note_prefix(budget: float, suite: str) -> str:
 
     Public because it is a CONTRACT, not an implementation detail: the
     repo-scoped give-up counter matches notes by this prefix, so the string
-    and its inputs are load-bearing in the same way `"baseline failing @ "`
-    is, and the tests assert against it rather than re-typing it.
+    and its inputs are load-bearing in the same way `failing_note_prefix`'s
+    are, and the tests assert against it rather than re-typing it.
 
     Keyed on (suite command, budget) and NOT on the head, which is the entire
     point. A red suite is a property of a commit and a new commit deserves a
@@ -53,6 +53,33 @@ def timeout_note_prefix(budget: float, suite: str) -> str:
     falls to zero, and mutation tries again on the next drain.
     """
     return f"baseline timeout: {suite} did not finish within the {budget:.0f}s budget"
+
+
+def failing_note_prefix(head: str) -> str:
+    """The note family for "the baseline suite is RED at this commit".
+
+    Returns the COMPLETE note rather than a stem, and both the give-up counter
+    and the emit site use it verbatim -- so there is no spelling of this note
+    that the counter cannot match. That is a deliberate difference from
+    `timeout_note_prefix`, whose callers append their own `(last seen @ ...)`;
+    that convention predates this one and works, and changing it would be
+    unrelated churn on a live contract. Two conventions in one module is worth
+    one docstring saying which is which.
+
+    Head-scoped, and load-bearing: a red suite is a property of a commit, so a
+    new commit deserves a fresh attempt. Contrast the timeout family, which is
+    repo-scoped because no commit ever changes a budget.
+
+    On the grammar -- `(last seen @ <sha>)`, not `@ <sha>`: the sha is honest
+    here, this really is a head at which the suite was red. But this note sits
+    in the same `status` column as the timeout family directly beneath it, and
+    a reader learns the column's grammar from whichever note they meet first.
+    A bare `@ <sha>` teaches them to read the sha as causal, which is exactly
+    the misreading the timeout reword removed. One grammar down the column.
+    """
+    return f"baseline failing (last seen @ {head[:12]})"
+
+
 _SAFE_STEM = re.compile(r"^[A-Za-z0-9_]+$")
 _K_KEYWORDS = {"not", "and", "or"}   # pytest -k expression keywords
 
@@ -63,8 +90,8 @@ _K_KEYWORDS = {"not", "and", "or"}   # pytest -k expression keywords
 # exists for: a repo that has committed to pytest (e.g. a root conftest.py,
 # one of Task 1's three positive detect_tests signals) but has no tests to
 # run AT THIS HEAD. It is never a transiently failing baseline, so it must
-# not share the "baseline failing @ " note family -- that literal prefix is
-# what base.prior_note_count's give-up counter matches (see the give-up
+# not share the `failing_note_prefix` note family -- that string is what
+# base.prior_note_count's give-up counter matches (see the give-up
 # check above the worktree try block), and this rc is not a failure at all.
 _PYTEST_NO_TESTS_RC = 5
 
@@ -252,7 +279,7 @@ def consume(item, ctx: DrainContext) -> ConsumerResult:
                   f"[mutation].test_command at a narrower suite"))
 
     if base.prior_note_count(ctx.ledger, NAME, item.id,
-                             f"baseline failing @ {item.head[:12]}") >= _BASELINE_GIVE_UP:
+                             failing_note_prefix(item.head)) >= _BASELINE_GIVE_UP:
         # A permanently-red suite must stop pinning the queue item: after 3
         # honest DEGRADED retries AT THIS HEAD this becomes a permanent-skip.
         # Head-scoped (review I2): queue coalescing advances item.head under
@@ -329,10 +356,10 @@ def consume(item, ctx: DrainContext) -> ConsumerResult:
                       f" (last seen @ {item.head[:12]})"),
                 duration_s=time.monotonic() - started)
         if base_res.state is not ToolState.OK or base_res.returncode != 0:
-            # Note text is load-bearing: the give-up counter above matches
-            # notes starting with "baseline failing @ <head12>".
+            # Note text is load-bearing: the give-up counter above matches it.
+            # Both ends call failing_note_prefix so they cannot drift apart.
             return ConsumerResult(consumer=NAME, state="degraded",
-                                  note=f"baseline failing @ {item.head[:12]}",
+                                  note=failing_note_prefix(item.head),
                                   duration_s=time.monotonic() - started)
         # The one run that can actually MEASURE the suite is one that finished.
         # A timeout only ever yields the budget you set, so recording "elapsed"

@@ -5,6 +5,7 @@ import pytest
 
 from aramid import config as config_mod
 from aramid.consumers import js_mutation as jsc
+from aramid.consumers import mutation as py_mutation
 from aramid.consumers.base import DrainContext
 from aramid.ledger import Ledger
 from aramid.queue import QueueItem
@@ -176,7 +177,9 @@ def test_baseline_red_degrades_with_loadbearing_note(tmp_path, monkeypatch):
     _scripted(monkeypatch, [(ToolState.OK, 1)])   # baseline itself fails
     res = _consume(r, base, head, monkeypatch, tmp_path)
     assert res.state == "degraded"
-    assert res.note.startswith(f"baseline failing @ {head[:12]}")
+    # Shared with the Python consumer -- one definition, so the two paths
+    # cannot drift into different spellings of the same condition.
+    assert res.note.startswith(py_mutation.failing_note_prefix(head))
 
 
 def test_timeout_counts_not_killed_not_survived(tmp_path, monkeypatch):
@@ -197,7 +200,7 @@ def test_give_up_after_three_baseline_failures_head_scoped(tmp_path, monkeypatch
         for i in range(3):
             led.append(Event(EventType.CONSUMER_RUN_FINISHED, f"r{i}", "t",
                              payload={"consumer": "js_mutation", "item_id": "q1",
-                                      "note": f"baseline failing @ {head[:12]}"}))
+                                      "note": py_mutation.failing_note_prefix(head)}))
     finally:
         led.close()
     _scripted(monkeypatch, [(ToolState.OK, 0)])   # would pass, but give-up first
@@ -266,7 +269,7 @@ def test_node_modules_link_failure_degrades_with_head_scoped_prefix(tmp_path, mo
     res = _consume(r, base, head, monkeypatch, tmp_path)
     assert res.state == "degraded"
     # note must START with the head-scoped prefix so prior_note_count can match it
-    assert res.note.startswith(f"node_modules link failing @ {head[:12]}")
+    assert res.note.startswith(jsc.link_note_prefix(head))
 
 
 def test_give_up_after_three_node_modules_link_failures_head_scoped(tmp_path, monkeypatch):
@@ -278,7 +281,7 @@ def test_give_up_after_three_node_modules_link_failures_head_scoped(tmp_path, mo
         for i in range(3):
             led.append(Event(EventType.CONSUMER_RUN_FINISHED, f"r{i}", "t",
                              payload={"consumer": "js_mutation", "item_id": "q1",
-                                      "note": f"node_modules link failing @ {head[:12]}"}))
+                                      "note": jsc.link_note_prefix(head)}))
     finally:
         led.close()
     _scripted(monkeypatch, [(ToolState.OK, 0)])

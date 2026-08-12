@@ -10,6 +10,46 @@ to publish a tag that disagrees with it.
 
 ## [Unreleased]
 
+### Changed
+
+- **One grammar down the `status` column: every head-scoped consumer note now
+  reads `(last seen @ <sha>)` instead of a bare `@ <sha>`.** Requested by a
+  downstream consumer, whose argument was about the column rather than any one
+  note: the timeout family already said `(last seen @ ...)`, these sat directly
+  beneath it, and *a reader learns the grammar from whichever note they meet
+  first*. A bare `@ <sha>` teaches them to read the sha as a causal claim —
+  precisely the misreading the timeout reword removed.
+
+  The sha itself was never wrong here. A red baseline really was red at that
+  head, and head-scoping is deliberate: a new commit can fix a red suite, so it
+  deserves a fresh attempt. Only the wording moved.
+
+  Six sites, five note families, three consumers — `mutation`, `js_mutation`
+  and `dast`. The consumer only reported the first; the other four came from
+  asking the code graph who else calls `prior_note_count`, which found `dast`'s
+  pair after a string search for the two known literals had already come back
+  "complete". Fixing three of five would have left the column bilingual and
+  achieved nothing the request was about.
+
+  These strings are load-bearing — the give-up counters match live ledger rows
+  by prefix — so `mutation.failing_note_prefix()` and
+  `js_mutation.link_note_prefix()` are now the single definition each counter
+  and each emit site calls, making a half-applied reword unrepresentable.
+  (`dast` already bound both prefixes to locals used at both ends.)
+
+  **Deliberate one-time cost:** notes already in a ledger keep the old spelling
+  and no longer satisfy the counters, so any item mid-streak restarts at zero
+  and takes up to 3 more DEGRADED retries before standing down. Bounded,
+  per-item, and pinned by a test so the next reader meets it as a decision
+  rather than as a latch that looks broken.
+
+  Also pinned: one test asserting the literal wording of all three families.
+  Every other assertion here compares `res.note` to `failing_note_prefix(head)`
+  — both sides from one function, which proves the producer is deterministic
+  and would hold just as well if it returned `"potato"`. Verified against a
+  perturbed copy of the source: the literal pin went red naming the change; the
+  equality assertions passed.
+
 ### Fixed
 
 - **`aramid status` could not report a scanner that never ran**, which is the

@@ -72,8 +72,12 @@ def consume(item, ctx: DrainContext) -> ConsumerResult:
     # HEAD each becomes a permanent OK-skip. Head-scoped so new commits get a
     # fresh try. Both prefixes are load-bearing -- each DEGRADED note below must
     # start with the exact string its give-up counter reads.
-    give_up_prefix = f"dast target unreachable @ {item.head[:12]}"
-    crash_prefix = f"dast probe error @ {item.head[:12]}"
+    # `(last seen @ ...)` rather than a bare `@`: these notes share the `status`
+    # column with the mutation families, and one grammar down that column is the
+    # whole point -- see consumers/mutation.py:failing_note_prefix. Both prefixes
+    # stay head-scoped; only the wording moved.
+    give_up_prefix = f"dast target unreachable (last seen @ {item.head[:12]})"
+    crash_prefix = f"dast probe error (last seen @ {item.head[:12]})"
     if (base.prior_note_count(ctx.ledger, NAME, item.id, give_up_prefix) >= _UNREACHABLE_GIVE_UP
             or base.prior_note_count(ctx.ledger, NAME, item.id, crash_prefix) >= _UNREACHABLE_GIVE_UP):
         return ConsumerResult(consumer=NAME, state="ok",

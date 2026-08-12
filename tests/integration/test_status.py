@@ -720,12 +720,17 @@ def test_the_streak_line_names_the_note_so_it_is_actionable(tmp_path, monkeypatc
     _no_user_config(tmp_path, monkeypatch)
     _write_toml(root, armed=True, bake_started=None)
     lg = Ledger(root / ".aramid" / "ledger.db")
-    _consumer_run(lg, "mutation", "degraded", "baseline failing @ 8abc418da153")
+    # A real note, not a plausible-looking one: `status` passes it through
+    # verbatim, so any string would make this test pass -- which is precisely
+    # why the sample should be one production emits.
+    from aramid.consumers import mutation as mut_consumer
+    note = mut_consumer.failing_note_prefix("8abc418da153")
+    _consumer_run(lg, "mutation", "degraded", note)
     lg.close()
 
     assert cmd_status(root) == 0
 
-    assert "mutation: degraded last 1 run(s) -- baseline failing @ 8abc418da153" \
+    assert f"mutation: degraded last 1 run(s) -- {note}" \
         in capsys.readouterr().out
 
 

@@ -103,7 +103,7 @@ def test_unreachable_degrades_with_loadbearing_note(tmp_path, monkeypatch):
                   "schema_version = 1\n[dast]\nbase_url = \"http://127.0.0.1:1/\"\ntimeout_s = 1\n")
     res = _consume(r, cfg)
     assert res.state == "degraded"
-    assert res.note.startswith("dast target unreachable @ ")
+    assert res.note.startswith("dast target unreachable (last seen @ ")
 
 
 def test_give_up_after_three_unreachable(tmp_path, monkeypatch):
@@ -116,7 +116,7 @@ def test_give_up_after_three_unreachable(tmp_path, monkeypatch):
         for i in range(3):
             led.append(Event(EventType.CONSUMER_RUN_FINISHED, f"r{i}", "t",
                              payload={"consumer": "dast", "item_id": "q1",
-                                      "note": f"dast target unreachable @ {head12}"}))
+                                      "note": f"dast target unreachable (last seen @ {head12})"}))
     finally:
         led.close()
     res = _consume(r, cfg)
@@ -148,7 +148,7 @@ def test_probe_crash_degrades_with_headscoped_note(tmp_path, monkeypatch):
                   "schema_version = 1\n[dast]\nbase_url = \"http://127.0.0.1:1/\"\ntimeout_s = 1\n")
     res = _consume(r, cfg)
     assert res.state == "degraded"
-    assert res.note.startswith("dast probe error @ ")
+    assert res.note.startswith("dast probe error (last seen @ ")
 
 
 def test_dast_finding_fingerprint_stable_through_normalize(tmp_path, monkeypatch):
