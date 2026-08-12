@@ -869,8 +869,18 @@ def run_gate(root: Path, gate: Gate, mode: str, cfg: config_mod.Config, ledger: 
     # records historical gitleaks findings whose paths belong to old commits
     # and usually do not exist at HEAD, so the same flag there would clear
     # every historical secret on sight (see ledger._departed).
+    # Computed HERE because this is the only place that holds the gate and the
+    # config at the same time. `status` cannot re-derive it later: it reads a
+    # historical event and has neither the gate's runner list as it was, nor
+    # the config as it was. Never raises -- a diagnostic that takes down the
+    # gate is worse than one that degrades to the older, blinder rule.
+    try:
+        expected_tools = toolset.expected_tool_names(root, cfg, gate)
+    except Exception:
+        expected_tools = None
     new_ids = ledger.record_run(run_id, at, str(gate), scope_tools, scope_files, findings,
-                                selected_tools=selected_tools, root=root,
+                                selected_tools=selected_tools,
+                                expected_tools=expected_tools, root=root,
                                 examined_by_tool=examined_by_tool)
 
     # record_run above can NEVER resolve a whole-suite finding: those carry the

@@ -481,6 +481,7 @@ class Ledger:
 
     def record_run(self, run_id, at, gate, scope_tools, scope_files, findings, *,
                    selected_tools: set[str] | None = None,
+                   expected_tools: set[str] | None = None,
                    root: Path | None = None,
                    examined_by_tool: dict[str, set[str]] | None = None):
         state, seen = _materialize(self.events())
@@ -488,6 +489,18 @@ class Ledger:
         payload = {"gate": gate, "tools": sorted(scope_tools)}
         if selected_tools is not None:
             payload["selected"] = sorted(selected_tools)
+        if expected_tools is not None:
+            # What THIS GATE should have run, as opposed to `selected` (the
+            # union across every gate) and `tools` (what actually ran). The
+            # three are genuinely different questions and the skip report needs
+            # all of them: without `expected` it can only notice a tool that
+            # ran once and stopped, never one that never started.
+            #
+            # Written only when the caller supplies it, so the key stays absent
+            # rather than empty on any path that cannot compute it -- `status`
+            # reads absent as "too old to record" and falls back, and empty as
+            # a positive claim that nothing was expected.
+            payload["expected"] = sorted(expected_tools)
         self.append(Event(EventType.RUN_STARTED, run_id, at, payload=payload))
         new_ids = []
         for f in findings:

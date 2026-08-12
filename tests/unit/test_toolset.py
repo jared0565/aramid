@@ -210,3 +210,75 @@ def test_cargo_warnings_findings_become_ghosts_when_the_flag_is_turned_off(tmp_p
 def test_cargo_warnings_tool_is_in_the_retireable_universe():
     assert deps.NAME_CARGO_AUDIT_WARNINGS in toolset.RUNNER_TOOL_NAMES
     assert deps.NAME_CARGO_AUDIT_WARNINGS not in toolset.PRODUCER_TOOL_NAMES
+
+
+# ------------------ what a GATE should have produced, not what it ever did ---
+# R71 §2. `status`'s skip streak derives each gate's eligible tools from what
+# has PREVIOUSLY APPEARED in that gate's runs, so a scanner that is
+# misconfigured, renamed, or failing from the very first run never enters the
+# universe and is therefore never reported as skipped. An absent security
+# control reads as a healthy one.
+#
+# Neither existing source answers this. `selected_tool_names` unions across
+# EVERY gate (deliberately -- ruff findings must count as selected when
+# checking a pre-commit finding), and `GATE_RUNNER_KEYS` is gate-scoped but
+# holds registry KEYS, which are not what `Finding.tool`/`RUN_STARTED.tools`
+# record: the tests slot records `pytest`, not `tests`. Comparing keys against
+# recorded labels would make a perfectly healthy suite run look skipped.
+
+def test_expected_tool_names_is_scoped_to_one_gate(tmp_path, monkeypatch):
+    from aramid.models import Gate
+
+    root = tmp_path
+    (root / "tests").mkdir()
+    (root / "tests" / "test_x.py").write_text("def test_x():\n    assert True\n",
+                                              encoding="utf-8")
+    cfg = _cfg(tmp_path, monkeypatch, root)
+
+    pre_commit = toolset.expected_tool_names(root, cfg, Gate.PRE_COMMIT)
+    pre_push = toolset.expected_tool_names(root, cfg, Gate.PRE_PUSH)
+
+    # The whole point of scoping: ruff is pre-commit tier, semgrep is pre-push.
+    assert "ruff" in pre_commit
+    assert "ruff" not in pre_push, "ruff at pre-push is what produced the false skip"
+    assert "semgrep" in pre_push
+    assert "semgrep" not in pre_commit
+
+
+def test_expected_tool_names_uses_recorded_labels_not_registry_keys(tmp_path,
+                                                                     monkeypatch):
+    """The alias trap. `GATE_RUNNER_KEYS` says `tests`; `RUN_STARTED.tools`
+    records the runner's own label. If this returned the key, a healthy suite
+    run would be reported skipped forever -- turning a blind spot into a false
+    alarm, which is worse."""
+    from aramid.models import Gate
+
+    root = tmp_path
+    (root / "tests").mkdir()
+    (root / "tests" / "test_x.py").write_text("def test_x():\n    assert True\n",
+                                              encoding="utf-8")
+    cfg = _cfg(tmp_path, monkeypatch, root)
+
+    expected = toolset.expected_tool_names(root, cfg, Gate.PRE_PUSH)
+
+    assert "pytest" in expected, (
+        "must carry the label a run actually records, or the tests slot reads "
+        "as permanently skipped")
+
+
+def test_expected_is_a_subset_of_selected(tmp_path, monkeypatch):
+    """Consistency with the existing universe. `selected_tool_names` is the
+    union across gates, so no single gate may expect a tool the repo does not
+    select at all -- if that ever happens the two have drifted apart and the
+    skip report would name a tool that can never run."""
+    from aramid.models import Gate
+
+    root = tmp_path
+    (root / "tests").mkdir()
+    (root / "tests" / "test_x.py").write_text("def test_x():\n    assert True\n",
+                                              encoding="utf-8")
+    cfg = _cfg(tmp_path, monkeypatch, root)
+
+    selected = toolset.selected_tool_names(root, cfg)
+    for gate in (Gate.PRE_COMMIT, Gate.PRE_PUSH):
+        assert toolset.expected_tool_names(root, cfg, gate) <= selected, gate

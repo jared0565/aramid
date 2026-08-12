@@ -116,10 +116,34 @@ def _skip_streak_lines(ledger: Ledger) -> list[str]:
     lines = []
     for gate in sorted(by_gate):
         gate_runs = by_gate[gate]
-        eligible: set[str] = set()
-        for e in gate_runs:
-            eligible.update(e.payload.get("tools", []))
-        for tool in sorted(eligible):
+        # WHAT THE GATE SHOULD HAVE RUN, from the newest run that recorded it.
+        #
+        # Deriving eligibility from tools that have previously APPEARED cannot
+        # see a scanner that never started: misconfigure semgrep before its
+        # first run and it never enters the universe, so it is never reported
+        # skipped and an absent security control reads as a healthy one. That
+        # is the shape this whole report exists to prevent, and it survived the
+        # fix for the opposite bug.
+        #
+        # Newest-that-has-it rather than a union across runs, so the report
+        # follows config: a tool genuinely removed from a gate stops being
+        # expected on the next run instead of being demanded forever.
+        #
+        # `"expected" in payload` distinguishes ABSENT (a ledger written before
+        # this was recorded -- fall back to the old observed-universe rule, or
+        # every historical repo suddenly reports nothing) from EMPTY (a
+        # positive claim that this gate expects no tools).
+        expected: set[str] | None = None
+        for e in reversed(gate_runs):
+            if "expected" in e.payload:
+                expected = {str(t) for t in (e.payload.get("expected") or ())}
+                break
+        if expected is None:
+            expected = set()
+            for e in gate_runs:
+                expected.update(e.payload.get("tools", []))
+
+        for tool in sorted(expected):
             streak = 0
             for e in reversed(gate_runs):
                 if tool in e.payload.get("tools", []):

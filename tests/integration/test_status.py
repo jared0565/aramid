@@ -856,3 +856,105 @@ def test_an_ordinary_healthy_consumer_reports_nothing(tmp_path, monkeypatch, cap
     out = capsys.readouterr().out
     assert "stood down" not in out
     assert "degraded consumer runs" not in out
+
+
+# ---------- a scanner that NEVER ran must still be reported (R71 §2) ---------
+# The blind spot aramid's own reviewer found in the R64-8 fix. Eligibility was
+# derived from tools that had previously APPEARED in a gate's runs, so a
+# scanner misconfigured, renamed, or failing from the very first run never
+# entered the universe and was never reported skipped. An absent security
+# control read as a healthy one -- and this is the report a consumer repo uses
+# to notice a missing scanner.
+#
+# `RUN_STARTED` now records the gate-scoped `expected` set, computed when the
+# gate and the config are both in hand. Absent on runs written before that,
+# which is why the fallback below has to keep working.
+
+def _run_started(lg, gate, tools, expected=None, at=None):
+    payload = {"gate": gate, "tools": tools}
+    if expected is not None:
+        payload["expected"] = expected
+    lg.append(Event(EventType.RUN_STARTED, "r", at or "2026-01-01T00:00:00+00:00",
+                    payload=payload))
+
+
+def test_a_scanner_that_never_ran_is_reported_skipped(tmp_path, monkeypatch, capsys):
+    root = _repo(tmp_path)
+    _no_user_config(tmp_path, monkeypatch)
+    _write_toml(root, armed=True, bake_started=None)
+
+    lg = Ledger(root / ".aramid" / "ledger.db")
+    # semgrep is expected at pre-push and has NEVER appeared in a single run.
+    for i in range(3):
+        _run_started(lg, "pre-push", ["gitleaks"],
+                     expected=["gitleaks", "semgrep"],
+                     at=f"2026-01-0{i + 1}T00:00:00+00:00")
+    lg.close()
+
+    assert cmd_status(root) == 0
+
+    out = capsys.readouterr().out
+    assert "semgrep: skipped last 3 pre-push run(s)" in out, (
+        "a scanner that never started is exactly the case the old report could "
+        "not express -- absence of a skip line was reading as presence of a scanner")
+
+
+def test_a_tool_that_ran_every_time_is_not_reported(tmp_path, monkeypatch, capsys):
+    """Control. If `expected` alone drove the report, every healthy tool would
+    be listed and the section would be noise."""
+    root = _repo(tmp_path)
+    _no_user_config(tmp_path, monkeypatch)
+    _write_toml(root, armed=True, bake_started=None)
+
+    lg = Ledger(root / ".aramid" / "ledger.db")
+    for i in range(3):
+        _run_started(lg, "pre-push", ["gitleaks", "semgrep"],
+                     expected=["gitleaks", "semgrep"],
+                     at=f"2026-01-0{i + 1}T00:00:00+00:00")
+    lg.close()
+
+    assert cmd_status(root) == 0
+
+    assert "skipped" not in capsys.readouterr().out
+
+
+def test_the_tests_slot_label_does_not_read_as_permanently_skipped(tmp_path,
+                                                                    monkeypatch,
+                                                                    capsys):
+    """The alias trap, end to end. `expected` carries `pytest`, not the `tests`
+    registry key -- if it carried the key, a healthy suite would be reported
+    skipped on every run forever."""
+    root = _repo(tmp_path)
+    _no_user_config(tmp_path, monkeypatch)
+    _write_toml(root, armed=True, bake_started=None)
+
+    lg = Ledger(root / ".aramid" / "ledger.db")
+    _run_started(lg, "pre-push", ["gitleaks", "pytest"],
+                 expected=["gitleaks", "pytest"])
+    lg.close()
+
+    assert cmd_status(root) == 0
+
+    out = capsys.readouterr().out
+    assert "tests: skipped" not in out
+    assert "pytest: skipped" not in out
+
+
+def test_runs_without_expected_still_use_the_observed_universe(tmp_path,
+                                                                monkeypatch,
+                                                                capsys):
+    """Backward compatibility. Ledgers written before `expected` existed must
+    keep reporting exactly as they did -- absent means "too old to record",
+    not "nothing was expected"."""
+    root = _repo(tmp_path)
+    _no_user_config(tmp_path, monkeypatch)
+    _write_toml(root, armed=True, bake_started=None)
+
+    lg = Ledger(root / ".aramid" / "ledger.db")
+    _run_started(lg, "pre-push", ["gitleaks", "semgrep"], at="2026-01-01T00:00:00+00:00")
+    _run_started(lg, "pre-push", ["gitleaks"], at="2026-01-02T00:00:00+00:00")
+    lg.close()
+
+    assert cmd_status(root) == 0
+
+    assert "semgrep: skipped last 1 pre-push run(s)" in capsys.readouterr().out

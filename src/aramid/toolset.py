@@ -95,7 +95,47 @@ def selected_tool_names(root: Path, cfg) -> set[str]:
     """
     ctx = _build_ctx(root, cfg)
     all_keys = {key for keys in GATE_RUNNER_KEYS.values() for key in keys}
-    applicable = {key for key in all_keys if _is_applicable(key, ctx)}
+    return _expand_keys(all_keys, root, ctx)
+
+
+def expected_tool_names(root: Path, cfg, gate) -> set[str]:
+    """Which tool names THIS GATE should produce findings under, right now.
+
+    `selected_tool_names` above answers the same question unioned across every
+    gate, which is right for "can this finding's producer still run anywhere"
+    and wrong for "did this gate run what it was supposed to". Those differ by
+    exactly the tools that are tier-specific: ruff only ever runs at
+    pre-commit, semgrep and tests only at pre-push.
+
+    Exists because `status`'s skip streak had no way to ask this. It derived
+    each gate's universe from tools that had PREVIOUSLY APPEARED in that gate's
+    runs, so a scanner misconfigured, renamed, or failing from the very first
+    run never entered the universe and was never reported skipped -- an absent
+    security control reading as a healthy one. Found by aramid's own reviewer
+    in the change that fixed the opposite bug (a tier-absent tool wrongly
+    reported AS skipped), and reported to the consumer repo that depends on
+    this report.
+
+    Returns recorded LABELS, not registry keys, because that is what
+    `RUN_STARTED.tools` and `Finding.tool` carry -- the tests slot records
+    `pytest`/`npm`/`cargo`, never the literal key. Comparing keys against
+    recorded labels would report a perfectly healthy suite run as skipped
+    forever, which is a worse failure than the blind spot it replaces.
+    """
+    ctx = _build_ctx(root, cfg)
+    keys = set(GATE_RUNNER_KEYS.get(gate, ()))
+    return _expand_keys(keys, root, ctx)
+
+
+def _expand_keys(keys, root: Path, ctx) -> set[str]:
+    """Applicable keys -> the tool name(s) a `Finding.tool` carries for them.
+
+    Split out so `selected_tool_names` and `expected_tool_names` cannot drift:
+    they differ only in WHICH keys they consider, never in how a key expands.
+    The expansion is NOT identity for typecheck, deps or tests (spec section
+    3's table), which is precisely the part that must not be duplicated.
+    """
+    applicable = {key for key in keys if _is_applicable(key, ctx)}
 
     names: set[str] = set()
     for key in applicable:

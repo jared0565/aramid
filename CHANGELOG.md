@@ -10,6 +10,62 @@ to publish a tag that disagrees with it.
 
 ## [Unreleased]
 
+### Fixed
+
+- **`aramid status` could not report a scanner that never ran**, which is the
+  case a missing security control actually looks like. Found by aramid's own
+  LLM reviewer, in the diff that fixed the *opposite* bug — the 0.3.0 change
+  that stopped a tier-absent tool being wrongly reported as skipped derived
+  each gate's eligible set from tools that had **previously appeared** in that
+  gate's runs. Misconfigure semgrep, rename it, or have it fail before it ever
+  records, and it never enters the universe and is never reported at all.
+
+  Pre-existing rather than introduced — the original built its tool set the
+  same way — but it is the same *absent-renders-as-healthy* class as the rest
+  of this work, left standing in the function being edited.
+
+  Neither existing source could answer it. `toolset.selected_tool_names` unions
+  across **every** gate (deliberately: ruff findings must count as selected
+  when checking a pre-commit finding), and `GATE_RUNNER_KEYS` is gate-scoped
+  but holds registry **keys**, which are not what runs record — the tests slot
+  records `pytest`, never `tests`, so comparing keys to labels would report a
+  healthy suite as skipped forever. Turning a blind spot into a false alarm is
+  the worse trade.
+
+  `RUN_STARTED` now records a gate-scoped `expected` set, computed in
+  `run_gate` because that is the only place holding the gate and the config at
+  once — `status` reads a historical event and can re-derive neither. New
+  `toolset.expected_tool_names(root, cfg, gate)` shares the key→label expansion
+  with `selected_tool_names` via `_expand_keys`, so the two cannot drift.
+
+  Absent-vs-empty is load-bearing here too: a ledger with no `expected` key
+  falls back to the old observed-universe rule, while an empty one is a
+  positive claim that the gate expects nothing.
+
+  Interim advice given to the consumer repo while this was outstanding, and
+  still worth stating: **absence of a skip line was not presence of a
+  scanner** — read `RUN_STARTED.tools` directly.
+
+- **`check --json` undercounted which tools ran, and read like a complete
+  count.** A consumer compared two of aramid's own surfaces for one run and got
+  `['gitleaks', 'semgrep']` from `--json` against
+  `['gitleaks', 'pytest', 'semgrep']` from the ledger.
+
+  `_tool_provenance` is correct: `toolpath.PROVENANCE_TOOLS` holds only the
+  three runner keys that are also executable names, and `tests` is excluded on
+  purpose because there is no `tests.exe`. The **JSON name** was wrong — called
+  `tools`, the provenance map reads as "the tools that ran", so anyone asking
+  "did the suite run in this gate?" reasoned from an undercount.
+
+  Fixed additively: `tools_ran` carries the same value `record_run` writes to
+  `RUN_STARTED` — not a re-derivation, since the two disagreeing is the defect.
+  Renaming `tools` would break anyone reading provenance, and provenance is not
+  a superset of what ran, so one key cannot serve both questions.
+
+  The consumer's framing of the class is better than the one in 0.3.0's notes
+  and is adopted here: not only *what does a report print when it has nothing*,
+  but **what does it print when it has only part of something.**
+
 ## [0.3.0] — 2026-08-12
 
 Cut so a downstream consumer can pin to an immutable artifact instead of running

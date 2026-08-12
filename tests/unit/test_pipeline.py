@@ -2474,3 +2474,83 @@ def test_json_payload_exposes_tools_ran_separately_from_provenance(tmp_path, mon
     assert "pytest" not in payload["tools"], \
         "provenance stays a binary-path map; it is not the answer to 'what ran'"
     ledger.close()
+
+
+def test_run_started_records_what_the_gate_was_expected_to_run(tmp_path, monkeypatch):
+    """Without this the R71-§2 fix is fixture-only.
+
+    `status` can only report a never-started scanner if something wrote down
+    what the gate SHOULD have run, at a moment when the gate and the config
+    were both in hand. That moment is here. Seeding `expected` by hand in the
+    status tests proves the consumer works and says nothing about whether the
+    producer ever emits it.
+    """
+    from aramid.models import EventType
+
+    root = _repo(tmp_path)
+    (root / "tests").mkdir(exist_ok=True)
+    (root / "tests" / "test_x.py").write_text(
+        "def test_x():\n    assert True\n", encoding="utf-8")
+    cfg = _cfg(root, tmp_path, monkeypatch)
+    ledger = _ledger(tmp_path)
+
+    # semgrep is IN the tier and MISSING -- the real shape of a scanner that
+    # never successfully runs. Patching it out of GATE_RUNNER_KEYS instead
+    # would make it legitimately un-expected, which is the opposite case and
+    # is how the first draft of this test fooled itself.
+    monkeypatch.setitem(pipeline.RUNNERS, "gitleaks",
+                         _fake(RunnerResult("gitleaks", ToolState.OK)))
+    monkeypatch.setitem(pipeline.RUNNERS, "semgrep",
+                         _fake(RunnerResult("semgrep", ToolState.MISSING)))
+    monkeypatch.setitem(pipeline.GATE_RUNNER_KEYS, Gate.PRE_PUSH,
+                         ["gitleaks", "semgrep"])
+
+    pipeline.run_gate(root, Gate.PRE_PUSH, "range", cfg, ledger, run_id="run-exp")
+
+    started = [e for e in ledger.events() if e.type is EventType.RUN_STARTED][-1]
+    assert "expected" in started.payload, (
+        "the gate must record what it was supposed to run, or a scanner that "
+        "never started stays invisible forever")
+    # Computed from the real gate tier, not from what happened to run.
+    assert "semgrep" in started.payload["expected"], (
+        "semgrep is pre-push tier; it must be expected even though this run "
+        "never executed it -- that is the entire point")
+    ledger.close()
+
+
+def test_a_never_started_scanner_reaches_status_end_to_end(tmp_path, monkeypatch, capsys):
+    """Producer + consumer together. The recording test proves `expected` is
+    written; the status tests prove it is read, from hand-seeded events. Only
+    this proves a real gate run makes a never-started scanner visible, which is
+    the behaviour that was actually missing."""
+    from aramid.commands.status import cmd_status
+
+    root = _repo(tmp_path)
+    (root / "aramid.toml").write_text("schema_version = 1\n", encoding="utf-8")
+    cfg = _cfg(root, tmp_path, monkeypatch)
+    # Written where `cmd_status` will look for it, so the two halves share one
+    # real ledger rather than a copy -- copying it was how the first draft of
+    # this test failed, and a copy would also be one more thing between the
+    # producer and the consumer than production has.
+    from aramid.ledger import Ledger
+    ledger = Ledger(root / ".aramid" / "ledger.db")
+
+    monkeypatch.setitem(pipeline.RUNNERS, "gitleaks",
+                         _fake(RunnerResult("gitleaks", ToolState.OK)))
+    monkeypatch.setitem(pipeline.RUNNERS, "semgrep",
+                         _fake(RunnerResult("semgrep", ToolState.MISSING)))
+    monkeypatch.setitem(pipeline.GATE_RUNNER_KEYS, Gate.PRE_PUSH,
+                         ["gitleaks", "semgrep"])
+
+    # semgrep never reaches OK, so it never enters scope_tools -- on the old
+    # rule it could never appear in the report at all.
+    for i in range(2):
+        pipeline.run_gate(root, Gate.PRE_PUSH, "range", cfg, ledger,
+                          run_id=f"run-e2e-{i}")
+    ledger.close()
+    capsys.readouterr()   # discard the gates' own console output
+
+    assert cmd_status(root) == 0
+
+    out = capsys.readouterr().out
+    assert "semgrep: skipped last 2 pre-push run(s)" in out, out
