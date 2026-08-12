@@ -121,6 +121,19 @@ class GateResult:
     # the disagreement shows at FIRST detection, where no staleness explanation
     # can reach it.
     ratchet_escalated: tuple = ()
+    # WHAT ACTUALLY RAN, identical to the set `record_run` writes to
+    # RUN_STARTED. Distinct from `tool_provenance` above, which answers "which
+    # BINARY backed this key" and is deliberately limited to
+    # `toolpath.PROVENANCE_TOOLS` -- the three runner keys that are also
+    # executable names.
+    #
+    # Both exist because a consumer compared them and found `--json` reporting
+    # two tools where the ledger recorded three: the provenance map has no
+    # entry for the `tests` slot, since there is no `tests.exe` and probing the
+    # key as a binary is the wrong question, not a slow one. The map was right;
+    # its JSON name (`tools`) made an undercount read as a complete count, and
+    # someone asking "did the suite run in this gate?" got the wrong answer.
+    tools_ran: tuple = ()
 
 
 def _tool_provenance(selected) -> dict:
@@ -1136,4 +1149,8 @@ def run_gate(root: Path, gate: Gate, mode: str, cfg: config_mod.Config, ledger: 
                        new_ids=new_ids, stale_overrides=stale, run_id=run_id,
                        degraded_block_tier=degraded_block_tier,
                        tool_provenance=_tool_provenance(selected),
-                       ratchet_escalated=ratchet_escalated)
+                       ratchet_escalated=ratchet_escalated,
+                       # The SAME value record_run wrote to RUN_STARTED, not a
+                       # re-derivation: the two surfaces disagreeing about what
+                       # ran is the defect this closes.
+                       tools_ran=tuple(sorted(scope_tools)))

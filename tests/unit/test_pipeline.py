@@ -1,3 +1,4 @@
+import json
 import subprocess
 import sys
 import threading
@@ -2393,4 +2394,83 @@ def test_an_intrinsic_block_is_not_recorded_as_escalated(tmp_path, monkeypatch):
     assert fid in result.new_ids, "new, so `new_ids` alone cannot discriminate"
     assert fid not in result.ratchet_escalated, "BLOCK on its own merits"
     assert ledger.open_findings()[fid]["verdict"] == "block", "and the ledger agrees"
+    ledger.close()
+
+
+# ------------- --json and run_started must agree about what ran (R72) --------
+# A consumer compared the two surfaces for one run and found them different:
+#
+#   check --json   tools: ['gitleaks', 'semgrep']
+#   run_started    tools: ['gitleaks', 'pytest', 'semgrep']
+#
+# `--json`'s `tools` block is the PROVENANCE map, which is keyed on runner keys
+# in `toolpath.PROVENANCE_TOOLS` -- deliberately just the three that are also
+# binary names. `tests` is excluded on purpose: there is no `tests.exe`, that
+# slot runs pytest/npm/cargo/go and probing the key as a binary is the wrong
+# question, not a slow one.
+#
+# So the map is right and its NAME is wrong. Called `tools`, it reads as "the
+# tools that ran", and a consumer asking "did the suite actually run in this
+# gate?" got NO from `--json` and YES from the ledger. An undercount is
+# indistinguishable from a complete count -- the neighbour of the absent-vs-bad
+# class this whole exchange has been about, and the consumer named it: ask what
+# a report prints when it has only PART of something.
+#
+# Fixed additively rather than by renaming `tools`: the authoritative list gets
+# its own key, so nothing that reads the provenance map breaks.
+
+def test_json_tools_ran_matches_what_the_ledger_recorded(tmp_path, monkeypatch):
+    root = _repo(tmp_path)
+    # A real test file keeps the "tests" slot applicable -- without it
+    # detect_tests() finds no signal, the runner never runs, and the assertion
+    # below would pass vacuously against an empty scope. The precondition
+    # assert caught exactly that on the first draft of this test.
+    (root / "tests").mkdir(exist_ok=True)
+    (root / "tests" / "test_x.py").write_text(
+        "def test_x():\n    assert True\n", encoding="utf-8")
+    cfg = _cfg(root, tmp_path, monkeypatch)
+    ledger = _ledger(tmp_path)
+
+    # A runner whose `.tool` label is NOT a resolvable binary name -- the exact
+    # shape that went missing (the tests slot reports `.tool == "pytest"`).
+    monkeypatch.setitem(pipeline.RUNNERS, "tests",
+                         _fake(RunnerResult("pytest", ToolState.OK)))
+    monkeypatch.setitem(pipeline.GATE_RUNNER_KEYS, Gate.PRE_PUSH, ["tests"])
+
+    result = pipeline.run_gate(root, Gate.PRE_PUSH, "range", cfg, ledger,
+                               run_id="run-tools")
+
+    from aramid.models import EventType
+    started = [e for e in ledger.events() if e.type is EventType.RUN_STARTED][-1]
+    recorded = started.payload["tools"]
+
+    assert "pytest" in recorded, "precondition: the ledger records the suite ran"
+    assert sorted(result.tools_ran) == sorted(recorded), (
+        "the two surfaces must answer 'what ran' identically -- a consumer "
+        "reasoning about gate coverage from --json was reading an undercount")
+    ledger.close()
+
+
+def test_json_payload_exposes_tools_ran_separately_from_provenance(tmp_path, monkeypatch):
+    """Both keys present and distinct: provenance answers 'which binary', and
+    `tools_ran` answers 'what ran'. Conflating them is the reported bug."""
+    from aramid import reporter
+
+    root = _repo(tmp_path)
+    (root / "tests").mkdir(exist_ok=True)
+    (root / "tests" / "test_x.py").write_text(
+        "def test_x():\n    assert True\n", encoding="utf-8")
+    cfg = _cfg(root, tmp_path, monkeypatch)
+    ledger = _ledger(tmp_path)
+    monkeypatch.setitem(pipeline.RUNNERS, "tests",
+                         _fake(RunnerResult("pytest", ToolState.OK)))
+    monkeypatch.setitem(pipeline.GATE_RUNNER_KEYS, Gate.PRE_PUSH, ["tests"])
+
+    result = pipeline.run_gate(root, Gate.PRE_PUSH, "range", cfg, ledger,
+                               run_id="run-tools2")
+    payload = json.loads(reporter.render_json(result))
+
+    assert "pytest" in payload["tools_ran"]
+    assert "pytest" not in payload["tools"], \
+        "provenance stays a binary-path map; it is not the answer to 'what ran'"
     ledger.close()

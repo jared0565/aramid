@@ -136,5 +136,15 @@ def render_json(result: GateResult) -> str:
         # enough not to record provenance, an EMPTY one means it looked and
         # found nothing. A consumer diffing two runs has to tell those apart.
         "tools": dict(getattr(result, "tool_provenance", {}) or {}),
+        # WHAT RAN, as opposed to `tools` above, which is WHICH BINARY backed
+        # the keys that have one. They are not the same question and the
+        # provenance map is not a superset: the `tests` slot has no executable
+        # named `tests`, so it never appears there however well it ran.
+        #
+        # Added because a consumer read `tools` as the answer to "did the suite
+        # run in this gate?", got two entries where the ledger recorded three,
+        # and reasoned from an undercount. Additive on purpose -- renaming
+        # `tools` would break anyone already reading the provenance map.
+        "tools_ran": sorted(getattr(result, "tools_ran", ()) or ()),
     }
     return json.dumps(payload, indent=2)
