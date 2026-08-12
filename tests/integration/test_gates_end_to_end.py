@@ -477,7 +477,7 @@ def test_graphite_artifacts_excluded_from_findings_and_ledger(
     cfg = config_mod.load_config(root)
 
     # --- filter pass 1: pre-runner file-set filter -------------------------
-    raw_files, _rng = pipeline._discover_files(root, mode)
+    raw_files, _rng, _widened = pipeline._discover_files(root, mode)
     filtered = config_mod.filter_paths(raw_files, cfg)
     assert "graph-out/leak.json" not in filtered
     assert ".graphite_cache/x.py" not in filtered

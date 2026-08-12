@@ -242,9 +242,14 @@ def test_prepush_range_mode_with_real_upstream_still_scans_only_the_range(tmp_pa
     rng = gitutil.resolve_range(root)
     assert rng == "@{u}..HEAD"  # a real range resolved, not None
 
-    files, returned_rng = pipeline._discover_files(root, "range")
+    files, returned_rng, widened = pipeline._discover_files(root, "range")
 
     assert returned_rng == rng
     assert returned_rng != pipeline.FULL_HISTORY_RNG
     assert files == ["new_file.py"]     # only the unpushed commit's change
+    # A genuine range was resolved, so nothing was widened and the run must
+    # not claim otherwise -- the note exists to explain a scan that covered
+    # more than the push, and printing it here would be a lie in the other
+    # direction.
+    assert widened is None
     assert "README.md" not in files     # already-pushed content excluded
