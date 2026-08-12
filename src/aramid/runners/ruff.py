@@ -9,7 +9,8 @@ import json
 from dataclasses import replace
 
 from aramid.normalizer import RawFinding
-from aramid.runners.base import RunnerResult, ToolState, run_subprocess
+from aramid.runners.base import (RunnerResult, ToolState, run_subprocess,
+                                  scanned_line_reader)
 from aramid.runners._util import json_or_crashed, relativize
 
 NAME = "ruff"
@@ -80,6 +81,9 @@ def parse(result: RunnerResult, ctx) -> list[RawFinding]:
     if result.state is not ToolState.OK:
         return []
     items = json.loads(result.raw or "[]")
+    # ruff's JSON carries the row but not the source line, so read it back from
+    # the file ruff just scanned. See runners/base.scanned_line_reader.
+    line_at = scanned_line_reader()
     return [
         RawFinding(
             tool=NAME,
@@ -88,6 +92,7 @@ def parse(result: RunnerResult, ctx) -> list[RawFinding]:
             file=relativize(item["filename"], ctx.root),
             line=item["location"]["row"],
             message=item["message"],
+            line_content=line_at(item["filename"], item["location"]["row"]),
         )
         for item in items
     ]

@@ -18,6 +18,24 @@ class RawFinding:
     line: int
     message: str
     secret: str | None = None
+    # The source line the RUNNER actually read, when the runner scanned bytes
+    # it can vouch for. Set it and `normalize` fingerprints THIS string instead
+    # of re-reading the line by number out of a git object.
+    #
+    # Why it exists: `line` comes from a scanner that read the WORKING TREE,
+    # while `ref_for` picks a blob (the INDEX at pre-commit). Those two agree
+    # right up until someone has an unstaged edit, and then
+    # `lines[raw.line - 1]` is a different line of code than the one that was
+    # flagged. Measured consequence: an unreviewed statement inherited a
+    # SUPPRESSED finding's id and was downgraded to INFO -- a suppression
+    # written for one line covering another. See tests/integration/
+    # test_fingerprint_modes.py Part C.
+    #
+    # Additive on purpose. Adapters that leave it None keep today's ref lookup
+    # exactly, which is what gitleaks' history scan needs: it reports lines out
+    # of OLD COMMITS, so the working tree is the wrong place to read them and
+    # `commit`/`ref_for` above is the right one.
+    line_content: str | None = None
     # Commit sha the finding was read from, when known (gitleaks' `git log`
     # history-scan path only -- see runners/gitleaks.py). Additive/optional:
     # every other adapter and every staged/protect-mode gitleaks finding
@@ -45,10 +63,17 @@ def normalize(raws: list[RawFinding], root: Path, ref_for: Callable[[str], str],
     findings: list[Finding] = []
 
     for raw in raws:
-        content = gitutil.read_for_fingerprint(root, ref_for(raw.file), raw.file)
-        lines = content.splitlines()
-        idx = raw.line - 1
-        line_content = lines[idx] if 0 <= idx < len(lines) else ""
+        if raw.line_content is not None:
+            # The runner handed us the bytes it scanned. Trust them over a
+            # second lookup: re-reading `lines[raw.line - 1]` out of a
+            # different revision is what let a finding be identified by a line
+            # that was never flagged.
+            line_content = raw.line_content
+        else:
+            content = gitutil.read_for_fingerprint(root, ref_for(raw.file), raw.file)
+            lines = content.splitlines()
+            idx = raw.line - 1
+            line_content = lines[idx] if 0 <= idx < len(lines) else ""
 
         occ_key = (raw.tool, raw.rule, raw.file, normalize_line(line_content))
         # pin_occurrence (M5): variable-set drain consumers (mutation, fuzz)

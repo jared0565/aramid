@@ -10,6 +10,54 @@ to publish a tag that disagrees with it.
 
 ## [Unreleased]
 
+### Fixed
+
+- **A suppression could be inherited by a line nobody adjudicated.** Reported
+  from a downstream repo as "suppression ids bind to position, so a cosmetic
+  edit un-suppresses". The premise was right and the mechanism was not, and the
+  real one is a security defect rather than an ergonomic one.
+
+  `compute_fingerprint` has no line number in it, and a *staged* comment
+  insertion is perfectly stable — measured, as a control. What is not stable is
+  the pair of sources `normalizer.normalize` was reading from: the line
+  **number** came from the scanner, which read the **working tree**, while the
+  line **content** came from a blob chosen by `_ref_for_builder` — the
+  **index** at pre-commit. Those agree until anyone has an unstaged edit, and
+  then `lines[raw.line - 1]` is a different line of code than the one that was
+  flagged.
+
+  Measured consequence, with a firing control (same suppression bound
+  correctly when nothing was skewed):
+
+  ```
+  [select]      8c148186f0b3  S608 app.py:2  verdict=block   <- baseline
+  [suppressed]  8c148186f0b3  S608 app.py:2  verdict=info    <- control
+  [skew]        8c148186f0b3  S608 app.py:2  verdict=info    <- the DELETE line
+  ```
+
+  The index held a reviewed `"SELECT * FROM " + table`; the working tree held a
+  never-reviewed `"DELETE FROM " + table`. The DELETE was reported under the
+  SELECT's id and downgraded to INFO. **A decision made about one statement
+  silently covered a different one** — the direction a security tool may not
+  fail in. The reported symptom (adjudicated findings resurfacing) is the same
+  bug pointing the other way.
+
+  Fix: the runner already read the line, so it now carries it.
+  `RawFinding.line_content` is optional and additive; `normalize` fingerprints
+  it when present and falls back to today's ref lookup when absent.
+
+  **Converted: `ruff` and `semgrep`** — both scan the working tree, and both
+  produced this. **Not converted: `gitleaks`**, deliberately. Its history scan
+  reports lines out of *old commits*, where the working tree is the wrong place
+  to look and the existing `commit`/`ref_for` path is correct. Consumers are
+  unchanged. Naming which runners moved matters: a half-restored invariant that
+  reads as a whole one is the defect class this release keeps finding.
+
+  **Id churn is limited to findings that were already skewed.** A fully-staged
+  repo fingerprints identically before and after — the cross-mode stability
+  test (pre-commit / pre-push / --all) still passes unchanged. Nobody needs to
+  re-adjudicate a suppression that was binding correctly.
+
 ### Changed
 
 - **One grammar down the `status` column: every head-scoped consumer note now

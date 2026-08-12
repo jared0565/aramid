@@ -10,7 +10,8 @@ from dataclasses import replace
 from pathlib import Path
 
 from aramid.normalizer import RawFinding
-from aramid.runners.base import RunnerResult, ToolState, run_subprocess
+from aramid.runners.base import (RunnerResult, ToolState, run_subprocess,
+                                  scanned_line_reader)
 from aramid.runners._util import json_or_crashed, relativize
 
 NAME = "semgrep"
@@ -190,6 +191,12 @@ def parse(result: RunnerResult, ctx) -> list[RawFinding]:
     if result.state is not ToolState.OK:
         return []
     data = json.loads(result.raw or "{}")
+    # Read the flagged line back off the file semgrep just scanned rather than
+    # letting `normalize` re-read it by number out of a git blob. semgrep does
+    # ship `extra.lines`, but it is the whole MATCH (multi-line for a
+    # multi-line pattern) and some configs replace it with a placeholder, so
+    # the file is the more predictable source. See base.scanned_line_reader.
+    line_at = scanned_line_reader()
     return [
         RawFinding(
             tool=NAME,
@@ -198,6 +205,7 @@ def parse(result: RunnerResult, ctx) -> list[RawFinding]:
             file=relativize(item["path"], ctx.root),
             line=item["start"]["line"],
             message=item["extra"]["message"],
+            line_content=line_at(item["path"], item["start"]["line"]),
         )
         for item in data.get("results", [])
     ]

@@ -278,3 +278,123 @@ def test_stale_override_re_fires_at_normal_tier_after_line_edit(
     assert original.id in console
     assert "aramid override" in console
     assert ".aramid-suppressions.toml" in console
+
+
+# ============ Part C: the id must follow the bytes that were SCANNED ========
+# Part A proves ids agree across modes when the working tree and the git object
+# agree. They do not always agree, and nothing above tested that.
+#
+# `normalizer.normalize` takes the line NUMBER from the scanner (which read the
+# working tree) and the line CONTENT from a blob chosen by `_ref_for_builder`
+# (the INDEX at pre-commit). An ordinary partially-staged edit desynchronises
+# them, and the fingerprint then hashes a DIFFERENT LINE OF CODE than the one
+# that was flagged.
+#
+# Reported from a downstream repo as "suppression ids bind to position, so a
+# cosmetic edit un-suppresses". That diagnosis is wrong -- compute_fingerprint
+# has no line number in it and a STAGED comment insertion is stable (measured).
+# The premise was right and the mechanism was not, which is why this is pinned
+# by the invariant rather than by the symptom they saw.
+
+
+def _staged(root: Path, src: str) -> None:
+    """Write `src` and stage it.
+
+    danger.py is deliberately never COMMITTED in Part C. `staged_files` diffs
+    the index against HEAD, so a committed file re-staged with identical
+    content stages nothing, leaves scope, and the gate returns zero findings --
+    which reads exactly like "the ids matched". The first version of these
+    tests committed it and failed with `assert 0 == 1` instead of an id
+    mismatch. Left uncommitted, danger.py is an added path and stays in scope
+    no matter what its content is.
+    """
+    (root / "danger.py").write_text(src, encoding="utf-8")
+    _git(root, "add", "danger.py")
+
+
+@pytest.mark.skipif(_RUFF_BIN is None, reason=_SKIP_RUFF)
+def test_fingerprint_follows_the_scanned_bytes_not_the_staged_blob(
+        tmp_path, monkeypatch, live_ruff_path_env):
+    root = _init_repo_with_upstream(tmp_path)
+    _no_user_config(tmp_path, monkeypatch)
+    monkeypatch.setitem(pipeline.RUNNERS, "gitleaks", _gitleaks_clean())
+
+    cfg = config_mod.load_config(root)
+    ledger = Ledger(root / ".aramid" / "ledger.db")
+    try:
+        # Reference ids, each with the index and the working tree in agreement.
+        _staged(root, _EXEC_SRC)
+        id_x = _s102(pipeline.run_gate(root, Gate.PRE_COMMIT, "staged", cfg,
+                                        ledger, run_id="c-x").findings).id
+        _staged(root, _EXEC_SRC_EDITED)
+        id_y = _s102(pipeline.run_gate(root, Gate.PRE_COMMIT, "staged", cfg,
+                                        ledger, run_id="c-y").findings).id
+        assert id_x != id_y, \
+            "precondition: the two line contents must fingerprint differently"
+
+        # SKEW: index holds exec(x); the working tree -- the bytes ruff reads --
+        # holds exec(y). Nothing here is exotic; it is an unstaged edit.
+        _staged(root, _EXEC_SRC)
+        (root / "danger.py").write_text(_EXEC_SRC_EDITED, encoding="utf-8")
+        skewed = _s102(pipeline.run_gate(root, Gate.PRE_COMMIT, "staged", cfg,
+                                          ledger, run_id="c-skew").findings)
+    finally:
+        ledger.close()
+
+    assert skewed.id == id_y, (
+        "the finding was raised against exec(y) -- the line ruff actually read "
+        "-- so its identity must be exec(y)'s")
+    assert skewed.id != id_x, (
+        "hashing the INDEX line means this finding is identified by a line of "
+        "code that was never flagged")
+
+
+@pytest.mark.skipif(_RUFF_BIN is None, reason=_SKIP_RUFF)
+def test_a_suppression_cannot_be_inherited_by_a_line_it_never_adjudicated(
+        tmp_path, monkeypatch, live_ruff_path_env):
+    """The consequence the test above exists to prevent, pinned separately.
+
+    Under the skew, an unreviewed statement is reported under a SUPPRESSED
+    finding's id and silently downgraded to INFO -- a suppression written for
+    one line covering a different one. Measured before the fix with a firing
+    control (the same suppression bound correctly with no skew), so this is the
+    security direction, not a hypothetical.
+    """
+    root = _init_repo_with_upstream(tmp_path)
+    _no_user_config(tmp_path, monkeypatch)
+    monkeypatch.setitem(pipeline.RUNNERS, "gitleaks", _gitleaks_clean())
+
+    cfg = config_mod.load_config(root)
+    ledger = Ledger(root / ".aramid" / "ledger.db")
+    try:
+        _staged(root, _EXEC_SRC)
+        adjudicated = _s102(pipeline.run_gate(root, Gate.PRE_COMMIT, "staged",
+                                               cfg, ledger, run_id="d-1").findings)
+        (root / ".aramid-suppressions.toml").write_text(
+            "[[suppress]]\n"
+            f'id = "{adjudicated.id}"\n'
+            'tool = "ruff"\nrule = "S102"\npath = "danger.py"\n'
+            'reason = "reviewed: exec(x) is fed from an internal allowlist"\n',
+            encoding="utf-8")
+
+        # Control: with no skew the suppression binds, so a later INFO cannot
+        # be mistaken for "suppressions never work here".
+        _staged(root, _EXEC_SRC)
+        bound = _s102(pipeline.run_gate(root, Gate.PRE_COMMIT, "staged", cfg,
+                                         ledger, run_id="d-2").findings)
+        assert bound.verdict is Verdict.INFO, \
+            "control: the suppression must bind when nothing is skewed"
+
+        # Treatment: index still exec(x) (the adjudicated line); disk is
+        # exec(y), which nobody reviewed.
+        _staged(root, _EXEC_SRC)
+        (root / "danger.py").write_text(_EXEC_SRC_EDITED, encoding="utf-8")
+        unreviewed = _s102(pipeline.run_gate(root, Gate.PRE_COMMIT, "staged",
+                                              cfg, ledger, run_id="d-3").findings)
+    finally:
+        ledger.close()
+
+    assert unreviewed.id != adjudicated.id, \
+        "an unreviewed line must not inherit an adjudicated line's identity"
+    assert unreviewed.verdict is Verdict.BLOCK, \
+        "an unreviewed exec() must not be suppressed by a decision made about a different line"

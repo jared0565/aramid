@@ -15,6 +15,41 @@ class ToolState(StrEnum):
     CRASHED = "crashed"
     TIMEOUT = "timeout"
 
+
+def scanned_line_reader():
+    """A cached `(path, row) -> line | None` reader over the working tree.
+
+    For runners that scan files on disk. The runner ran moments ago against
+    exactly these bytes, so reading them back here is reading what the scanner
+    saw -- which is the point: `normalizer.normalize` otherwise re-reads the
+    line BY NUMBER out of a git blob that may be a different revision, and then
+    the fingerprint describes a line that was never flagged.
+
+    Caches per file, not per finding: a rule that fires forty times in one file
+    must not re-read that file forty times.
+
+    Returns None when the file is unreadable or the row is out of range, which
+    routes that finding back to the ref lookup rather than fingerprinting it as
+    the empty string -- distinct inputs must not collapse to one id.
+    """
+    cache: dict[str, list[str] | None] = {}
+
+    def read(path: str, row: int) -> str | None:
+        lines = cache.get(path, ...)
+        if lines is ...:
+            try:
+                lines = (Path(path).read_text(errors="replace")
+                          .replace("\r\n", "\n").splitlines())
+            except OSError:
+                lines = None
+            cache[path] = lines
+        if lines is None:
+            return None
+        idx = row - 1
+        return lines[idx] if 0 <= idx < len(lines) else None
+
+    return read
+
 @dataclass
 class RunnerResult:
     tool: str
