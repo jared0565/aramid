@@ -10,7 +10,75 @@ to publish a tag that disagrees with it.
 
 ## [Unreleased]
 
+## [0.3.0] — 2026-08-12
+
+Cut so a downstream consumer can pin to an immutable artifact instead of running
+an editable install of this repo's working tree. Everything below came out of
+interop rounds 64–69 with that consumer, which ran the gate against a real
+2900-test repo for several days and reported what it saw.
+
+**The whole release is one defect class**, found nine times: *a report that
+cannot distinguish "absent" from "bad".* A timeout reported as a failing test. A
+give-up recorded as success. `kill-rate n/a (0/0)` rendered like a low score. A
+line number frozen while the code moved. `skipped` covering three different
+states. A run that generated 18 mutants, tested none, and reported `ok`. Each
+one sent a reader toward the opposite of the correct remedy.
+
+### ⚠ Downgrading from 0.3.0 is one-way
+
+`Ledger.events()` constructs `EventType(value)` strictly, so **an aramid that
+does not know an event type raises on every read** — `status`, `check`, all of
+it. 0.3.0 writes two event types 0.2.0 has never seen (`finding_moved`,
+`resolver_yield`), so once a 0.3.0 gate has run, that repo's `.aramid/ledger.db`
+can no longer be read by 0.2.0.
+
+Verified, not inferred: `EventType('some_future_event')` raises `ValueError`.
+
+Nothing is lost — the ledger is intact and 0.3.0 reads it fine — but a rollback
+needs the ledger moved aside. Deliberately **not** "fixed" by making unknown
+events skippable: silently ignoring an event a future version considered
+important (a resolution, a suppression) is a worse failure than a loud one, in
+an append-only audit trail. Flagged rather than papered over.
+
+### Added
+
+- `aramid ledger filter --json`, and `--gate`-free structured output generally:
+  the one-line text row put id, `tool:rule`, `file:line` and a free-text message
+  on one line, which silently mis-tagged a consumer's batch of 26 overrides.
+- `[mutation].baseline_timeout_s` / `[js_mutation].baseline_timeout_s`.
+- `finding_moved` ledger event, so a finding's reported line follows the code.
+- `injection-dataflow.python-query-built-then-executed` — WARN-tier SQLi rule
+  covering build-then-execute, which the existing call-site-only rule was blind
+  to (measured 3/3 inline caught, 0/4 assigned).
+- `aramid status`: `consumers stood down:` and `consumers doing no work:`.
+- `check --json`: `escalated_by_ratchet` and `verdict_before_ratchet` per
+  finding.
+
 ### Fixed
+
+- **`check --json` reported `block` for findings the ledger recorded as `warn`,
+  with no way to tell why.** Reported by a consumer that came within one step of
+  concluding a deliberate WARN-tier rule decision had failed.
+
+  Diagnosed first as staleness and **that diagnosis was wrong** — the consumer
+  measured the disagreement at *first detection*, where staleness cannot reach.
+  The real mechanism: `run_gate` calls `record_run` **before** the
+  no-new-warnings ratchet, and the ratchet then rebinds `findings`. Both values
+  are computed in the same run and both are correct for their own purpose — the
+  ledger holds the intrinsic verdict, `--json` the effective one for this push.
+
+  So `verdict: block` was covering two conditions with opposite remedies: fix
+  the security issue, versus you added a new warning and it stops escalating
+  once the finding is no longer new. `new_ids` was already in the payload and is
+  **not** sufficient to derive this, since a brand-new finding can be BLOCK on
+  its own merits. Now stated explicitly.
+
+  aramid already knew: it is written down in
+  `tests/integration/test_gates_end_to_end.py` as "an artifact of the ratchet" —
+  in a place no consumer would ever read.
+
+- Three more emitted strings carrying a literal U+2014, which a redirected
+  Windows stdout writes as the invalid byte `0x97`.
 
 - **A new vendored rule namespace was not registered, so its findings carried a
   machine-dependent id.** Introduced by the SQLi rule in `6c86ec9` and caught by

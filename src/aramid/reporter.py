@@ -17,7 +17,13 @@ ROTATE_WARNING = "rotate the credential — deleting the line does not fix the l
 
 
 def _render_finding(f: Finding) -> str:
-    line = f"  [{f.verdict.value.upper()}] {f.id} {f.tool}:{f.rule} {f.file}:{f.line} — {f.message}"
+    # ASCII `--`, for the reason `ledger_cmd._render_row` is: a literal U+2014
+    # goes out as the single byte 0x97 under a redirected stdout on Windows,
+    # which is not valid UTF-8. `cli.main` now reconfigures the stream so this
+    # is belt-and-braces rather than the fix, but there is no reason for a
+    # separator to be non-ASCII and every other rendered line here already
+    # uses `--`.
+    line = f"  [{f.verdict.value.upper()}] {f.id} {f.tool}:{f.rule} {f.file}:{f.line} -- {f.message}"
     if f.tool == "gitleaks":
         line += f"\n      {ROTATE_WARNING}"
     return line
@@ -62,7 +68,7 @@ def render_console(result: GateResult, ledger: Ledger) -> str:
         for f in new_findings:
             lines.append(_render_finding(f))
     if still_blocking:
-        lines.append(f"STILL BLOCKING ({len(still_blocking)}) — seen before, "
+        lines.append(f"STILL BLOCKING ({len(still_blocking)}) -- seen before, "
                      "and still failing this gate:")
         for f in still_blocking:
             lines.append(_render_finding(f))
@@ -85,7 +91,7 @@ def render_console(result: GateResult, ledger: Ledger) -> str:
         # file is now the correct answer at either tier, and it is the only
         # one of the two a teammate ever sees.
         lines.append(
-            f"stale override {record.id} — re-affirm it: `aramid override {record.id} --reason` "
+            f"stale override {record.id} -- re-affirm it: `aramid override {record.id} --reason` "
             "(WARN only, machine-local) or an entry in .aramid-suppressions.toml "
             "(any tier, committed)"
         )
@@ -96,9 +102,33 @@ def render_console(result: GateResult, ledger: Ledger) -> str:
 def render_json(result: GateResult) -> str:
     # Finding.evidence is already redacted by the normalizer -- this is pure
     # dataclass->dict serialization, nothing here adds raw material back in.
+    # WHY a finding is BLOCK, not only that it is. The no-new-warnings ratchet
+    # escalates a brand-new WARN to BLOCK, so `verdict` alone covers two
+    # conditions with opposite remedies: an intrinsic BLOCK is a security
+    # finding to fix, a ratchet escalation is a new warning that stops
+    # escalating once the finding is no longer new. A consumer scripting this
+    # output read the second as the first and nearly reported that a deliberate
+    # WARN-tier rule decision had failed.
+    #
+    # `new_ids` was already here and is NOT sufficient to derive this: a
+    # brand-new finding can be BLOCK on its own merits, and telling the two
+    # apart otherwise means reimplementing the ratchet's exemption list.
+    #
+    # Both keys are always present. An absent key means an aramid too old to
+    # record provenance; `false` means it looked -- the same absent-vs-empty
+    # contract as `tools` below.
+    escalated = set(getattr(result, "ratchet_escalated", ()) or ())
+
+    def _finding(f) -> dict:
+        d = dataclasses.asdict(f)
+        was = f.id in escalated
+        d["escalated_by_ratchet"] = was
+        d["verdict_before_ratchet"] = "warn" if was else d.get("verdict")
+        return d
+
     payload = {
         "exit_code": result.exit_code,
-        "findings": [dataclasses.asdict(f) for f in result.findings],
+        "findings": [_finding(f) for f in result.findings],
         "degraded": list(result.degraded),
         "new_ids": list(result.new_ids),
         "stale_overrides": [dataclasses.asdict(s) for s in result.stale_overrides],

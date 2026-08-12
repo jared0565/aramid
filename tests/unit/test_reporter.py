@@ -118,7 +118,7 @@ def test_stale_override_renders_reaffirm_line(tmp_path):
     # tier-agnostic: the file is now the right answer at EITHER tier, and it
     # is the only one a teammate ever sees. The routes differ in reach, so
     # that is what the line names.
-    assert ("stale override stale1 — re-affirm it: `aramid override stale1 --reason` "
+    assert ("stale override stale1 -- re-affirm it: `aramid override stale1 --reason` "
             "(WARN only, machine-local) or an entry in .aramid-suppressions.toml "
             "(any tier, committed)") in out
     ledger.close()
@@ -203,3 +203,64 @@ def test_render_json_never_contains_raw_secret():
     # assert on the round-tripped value, not a literal substring of `out`.
     parsed = json.loads(out)
     assert parsed["findings"][0]["evidence"] == redacted_evidence
+
+
+# ------------------------- intrinsic BLOCK vs ratchet-escalated WARN (R69) ---
+# A consumer scripting `check --json` read `verdict: block` for a rule we
+# deliberately shipped as WARN, and came within one step of reporting that the
+# tier decision had failed. Neither value was wrong: `pipeline.run_gate` calls
+# `record_run` BEFORE the no-new-warnings ratchet and the ratchet then rebinds
+# `findings`, so the ledger holds the intrinsic verdict and `--json` reports the
+# effective one for this push. Both computed in the same run -- which is why the
+# consumer measured the disagreement at FIRST detection, where staleness cannot
+# reach.
+#
+# The defect is that one word covers two conditions demanding opposite
+# responses: an intrinsic BLOCK means fix the security issue; a ratchet
+# escalation means you added a new warning, and it stops escalating once the
+# finding is no longer new. aramid knew this -- it is written down in
+# tests/integration/test_gates_end_to_end.py as "an artifact of the ratchet" --
+# but only ever in a place no consumer would read.
+
+def test_json_marks_a_ratchet_escalated_finding_as_such():
+    findings = [_f("newwarn", verdict=Verdict.BLOCK)]
+    result = GateResult(exit_code=1, findings=findings, degraded=[],
+                         new_ids=["newwarn"], stale_overrides=[], run_id="r1",
+                         ratchet_escalated=("newwarn",))
+
+    parsed = json.loads(reporter.render_json(result))
+    f = parsed["findings"][0]
+
+    assert f["verdict"] == "block", "the effective verdict for this push is unchanged"
+    assert f["escalated_by_ratchet"] is True
+    assert f["verdict_before_ratchet"] == "warn", \
+        "the intrinsic verdict must be recoverable without knowing the ratchet rule"
+
+
+def test_json_does_not_mark_an_intrinsic_block():
+    """The control, and the whole point. If every BLOCK were labelled, the
+    label would carry no information -- a consumer still could not tell a
+    security finding from a new-warning escalation."""
+    findings = [_f("realblock", verdict=Verdict.BLOCK)]
+    result = GateResult(exit_code=1, findings=findings, degraded=[],
+                         new_ids=["realblock"], stale_overrides=[], run_id="r1",
+                         ratchet_escalated=())
+
+    f = json.loads(reporter.render_json(result))["findings"][0]
+
+    assert f["verdict"] == "block"
+    assert f["escalated_by_ratchet"] is False
+    assert f["verdict_before_ratchet"] == "block"
+
+
+def test_json_ratchet_field_is_present_even_when_nothing_escalated():
+    """Absent-vs-empty, the distinction this whole exchange has been about. A
+    missing key means an aramid too old to record it; `false` means it looked
+    and this finding was not escalated."""
+    result = GateResult(exit_code=0, findings=[_f("w", verdict=Verdict.WARN)],
+                         degraded=[], new_ids=[], stale_overrides=[], run_id="r1")
+
+    f = json.loads(reporter.render_json(result))["findings"][0]
+
+    assert "escalated_by_ratchet" in f
+    assert f["escalated_by_ratchet"] is False

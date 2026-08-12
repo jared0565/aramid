@@ -104,6 +104,23 @@ class GateResult:
     # someone reads when CI and local disagree: two finding sets are only
     # comparable when the analyzers behind them are.
     tool_provenance: dict = field(default_factory=dict)
+    # Finding ids whose BLOCK verdict came from the no-new-warnings RATCHET
+    # rather than from `policy.classify`. Recorded at the escalation site
+    # below, where both the before and after values are in hand.
+    #
+    # Exists because `verdict: block` alone conflates two conditions that
+    # demand opposite responses: an intrinsic BLOCK ("fix the security issue")
+    # and a new WARN escalated so warning debt cannot accumulate ("you added a
+    # warning; this stops escalating once the finding is no longer new"). A
+    # consumer scripting `check --json` read the second as the first and nearly
+    # reported that a deliberate WARN-tier rule decision had failed.
+    #
+    # `record_run` runs BEFORE the ratchet, so the ledger keeps the intrinsic
+    # verdict while `--json` reports the effective one. Both are correct for
+    # their own purpose and they are computed in the same run -- which is why
+    # the disagreement shows at FIRST detection, where no staleness explanation
+    # can reach it.
+    ratchet_escalated: tuple = ()
 
 
 def _tool_provenance(selected) -> dict:
@@ -862,6 +879,11 @@ def run_gate(root: Path, gate: Gate, mode: str, cfg: config_mod.Config, ledger: 
         suite_completed=(_tests_result is not None
                          and _tests_result.state is ToolState.OK))
 
+    # Bound for EVERY path, not only the pre-push one: pre-commit never
+    # ratchets, and a name defined only inside the branch below would raise on
+    # any other gate the moment the return statement reads it.
+    ratchet_escalated: tuple = ()
+
     if gate is Gate.PRE_PUSH:
         # ---- THE RATCHET, AND THE ONE RULE THAT GOVERNS ITS EXEMPTION LIST --
         # A new WARN escalates to BLOCK so warning debt cannot accumulate. The
@@ -913,13 +935,20 @@ def run_gate(root: Path, gate: Gate, mode: str, cfg: config_mod.Config, ledger: 
         #                       touches them. Holding NEW code to the standard
         #                       is the ratchet working, not the bake failing.
         #   clippy           -- a lint the author wrote and can fix.
+        def _escalates(f) -> bool:
+            return (f.id in new_ids and f.verdict is Verdict.WARN
+                    and f.rule != deps.DEPS_SHAPE_DRIFT_RULE
+                    and f.tool not in ("tdd", "red-proof",
+                                       deps.NAME_CARGO_AUDIT_WARNINGS))
+
+        # Captured here, not re-derived downstream: this is the only place that
+        # holds both the pre- and post-ratchet verdict. A reader given only the
+        # post-ratchet findings cannot tell an escalated WARN from an intrinsic
+        # BLOCK -- `f.id in new_ids` is not sufficient, since a brand-new
+        # finding can be BLOCK on its own merits.
+        ratchet_escalated = tuple(f.id for f in findings if _escalates(f))
         findings = [
-            replace(f, verdict=Verdict.BLOCK)
-            if (f.id in new_ids and f.verdict is Verdict.WARN
-                and f.rule != deps.DEPS_SHAPE_DRIFT_RULE
-                and f.tool not in ("tdd", "red-proof",
-                                   deps.NAME_CARGO_AUDIT_WARNINGS))
-            else f
+            replace(f, verdict=Verdict.BLOCK) if _escalates(f) else f
             for f in findings
         ]
 
@@ -1106,4 +1135,5 @@ def run_gate(root: Path, gate: Gate, mode: str, cfg: config_mod.Config, ledger: 
     return GateResult(exit_code=exit_code, findings=findings, degraded=degraded_tools,
                        new_ids=new_ids, stale_overrides=stale, run_id=run_id,
                        degraded_block_tier=degraded_block_tier,
-                       tool_provenance=_tool_provenance(selected))
+                       tool_provenance=_tool_provenance(selected),
+                       ratchet_escalated=ratchet_escalated)

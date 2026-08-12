@@ -2334,3 +2334,63 @@ def test_all_mode_gets_the_pre_push_budget_not_the_interactive_one():
     assert pipeline._budget_key(Gate.PRE_COMMIT, "range") == "pre_commit"
     assert pipeline._budget_key(Gate.PRE_PUSH, "range") == "pre_push"
     assert pipeline._budget_key(Gate.PRE_PUSH, "all") == "pre_push"
+
+
+# ---------------- the ratchet's escalation is recorded, not just applied (R69) --
+# A consumer scripting `check --json` read `verdict: block` for a WARN-tier rule
+# and nearly reported the tier decision had failed. The disagreement it measured
+# -- ledger `warn`, json `block`, on findings created by that same run -- is not
+# staleness: `record_run` is called BEFORE this escalation and the escalation
+# rebinds `findings`, so both values are computed in one run and both are right
+# for their own purpose.
+#
+# These go through the real `run_gate` on purpose. Asserting on a hand-built
+# GateResult would only prove the serialiser copies a field I set myself.
+
+def test_a_new_warn_is_recorded_as_ratchet_escalated(tmp_path, monkeypatch):
+    root = _repo(tmp_path)
+    cfg = _cfg(root, tmp_path, monkeypatch)
+    ledger = _ledger(tmp_path)
+
+    # E501 is not in any block list -> classifies WARN; brand new -> ratcheted.
+    raw = RawFinding(tool="ruff", rule="E501", severity_raw="medium",
+                      file="a.py", line=1, message="line too long")
+    monkeypatch.setitem(pipeline.RUNNERS, "fake",
+                         _fake(RunnerResult("fake", ToolState.OK), raws=[raw]))
+    monkeypatch.setitem(pipeline.GATE_RUNNER_KEYS, Gate.PRE_PUSH, ["fake"])
+
+    result = pipeline.run_gate(root, Gate.PRE_PUSH, "range", cfg, ledger,
+                               run_id="run-ratchet")
+
+    fid = result.findings[0].id
+    assert result.findings[0].verdict is Verdict.BLOCK, "the ratchet escalated it"
+    assert fid in result.ratchet_escalated, \
+        "and said so -- otherwise a reader cannot tell this from an intrinsic BLOCK"
+    # The ledger keeps the intrinsic verdict: this is the exact disagreement the
+    # consumer measured, now explicable rather than mysterious.
+    assert ledger.open_findings()[fid]["verdict"] == "warn"
+    ledger.close()
+
+
+def test_an_intrinsic_block_is_not_recorded_as_escalated(tmp_path, monkeypatch):
+    """The control. If every new BLOCK were listed, the field would carry no
+    information and the consumer would be no better off than with `new_ids`."""
+    root = _repo(tmp_path)
+    cfg = _cfg(root, tmp_path, monkeypatch)
+    ledger = _ledger(tmp_path)
+
+    raw = RawFinding(tool="ruff", rule="S102", severity_raw="high",
+                      file="a.py", line=1, message="exec used")
+    monkeypatch.setitem(pipeline.RUNNERS, "fake",
+                         _fake(RunnerResult("fake", ToolState.OK), raws=[raw]))
+    monkeypatch.setitem(pipeline.GATE_RUNNER_KEYS, Gate.PRE_PUSH, ["fake"])
+
+    result = pipeline.run_gate(root, Gate.PRE_PUSH, "range", cfg, ledger,
+                               run_id="run-intrinsic")
+
+    fid = result.findings[0].id
+    assert result.findings[0].verdict is Verdict.BLOCK
+    assert fid in result.new_ids, "new, so `new_ids` alone cannot discriminate"
+    assert fid not in result.ratchet_escalated, "BLOCK on its own merits"
+    assert ledger.open_findings()[fid]["verdict"] == "block", "and the ledger agrees"
+    ledger.close()
