@@ -630,16 +630,14 @@ def test_dead_interpolation_is_cleared_for_every_build_form(tmp_path, semgrep_pa
         tmp_path, _REBIND_SRC, name="rebind.py")
 
 
-# --- documented gaps: missed by this rule AND by graphite's oracle ----------
+# --- documented gaps in THIS rule ------------------------------------------
 #
-# Four of the seven real hazards in the fixture are invisible to BOTH
-# instruments -- the failure mode two independent implementations are supposed
-# to rule out. They fail together because they fail for the same structural
-# reason: both reason within one scope about one name. Any recall figure
-# derived by comparing them is uninformative on this class.
+# Four hazardous forms in the fixture are not reported here. Each reason below
+# describes only what this rule does, which is the only thing these tests can
+# measure -- see the note under the list for why that separation exists.
 #
 # xfail rather than an absence assert: a fix should XPASS these.
-_DOUBLE_BLIND = [
+_KNOWN_GAPS = [
     ("bs_cross_function",
      "query assembled in a helper and executed one frame away"),
     ("Repo.run",
@@ -651,10 +649,29 @@ _DOUBLE_BLIND = [
      "`q +=` accumulating in a loop -- no single statement builds the query"),
 ]
 
+# WHY THE REASONS ABOVE DO NOT MENTION THE OTHER INSTRUMENT, though the first
+# version of them did.
+#
+# Round 86 reported that four of these were invisible to graphite's independent
+# taint oracle as well, and this list was written asserting exactly that -- the
+# failure mode two independent implementations are supposed to rule out. Round
+# 88, less than two hours later, corrected it: fixing an unrelated defect in
+# that oracle moved `bs_augmented_in_loop` into its claimed set, leaving three.
+#
+# The number was never mine to state. It describes a tool in another repository
+# that I cannot run and must not read, so every such claim here is inherited,
+# unverifiable from this side, and free to go stale silently -- as it did,
+# within the hour, in a comment that read like a measurement.
+#
+# So these tests now assert only what they can observe, and the cross-tool
+# status lives in the channel record where it is dated and attributed. As of
+# round 88 the forms missed by BOTH are cross-function assembly, the attribute
+# target, and container-built-then-iterated.
+
 
 @pytest.mark.skipif(_SEMGREP_BIN is None, reason=_SKIP_REASON)
-@pytest.mark.parametrize("func,gap", _DOUBLE_BLIND, ids=[f for f, _ in _DOUBLE_BLIND])
-def test_known_double_blind_shapes(tmp_path, semgrep_path_env, func, gap):
-    """These SHOULD be reported and are not."""
+@pytest.mark.parametrize("func,gap", _KNOWN_GAPS, ids=[f for f, _ in _KNOWN_GAPS])
+def test_known_gaps_in_this_rule(tmp_path, semgrep_path_env, func, gap):
+    """These SHOULD be reported by this rule and are not."""
     if func not in _flagged_functions(tmp_path, _BLIND_SPOT_SRC):
-        pytest.xfail(f"known gap, missed by this rule and by graphite's oracle: {gap}")
+        pytest.xfail(f"known gap in this rule: {gap}")

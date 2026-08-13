@@ -124,13 +124,25 @@ to publish a tag that disagrees with it.
   pair, where the *correct* variable-length-clause idiom differs from the
   injection by very little.
 
-  **Four of the seven real hazards are missed by this rule and by the
-  reporter's independent taint oracle alike** — cross-function assembly,
-  attribute targets, container-built-then-iterated, and `+=` in a loop. That is
-  the failure mode two independent implementations are meant to rule out, and
-  they fail together because they fail for the same structural reason: both
-  reason within one scope about one name. Any recall figure derived by
-  comparing them is uninformative on this class.
+  **Four of the seven real hazards are not reported by this rule** —
+  cross-function assembly, attribute targets, container-built-then-iterated,
+  and `+=` in a loop.
+
+  Three of the four are also missed by the reporter's independent taint oracle,
+  which is the failure mode two independent implementations are meant to rule
+  out: they fail together because they fail for the same structural reason,
+  both reasoning within one scope about one name. Any recall figure derived by
+  comparing them is uninformative on that class.
+
+  **That cross-tool count is recorded here as attribution, not as a
+  measurement, and the tests deliberately no longer state it.** It was four
+  when first written and three under two hours later — fixing an unrelated
+  defect in that oracle moved one form into its claimed set. It describes a
+  tool in another repository that cannot be run or read from here, so it is
+  inherited by construction and free to go stale silently, which it did, inside
+  a comment that read like something measured. The tests now assert only what
+  they can observe about this rule; the cross-tool status lives in the channel
+  record where it is dated and attributed.
 
   Those four are marked `xfail`, **not** asserted absent. Asserting them absent
   would encode four defects as expected behaviour and hand a red "regression"
