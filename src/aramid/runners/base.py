@@ -16,37 +16,61 @@ class ToolState(StrEnum):
     TIMEOUT = "timeout"
 
 
-def scanned_line_reader():
-    """A cached `(path, row) -> line | None` reader over the working tree.
+# Fingerprinted in place of a line the scanner flagged but that could not be
+# read back. Deliberately not "" and not None: "" is a real (blank) line, and
+# None routes to the ref lookup -- the very path that let an unreviewed
+# statement inherit a SUPPRESSED finding's id. A value that cannot occur in
+# source guarantees the failure case can never collide with an adjudicated
+# finding. The id is still deterministic, so a persistent failure is stable
+# rather than churning.
+CONTENT_UNREADABLE = "\x00aramid:line-unreadable"
 
-    For runners that scan files on disk. The runner ran moments ago against
-    exactly these bytes, so reading them back here is reading what the scanner
-    saw -- which is the point: `normalizer.normalize` otherwise re-reads the
-    line BY NUMBER out of a git blob that may be a different revision, and then
-    the fingerprint describes a line that was never flagged.
+
+def scanned_line_reader(root):
+    """A cached `(path, row) -> line` reader over the bytes a runner scanned.
+
+    The runner ran moments ago against exactly these files, so reading them
+    back here reads what the scanner saw. That is the point:
+    `normalizer.normalize` otherwise re-reads the line BY NUMBER out of a git
+    blob that may be a different revision, and the fingerprint then describes a
+    line that was never flagged.
+
+    `root` is REQUIRED and is the runner's `ctx.root`. Tool-reported paths are
+    not uniformly absolute -- semgrep runs with `cwd=ctx.root` and reports
+    invocation-relative paths, while ruff reports absolute ones -- and
+    resolving a relative path against the aramid PROCESS's cwd is wrong
+    whenever the two differ (a `check` run from a subdirectory, a hook invoked
+    from elsewhere). That either fails, silently reverting to the ref lookup
+    this exists to avoid, or -- worse -- finds a same-named file somewhere else
+    and succeeds, fingerprinting a line from an unrelated file.
 
     Caches per file, not per finding: a rule that fires forty times in one file
-    must not re-read that file forty times.
+    must not re-read it forty times.
 
-    Returns None when the file is unreadable or the row is out of range, which
-    routes that finding back to the ref lookup rather than fingerprinting it as
-    the empty string -- distinct inputs must not collapse to one id.
+    Never returns None. An unreadable file or an out-of-range row yields
+    `CONTENT_UNREADABLE`, so a converted runner always makes a positive
+    statement about what it saw and the ambiguous "runner said nothing" case
+    stays reserved for runners that do not participate at all.
     """
+    base = Path(root)
     cache: dict[str, list[str] | None] = {}
 
-    def read(path: str, row: int) -> str | None:
+    def read(path: str, row: int) -> str:
         lines = cache.get(path, ...)
         if lines is ...:
+            p = Path(path)
+            if not p.is_absolute():
+                p = base / p
             try:
-                lines = (Path(path).read_text(errors="replace")
+                lines = (p.read_text(errors="replace")
                           .replace("\r\n", "\n").splitlines())
             except OSError:
                 lines = None
             cache[path] = lines
         if lines is None:
-            return None
+            return CONTENT_UNREADABLE
         idx = row - 1
-        return lines[idx] if 0 <= idx < len(lines) else None
+        return lines[idx] if 0 <= idx < len(lines) else CONTENT_UNREADABLE
 
     return read
 

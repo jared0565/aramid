@@ -196,7 +196,10 @@ def parse(result: RunnerResult, ctx) -> list[RawFinding]:
     # ship `extra.lines`, but it is the whole MATCH (multi-line for a
     # multi-line pattern) and some configs replace it with a placeholder, so
     # the file is the more predictable source. See base.scanned_line_reader.
-    line_at = scanned_line_reader()
+    # ctx.root, not the process cwd: semgrep runs with `cwd=ctx.root` and
+    # reports invocation-relative paths, so a bare Path(...) would resolve them
+    # against wherever aramid was invoked from.
+    line_at = scanned_line_reader(ctx.root)
     return [
         RawFinding(
             tool=NAME,

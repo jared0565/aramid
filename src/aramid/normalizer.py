@@ -35,6 +35,14 @@ class RawFinding:
     # exactly, which is what gitleaks' history scan needs: it reports lines out
     # of OLD COMMITS, so the working tree is the wrong place to read them and
     # `commit`/`ref_for` above is the right one.
+    #
+    # None therefore means "this runner does not participate", NOT "this runner
+    # tried and failed". A converted runner always sets a string -- see
+    # `runners/base.CONTENT_UNREADABLE`, which it uses when the file is gone or
+    # the row is out of range. Keeping those two cases apart is load-bearing:
+    # if a failed read fell through to the ref lookup, the rare failure path
+    # would quietly reinstate the exact hazard this field removes, and nothing
+    # in the output would say which source an id came from.
     line_content: str | None = None
     # Commit sha the finding was read from, when known (gitleaks' `git log`
     # history-scan path only -- see runners/gitleaks.py). Additive/optional:

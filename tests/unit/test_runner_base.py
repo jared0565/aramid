@@ -1,6 +1,72 @@
 import sys
 import time
-from aramid.runners.base import run_subprocess, ToolState
+from aramid.runners.base import (CONTENT_UNREADABLE, run_subprocess, ToolState,
+                                  scanned_line_reader)
+
+
+# ------------------------------------------- scanned_line_reader (R77-3) ----
+# The fingerprint fix depends on reading back the line a runner scanned. A
+# tool-reported path is not uniformly absolute -- semgrep runs with
+# `cwd=ctx.root` and reports invocation-relative paths -- so resolving one
+# against the aramid PROCESS's cwd is wrong whenever the two differ. Flagged by
+# aramid's own reviewer against the commit that introduced this.
+
+
+def test_a_relative_tool_path_resolves_against_root_not_the_process_cwd(tmp_path, monkeypatch):
+    root = tmp_path / "repo"
+    (root / "pkg").mkdir(parents=True)
+    (root / "pkg" / "a.py").write_text("zero\none\ntwo\n", encoding="utf-8")
+
+    # A same-named file somewhere else, holding DIFFERENT content. This is the
+    # dangerous half: resolving against the wrong root can silently succeed and
+    # fingerprint a line from an unrelated file, rather than merely failing.
+    elsewhere = tmp_path / "elsewhere"
+    (elsewhere / "pkg").mkdir(parents=True)
+    (elsewhere / "pkg" / "a.py").write_text("DECOY\nDECOY\nDECOY\n", encoding="utf-8")
+
+    monkeypatch.chdir(elsewhere)
+    read = scanned_line_reader(root)
+
+    assert read("pkg/a.py", 2) == "one", \
+        "a relative path must resolve against the runner's root, not os.getcwd()"
+
+
+def test_an_absolute_tool_path_is_used_as_given(tmp_path):
+    root = tmp_path / "repo"
+    root.mkdir()
+    f = root / "b.py"
+    f.write_text("alpha\nbeta\n", encoding="utf-8")
+    read = scanned_line_reader(root)
+    assert read(str(f), 2) == "beta"
+
+
+def test_an_unreadable_file_or_row_yields_the_sentinel_not_none(tmp_path):
+    """None means "this runner does not participate" and routes to the ref
+    lookup -- the skewed path the sentinel exists to keep failures out of. A
+    converted runner must always make a positive statement, so a failed read
+    gets a value that cannot occur in source and therefore cannot collide with
+    an adjudicated finding's id."""
+    root = tmp_path / "repo"
+    root.mkdir()
+    (root / "c.py").write_text("only\n", encoding="utf-8")
+    read = scanned_line_reader(root)
+
+    assert read("missing.py", 1) == CONTENT_UNREADABLE
+    assert read("c.py", 99) == CONTENT_UNREADABLE
+    assert read("c.py", 1) == "only"          # control: it does read real lines
+    assert CONTENT_UNREADABLE not in ("", None)
+
+
+def test_the_reader_caches_per_file(tmp_path):
+    """A rule firing many times in one file must not re-read it each time."""
+    root = tmp_path / "repo"
+    root.mkdir()
+    p = root / "d.py"
+    p.write_text("first\nsecond\n", encoding="utf-8")
+    read = scanned_line_reader(root)
+    assert read("d.py", 1) == "first"
+    p.write_text("REWRITTEN\nREWRITTEN\n", encoding="utf-8")
+    assert read("d.py", 2) == "second", "second lookup must come from the cache"
 
 def test_missing_binary_is_missing(tmp_path):
     r = run_subprocess(["definitely-not-a-real-binary-xyz"], tmp_path, 5)

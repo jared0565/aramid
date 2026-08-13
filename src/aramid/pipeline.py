@@ -250,12 +250,15 @@ def _discover_files(root: Path, mode: str) -> tuple[list[str], str | None, str |
             # a tag checkout and any branch with no upstream configured -- all
             # ordinary release shapes. The fallback stays (under-scanning is
             # the worse failure); what changes is that it now says so.
-            files = gitutil.all_tracked_files(root)
-            return files, FULL_HISTORY_RNG, (
-                f"scanned all {len(files)} tracked file(s), not this push's "
-                f"changes: no upstream to diff against (detached HEAD, a tag "
-                f"checkout, or a first push). Pre-existing findings anywhere "
-                f"in the repo apply here")
+            # The CAUSE only. The count belongs to the caller, which is the
+            # only place that knows how many files survive the ignore-path
+            # filter -- quoting the pre-filter total here would overstate
+            # coverage in exactly the report a reader uses to decide whether an
+            # absent finding means clean or unscanned.
+            return gitutil.all_tracked_files(root), FULL_HISTORY_RNG, (
+                "no upstream to diff against (detached HEAD, a tag checkout, "
+                "or a first push). Pre-existing findings anywhere in the repo "
+                "apply here")
         return gitutil.changed_files(root, rng), rng, None
     if mode == "all":
         # Deliberately silent: `--all` IS the request to scan everything, so
@@ -756,8 +759,12 @@ def run_gate(root: Path, gate: Gate, mode: str, cfg: config_mod.Config, ledger: 
     at = clock()
 
     # 1. file set for mode, then the always-on ignore-path filter (spec §8b).
-    raw_files, rng, scope_widened = _discover_files(root, mode)
+    raw_files, rng, widened_cause = _discover_files(root, mode)
     files = config_mod.filter_paths(raw_files, cfg)
+    # Composed AFTER the filter so the count is what the runners were actually
+    # handed. `_discover_files` returns the cause; only here is the number real.
+    scope_widened = (f"scanned all {len(files)} tracked file(s), not this "
+                     f"push's changes: {widened_cause}") if widened_cause else None
 
     # 2. build the shared RunContext (stack detection feeds runner
     #    applicability), then select applicable runners for this gate.

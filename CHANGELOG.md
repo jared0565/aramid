@@ -12,6 +12,43 @@ to publish a tag that disagrees with it.
 
 ### Fixed
 
+- **Three defects in this release's own fingerprint fix, found by aramid's own
+  reviewer reviewing it.** The drain reviewed the commits above and raised
+  three findings against them. All three were real.
+
+  1. **The semgrep adapter resolved a tool-reported path against the wrong
+     root.** `file=` was relativized with `ctx.root` while the line-content
+     read got the raw `item["path"]` and a bare `Path(...)`, i.e. the aramid
+     process's cwd. semgrep runs with `cwd=ctx.root` and reports
+     invocation-relative paths, so whenever the process cwd differs the read
+     either fails — silently reverting to the ref lookup the fix exists to
+     avoid — or finds a **same-named file elsewhere and succeeds**,
+     fingerprinting a line from an unrelated file. `scanned_line_reader` now
+     takes the root as a required argument and resolves relative paths against
+     it.
+
+  2. **A failed read silently reverted to the skewed ref lookup.** The reader
+     returned `None` on an unreadable file or an out-of-range row, and `None`
+     already meant "this runner does not participate" — so the rare failure
+     path quietly reinstated the exact hazard, with nothing in the output
+     saying which source an id came from. A converted runner now always makes a
+     positive statement: failures yield `CONTENT_UNREADABLE`, a value that
+     cannot occur in source and therefore cannot collide with an adjudicated
+     finding's id.
+
+  3. **The widened-scope note quoted the pre-filter file count.** `len(files)`
+     was interpolated inside `_discover_files`, before `run_gate` applies the
+     ignore-path filter, so the note claimed coverage of files the runners were
+     never handed — in the one report a reader uses to decide whether an absent
+     finding means clean or unscanned. `_discover_files` now returns the cause
+     and `run_gate` composes the note with the filtered count. Measured: 4
+     tracked files, `vendor/**` ignored, note reads "scanned all 3".
+
+  Known, not fixed here: running `check` from a **subdirectory** degrades
+  semgrep and gitleaks entirely. Found while trying to exercise (1) end to end,
+  which is why (1) is pinned by unit tests against `scanned_line_reader` rather
+  than through the CLI.
+
 - **`_skip_streak_lines`' docstring still specified the rule that was removed
   for a security reason.** `06e7f46` replaced "a gate's eligible set is the
   tools that have actually appeared at it" with a recorded `expected` set,

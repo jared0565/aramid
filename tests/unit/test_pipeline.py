@@ -1208,10 +1208,14 @@ def test_a_widened_scope_says_so_and_a_narrow_one_does_not(tmp_path):
     assert files == ["a.py"], "the whole tracked tree, not the push's delta"
     assert rng == pipeline.FULL_HISTORY_RNG
     assert widened is not None
-    # Must name the SCOPE and the CAUSE. "scanned 1 file" alone would leave the
-    # reader where they started: wondering what regressed.
-    assert "tracked" in widened
-    assert "upstream" in widened
+    assert "upstream" in widened, "the note has to name the CAUSE, not just the size"
+    # `_discover_files` returns the cause ONLY. The count is the caller's,
+    # because only `run_gate` has applied the ignore-path filter by then --
+    # quoting the pre-filter total here would claim coverage of files the
+    # runners were never handed, in the one report a reader uses to decide
+    # whether an absent finding means clean or unscanned.
+    assert not any(ch.isdigit() for ch in widened), \
+        "a count in the cause would be the pre-filter one, i.e. an overstatement"
 
 
 # --------------------------------------------- (i) wall-clock budget -------

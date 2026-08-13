@@ -83,7 +83,7 @@ def parse(result: RunnerResult, ctx) -> list[RawFinding]:
     items = json.loads(result.raw or "[]")
     # ruff's JSON carries the row but not the source line, so read it back from
     # the file ruff just scanned. See runners/base.scanned_line_reader.
-    line_at = scanned_line_reader()
+    line_at = scanned_line_reader(ctx.root)
     return [
         RawFinding(
             tool=NAME,
