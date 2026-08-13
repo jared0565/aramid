@@ -12,6 +12,28 @@ to publish a tag that disagrees with it.
 
 ### Fixed
 
+- **`_skip_streak_lines`' docstring still specified the rule that was removed
+  for a security reason.** `06e7f46` replaced "a gate's eligible set is the
+  tools that have actually appeared at it" with a recorded `expected` set,
+  because the old rule cannot see a scanner that never started. The inline
+  comment explaining that landed; the docstring six lines above it kept
+  presenting the old rule as the design — including its rationale ("no runner
+  table to keep in sync"), which is the argument for reintroducing the blind
+  spot.
+
+  Found by not dismissing a stale-looking finding. aramid's own LLM reviewer
+  had flagged this and the finding was still open; the reasonable-sounding read
+  was "the code is fixed, so the finding is stale and `auto_resolve_llm` has a
+  gap." Neither half was true. The reviewer had quoted the **docstring**, the
+  docstring was still wrong, and the resolver was right not to fire — it
+  resolves on the quote disappearing, and the quote was still there.
+
+  This is the third recorded instance of `auto_resolve_llm`'s documented
+  known limitation (a fix that does not move the quoted line leaves the finding
+  open), and the first where the finding was still saying something true. The
+  docstring now states what the code does and says plainly not to reintroduce
+  the old rule.
+
 - **A push could silently scan the whole repository instead of its own
   changes.** A downstream repo pushed a branch (0 blocking), then pushed a tag
   off the same tree thirteen minutes later and was blocked by 20 pre-existing

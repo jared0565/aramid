@@ -95,12 +95,21 @@ def _skip_streak_lines(ledger: Ledger) -> list[str]:
     hand, and reproduced in aramid's own `status` at the same time.
 
     One word cannot carry both "ran and failed" and "not part of this gate":
-    the first is a hole in the gate, the second is the gate being correct. So a
-    tool's universe is the set of tools that have ACTUALLY appeared in a run of
-    that gate. A tool that never appears at a gate is not eligible for it, and
-    so cannot be skipped by it -- no runner table to keep in sync, and the
-    tests-runner alias ("tests" the key, "python" the recorded label) needs no
-    special case because both are read from the same recorded field.
+    the first is a hole in the gate, the second is the gate being correct.
+
+    A gate's eligible set is therefore what the gate SHOULD have run, recorded
+    on the run itself as `expected` (see the comment at the loop below for how
+    it is read, and why an absent key is not an empty one).
+
+    It is deliberately NOT "the tools that have actually appeared at this
+    gate". That rule was tried first and it cannot see a scanner that never
+    started: misconfigure semgrep before its first run and it never enters the
+    universe, so it is never reported skipped, and an absent security control
+    reads as a healthy one. Do not reintroduce it -- its appeal is that it
+    needs no runner table to keep in sync, and that convenience is exactly the
+    blind spot. The tests-runner alias ("tests" the key, "python" the recorded
+    label) is handled because `expected` is recorded in the same vocabulary the
+    runs report.
 
     The gate is named in the line for the same reason: it tells the reader
     which set of runs the count is over.
