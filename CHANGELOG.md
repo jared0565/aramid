@@ -10,6 +10,30 @@ to publish a tag that disagrees with it.
 
 ## [Unreleased]
 
+### Added
+
+- **`ledger filter` now says which open findings anyone has actually looked
+  at.** A committed suppression lives in `.aramid-suppressions.toml` and never
+  reaches a ledger row, so an adjudicated finding and one nobody has ever
+  examined were shape-identical: both `status: open`, both `verdict: block`,
+  both `reason: null`. `check` distinguishes them (a suppressed finding renders
+  INFO); `ledger filter` is the surface a reader uses to ask *what is
+  outstanding*, and it did not.
+
+  Reported from a downstream repo, where it hid a real never-adjudicated `S105`
+  among nineteen reviewed rows — a finding that had been open for weeks because
+  a range-scoped gate had never had that file in scope.
+
+  `--json` gains `suppressed` and `suppressed_reason`; the text row gains a
+  `[suppressed: <reason>]` marker. **`verdict` is deliberately left alone** —
+  it is the finding's own tier, a suppression is a separate decision about it,
+  and collapsing the two would lose the ability to ask what this would be if
+  the suppression were withdrawn. Additive, so existing readers are unaffected.
+
+  Replayed against aramid's own ledger before shipping, which immediately
+  corrected a misreading of it: of four open findings, two are adjudicated. The
+  session that added this had described all four as outstanding.
+
 ### Fixed
 
 - **Three defects in this release's own fingerprint fix, found by aramid's own

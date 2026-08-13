@@ -107,6 +107,29 @@ def cmd_ledger_filter(root, tool: str | None = None, rule: str | None = None,
                        as_json: bool = False) -> int:
     root = Path(root)
     ledger = Ledger(root / ".aramid" / "ledger.db")
+    # WHICH OF THESE HAS ANYONE ACTUALLY LOOKED AT.
+    #
+    # A committed suppression lives in `.aramid-suppressions.toml` and never
+    # reaches the ledger row, so an adjudicated finding and one nobody has ever
+    # examined are shape-identical here: both `status: open`, both `verdict:
+    # block`, both `reason: null`. `check` distinguishes them -- a suppressed
+    # finding renders INFO -- but this is the surface a reader uses to ask
+    # "what is outstanding", and a consumer found a real never-examined S105
+    # camouflaged among nineteen adjudicated rows because of it.
+    #
+    # Deliberately does NOT rewrite `verdict`. The stored verdict is the
+    # finding's own tier and a suppression is a separate decision ABOUT it;
+    # collapsing the two would lose the ability to ask "what would this be if
+    # the suppression were withdrawn". Additive fields, so a script reading the
+    # existing keys is unaffected.
+    try:
+        suppressed_reasons = {
+            rec.id: rec.reason for rec in config_mod.load_suppressions(root)[0]}
+    except Exception:
+        # An unreadable or malformed suppressions file must not take the query
+        # down -- but it must not silently claim nothing is adjudicated either,
+        # so the marker simply goes absent rather than reading False.
+        suppressed_reasons = {}
     try:
         state = ledger.open_findings()
         matched = {
@@ -123,14 +146,19 @@ def cmd_ledger_filter(root, tool: str | None = None, rule: str | None = None,
             # defect this flag exists to fix, so it must not survive in the
             # one case where a caller is least likely to test.
             print(json.dumps(
-                [{"id": fid, **{k: rec.get(k) for k in _JSON_KEYS}}
+                [{"id": fid, **{k: rec.get(k) for k in _JSON_KEYS},
+                  "suppressed": fid in suppressed_reasons,
+                  "suppressed_reason": suppressed_reasons.get(fid)}
                  for fid, rec in matched.items()], indent=2))
             return 0
         if not matched:
             print("aramid: ledger filter: no matching findings")
             return 0
         for finding_id, rec in matched.items():
-            print(_render_row(finding_id, rec))
+            row = _render_row(finding_id, rec)
+            if finding_id in suppressed_reasons:
+                row += f"  [suppressed: {suppressed_reasons[finding_id]}]"
+            print(row)
         return 0
     finally:
         ledger.close()

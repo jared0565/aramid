@@ -688,3 +688,65 @@ def test_unreachable_finding_reopens_when_tool_returns_via_real_dispatch(
         assert ledger.open_findings()["f1"]["status"] == "open"
     finally:
         ledger.close()
+
+
+# -------- adjudicated vs never-examined are not the same row (R80-2) --------
+# Reported from a downstream repo: `ledger filter --status open` returned 20
+# BLOCK-verdict rows, 19 of them with written, committed, reviewed entries in
+# `.aramid-suppressions.toml` and one that had never been looked at -- a real
+# S105 in a file a range-scoped gate had never had in scope. All twenty were
+# shape-identical (`status: open`, `verdict: block`, `reason: null`), so the
+# one nobody had adjudicated was camouflaged by the nineteen everybody had.
+#
+# `check` already distinguishes them (a suppressed finding renders `info`).
+# `ledger filter` is the surface you reach for when asking "what is
+# outstanding", and it did not -- a field answering a different question than
+# the reader is asking.
+
+
+def _suppressions(root: Path, *entries) -> None:
+    body = "".join(
+        f'[[suppress]]\nid = "{fid}"\ntool = "ruff"\nrule = "S102"\n'
+        f'path = "a.py"\nreason = "{reason}"\n\n'
+        for fid, reason in entries)
+    (root / ".aramid-suppressions.toml").write_text(body, encoding="utf-8")
+
+
+def test_filter_json_marks_which_open_findings_are_adjudicated(tmp_path, capsys):
+    root: Path = tmp_path
+    ledger = _ledger(root)
+    ledger.record_run("r1", "t1", "pre-push", {"ruff"}, {"a.py"},
+                       [_f("adjudicated1", verdict=Verdict.BLOCK),
+                        _f("nobody_looked", verdict=Verdict.BLOCK)])
+    ledger.close()
+    _suppressions(root, ("adjudicated1", "reviewed: fixture key, not well-formed"))
+
+    assert cmd_ledger_filter(root, status="open", as_json=True) == 0
+    rows = {r["id"]: r for r in json.loads(capsys.readouterr().out)}
+
+    assert rows["adjudicated1"]["suppressed"] is True
+    assert "fixture key" in rows["adjudicated1"]["suppressed_reason"]
+    # The whole point: the un-adjudicated one must be distinguishable, and the
+    # verdict field cannot do it -- both are BLOCK.
+    assert rows["nobody_looked"]["suppressed"] is False
+    assert rows["nobody_looked"]["suppressed_reason"] is None
+    assert rows["adjudicated1"]["verdict"] == rows["nobody_looked"]["verdict"] == "block"
+
+
+def test_filter_text_row_marks_an_adjudicated_finding(tmp_path, capsys):
+    root: Path = tmp_path
+    ledger = _ledger(root)
+    ledger.record_run("r1", "t1", "pre-push", {"ruff"}, {"a.py"},
+                       [_f("adjudicated2", verdict=Verdict.BLOCK),
+                        _f("unexamined2", verdict=Verdict.BLOCK)])
+    ledger.close()
+    _suppressions(root, ("adjudicated2", "reviewed: test canary"))
+
+    assert cmd_ledger_filter(root, status="open") == 0
+    out = capsys.readouterr().out
+    adj = next(ln for ln in out.splitlines() if "adjudicated2" in ln)
+    une = next(ln for ln in out.splitlines() if "unexamined2" in ln)
+
+    assert "suppressed" in adj
+    assert "suppressed" not in une, \
+        "the never-examined finding must not wear the adjudicated marker"
