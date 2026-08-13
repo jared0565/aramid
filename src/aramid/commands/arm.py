@@ -2,6 +2,32 @@
 sets `semgrep_block_armed = true` in the repo's `aramid.toml`. Always a
 manual, deliberate act -- no timer, no auto-promotion.
 
+THAT LAST CLAUSE IS A PRECONDITION OF A DESIGN ELSEWHERE, NOT JUST A
+DESCRIPTION OF TODAY. Read this before adding any automatic arming --
+a bake that promotes on expiry, a scheduled sweep, a config default that
+flips on upgrade.
+
+The agreed design for stale overrides (interop rounds 84 §2, 87 §5, 89) is
+that arming INVALIDATES an override made while the tool was disarmed and
+re-opens the finding, because an operator who suppressed a WARN was never
+asked whether they would suppress a BLOCK. That is safe only while arming is
+operator-initiated: the person just typed `aramid arm`, asked to be blocked
+by this class, and is present to deal with the fallout. Make arming
+automatic and the same mechanism re-opens N findings unattended -- a gate
+that was green goes red at 3am with nobody able to say what changed.
+
+So: if arming ever becomes automatic, that invalidation must move behind an
+explicit operator acknowledgement rather than firing on the arming event.
+
+Confirmed by graph rather than by this docstring when the design was
+settled: `cmd_arm`'s only non-test caller is `cli.main`, no other module
+writes a `*_block_armed` key, and `bake_started` is read only by
+`commands/status.py` for display -- there is no expiry path to promote from.
+The note lives HERE, in the file such a feature would be added to, because a
+precondition recorded somewhere else is one the breaking change never sees.
+Same shape as the `-P` trampoline fix, where the fix was sound and what
+undid it was a later change one hop away.
+
 Targeted regex substitution rather than a tomllib-parse/tomli_w-dump
 round-trip: TOML comments (e.g. the `# aramid repo config -- detected
 stack: ...` header `aramid.config.render_repo_stub` writes) are not

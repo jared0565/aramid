@@ -127,6 +127,16 @@ aramid = ["data/*.toml", "data/*.tmpl", "rules/*.yml"]
 # "the test is not bound". Measured: a guard test passed against a scratch copy
 # with the guard deleted.
 #
+# THE HAZARD IS NOT THE `pythonpath` SETTING -- it is that the directory named
+# here CONTAINS the package under test, and therefore shadows it. A consumer
+# repo that sets `pythonpath = ["."]` while keeping its package in `src/` names
+# a directory holding no importable copy at all, so nothing is shadowed and
+# `PYTHONPATH` still decides. Same key, opposite consequence, settled entirely
+# by layout (established against a second repo, interop rounds 89/91). Anyone
+# auditing for this by grepping their config for `pythonpath` will get the
+# wrong answer; ask instead whether that path contains the package being
+# tested.
+#
 # Use pytest's own override instead, which does win:
 #
 #     python -m pytest -o pythonpath=/path/to/scratch/src -k <test>
