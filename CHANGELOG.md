@@ -61,6 +61,31 @@ to publish a tag that disagrees with it.
   operator-facing policy call — not something to ship as a side effect of a
   security repair.
 
+  That residual is **not theoretical, and this repo is an instance**. Measured
+  on aramid's own ledger:
+
+  ```
+  aramid ledger filter --status overridden --tool <t> --json
+    mutation   2      tdd  1      red-proof  6
+  ```
+
+  All nine store `verdict: "warn"` and all three tools are currently disarmed,
+  so nothing is being defeated today — they are legitimate bake-time
+  suppressions. But arming any of those tools silently promotes the findings
+  underneath them, and the two mutation rows would become permanently invisible
+  to the gate, because `mutation_gate_findings` filters on `status == "open"`
+  *before* `policy.apply_overrides` ever sees them. Note the asymmetry that
+  makes mutation the severe case: freshly-scanned findings do reach
+  `apply_overrides`, which re-checks the **current** verdict and refuses to
+  downgrade a BLOCK (`test_override_does_not_downgrade_block_finding`), so for
+  ruff/semgrep/tdd/red-proof a stale override is misleading rather than
+  load-bearing.
+
+  Fixing the existing rows is therefore a *different* change from refusing new
+  ones: refusing future overrides does nothing about nine already recorded.
+  Whatever closes this has to decide what an override recorded under one arming
+  state means under another — at the gate, not at the CLI.
+
 ### Added
 
 - **`ledger filter` now says which open findings anyone has actually looked
