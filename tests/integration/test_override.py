@@ -2,7 +2,10 @@
 suppression (design doc section 6). A BLOCK-tier finding must error and
 direct the user to .aramid-suppressions.toml instead.
 """
+import tomllib
 from pathlib import Path
+
+import pytest
 
 from aramid import config as config_mod
 from aramid import policy
@@ -347,13 +350,8 @@ def test_an_unreadable_config_refuses_rather_than_falling_back_to_the_stored_ver
 
     # Precondition: the config really is unreadable, and the stored verdict
     # really is the permissive "warn" -- otherwise the refusal proves nothing.
-    try:
+    with pytest.raises(tomllib.TOMLDecodeError):
         config_mod.load_config(root)
-        raise AssertionError("expected load_config to fail on malformed TOML")
-    except AssertionError:
-        raise
-    except Exception:
-        pass
     ledger = _ledger(root)
     try:
         assert ledger.open_findings()["mut1"]["verdict"] == "warn"
