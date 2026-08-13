@@ -124,6 +124,80 @@ def test_fresh_ledger_prepush_genuine_secret_still_blocks(tmp_path, monkeypatch)
     assert rc == 1
 
 
+def test_an_override_made_while_disarmed_does_not_defeat_the_block_after_arming(
+        tmp_path, monkeypatch):
+    """END-TO-END guard for the property a downstream repo's 26 suppressions
+    rest on, reported in interop round 84.
+
+    That repo holds 26 ledger overrides, every one stored `verdict: "warn"`,
+    with `semgrep_block_armed = true` today. It is not a repo that sits outside
+    the stored-verdict defect -- it is precisely the population the defect
+    describes. The only thing between it and 26 silently defeated blocks is
+    that semgrep findings are freshly scanned every run and re-classified under
+    the CURRENT config, so `policy.apply_overrides` sees a BLOCK and refuses to
+    downgrade it.
+
+    `test_override_does_not_downgrade_block_finding` pins that guard, but it is
+    a unit test of `apply_overrides` -- it pins the guard's BEHAVIOUR and not
+    that the guard is REACHED. Both would keep passing if a status filter were
+    ever added ahead of it, which is exactly mutation's shape:
+    `mutation_gate_findings` drops any record whose status is not "open", so an
+    overridden mutation finding never reaches `apply_overrides` at all. The
+    reporter's point was that their repo would go from clean to 26 defeated
+    blocks with no change to semgrep whatsoever. This test is the thing that
+    would go red.
+
+    It also pins the known-open residual honestly: the override is NOT undone
+    by arming. It survives, the row still reads `overridden`, and the block is
+    held by the re-classification rather than by anything having reconsidered
+    the suppression.
+    """
+    from aramid.commands.override import cmd_override
+
+    root = _repo(tmp_path)
+    _no_user_config(tmp_path, monkeypatch)
+    cfg_path = root / "aramid.toml"
+
+    raw = RawFinding(tool="semgrep", rule="owasp-top-ten.a03-injection.python-sqli-string-concat",
+                      severity_raw="ERROR", file="a.py", line=1,
+                      message="SQL built by concatenation")
+    monkeypatch.setitem(pipeline.RUNNERS, "semgrep",
+                         _fake(RunnerResult("semgrep", ToolState.OK), raws=[raw]))
+    monkeypatch.setitem(pipeline.GATE_RUNNER_KEYS, Gate.PRE_PUSH, ["semgrep"])
+
+    # 1. Detect it while DISARMED. classify -> WARN, and that is what is stored.
+    cfg_path.write_text("semgrep_block_armed = false\n", encoding="utf-8")
+    cmd_check(root, Gate.PRE_PUSH, "range")
+
+    ledger = Ledger(root / ".aramid" / "ledger.db")
+    try:
+        state = ledger.open_findings()
+    finally:
+        ledger.close()
+    fid = next(iter(state))
+    assert state[fid]["verdict"] == "warn", state[fid]
+
+    # 2. Suppress it locally. Legitimate while disarmed -- it really is WARN-tier
+    #    right now -- and this must SUCCEED, or the arms below prove nothing.
+    assert cmd_override(root, fid, "noisy during the bake") == 0
+
+    # 3. Arm. Arming is retroactive, so the same finding is now BLOCK-tier,
+    #    while its ledger row still reads "warn" and still reads "overridden".
+    cfg_path.write_text("semgrep_block_armed = true\n", encoding="utf-8")
+
+    rc = cmd_check(root, Gate.PRE_PUSH, "range")
+
+    assert rc == 1, "a stale override must not defeat a now-armed BLOCK"
+
+    ledger = Ledger(root / ".aramid" / "ledger.db")
+    try:
+        after = ledger.open_findings()[fid]
+    finally:
+        ledger.close()
+    # The residual, stated rather than implied: nothing revoked the override.
+    assert after["status"] == "overridden", after
+
+
 # --------------------------- (e) fresh ledger, pre-push, degraded BLOCK-tier -
 
 def test_fresh_ledger_prepush_degraded_block_tier_still_blocks(tmp_path, monkeypatch):

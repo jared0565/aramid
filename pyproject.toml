@@ -117,6 +117,19 @@ aramid = ["data/*.toml", "data/*.tmpl", "rules/*.yml"]
 #
 # `pip install -e .` would also fix it and must NOT be used here: it overwrites
 # the consumer's deliberate pin and re-exposes them to this working tree.
+#
+# SIDE EFFECT, and it silently invalidates a verification technique: this entry
+# is inserted at the FRONT of sys.path, so it now beats the `PYTHONPATH`
+# environment variable under pytest. Perturbing a scratch copy of `src/` and
+# pointing `PYTHONPATH` at it -- the way to prove a test is actually bound to
+# the code it claims to test, without touching the working tree -- stops having
+# any effect, and the perturbed run comes back GREEN, which reads exactly like
+# "the test is not bound". Measured: a guard test passed against a scratch copy
+# with the guard deleted.
+#
+# Use pytest's own override instead, which does win:
+#
+#     python -m pytest -o pythonpath=/path/to/scratch/src -k <test>
 [tool.pytest.ini_options]
 pythonpath = ["src"]
 
