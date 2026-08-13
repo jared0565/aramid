@@ -353,3 +353,308 @@ def test_live_scan_rust_memory_safety_lints_fire_at_warn_tier(tmp_path, semgrep_
     # and every fingerprint built from it, differs per machine.
     assert all(not f.rule.startswith("/") and "aramid" not in f.rule.split(".")[0]
                for f in findings if f.rule.startswith("rust-memory-safety."))
+
+
+# --- the SQL blind-spot fixture (interop round 86) -------------------------
+#
+# graphite delivered a 14-form fixture in which every hazardous shape is PAIRED
+# with a safe twin that looks almost identical, and ran both their taint oracle
+# and this rule against it.
+#
+# The fixture's own warning drives the structure below: "a score against this
+# fixture is a probe result, not a benchmark". Every shape in it came from a
+# PUBLISHED blind-spot list, so it holds the gaps both sides already knew about
+# and structurally cannot hold the ones they do not -- the round-69 fixture
+# scored 6/6 while it and the oracle were both blind to
+# build-then-execute-inside-a-loop, because neither had a loop.
+#
+# So the four shapes this rule MISSES are xfail, never asserted absent.
+# Asserting them absent would encode four defects as expected behaviour and
+# hand a red "regression" to whoever eventually fixes one.
+_BLIND_SPOT_SRC = '''\
+import sqlite3
+
+cur = sqlite3.connect(":memory:").cursor()
+
+UNTRUSTED = "'; DROP TABLE t; --"
+UNTRUSTED_VALUES = [UNTRUSTED, "b"]
+UNTRUSTED_TABLES = [UNTRUSTED, "beta"]
+MIGRATIONS = {"alpha": ("ALTER TABLE alpha ADD COLUMN c TEXT", ["c"])}
+
+
+def _assemble(value):
+    return "SELECT * FROM t WHERE x = '" + value + "'"
+
+
+def bs_cross_function():
+    cur.execute(_assemble(UNTRUSTED))
+
+
+def _assemble_parameterized():
+    return "SELECT * FROM t WHERE x = ?"
+
+
+def bs_cross_function_safe():
+    cur.execute(_assemble_parameterized(), (UNTRUSTED,))
+
+
+class Repo:
+    def build(self):
+        self.q = f"SELECT * FROM t WHERE x = '{UNTRUSTED}'"
+
+    def run(self):
+        cur.execute(self.q)
+
+
+class SafeRepo:
+    def build(self):
+        self.q = "SELECT * FROM t WHERE x = ?"
+
+    def run(self):
+        cur.execute(self.q, (UNTRUSTED,))
+
+
+def bs_subscript_target():
+    d = {}
+    d["q"] = f"SELECT * FROM t WHERE x = '{UNTRUSTED}'"
+    cur.execute(d["q"])
+
+
+def bs_container_iterated():
+    statements = []
+    for table in UNTRUSTED_TABLES:
+        statements.append(f"DROP TABLE {table}")
+    for statement in statements:
+        cur.execute(statement)
+
+
+def bs_container_iterated_safe():
+    statements = ["SELECT 1", "SELECT 2"]
+    for statement in statements:
+        cur.execute(statement)
+
+
+def bs_augmented_in_loop():
+    query = "SELECT * FROM t WHERE 1=0"
+    for value in UNTRUSTED_VALUES:
+        query += f" OR x = '{value}'"
+    cur.execute(query)
+
+
+def bs_augmented_in_loop_safe():
+    query = "SELECT * FROM t WHERE 1=0"
+    params = []
+    for value in UNTRUSTED_VALUES:
+        query += " OR x = ?"
+        params.append(value)
+    cur.execute(query, params)
+
+
+def bs_one_branch_only(flag):
+    query = "SELECT * FROM t WHERE x = ?"
+    if flag:
+        query = f"SELECT * FROM t WHERE x = '{UNTRUSTED}'"
+    cur.execute(query)
+
+
+def bs_dead_interpolation():
+    query = f"SELECT * FROM t WHERE x = '{UNTRUSTED}'"
+    query = "SELECT * FROM t WHERE x = ?"
+    cur.execute(query, (UNTRUSTED,))
+
+
+def bs_tuple_unpacking_safe():
+    for _table, (ddl, _cols) in MIGRATIONS.items():
+        cur.execute(ddl)
+
+
+def bs_tuple_unpacking_tainted():
+    for table, (suffix, _cols) in {"alpha": (UNTRUSTED, [])}.items():
+        ddl = f"ALTER TABLE {table} ADD COLUMN {suffix} TEXT"
+        cur.execute(ddl)
+
+
+def bs_probe_unrelated_execute():
+    _unused = f"SELECT * FROM t WHERE x = '{UNTRUSTED}'"
+    cur.execute("SELECT 1")
+'''
+
+# Written HERE, not by graphite: the adversarial cases for the dead-interpolation
+# FIX, as opposed to for the rule's original behaviour.
+_REBIND_SRC = '''\
+import sqlite3
+
+cur = sqlite3.connect(":memory:").cursor()
+UNTRUSTED = "'; DROP TABLE t; --"
+
+
+def adv_conditional_rebind():
+    query = f"SELECT * FROM t WHERE x = '{UNTRUSTED}'"
+    if UNTRUSTED:
+        query = "SELECT * FROM t WHERE x = ?"
+    cur.execute(query)
+
+
+def adv_rebind_after_execute():
+    query = f"SELECT * FROM t WHERE x = '{UNTRUSTED}'"
+    cur.execute(query)
+    query = "SELECT * FROM t WHERE x = ?"
+
+
+def adv_concat_dead_interpolation():
+    query = "SELECT * FROM t WHERE x = '" + UNTRUSTED + "'"
+    query = "SELECT * FROM t WHERE x = ?"
+    cur.execute(query, (UNTRUSTED,))
+'''
+
+
+_SCAN_CACHE: dict = {}
+
+
+def _flagged_functions(tmp_path, source: str, name: str = "sqlfix.py") -> set:
+    """Names of the functions semgrep flagged, through the real runner path.
+
+    Reports the ENCLOSING function rather than a line number, so the assertions
+    read as claims about forms and survive the fixture being reformatted.
+
+    Cached on the source text, which is the ONLY input that can change the
+    answer -- `tmp_path` varies per test but nothing in the scan depends on it.
+    Nine call sites over two distinct sources was nine real semgrep spawns and
+    ~105 s of a suite that is already long.
+    """
+    import ast
+
+    if source in _SCAN_CACHE:
+        return _SCAN_CACHE[source]
+
+    (tmp_path / name).write_text(source, encoding="utf-8")
+    ctx = RunContext(root=tmp_path, files=[name])
+    result = semgrep_runner.run(ctx)
+    assert result.state is ToolState.OK, (result.state, result.stderr)
+
+    spans = sorted((n.lineno, n.end_lineno, n.name)
+                   for n in ast.walk(ast.parse(source))
+                   if isinstance(n, ast.FunctionDef))
+
+    def owner(line: int) -> str:
+        best = None
+        for start, end, fn in spans:
+            if start <= line <= end and (best is None or start > best[0]):
+                best = (start, fn)
+        return best[1] if best else "<module>"
+
+    _SCAN_CACHE[source] = {owner(f.line) for f in semgrep_runner.parse(result, ctx)}
+    return _SCAN_CACHE[source]
+
+
+@pytest.mark.skipif(_SEMGREP_BIN is None, reason=_SKIP_REASON)
+def test_blind_spot_safe_twins_are_never_flagged(tmp_path, semgrep_path_env):
+    """PRECISION contract -- the half the fixture exists for.
+
+    Every hazardous form is paired with a twin that LOOKS the same and is not
+    vulnerable, so a matcher keying on syntax rather than flow is caught
+    over-firing instead of rewarded for it. Most sharply
+    `bs_augmented_in_loop_safe`: the CORRECT idiom for a variable-length
+    clause, where `+=` still appears in a loop directly above an execute, but
+    what accumulates is placeholders and the values travel bound.
+    """
+    flagged = _flagged_functions(tmp_path, _BLIND_SPOT_SRC)
+
+    for safe in ("bs_cross_function_safe", "bs_container_iterated_safe",
+                  "bs_augmented_in_loop_safe", "bs_tuple_unpacking_safe",
+                  "run"):
+        assert safe not in flagged, (safe, sorted(flagged))
+
+
+@pytest.mark.skipif(_SEMGREP_BIN is None, reason=_SKIP_REASON)
+def test_the_scope_pairing_probe_is_not_flagged(tmp_path, semgrep_path_env):
+    """graphite hypothesised the false positive came from scope-level pairing
+    -- any build plus any execute in one function -- then added this probe,
+    which KILLED that hypothesis. It matters because under scope-level pairing
+    the catch on `bs_subscript_target` would have been earned by the very
+    looseness that produced the false positive: right answer, wrong reason.
+
+    Pinned so a future widening cannot quietly make that true.
+    """
+    assert "bs_probe_unrelated_execute" not in _flagged_functions(tmp_path, _BLIND_SPOT_SRC)
+
+
+@pytest.mark.skipif(_SEMGREP_BIN is None, reason=_SKIP_REASON)
+def test_blind_spot_recall_floor_is_held(tmp_path, semgrep_path_env):
+    """RECALL floor: the two fixture forms this rule genuinely catches. No
+    precision work may cost them."""
+    flagged = _flagged_functions(tmp_path, _BLIND_SPOT_SRC)
+
+    assert "bs_subscript_target" in flagged, sorted(flagged)
+    assert "bs_tuple_unpacking_tainted" in flagged, sorted(flagged)
+
+
+@pytest.mark.skipif(_SEMGREP_BIN is None, reason=_SKIP_REASON)
+def test_dead_interpolation_is_not_flagged(tmp_path, semgrep_path_env):
+    """The reported false positive. The interpolated binding is unconditionally
+    replaced by a constant before a parameterized execute, so nothing tainted
+    reaches the database -- and it was flagged anyway, because the sequential
+    patterns pair on the NAME and semgrep's `...` spans the rebinding."""
+    assert "bs_dead_interpolation" not in _flagged_functions(tmp_path, _BLIND_SPOT_SRC)
+
+
+@pytest.mark.skipif(_SEMGREP_BIN is None, reason=_SKIP_REASON)
+def test_a_conditional_rebind_is_still_reported(tmp_path, semgrep_path_env):
+    """THE GUARD ON THE FIX, and why the pattern-not requires adjacency.
+
+    The first version put `...` between the two assignments. It cleared the
+    false positive and was MEASURED to drop this: with `...` there an
+    intervening `if` matches too, so a rebind on only ONE branch reads as
+    unconditional and the still-vulnerable else path stops being reported.
+    A precision fix that costs a true positive is not a precision fix.
+    """
+    assert "adv_conditional_rebind" in _flagged_functions(
+        tmp_path, _REBIND_SRC, name="rebind.py")
+
+
+@pytest.mark.skipif(_SEMGREP_BIN is None, reason=_SKIP_REASON)
+def test_a_rebind_after_the_execute_does_not_excuse_it(tmp_path, semgrep_path_env):
+    """Ordering is load-bearing: a safe reassignment BELOW the execute cannot
+    save it. Without this arm, a pattern-not keyed on "the name is reassigned
+    to a literal somewhere" would look correct."""
+    assert "adv_rebind_after_execute" in _flagged_functions(
+        tmp_path, _REBIND_SRC, name="rebind.py")
+
+
+@pytest.mark.skipif(_SEMGREP_BIN is None, reason=_SKIP_REASON)
+def test_dead_interpolation_is_cleared_for_every_build_form(tmp_path, semgrep_path_env):
+    """The reported repro used an f-string; the defect never was specific to
+    one. Found here rather than reported: the same shape built by concatenation
+    fired identically, so the fix covers all five build forms."""
+    assert "adv_concat_dead_interpolation" not in _flagged_functions(
+        tmp_path, _REBIND_SRC, name="rebind.py")
+
+
+# --- documented gaps: missed by this rule AND by graphite's oracle ----------
+#
+# Four of the seven real hazards in the fixture are invisible to BOTH
+# instruments -- the failure mode two independent implementations are supposed
+# to rule out. They fail together because they fail for the same structural
+# reason: both reason within one scope about one name. Any recall figure
+# derived by comparing them is uninformative on this class.
+#
+# xfail rather than an absence assert: a fix should XPASS these.
+_DOUBLE_BLIND = [
+    ("bs_cross_function",
+     "query assembled in a helper and executed one frame away"),
+    ("Repo.run",
+     "built into self.q in one method, executed in another (attribute target)"),
+    ("bs_container_iterated",
+     "list of queries built in a loop then iterated -- nothing tainted is ever "
+     "the direct argument to execute"),
+    ("bs_augmented_in_loop",
+     "`q +=` accumulating in a loop -- no single statement builds the query"),
+]
+
+
+@pytest.mark.skipif(_SEMGREP_BIN is None, reason=_SKIP_REASON)
+@pytest.mark.parametrize("func,gap", _DOUBLE_BLIND, ids=[f for f, _ in _DOUBLE_BLIND])
+def test_known_double_blind_shapes(tmp_path, semgrep_path_env, func, gap):
+    """These SHOULD be reported and are not."""
+    if func not in _flagged_functions(tmp_path, _BLIND_SPOT_SRC):
+        pytest.xfail(f"known gap, missed by this rule and by graphite's oracle: {gap}")

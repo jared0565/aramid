@@ -103,6 +103,72 @@ rules:
               $Q = "...".format(...)
               ...
               $C.executemany($Q, ...)
+      # PRECISION: a build whose binding is REPLACED before the execute.
+      #
+      # The sequential patterns above pair on the NAME $Q, and semgrep's `...`
+      # happily spans the statement that rebinds it -- so `q = f"..."` followed
+      # by `q = "SELECT ... ?"` followed by `execute(q)` matched, flagging code
+      # in which nothing interpolated ever reaches the database. Reported by a
+      # downstream repo with a three-line repro; reproduced here before fixing.
+      #
+      # THE ADJACENCY IS LOAD-BEARING -- do not "simplify" it by inserting `...`
+      # between the two assignments. That version was written first and MEASURED
+      # to drop a true positive: with `...` there, an intervening `if` matches
+      # too, so a rebind on only ONE branch reads as unconditional and the
+      # still-vulnerable else path stops being reported. Requiring the
+      # replacement to be the very next statement is what distinguishes
+      # "definitely replaced" from "maybe replaced".
+      # `tests/integration/test_semgrep_rules.py` pins both directions.
+      - pattern-not: |
+          $Q = f"..."
+          $Q = "..."
+          ...
+          $C.execute($Q, ...)
+      - pattern-not: |
+          $Q = f"..."
+          $Q = "..."
+          ...
+          $C.executemany($Q, ...)
+      - pattern-not: |
+          $Q = "..." + $X
+          $Q = "..."
+          ...
+          $C.execute($Q, ...)
+      - pattern-not: |
+          $Q = "..." + $X
+          $Q = "..."
+          ...
+          $C.executemany($Q, ...)
+      - pattern-not: |
+          $Q = $X + "..."
+          $Q = "..."
+          ...
+          $C.execute($Q, ...)
+      - pattern-not: |
+          $Q = $X + "..."
+          $Q = "..."
+          ...
+          $C.executemany($Q, ...)
+      - pattern-not: |
+          $Q = "..." % $X
+          $Q = "..."
+          ...
+          $C.execute($Q, ...)
+      - pattern-not: |
+          $Q = "..." % $X
+          $Q = "..."
+          ...
+          $C.executemany($Q, ...)
+      - pattern-not: |
+          $Q = "...".format(...)
+          $Q = "..."
+          ...
+          $C.execute($Q, ...)
+      - pattern-not: |
+          $Q = "...".format(...)
+          $Q = "..."
+          ...
+          $C.executemany($Q, ...)
 
   - id: owasp-top-ten.a03-injection.javascript-sqli-string-concat
     languages: [javascript, typescript]

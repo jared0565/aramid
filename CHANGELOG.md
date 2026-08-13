@@ -12,6 +12,35 @@ to publish a tag that disagrees with it.
 
 ### Fixed
 
+- **`injection-dataflow.python-query-built-then-executed` flagged code where
+  the interpolated string never reaches the database.** The rule's sequential
+  patterns pair on the *name* `$Q`, and semgrep's `...` spans the statement
+  that rebinds it — so building a query, replacing it with a constant, and
+  running a parameterized execute was reported as injection. Reported by a
+  downstream repo with a three-line repro, reproduced here before any fix.
+
+  They also killed the obvious hypothesis before reporting it. A probe form —
+  interpolate into an unused name, then execute a *different*, wholly constant
+  query — is **not** flagged, so the pairing is not scope-level, and the rule's
+  genuine catches were not earned by the same looseness that produced the false
+  positive.
+
+  **The fix requires the replacement to be the very next statement, and that
+  adjacency is load-bearing.** The first version allowed `...` between the two
+  assignments and was measured to drop a true positive: with `...` there, an
+  intervening `if` matches too, so a rebind on only *one* branch reads as
+  unconditional and the still-vulnerable else path stops being reported. A
+  precision fix that costs a true positive is not a precision fix; both
+  directions are now pinned.
+
+  Recall was the explicit constraint — the reporter said they did not want it
+  traded for this — so it was measured rather than assumed, on seven arms
+  (five from the round-69 fixture plus the two forms this rule catches on the
+  new one). All seven survive. The reported repro used an f-string; the defect
+  was never specific to one, so the fix covers all five build forms for both
+  `execute` and `executemany` — the concatenation variant was found here, not
+  reported.
+
 - **`aramid override` could suppress a finding that is BLOCK-tier right now**,
   because it read the ledger's *stored* verdict instead of computing the
   current one. `policy.classify` computes a verdict when a finding is detected
@@ -87,6 +116,28 @@ to publish a tag that disagrees with it.
   state means under another — at the gate, not at the CLI.
 
 ### Added
+
+- **The SQL blind-spot fixture is now an executable contract.** 14 forms in
+  which every hazardous shape is paired with a safe twin that looks almost
+  identical, so a matcher keying on syntax rather than flow is caught
+  over-firing rather than rewarded for it — most sharply the `+=`-in-a-loop
+  pair, where the *correct* variable-length-clause idiom differs from the
+  injection by very little.
+
+  **Four of the seven real hazards are missed by this rule and by the
+  reporter's independent taint oracle alike** — cross-function assembly,
+  attribute targets, container-built-then-iterated, and `+=` in a loop. That is
+  the failure mode two independent implementations are meant to rule out, and
+  they fail together because they fail for the same structural reason: both
+  reason within one scope about one name. Any recall figure derived by
+  comparing them is uninformative on this class.
+
+  Those four are marked `xfail`, **not** asserted absent. Asserting them absent
+  would encode four defects as expected behaviour and hand a red "regression"
+  to whoever eventually fixes one; a fix should flip them to XPASS. The fixture
+  is a probe, not a benchmark — every shape in it came from a *published*
+  blind-spot list, so it holds the gaps both sides already knew about and
+  structurally cannot hold the ones they do not.
 
 - **`ledger filter` now says which open findings anyone has actually looked
   at.** A committed suppression lives in `.aramid-suppressions.toml` and never
