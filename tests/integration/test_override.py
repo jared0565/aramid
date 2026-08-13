@@ -4,6 +4,8 @@ direct the user to .aramid-suppressions.toml instead.
 """
 from pathlib import Path
 
+from aramid import config as config_mod
+from aramid import policy
 from aramid.commands.override import cmd_override
 from aramid.ledger import Ledger
 from aramid.models import Finding, Gate, Severity, Source, Verdict
@@ -23,6 +25,18 @@ def _llm_finding(fid, severity=Severity.CRITICAL, confirmed=True, verdict=Verdic
     return Finding(fid, "llm-review", "llm/a01", str(severity), severity, verdict,
                     "src/auth.py", 2, "IDOR: no ownership check", "evidence text",
                     Gate.ALL, source=Source.LLM, confirmed=confirmed)
+
+
+def _mutation_finding(fid, verdict=Verdict.WARN):
+    """A drain-written surviving-mutant row. The drain stores the verdict
+    policy.classify computed AT DRAIN TIME -- WARN while
+    [mutation].mutation_block_armed is false. Arming later promotes the same
+    finding to BLOCK (classify's tool=="mutation" branch, mirrored in
+    mutation_gate.mutation_gate_findings) but never rewrites the stored row:
+    the ledger is append-only, so `verdict` stays frozen at "warn" forever."""
+    return Finding(fid, "mutation", "survived", "medium", Severity.MEDIUM, verdict,
+                    "src/pay.py", 7, "surviving mutant", "evidence text",
+                    Gate.PRE_PUSH, source=Source.DETERMINISTIC)
 
 
 def _ledger(root) -> Ledger:
@@ -247,5 +261,114 @@ def test_unreachable_finding_is_refused(tmp_path, capsys):
         assert ledger.open_findings()["f1"]["status"] == "unreachable"
         events = [e for e in ledger.events() if e.type.value == "finding_overridden"]
         assert events == []
+    finally:
+        ledger.close()
+
+
+def test_armed_mutation_finding_is_refused_though_the_ledger_froze_its_verdict_at_warn(
+        tmp_path, capsys):
+    """The stored verdict is a snapshot of one config, and this command trusted
+    it. `rec["verdict"] == "block"` reads a value classify computed at DRAIN
+    time; for a mutation finding drained while [mutation].mutation_block_armed
+    was false that value is "warn", and the append-only ledger never rewrites
+    it. Arming afterwards makes the finding BLOCK-tier everywhere that
+    recomputes -- classify, mutation_gate.mutation_gate_findings,
+    check._has_genuine_block -- while this command still reads "warn" and
+    permits the suppression.
+
+    That is the exact defeat
+    test_llm_confirmed_critical_is_refused_regardless_of_armed_state was
+    written to prevent, reachable through a different door: the override flips
+    status to "overridden", mutation_gate_findings skips any rec whose status
+    is not "open", and the armed BLOCK is silently and permanently gone with
+    no reviewable artifact (`.aramid/` is gitignored). LLM findings got a
+    dedicated is_confirmed_critical_llm guard because their stored verdict is
+    always "warn"; mutation has no such guard and the stored verdict is its
+    ONLY signal, so nothing catches this.
+    """
+    root: Path = tmp_path
+    (root / "aramid.toml").write_text(
+        "[mutation]\nmutation_block_armed = true\n", encoding="utf-8")
+
+    ledger = _ledger(root)
+    ledger.record_run("r1", "t1", "pre-push", {"mutation"}, set(),
+                       [_mutation_finding("mut1")])
+    ledger.close()
+
+    # Preconditions. Without all three the refusal below could pass for the
+    # wrong reason -- an over-refusal that rejects every mutation override, or
+    # a row that was never WARN-in-store to begin with, would both look green.
+    cfg = config_mod.load_config(root)
+    assert cfg.mutation.get("mutation_block_armed") is True
+    assert policy.classify("mutation", "survived", "medium",
+                            Gate.PRE_PUSH, cfg)[1] is Verdict.BLOCK
+    ledger = _ledger(root)
+    try:
+        assert ledger.open_findings()["mut1"]["verdict"] == "warn"
+    finally:
+        ledger.close()
+
+    rc = cmd_override(root, "mut1", "mutation testing is noisy, ignore")
+    err = capsys.readouterr().err
+
+    assert rc == 3
+    assert ".aramid-suppressions.toml" in err
+    # ...and specifically the BLOCK-tier refusal for THIS record. Every refusal
+    # path in cmd_override returns 3, so rc alone does not say which one fired.
+    assert 'tool = "mutation"' in err
+
+    ledger = _ledger(root)
+    try:
+        assert ledger.open_findings()["mut1"]["status"] == "open"
+        events = [e for e in ledger.events() if e.type.value == "finding_overridden"]
+        assert events == []
+    finally:
+        ledger.close()
+
+
+def test_an_unreadable_config_refuses_rather_than_falling_back_to_the_stored_verdict(
+        tmp_path, capsys):
+    """The BLOCK-tier check needs the config in force, so failing to read the
+    config must not degrade to trusting the stored verdict. `aramid.toml` is an
+    ordinary writable repo file: if a malformed one sent this command back to
+    `rec["verdict"] == "block"`, anyone wanting to suppress an armed mutation
+    BLOCK could get it by breaking one line of TOML. The refusal must name the
+    config, not the suppressions file -- this is not "you picked the wrong
+    channel", it is "I could not answer the question".
+    """
+    root: Path = tmp_path
+    (root / "aramid.toml").write_text(
+        "[mutation]\nmutation_block_armed = = true\n", encoding="utf-8")
+
+    ledger = _ledger(root)
+    ledger.record_run("r1", "t1", "pre-push", {"mutation"}, set(),
+                       [_mutation_finding("mut1")])
+    ledger.close()
+
+    # Precondition: the config really is unreadable, and the stored verdict
+    # really is the permissive "warn" -- otherwise the refusal proves nothing.
+    try:
+        config_mod.load_config(root)
+        raise AssertionError("expected load_config to fail on malformed TOML")
+    except AssertionError:
+        raise
+    except Exception:
+        pass
+    ledger = _ledger(root)
+    try:
+        assert ledger.open_findings()["mut1"]["verdict"] == "warn"
+    finally:
+        ledger.close()
+
+    rc = cmd_override(root, "mut1", "let me push")
+    err = capsys.readouterr().err
+
+    assert rc == 3
+    assert "config" in err.lower()
+
+    ledger = _ledger(root)
+    try:
+        assert ledger.open_findings()["mut1"]["status"] == "open"
+        assert [e for e in ledger.events() if e.type.value == "finding_overridden"] == []
     finally:
         ledger.close()

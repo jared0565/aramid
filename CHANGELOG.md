@@ -10,6 +10,57 @@ to publish a tag that disagrees with it.
 
 ## [Unreleased]
 
+### Fixed
+
+- **`aramid override` could suppress a finding that is BLOCK-tier right now**,
+  because it read the ledger's *stored* verdict instead of computing the
+  current one. `policy.classify` computes a verdict when a finding is detected
+  and the ledger is append-only, so the row never moves again. Every armable
+  tool therefore stores `warn` for anything drained while its `*_block_armed`
+  flag was false — and arming is retroactive by design, so those findings are
+  BLOCK-tier afterwards while the row still reads `warn`.
+
+  Measured, not reasoned: with `mutation_block_armed = true` and
+  `policy.classify` returning BLOCK for the finding, `aramid override`
+  returned 0 and wrote the suppression.
+
+  **For mutation this is terminal rather than merely misleading.**
+  `mutation_gate.mutation_gate_findings` skips any record whose status is not
+  `open`, so once the override flips the status the armed BLOCK never surfaces
+  again — permanently, silently, through a gitignored file with no reviewable
+  artifact. That is the exact defeat the LLM branch of this command was added
+  to prevent; LLM findings got a dedicated `is_confirmed_critical_llm` guard
+  *because* their stored verdict is always `warn`, and mutation, tdd and
+  red-proof have no such guard while the stored value is their only signal.
+
+  The new check is **ORed with the stored verdict, never a replacement**, so it
+  can only refuse more. Recomputing alone would also *widen* the command —
+  dropping a rule from `block_rules` would make its already-stored BLOCK
+  findings locally overridable — and widening what a gitignored file may hide
+  is the one direction this command must never move.
+
+  **Failure refuses.** The first cut of this fix caught every exception and
+  answered "not BLOCK-tier", justified in its own docstring as degrading to
+  today's behaviour. It degraded to today's *bug*, on a path the person wanting
+  the override controls: `aramid.toml` is an ordinary writable repo file, so one
+  malformed line made `load_config` raise and handed the decision straight back
+  to the frozen `warn` — a documented switch for turning this fix off. An
+  unreadable config now refuses with its own message naming the config rather
+  than the suppressions file, because "I could not answer the question" is not
+  "you used the wrong channel".
+
+  Note `[pack].pack_block_armed` defaults to **true**, unlike every other
+  arming flag, so a pack-prefixed rule is BLOCK-tier even with no `aramid.toml`
+  present. A pack finding stored `warn` is therefore one detected while pack
+  was explicitly disarmed — exactly the case this fix is for, not a regression.
+
+  **Still open, and named here rather than quietly fixed:** an override
+  recorded while a tool is *disarmed* still survives arming. Closing that means
+  refusing every override for any tool with an arming flag, regardless of its
+  state, which is a much broader behaviour change than this fix and an
+  operator-facing policy call — not something to ship as a side effect of a
+  security repair.
+
 ### Added
 
 - **`ledger filter` now says which open findings anyone has actually looked

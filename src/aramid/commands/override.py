@@ -41,9 +41,10 @@ import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 
-from aramid import review
+from aramid import config as config_mod
+from aramid import policy, review
 from aramid.ledger import Ledger
-from aramid.models import Event, EventType
+from aramid.models import Event, EventType, Gate, Verdict
 
 
 def _now() -> str:
@@ -89,6 +90,55 @@ def _suppression_snippet(finding_id: str, rec: dict, reason: str) -> str:
     )
 
 
+def _is_block_tier_now(cfg, rec: dict) -> bool:
+    """Is this finding BLOCK-tier under the config in force RIGHT NOW?
+
+    `rec["verdict"]` is a snapshot, not a property of the finding:
+    `policy.classify` computed it when the finding was detected and the ledger
+    is append-only, so it never moves again. Every armable tool therefore
+    stores "warn" for findings drained while its `*_block_armed` flag was
+    false -- and arming is retroactive by design, so those findings ARE
+    BLOCK-tier afterwards while the row still reads "warn". Trusting the row
+    let `aramid override` grant a machine-local, gitignored suppression of a
+    live BLOCK finding. For mutation that is terminal rather than merely
+    misleading: `mutation_gate.mutation_gate_findings` skips any rec whose
+    status is not "open", so the armed BLOCK never surfaces again. That is the
+    defeat the LLM branch below was added to prevent, reached through the one
+    door it does not cover -- LLM findings got `is_confirmed_critical_llm`
+    precisely BECAUSE their stored verdict is always "warn"; mutation, tdd and
+    red-proof have no such guard and the stored value is their only signal.
+
+    ORed with the stored verdict rather than replacing it, so this can only
+    ever refuse MORE. Recomputing alone would also WIDEN the command --
+    dropping a rule from `block_rules` would make its already-stored BLOCK
+    findings locally overridable -- and widening what a gitignored file may
+    hide is the one direction this command must never move.
+
+    `severity` is stored post-`_map_severity`; feeding it back in as
+    `severity_raw` is sound because that mapping round-trips on all five
+    levels, and only classify's `_DEPS_TOOLS` branch reads severity at all.
+    PRE_PUSH is passed as the strictest gate; classify ignores the argument
+    entirely (policy.py's module docstring says so, and says why).
+
+    Failure REFUSES. An earlier draft of this function caught everything and
+    returned False, on the reasoning that it "degrades to today's behaviour" --
+    which is wrong in the way that matters: it degrades to today's BUG, on a
+    path the person wanting the override controls. `aramid.toml` is an ordinary
+    writable repo file, so one malformed line makes `load_config` raise, this
+    check answer False, and the frozen "warn" become the only gate again. That
+    is a documented switch for turning the fix off. An unclassifiable record is
+    one we cannot prove is WARN-tier, and a stored "warn" is exactly what this
+    function exists not to trust. Refusing costs a legitimate override an error
+    message; permitting costs a silently defeated BLOCK.
+    """
+    try:
+        _, verdict = policy.classify(str(rec.get("tool", "")), str(rec.get("rule", "")),
+                                      str(rec.get("severity", "")), Gate.PRE_PUSH, cfg)
+    except Exception:
+        return True
+    return verdict is Verdict.BLOCK
+
+
 def cmd_override(root, finding_id: str, reason: str) -> int:
     root = Path(root)
     reason = (reason or "").strip()
@@ -114,8 +164,22 @@ def cmd_override(root, finding_id: str, reason: str) -> int:
                   f"run in this repo, so there is nothing to override", file=sys.stderr)
             return 3
 
+        # Loaded HERE, and a failure refuses rather than falling through to the
+        # stored verdict: whether this finding is BLOCK-tier is a question about
+        # the config in force, so being unable to read the config is being
+        # unable to answer it -- not licence to trust the frozen row instead.
+        try:
+            cfg = config_mod.load_config(root)
+        except Exception as exc:
+            print(f"aramid: override: cannot read the config ({exc}) -- refusing. "
+                  f"Whether {finding_id} is BLOCK-tier depends on the config in "
+                  f"force, and its stored verdict is not proof of that. Fix "
+                  f"aramid.toml and retry.", file=sys.stderr)
+            return 3
+
         is_llm_confirmed_critical = review.is_confirmed_critical_llm(rec)
-        if rec.get("verdict") == "block" or is_llm_confirmed_critical:
+        if (rec.get("verdict") == "block" or _is_block_tier_now(cfg, rec)
+                or is_llm_confirmed_critical):
             print(f"aramid: override: {finding_id} is a BLOCK-tier finding -- a local "
                   f"override is not permitted; add a reasoned entry to "
                   f".aramid-suppressions.toml instead (design doc section 6).\n"
