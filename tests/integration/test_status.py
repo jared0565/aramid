@@ -712,6 +712,85 @@ def test_status_clears_the_streak_once_a_consumer_recovers(tmp_path, monkeypatch
     assert "degraded consumer runs" not in capsys.readouterr().out
 
 
+# ------------- a renamed tests slot is not a skipped suite (R80-1) ----------
+# Reported from a downstream repo, and it fires on the configuration aramid
+# itself recommends. `[tests].command` is labelled by `basename(argv[0])`, so
+# pointing it at a venv interpreter -- which a repo MUST do once it stops being
+# installed editable, or the machine `pytest` imports the released wheel and
+# green-lights changes it never loaded -- renames the slot `pytest` ->
+# `python.exe`. Under the observed-universe rule the vanished `pytest` reads as
+# a suite that stopped running, and a run that provably executed the suite
+# INCREMENTS the skipped counter.
+#
+# They asked whether the recorded `expected` set already fixes this. These two
+# tests are the answer, and the second is what makes the first mean anything:
+# without an arm that reproduces the bug, "no phantom streak" is equally
+# consistent with the streak logic not running at all.
+
+_OLD_TESTS_EXPECTED = ["gitleaks", "semgrep", "tests", "pytest"]
+_CUSTOM_TESTS_EXPECTED = ["gitleaks", "semgrep", "tests", "python.exe"]
+_RAN_OLD = ["gitleaks", "pytest", "semgrep"]
+_RAN_CUSTOM = ["gitleaks", "python.exe", "semgrep"]
+
+
+def test_a_renamed_tests_slot_is_not_reported_as_a_skipped_suite(tmp_path, monkeypatch,
+                                                                  capsys):
+    root = _repo(tmp_path)
+    _no_user_config(tmp_path, monkeypatch)
+    _write_toml(root, armed=True, bake_started=None)
+
+    lg = Ledger(root / ".aramid" / "ledger.db")
+    # Two runs under the old label, then the operator repoints [tests].command
+    # at a venv interpreter and two more runs record the new one. Every run
+    # RAN the suite; only its label changed.
+    _run_started(lg, "pre-push", _RAN_OLD, expected=_OLD_TESTS_EXPECTED,
+                 at="2026-01-01T00:00:00+00:00")
+    _run_started(lg, "pre-push", _RAN_OLD, expected=_OLD_TESTS_EXPECTED,
+                 at="2026-01-02T00:00:00+00:00")
+    _run_started(lg, "pre-push", _RAN_CUSTOM, expected=_CUSTOM_TESTS_EXPECTED,
+                 at="2026-01-03T00:00:00+00:00")
+    _run_started(lg, "pre-push", _RAN_CUSTOM, expected=_CUSTOM_TESTS_EXPECTED,
+                 at="2026-01-04T00:00:00+00:00")
+    lg.close()
+
+    assert cmd_status(root) == 0
+    out = capsys.readouterr().out
+
+    assert "pytest: skipped" not in out, (
+        "the suite ran on every one of these runs; only the slot's label moved. "
+        "A pre-existing streak under the old label must age out, not latch")
+
+
+def test_without_a_recorded_expected_set_the_rename_does_read_as_a_skip(tmp_path, monkeypatch,
+                                                                        capsys):
+    """The discriminator, and the state a consumer on an older release is in.
+
+    Identical runs with `expected` ABSENT from every payload, which is how a
+    ledger written before that key existed looks. `_skip_streak_lines` falls
+    back to the observed-universe rule -- deliberately, so historical repos do
+    not suddenly report nothing -- and the bug reappears. This test exists to
+    prove the arm above is not passing vacuously.
+    """
+    root = _repo(tmp_path)
+    _no_user_config(tmp_path, monkeypatch)
+    _write_toml(root, armed=True, bake_started=None)
+
+    lg = Ledger(root / ".aramid" / "ledger.db")
+    _run_started(lg, "pre-push", _RAN_OLD, at="2026-01-01T00:00:00+00:00")
+    _run_started(lg, "pre-push", _RAN_OLD, at="2026-01-02T00:00:00+00:00")
+    _run_started(lg, "pre-push", _RAN_CUSTOM, at="2026-01-03T00:00:00+00:00")
+    _run_started(lg, "pre-push", _RAN_CUSTOM, at="2026-01-04T00:00:00+00:00")
+    lg.close()
+
+    assert cmd_status(root) == 0
+    out = capsys.readouterr().out
+
+    assert "pytest: skipped last 2 pre-push run(s)" in out, (
+        "without `expected` the observed-universe rule still produces the "
+        "phantom streak -- if this stops reproducing, the arm above no longer "
+        "discriminates and both tests need rewriting")
+
+
 def test_the_streak_line_names_the_note_so_it_is_actionable(tmp_path, monkeypatch,
                                                              capsys):
     """"fuzz is degraded" sends the reader to the ledger; the note tells them
