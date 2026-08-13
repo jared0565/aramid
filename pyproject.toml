@@ -99,6 +99,27 @@ where = ["src"]
 [tool.setuptools.package-data]
 aramid = ["data/*.toml", "data/*.tmpl", "rules/*.yml"]
 
+# TEST THE WORKING TREE, NOT WHATEVER HAPPENS TO BE INSTALLED.
+#
+# aramid is src-layout, so the repo root contains no `aramid/` and a bare
+# `python -m pytest` imports from site-packages instead. That made the suite's
+# subject depend on install state rather than on the checkout: CI was fine
+# because it runs `pip install -e .[dev]` first, while this machine -- where a
+# downstream consumer pinned the released aramid WHEEL into shared user
+# site-packages -- ran the whole suite against a frozen 0.3.0.
+#
+# It is not a cosmetic difference. aramid's own pre-push gate runs `[tests]
+# command` = `python -m pytest -q`, so the gate was grading the installed
+# artifact and not the code being pushed: it BLOCKED a commit whose new tests
+# were correct, because the wheel they were run against genuinely still had the
+# bug being fixed. A gate that cannot see the diff it is gating is worse than
+# no gate -- it would equally have passed a broken commit.
+#
+# `pip install -e .` would also fix it and must NOT be used here: it overwrites
+# the consumer's deliberate pin and re-exposes them to this working tree.
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+
 # PIN THE RULE SET EXPLICITLY -- DO NOT DELETE AS "the default anyway".
 #
 # It is the default of ruff 0.15, and was not the default of ruff 0.16. With no
