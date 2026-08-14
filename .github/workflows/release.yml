@@ -190,7 +190,24 @@ jobs:
             dist/aramid-*.whl
             dist/aramid-*.tar.gz
           if-no-files-found: error
-          retention-days: 1
+          # MUST outlive the approval gate below, which has no time limit.
+          # This read `1`, and that made the gate and the artifact contradict
+          # each other: `publish-pypi` waits on a required reviewer for as long
+          # as a human takes, then downloads THIS artifact -- so any approval
+          # later than 24h after the build failed with "Artifact not found for
+          # name: gated-dist", the publish step skipped, and the run went red
+          # having published nothing.
+          #
+          # Measured, not hypothesised: the v0.3.0 run built at
+          # 2026-08-12T07:33:40Z, the artifact expired 2026-08-13T07:33:40Z,
+          # and the reviewer approved on 2026-08-14 -- ~31h into a window that
+          # had already closed. The failure is silent until approval, which is
+          # the worst possible moment to discover it: the operator has just
+          # authorised an irreversible publish and gets a red run instead.
+          #
+          # 90 is the retention ceiling for public repositories. A gate that
+          # waits on a person should not be racing a timer nobody is shown.
+          retention-days: 90
 
   # THE REHEARSAL, and the reason it is a gate rather than an option.
   #
