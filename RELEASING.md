@@ -26,7 +26,11 @@ normalised form into the wheel. Either spelling is fine in `__version__`.
 
 1. **Bump `__version__`** in `src/aramid/__init__.py`.
 
-2. **Re-run `pip install -e .`** — do not skip this, see below.
+2. **Regenerate the package metadata** — do not skip this, see below:
+
+   ```bash
+   python -c "from setuptools import setup; setup()" egg_info --egg-base src
+   ```
 
 3. **Update `CHANGELOG.md`**: move the `Unreleased` items under a new version
    heading with today's date, and refresh the link definitions at the bottom.
@@ -45,11 +49,39 @@ normalised form into the wheel. Either spelling is fine in `__version__`.
 
 ## Why step 2 is not optional
 
-An editable install records its metadata **at install time**. Bump
-`__version__` without reinstalling and the installed metadata still reports the
-old version, so `tests/unit/test_version.py::test_installed_metadata_matches_
-dunder_version` fails — by design, because that mismatch is real in your
-environment.
+Package metadata is recorded at **build time**. Bump `__version__` without
+regenerating it and the metadata still reports the old version, so
+`tests/unit/test_version.py::test_installed_metadata_matches_dunder_version`
+fails — by design, because that mismatch is real in your environment. Under
+`pythonpath = ["src"]` the metadata `importlib.metadata` resolves is the
+gitignored `src/aramid.egg-info`, so regenerating it is a purely local act that
+never writes to `site-packages`.
+
+**This step used to read "re-run `pip install -e .`", which contradicted this
+same document's "Never `pip install -e .` in this repo" section below.** The
+instruction predated the two-aramid separation and was never revisited;
+following the release process literally would have collapsed the separation and
+put this uncommitted working tree in front of every consumer repo on the
+machine, with `aramid doctor` then reporting the machine as compromised. Caught
+while cutting 0.3.1 — the first release attempted after the separation existed.
+
+### The other thing the first post-separation release exposed
+
+`test_version_flag_prints_the_real_version` spawns `python -m aramid --version`
+as a **subprocess**, and a child inherits none of pytest's `pythonpath` ini
+setting. So it was resolving the INSTALLED wheel and comparing that version to
+the checkout's — a comparison that passed only while the two agreed, and went
+red on the first bump. It now pins `PYTHONPATH` for the child, derived from
+`aramid.__file__`. Measured at the time, with both aramids live:
+
+```
+bare subprocess          ->  aramid 0.3.0   (the installed wheel)
+PYTHONPATH=src           ->  aramid 0.3.1   (the checkout under test)
+```
+
+The general rule, since this repo keeps rediscovering it: **a seam that must
+reach a subprocess has to be an environment variable.** An ini setting, a
+monkeypatch, or a `sys.path` edit stops at the process boundary.
 
 That test then blocks the push, and the symptom is unhelpful:
 

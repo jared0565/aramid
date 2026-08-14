@@ -10,7 +10,70 @@ to publish a tag that disagrees with it.
 
 ## [Unreleased]
 
+## [0.3.1] — 2026-08-15
+
 ### Fixed
+
+- **The release workflow could not publish if the operator took more than a day
+  to approve.** `gated-dist` was uploaded with `retention-days: 1`, while
+  `publish-pypi` sits behind a required-reviewer gate that has no time limit.
+  The two contradicted each other and the contradiction was invisible until the
+  worst possible moment. Measured on the v0.3.0 run:
+
+  ```
+  artifact created   2026-08-12T07:33:40Z
+  artifact expired   2026-08-13T07:33:40Z
+  reviewer approved  2026-08-14T14:54:40Z    <- ~31h after the window shut
+  ```
+
+  ```
+  ##[error]Unable to download artifact(s): Artifact not found for name: gated-dist
+  ```
+
+  The publish step then *skipped*, so nothing was published and the run went
+  red — the operator having just authorised an irreversible upload. Now
+  `retention-days: 90`, the public-repo ceiling; the correct bound is "longer
+  than any human approval delay" and no smaller number expresses it.
+
+  **What did not catch this is the interesting part.** The TestPyPI rehearsal
+  exists to exercise "the gated-dist upload/download round-trip" before
+  production, and it passed every time — because it runs immediately after the
+  build, always inside the artifact's lifetime. A rehearsal that always runs
+  inside the window cannot detect a window that closes. The gate being
+  rehearsed was never the gate that failed.
+
+  Recovery also needed the GitHub Release deleted first: `publish-testpypi`
+  already anticipated re-runs with `skip-existing: true`, but `gh release
+  create --verify-tag` collides with its own earlier output. Half the workflow
+  was re-run aware and half was not, and nothing said so.
+
+- **`RELEASING.md` told you to run the one command it also forbids.** Step 2
+  read "Re-run `pip install -e .`", while the same document's "Never `pip
+  install -e .` in this repo" section explains that doing so collapses the
+  two-aramid separation and puts the uncommitted working tree in front of every
+  consumer repo on the machine. The step predated the separation and was never
+  revisited. Following the release process literally would have compromised the
+  machine, with `aramid doctor` then reporting it. Step 2 now regenerates the
+  gitignored `src/aramid.egg-info` in place, which writes nothing to
+  `site-packages`.
+
+- **`test_version_flag_prints_the_real_version` was comparing two different
+  aramids.** It spawns `python -m aramid --version` as a subprocess, and a
+  child inherits none of pytest's `pythonpath = ["src"]` ini setting — so it
+  resolved the INSTALLED wheel and compared that to the checkout's
+  `__version__`. The assertion passed only while the two happened to agree, and
+  went red on the first version bump after the separation existed. It now pins
+  `PYTHONPATH` for the child, derived from `aramid.__file__`. Both halves were
+  live at the time, which is what made it legible:
+
+  ```
+  bare subprocess   ->  aramid 0.3.0   (the installed wheel)
+  PYTHONPATH=src    ->  aramid 0.3.1   (the checkout under test)
+  ```
+
+  The recurring rule: a seam that must reach a subprocess has to be an
+  environment variable. An ini setting, a monkeypatch or a `sys.path` edit stops
+  at the process boundary.
 
 - **`injection-dataflow.python-query-built-then-executed` flagged code where
   the interpolated string never reaches the database.** The rule's sequential
@@ -83,39 +146,135 @@ to publish a tag that disagrees with it.
   present. A pack finding stored `warn` is therefore one detected while pack
   was explicitly disarmed — exactly the case this fix is for, not a regression.
 
-  **Still open, and named here rather than quietly fixed:** an override
-  recorded while a tool is *disarmed* still survives arming. Closing that means
-  refusing every override for any tool with an arming flag, regardless of its
-  state, which is a much broader behaviour change than this fix and an
-  operator-facing policy call — not something to ship as a side effect of a
-  security repair.
+  **This left one residual, and it is CLOSED in this same release** by the
+  gate-start invalidation sweep described below: an override recorded while a
+  tool was *disarmed* used to survive arming. The paragraphs below are kept
+  because the measurement in them was wrong in a way worth recording.
 
-  That residual is **not theoretical, and this repo is an instance**. Measured
-  on aramid's own ledger:
+  That residual was **not theoretical, and this repo was an instance**. As
+  originally measured on aramid's own ledger:
 
   ```
   aramid ledger filter --status overridden --tool <t> --json
     mutation   2      tdd  1      red-proof  6
   ```
 
-  All nine store `verdict: "warn"` and all three tools are currently disarmed,
-  so nothing is being defeated today — they are legitimate bake-time
-  suppressions. But arming any of those tools silently promotes the findings
-  underneath them, and the two mutation rows would become permanently invisible
-  to the gate, because `mutation_gate_findings` filters on `status == "open"`
-  *before* `policy.apply_overrides` ever sees them. Note the asymmetry that
-  makes mutation the severe case: freshly-scanned findings do reach
-  `apply_overrides`, which re-checks the **current** verdict and refuses to
-  downgrade a BLOCK (`test_override_does_not_downgrade_block_finding`), so for
+  **That count — nine — was wrong, and the error was one of omission.** It
+  enumerated three tools and silently dropped `llm-review`, which holds **ten**
+  more. The real population is **19**, re-measured from the ledger rather than
+  recalled:
+
+  ```
+  finding_overridden events                     22
+  distinct findings, materialized "overridden"  19
+    llm-review 10   red-proof 6   mutation 2   tdd 1
+  ```
+
+  The nine figure had already travelled: it was quoted to a downstream repo,
+  who reasoned from it when arguing the migration policy for legacy rows. Their
+  argument survived the correction — 19 is still bounded and still countable in
+  advance — but the number did not, and nothing in either process would have
+  caught it. A count enumerated tool-by-tool is only as complete as the list of
+  tools you thought to type.
+
+  All 19 store `verdict: "warn"` and all four tools are currently disarmed, so
+  nothing was being defeated — they are legitimate bake-time suppressions. But
+  arming any of those tools silently promotes the findings underneath them, and
+  the two mutation rows would become permanently invisible to the gate, because
+  `mutation_gate_findings` filters on `status == "open"` *before*
+  `policy.apply_overrides` ever sees them. Note the asymmetry that makes
+  mutation the severe case: freshly-scanned findings do reach `apply_overrides`,
+  which re-checks the **current** verdict and refuses to downgrade a BLOCK
+  (`test_override_does_not_downgrade_block_finding`), so for
   ruff/semgrep/tdd/red-proof a stale override is misleading rather than
   load-bearing.
 
-  Fixing the existing rows is therefore a *different* change from refusing new
-  ones: refusing future overrides does nothing about nine already recorded.
-  Whatever closes this has to decide what an override recorded under one arming
-  state means under another — at the gate, not at the CLI.
+  Fixing the existing rows was therefore a *different* change from refusing new
+  ones: refusing future overrides does nothing about the 19 already recorded.
+  What closes it had to decide what an override recorded under one arming state
+  means under another — at the gate, not at the CLI. That is exactly what the
+  sweep below does.
 
 ### Added
+
+- **Arming now revokes an override that was granted while the class was
+  disarmed.** An operator who suppressed a WARN was never asked whether they
+  would suppress a BLOCK; arming asks a question their override never answered,
+  so the override stops binding and the finding returns to `open` for
+  re-adjudication. This closes the residual named under the `aramid override`
+  fix above.
+
+  **Recorded as an event, never computed from config at read time.** Computed,
+  disarming would silently restore the suppression — the predicate just flips
+  back, and a security decision would be undone by editing a TOML key with no
+  record it ever applied. As an event, the append-only log makes revocation
+  one-way for free: nothing about disarming emits a counter-event, so
+  re-suppressing costs a new decision that leaves an artifact.
+
+  **Emitted from a sweep at gate start, never from the detection path.** Every
+  armed tool's gate skips records whose status is not `open` — mutation's is
+  the sharpest — so an invalidation waiting for the finding to re-fire would be
+  eaten by the very filter that makes a defeated block permanent: suppressed,
+  therefore never re-detected, therefore never re-opened.
+
+  The sweep reuses the *same* composite `aramid override` refuses on rather
+  than mapping tools to their `*_block_armed` flags. Two implementations of one
+  question drift, and a flag-keyed map gets the LLM case wrong:
+  `policy.classify("llm-review", ...)` always returns WARN, so `llm_block_armed`
+  promotes only confirmed-CRITICAL findings — a tool-keyed sweep would revoke
+  overrides arming never touched, which is 10 of this repo's own 19 rows.
+
+  Each invalidation records a **cause** — `recorded_disarmed` when the override
+  carries the arming state it assumed, `arming_state_unrecorded` for rows
+  written before that field existed — and the report gives the count broken
+  down by cause rather than summed. "9 override(s) invalidated by arming:
+  arming state was not recorded when they were made" is a different message
+  from a bare notice, and it is the difference between an operator
+  re-adjudicating and an operator hunting for a bug.
+
+  `aramid override` now records the arming state in force when it grants a
+  suppression, collected by *walking* the config for `*_armed` rather than from
+  a literal list of today's six flags — a list is correct the day it is written
+  and silently wrong the day someone adds the seventh.
+
+  **Known and stated rather than discovered later:** this repo cannot dogfood
+  the mechanism. Its blast radius here is a measured zero, because all four
+  tools holding overrides are disarmed and no `llm-review` row is
+  confirmed-critical. The first real firing will be on a consumer's machine.
+
+- **`ledger list`, `show` and `filter` now report the tier a finding has NOW,
+  not only the one frozen at detection.** The stored `verdict` is a snapshot
+  `policy.classify` computed when the finding was detected, and the ledger is
+  append-only so it never moves again — while arming is retroactive and rules
+  get demoted. A row could read `warn` while the finding blocked today, with
+  nothing on it saying so.
+
+  `verdict` stays frozen deliberately: an auditor still needs "what would this
+  be if the suppression were withdrawn". `verdict_now` is the missing other
+  half, and it appears on **every** `--json` row, including those whose tier
+  has not moved — a field present on some rows and absent on others invites the
+  reader to infer meaning from the absence, and that inference is unverifiable
+  from the row. Which value you are reading is therefore answered structurally
+  rather than by a provenance flag nobody can check.
+
+  The text surface is the deliberate exception: `[now: block]` appears only
+  when the tier actually moved. That row never printed `verdict` at all, so
+  there is no pair to disambiguate and an unconditional marker would be noise.
+
+  An unreadable config now **refuses** these queries (exit 3) rather than
+  emitting rows with a null tier, mirroring `aramid override`: being unable to
+  read the config is being unable to answer. This deliberately differs from the
+  suppressions handling in the same command, where a malformed file leaves the
+  per-row marker absent — that is a marker whose absence carries meaning, this
+  is a value promised on every row.
+
+  The computation lives in a new `aramid.tier` module, shared with
+  `override._is_block_tier_now`. What is *not* shared is the ratchet:
+  `verdict_now` reports truth and may answer WARN for a row stored `block`,
+  while `override` ORs with the stored verdict so it can only ever refuse more.
+  Widening what a gitignored local suppression may hide is the one direction
+  that command must never move, and a test pins it — proven to bite against a
+  scratch copy with the composite collapsed.
 
 - **The SQL blind-spot fixture is now an executable contract.** 14 forms in
   which every hazardous shape is paired with a safe twin that looks almost
@@ -2542,6 +2701,8 @@ Stated plainly because each one changes how you should deploy this:
 - **PyPI publishing is not set up.** Install from a GitHub Release artifact or
   from git; `pip install aramid` does not work.
 
-[Unreleased]: https://github.com/jared0565/aramid/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/jared0565/aramid/compare/v0.3.1...HEAD
+[0.3.1]: https://github.com/jared0565/aramid/releases/tag/v0.3.1
+[0.3.0]: https://github.com/jared0565/aramid/releases/tag/v0.3.0
 [0.2.0]: https://github.com/jared0565/aramid/releases/tag/v0.2.0
 [0.1.0]: https://github.com/jared0565/aramid/releases/tag/v0.1.0
