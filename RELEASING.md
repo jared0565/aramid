@@ -80,6 +80,73 @@ artifact cannot be recalled, only superseded:
 | `twine check` | A package page that renders wrong — or, as was true right up until the 0.2.0 metadata work, one with **no description at all** |
 | Clean-venv **sdist** smoke test | An sdist that publishes fine and fails on install. The wheel and the sdist are built by different code paths, and any consumer whose platform or policy forces a source build gets this artifact |
 
+## Promoting a release to the live tool
+
+Releasing publishes an artifact. **Promoting installs it** as the tool every
+other repo on this machine actually runs. They are separate acts, and a release
+changes nothing for consumers until you promote it.
+
+```
+python scripts/promote_live.py 0.3.1 --confirm
+```
+
+Without `--confirm` it resolves the release, downloads the wheel and verifies
+its sha256 against the digest GitHub recorded, then stops without installing —
+so the rehearsal exercises the part that can actually be wrong.
+
+### Two aramids share this machine, and they must not converge
+
+| | is | resolved by |
+| --- | --- | --- |
+| **live** | an installed wheel in `site-packages` | every other repo's git hooks, and `aramid` on PATH |
+| **this checkout** | the working tree, edited constantly | this repo's own test suite, via `pythonpath = ["src"]` |
+
+**This repo's own pre-push gate runs the LIVE tool, not the checkout.** That is
+deliberate — you gate with exactly what consumers run, and a half-finished tree
+can never block your own commits. The cost is real and worth knowing: a gate bug
+you have just fixed still blocks you, and a gate feature you have just shipped
+does not protect you, until you promote. Both were true on 2026-08-14, when an
+`aramid override` security fix sat on `main` with the gate here still running
+0.3.0 without it.
+
+### What the script refuses to do, and why
+
+- **It installs a released artifact, never a local build.** A locally built
+  wheel is probably equivalent to the tagged one and cannot be proven identical.
+  "Probably the same as the tag" is not a claim worth making about the thing
+  every repo on the machine is about to run.
+- **It aborts on a sha256 mismatch** rather than installing and warning.
+- **It verifies afterwards in a clean interpreter** — `-P`, with `PYTHONPATH`
+  stripped — because this session very likely has `PYTHONPATH` pointing at
+  `src/`, and measuring under that would report the checkout and call it live.
+- **It checks the installed path is outside this checkout**, not just that the
+  version string matches. A version check alone passes for an editable install
+  of a tree carrying the same `__version__`, which is the state being excluded.
+
+### Never `pip install -e .` in this repo
+
+One command collapses the separation: every consumer silently starts running
+uncommitted edits, with nothing in their output saying so. This is not
+hypothetical — a downstream repo ran an editable install of this tree for days,
+and the remedy was for *them* to pin a wheel, a counterparty paying for a change
+made here.
+
+`aramid doctor` reports it if it happens anyway:
+
+```
+  EDITABLE aramid is installed editable from file:///F:/Projects/aramid
+           every repo on this machine runs that working tree, including uncommitted edits
+```
+
+That check reads the installed distribution's `direct_url.json`, not
+`aramid.__file__` — this repo's own suite imports the tree on purpose, so a
+`__file__` check would fire on every legitimate run and be trained away.
+
+### After promoting, tell the consumers
+
+Their pinned version moved. Say what changed, and say that anything they
+measured against the old one is a lead rather than a fact.
+
 ## Undoing a release
 
 ```bash

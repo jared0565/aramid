@@ -27,6 +27,7 @@ prepending the resolved executable's own directory to the child's PATH.
 """
 import hashlib
 import io
+import json
 import os
 import platform
 import shutil
@@ -178,6 +179,105 @@ def _version_of(exe: Path) -> str:
         return ""
     out = (cp.stdout or cp.stderr).strip()
     return out.splitlines()[0] if out else ""
+
+
+def _installed_direct_url() -> str | None:
+    """The INSTALLED aramid distribution's `direct_url.json`, or None.
+
+    Deliberately reads the distribution metadata rather than anything about
+    the running process: doctor may well be running from the working tree (a
+    developer with `PYTHONPATH` set, or this repo's own suite) while the
+    installed copy that every other repo resolves is something else entirely.
+    Those are different questions and only the second one matters here.
+
+    Never raises: an absent distribution (running straight from a checkout
+    with nothing installed) is a legitimate state, not an error.
+
+    ENUMERATES rather than calling `distribution("aramid")`, and the reason is
+    a false negative this had on its first outing. With this repo's `src/` on
+    `sys.path`, `distribution("aramid")` resolves to a stale
+    `src/aramid.egg-info` in the working tree instead of the dist-info in
+    site-packages. That directory carries no `direct_url.json`, so the lookup
+    returned None and the check went SILENT -- and it would have been equally
+    silent with a live editable install, which is the one thing it exists to
+    catch. A guard whose failure mode is silence has to be provoked, not
+    trusted.
+
+    An editable entry anywhere wins over a wheel entry, because the question
+    is "is ANY installed aramid live-linked to a tree", not "which one would
+    this process import".
+    """
+    try:
+        import importlib.metadata as importlib_metadata
+
+        found: list[str] = []
+        for dist in importlib_metadata.distributions():
+            name = (dist.metadata["Name"] or "").lower().replace("_", "-")
+            if name != "aramid":
+                continue
+            text = dist.read_text("direct_url.json")
+            if text:
+                found.append(text)
+        for text in found:
+            try:
+                if json.loads(text).get("dir_info", {}).get("editable"):
+                    return text
+            except (ValueError, TypeError):
+                continue
+        return found[0] if found else None
+    except Exception:
+        return None
+
+
+def install_mode_lines(direct_url: str | None) -> list[str]:
+    """Report when aramid ITSELF is installed editable, i.e. live-linked to a
+    working tree.
+
+    THE SEPARATION THIS GUARDS. Other repos on a machine run the promoted
+    wheel out of site-packages; aramid's own checkout is edited freely. One
+    `pip install -e .` in that checkout collapses the two, and every consumer
+    silently begins running uncommitted edits with nothing in their output
+    saying so. Not hypothetical: a downstream repo ran an editable install of
+    this tree for days, and the remedy was for THEM to pin a wheel -- a
+    counterparty paying for a change made over here.
+
+    Keyed on the installed distribution's `direct_url.json`, NOT on
+    `aramid.__file__`. `__file__` reports whichever copy the current process
+    imported, and this repo's own suite imports the tree deliberately
+    (`pyproject.toml`'s `pythonpath = ["src"]`), so a `__file__` check would
+    fire on every legitimate local run -- and a notice that fires when nothing
+    is wrong is one the reader learns to skip, exactly when it finally means
+    something. What matters is what OTHER processes resolve, which is the
+    installed distribution.
+
+    Silent for a wheel install (the promoted state), for an index install (no
+    `direct_url.json` at all), and for a non-editable local install, which
+    copies rather than links. `editable` is the discriminating key, not the
+    presence of `dir_info`.
+
+    Advisory, never a failure, matching `divergence_lines` below: an operator
+    running an editable install on a machine with no consumers is doing
+    something legitimate. What they should not have to do is guess that every
+    other repo is now running their working tree.
+    """
+    if not direct_url:
+        return []
+    try:
+        data = json.loads(direct_url)
+    except (ValueError, TypeError):
+        # doctor reports; it does not crash because a packaging file is odd.
+        # Silence can only UNDER-report here, since the case being detected
+        # has a positive marker rather than being the default.
+        return []
+    if not isinstance(data, dict) or not data.get("dir_info", {}).get("editable"):
+        return []
+    return [
+        f"  EDITABLE aramid is installed editable from {data.get('url', 'an unknown location')}",
+        "           every repo on this machine runs that working tree, including "
+        "uncommitted edits",
+        "           promote a built wheel instead (see RELEASING.md, "
+        "\"Promoting a release to the live tool\")",
+    ]
 
 
 def divergence_lines() -> list[str]:
@@ -722,6 +822,8 @@ def cmd_doctor(root: Path, fix: bool = False) -> int:
     for s in probe_deps(root):
         print(_report_line(s))
     print(_report_line(statuses["interpreter"]))
+    for line in install_mode_lines(_installed_direct_url()):
+        print(line)
     for line in divergence_lines():
         print(line)
 
