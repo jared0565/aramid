@@ -5,7 +5,7 @@ loader, and the near-empty per-repo config stub `init` writes.
 import fnmatch
 import sys
 from copy import deepcopy
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, fields
 from importlib import resources
 from pathlib import Path
 
@@ -51,6 +51,43 @@ class Config:
     tests: dict = field(default_factory=dict)
     deps: dict = field(default_factory=dict)
     hooks: dict = field(default_factory=dict)
+
+
+def arming_state(cfg: "Config") -> dict:
+    """Every tier-affecting `*_armed` flag in force, as a plain dict.
+
+    WALKED, never listed. A literal tuple of today's six flags would be
+    correct on the day it was written and silently wrong the day someone adds
+    the seventh: their flag goes unrecorded, and every override made under it
+    joins the unrecorded-legacy population without anyone choosing that. The
+    walk means a new armable tool is captured by existing code.
+
+    Scoped to keys ending `_armed` because those are the flags that can move a
+    finding between WARN and BLOCK tier -- which is the only thing an override
+    is a decision about. `[llm.autolearn].armed` is deliberately NOT captured:
+    its key does not match, and it changes reviewer SELECTION (escalate-only,
+    the ladder tier stays the floor) rather than any finding's tier, so it
+    cannot invalidate a suppression.
+
+    Recurses, because four of the six live in sub-tables (`llm`, `mutation`,
+    `red_proof`) rather than on the dataclass itself.
+    """
+    state: dict = {}
+
+    def _walk(d: dict) -> None:
+        for key, value in d.items():
+            if isinstance(value, dict):
+                _walk(value)
+            elif isinstance(value, bool) and key.endswith("_armed"):
+                state[key] = value
+
+    for f in fields(cfg):
+        value = getattr(cfg, f.name)
+        if isinstance(value, dict):
+            _walk(value)
+        elif isinstance(value, bool) and f.name.endswith("_armed"):
+            state[f.name] = value
+    return state
 
 
 def _user_config_path() -> Path:

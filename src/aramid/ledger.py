@@ -446,6 +446,20 @@ def _materialize(events):
             # new finding rather than as a move.
             if e.finding_id in state:
                 state[e.finding_id]["line"] = e.payload.get("line")
+        elif e.type.value == "finding_override_invalidated":
+            # Back to open, for re-adjudication. `reason` is REMOVED rather
+            # than left in place: it justified a suppression that no longer
+            # binds, and a row reading status=open beside a live-looking
+            # suppression reason invites every reader to conclude the
+            # override still applies. Preserved under its own key so the
+            # audit trail keeps it -- the ledger is append-only and the
+            # original event is still there regardless.
+            if e.finding_id in state:
+                rec = state[e.finding_id]
+                rec["status"] = "open"
+                rec["invalidated_cause"] = e.payload.get("cause", "")
+                if "reason" in rec:
+                    rec["invalidated_override_reason"] = rec.pop("reason")
         elif e.type.value == "finding_unreachable":
             if e.finding_id in state:
                 state[e.finding_id]["status"] = "unreachable"

@@ -46,6 +46,14 @@ class EventType(StrEnum):
     # re-detecting on a move would silently un-override every triaged finding
     # whose code shifted. This one touches `line` and nothing else.
     FINDING_MOVED = "finding_moved"
+    # An override stopped binding because arming moved its finding to
+    # BLOCK tier. Its own event type, and RECORDED rather than computed from
+    # config at read time: computed, disarming would silently restore the
+    # suppression, because the predicate simply flips back. As an event, the
+    # append-only log makes revocation one-way for free -- nothing about
+    # disarming emits a counter-event, so re-suppressing costs a NEW decision
+    # that the operator has to make and that leaves an artifact.
+    FINDING_OVERRIDE_INVALIDATED = "finding_override_invalidated"
     INFRASTRUCTURE_BYPASS = "infrastructure_bypass"
     BASELINE_SNAPSHOT = "baseline_snapshot"
 

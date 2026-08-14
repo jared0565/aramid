@@ -125,7 +125,7 @@ def test_fresh_ledger_prepush_genuine_secret_still_blocks(tmp_path, monkeypatch)
 
 
 def test_an_override_made_while_disarmed_does_not_defeat_the_block_after_arming(
-        tmp_path, monkeypatch):
+        tmp_path, monkeypatch, capsys):
     """END-TO-END guard for the property a downstream repo's 26 suppressions
     rest on, reported in interop round 84.
 
@@ -186,6 +186,7 @@ def test_an_override_made_while_disarmed_does_not_defeat_the_block_after_arming(
     cfg_path.write_text("semgrep_block_armed = true\n", encoding="utf-8")
 
     rc = cmd_check(root, Gate.PRE_PUSH, "range")
+    err = capsys.readouterr().err
 
     assert rc == 1, "a stale override must not defeat a now-armed BLOCK"
 
@@ -194,8 +195,19 @@ def test_an_override_made_while_disarmed_does_not_defeat_the_block_after_arming(
         after = ledger.open_findings()[fid]
     finally:
         ledger.close()
-    # The residual, stated rather than implied: nothing revoked the override.
-    assert after["status"] == "overridden", after
+    # The residual this test used to pin -- `status` still reading "overridden"
+    # after arming, the block held only by re-classification and nothing having
+    # reconsidered the suppression -- is CLOSED as of the disarm mechanism
+    # (interop rounds 84 §2, 87 §5, 89). The gate-start sweep now revokes it,
+    # so the assertion is inverted deliberately rather than deleted: this is
+    # the end-to-end proof that the sweep runs at gate start, on the same
+    # fixture that demonstrated the hole.
+    assert after["status"] == "open", after
+    assert after["invalidated_cause"] == "recorded_disarmed", after
+    # And the operator is told, with the count and the cause -- a bare notice
+    # is the difference between re-adjudicating and hunting for a bug.
+    assert "1 override" in err, err
+    assert "re-adjudication" in err, err
 
 
 def test_a_blocked_suite_names_a_log_that_exists_and_holds_the_failing_test(

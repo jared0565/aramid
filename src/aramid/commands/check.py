@@ -74,6 +74,7 @@ baseline" and re-trigger a false block).
 import dataclasses
 import os
 import sys
+import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -81,6 +82,7 @@ from aramid import config as config_mod
 from aramid import pipeline
 from aramid import policy
 from aramid import reporter
+from aramid.commands import override as override_cmd
 from aramid.ledger import Ledger
 from aramid.models import Gate, Source, Verdict
 
@@ -144,6 +146,17 @@ def cmd_check(root, gate: Gate, mode: str, strict: bool = False, as_json: bool =
             accept_degraded = os.environ.get("ARAMID_ACCEPT_DEGRADED")
 
         fresh = gate is Gate.PRE_PUSH and not ledger.has_baseline()
+
+        # Gate START, before anything detects. Deliberately not on the
+        # detection path: every armed tool's gate skips records whose status
+        # is not "open" (mutation's is the sharpest), so an invalidation that
+        # waited for the finding to re-fire would be eaten by the very filter
+        # that makes a defeated block permanent -- suppressed, therefore never
+        # re-detected, therefore never re-opened.
+        invalidated = override_cmd.invalidate_stale_overrides(
+            ledger, cfg, run_id=uuid.uuid4().hex, at=_now())
+        if invalidated:
+            print(override_cmd.render_invalidations(invalidated), file=sys.stderr)
 
         result = pipeline.run_gate(root, gate, mode, cfg, ledger, accept_degraded=accept_degraded)
 

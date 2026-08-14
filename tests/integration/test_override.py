@@ -268,6 +268,73 @@ def test_unreachable_finding_is_refused(tmp_path, capsys):
         ledger.close()
 
 
+def test_override_records_the_arming_state_it_assumed(tmp_path):
+    """An override is a decision made UNDER a config, and the ledger has never
+    recorded which one. Without that, a later sweep cannot tell "suppressed
+    while this class was disarmed" from "suppressed by a version that never
+    asked" -- and those two want different words in front of an operator
+    (interop round 89: cause `recorded_disarmed` vs `arming_state_unrecorded`).
+
+    Two arms, because a test that only asserts the key EXISTS would pass
+    against a hardcoded empty dict. The recorded value has to track the config
+    that was actually in force.
+    """
+    root: Path = tmp_path
+    ledger = _ledger(root)
+    ledger.record_run("r1", "t1", "pre-push", {"ruff"}, {"a.py"},
+                       [_f("warn1"), _f("warn2")])
+    ledger.close()
+
+    assert cmd_override(root, "warn1", "false positive, disarmed") == 0
+
+    # Arm semgrep and override a second time. The finding is a ruff finding, so
+    # arming semgrep does not make it BLOCK-tier -- the override still succeeds
+    # and the only thing that moves is the recorded state.
+    (root / "aramid.toml").write_text("semgrep_block_armed = true\n", encoding="utf-8")
+    assert cmd_override(root, "warn2", "false positive, armed") == 0
+
+    ledger = _ledger(root)
+    try:
+        by_id = {e.finding_id: e.payload
+                 for e in ledger.events() if e.type.value == "finding_overridden"}
+        assert "arming_state" in by_id["warn1"], "override recorded no arming state"
+        assert by_id["warn1"]["arming_state"]["semgrep_block_armed"] is False
+        assert by_id["warn2"]["arming_state"]["semgrep_block_armed"] is True
+    finally:
+        ledger.close()
+
+
+def test_recorded_arming_state_covers_every_armable_flag_not_a_hand_kept_list(tmp_path):
+    """Collected by walking the config for `*_armed`, never from a literal list
+    of today's tools. A hand-kept list is the failure mode this repo has now
+    paid for twice: whoever adds the next armable tool does not know this
+    record exists, the flag silently goes unrecorded, and its overrides join
+    the legacy population without anyone choosing that.
+
+    Asserts the nested-dict flags are present too -- they live in `llm`,
+    `mutation` and `red_proof` sub-tables, so a walk that only looked at
+    top-level bool fields would capture two flags out of six and still pass a
+    test that checked `semgrep_block_armed` alone.
+    """
+    root: Path = tmp_path
+    ledger = _ledger(root)
+    ledger.record_run("r1", "t1", "pre-push", {"ruff"}, {"a.py"}, [_f("warn1")])
+    ledger.close()
+
+    assert cmd_override(root, "warn1", "false positive") == 0
+
+    ledger = _ledger(root)
+    try:
+        ev = [e for e in ledger.events() if e.type.value == "finding_overridden"][0]
+        recorded = ev.payload["arming_state"]
+    finally:
+        ledger.close()
+
+    for flag in ("semgrep_block_armed", "tdd_block_armed", "llm_block_armed",
+                 "mutation_block_armed", "score_block_armed", "red_proof_block_armed"):
+        assert flag in recorded, f"{flag} not captured in the recorded arming state"
+
+
 def test_armed_mutation_finding_is_refused_though_the_ledger_froze_its_verdict_at_warn(
         tmp_path, capsys):
     """The stored verdict is a snapshot of one config, and this command trusted

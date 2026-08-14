@@ -139,6 +139,93 @@ def _is_block_tier_now(cfg, rec: dict) -> bool:
     return verdict is Verdict.BLOCK
 
 
+_CAUSE_TEXT = {
+    "recorded_disarmed": "recorded as made while the class was disarmed",
+    "arming_state_unrecorded": "arming state was not recorded when they were made",
+}
+
+
+def render_invalidations(invalidated: list[dict]) -> str:
+    """The operator-facing notice, broken down BY CAUSE rather than summed.
+
+    "your overrides were invalidated" and "2 override(s) invalidated by
+    arming: arming state was not recorded when they were made" are different
+    messages, and the difference is whether the reader re-adjudicates or goes
+    looking for a bug in aramid. The count and the cause are the two facts
+    that decide which (interop round 89).
+
+    Returns "" for an empty sweep so the caller prints nothing at all -- a
+    "0 overrides invalidated" line on every gate run is noise that trains
+    people to skip the whole notice.
+    """
+    if not invalidated:
+        return ""
+    counts: dict[str, int] = {}
+    for item in invalidated:
+        counts[item["cause"]] = counts.get(item["cause"], 0) + 1
+    lines = [f"aramid: check: {len(invalidated)} override(s) invalidated by arming "
+             f"-- reopened for re-adjudication:"]
+    for cause, count in sorted(counts.items()):
+        lines.append(f"aramid: check:   {count} -- {_CAUSE_TEXT.get(cause, cause)}")
+    return "\n".join(lines)
+
+
+def invalidate_stale_overrides(ledger, cfg, *, run_id: str, at: str) -> list[dict]:
+    """Revoke overrides that arming has moved out from under, and return what
+    was revoked as [{"id", "cause"}] so the caller can report count AND cause.
+
+    Called at GATE START, never from the detection path. Every armed tool's
+    gate skips findings whose status is not "open"
+    (`mutation_gate.mutation_gate_findings` is the sharpest case), so an
+    invalidation that waited for the finding to re-fire would be eaten by the
+    exact filter that makes the defeat terminal -- the finding is suppressed,
+    so it never re-detects, so it never re-opens.
+
+    The test is the SAME composite `cmd_override` refuses on, deliberately
+    reusing it rather than mapping tools to their arming flags. Two reasons.
+    The refusal and the revocation answer one question -- "is this finding
+    BLOCK-tier under the config in force" -- and two implementations of one
+    question drift. And a tool-keyed map gets the LLM case wrong:
+    `policy.classify("llm-review", ...)` always returns WARN, so
+    `llm_block_armed` does not promote an unconfirmed or sub-critical
+    llm-review finding at all, and a map keyed on the flag would revoke
+    overrides arming never touched.
+
+    Idempotency is structural rather than guarded: invalidating sets the
+    status back to "open", and this only ever examines rows that are
+    "overridden", so a revoked row is invisible to every later sweep. It
+    cannot be re-overridden either -- it is BLOCK-tier now, which is precisely
+    what `cmd_override` refuses.
+    """
+    state = ledger.open_findings()
+    # The WINNING override event per finding -- its last one. A finding may
+    # carry several (re-overridden after a re-detect), and only the one that
+    # actually granted the live suppression says what was assumed.
+    granted: dict[str, dict] = {}
+    for e in ledger.events():
+        if e.type.value == "finding_overridden":
+            granted[e.finding_id] = e.payload
+
+    invalidated: list[dict] = []
+    for fid, rec in state.items():
+        if rec.get("status") != "overridden":
+            continue
+        if not (rec.get("verdict") == "block" or _is_block_tier_now(cfg, rec)
+                or review.is_confirmed_critical_llm(rec)):
+            continue
+        # Absent field vs recorded field. Kept distinct because they are
+        # different claims: one says "granted while this class was disarmed",
+        # the other says "granted by a version that never asked". Collapsing
+        # them costs nothing today and makes "were these adjudicated under a
+        # wrong assumption, or were they just old?" unanswerable later.
+        cause = ("recorded_disarmed" if "arming_state" in granted.get(fid, {})
+                 else "arming_state_unrecorded")
+        ledger.append(Event(EventType.FINDING_OVERRIDE_INVALIDATED, run_id, at,
+                             finding_id=fid, payload={"cause": cause}))
+        invalidated.append({"id": fid, "cause": cause})
+    return invalidated
+
+
 def cmd_override(root, finding_id: str, reason: str) -> int:
     root = Path(root)
     reason = (reason or "").strip()
@@ -187,8 +274,18 @@ def cmd_override(root, finding_id: str, reason: str) -> int:
             print(_suppression_snippet(finding_id, rec, reason), file=sys.stderr)
             return 3
 
+        # The arming state this decision ASSUMED. An override is a judgement
+        # made under a config -- "I accept this as a WARN" -- and until now the
+        # ledger recorded the judgement without the premise. A later sweep
+        # needs the premise to tell a suppression granted while this class was
+        # disarmed from one granted by a version that never asked the question;
+        # those two deserve different words in front of an operator, and
+        # without this field the distinction is unrecoverable forever after
+        # (interop round 89).
         ledger.append(Event(EventType.FINDING_OVERRIDDEN, uuid.uuid4().hex, _now(),
-                             finding_id=finding_id, payload={"reason": reason}))
+                             finding_id=finding_id,
+                             payload={"reason": reason,
+                                      "arming_state": config_mod.arming_state(cfg)}))
         print(f"aramid: override: {finding_id} overridden ({reason})")
         return 0
     finally:
