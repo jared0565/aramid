@@ -268,6 +268,45 @@ def test_unreachable_finding_is_refused(tmp_path, capsys):
         ledger.close()
 
 
+def test_a_stored_block_stays_refused_even_when_its_rule_no_longer_blocks(
+        tmp_path, capsys):
+    """THE RATCHET, pinned. Written before `_is_block_tier_now` was re-expressed
+    on top of `tier.verdict_now`, so it is a refactor guard rather than a
+    red-first test: it passed before the change and must pass after.
+
+    `tier.verdict_now` reports TRUTH and is free to answer WARN for a finding
+    whose stored verdict is `block` -- a rule demoted, a tool disarmed. This
+    command must NOT follow it down. Widening what a machine-local, gitignored
+    suppression may hide is the one direction it must never move, and the
+    obvious "simplification" of replacing the whole composite with
+    `verdict_now(...) is BLOCK` does exactly that. This test is what walks that
+    edit into a red.
+    """
+    root: Path = tmp_path
+    # Stored BLOCK, under a config where semgrep no longer blocks anything.
+    (root / "aramid.toml").write_text("semgrep_block_armed = false\n", encoding="utf-8")
+    ledger = _ledger(root)
+    ledger.record_run("r1", "t1", "pre-push", {"semgrep"}, {"a.py"},
+                       [_f("stale1", tool="semgrep",
+                           rule="owasp-top-ten.a03-injection.python-sqli-string-concat",
+                           verdict=Verdict.BLOCK)])
+    ledger.close()
+
+    # Precondition: the recompute really does answer WARN here, or the arm
+    # below would be refused by the recompute rather than by the ratchet and
+    # would prove nothing about the ratchet at all.
+    from aramid import tier
+    cfg = config_mod.load_config(root)
+    state_rec = _ledger(root).open_findings()["stale1"]
+    assert tier.verdict_now(cfg, state_rec) is Verdict.WARN
+
+    rc = cmd_override(root, "stale1", "the rule was demoted, let me hide it")
+    err = capsys.readouterr().err
+
+    assert rc == 3, "a stored BLOCK must stay unoverridable after a demotion"
+    assert ".aramid-suppressions.toml" in err
+
+
 def test_override_records_the_arming_state_it_assumed(tmp_path):
     """An override is a decision made UNDER a config, and the ledger has never
     recorded which one. Without that, a later sweep cannot tell "suppressed

@@ -750,3 +750,111 @@ def test_filter_text_row_marks_an_adjudicated_finding(tmp_path, capsys):
     assert "suppressed" in adj
     assert "suppressed" not in une, \
         "the never-examined finding must not wear the adjudicated marker"
+
+
+# ------------------------------------------------- verdict_now (compute-on-read) ---
+#
+# The stored `verdict` is frozen at detection and stays that way on purpose --
+# an auditor still needs "what would this be if the suppression were
+# withdrawn". What was missing is the OTHER half: what tier is it now. Arming
+# is retroactive, so a row can read `warn` while the finding blocks today, and
+# nothing on the row said so (interop rounds 80, 82, 87 section 6).
+
+def _mutation_f(fid="mut1"):
+    return Finding(fid, "mutation", "survived", "medium", Severity.MEDIUM, Verdict.WARN,
+                    "src/pay.py", 7, "surviving mutant", "e", Gate.PRE_PUSH)
+
+
+def test_filter_json_carries_verdict_now_on_every_row(tmp_path, capsys):
+    """UNCONDITIONAL, and that is the whole point of the field's shape.
+
+    graphite withdrew their own `verdict_gate` proposal on exactly this
+    reasoning: a field present on some rows and absent on others invites the
+    reader to infer meaning from its absence, and that inference is
+    unverifiable from the row. So `verdict_now` appears on the row whose tier
+    moved AND on the row whose tier did not.
+    """
+    root: Path = tmp_path
+    (root / "aramid.toml").write_text("[mutation]\nmutation_block_armed = true\n",
+                                       encoding="utf-8")
+    ledger = _ledger(root)
+    ledger.record_run("r1", "t1", "pre-push", {"mutation", "ruff"}, {"src/pay.py", "a.py"},
+                       [_mutation_f(), _f("ruff1", rule="F401")])
+    ledger.close()
+
+    assert cmd_ledger_filter(root, as_json=True) == 0
+    rows = {r["id"]: r for r in json.loads(capsys.readouterr().out)}
+
+    # The moved row: stored value untouched, current tier reported beside it.
+    assert rows["mut1"]["verdict"] == "warn"
+    assert rows["mut1"]["verdict_now"] == "block"
+    # The unmoved row carries the key too, or absence becomes a signal.
+    # `F401` deliberately, not this module's default `S102`: S102 is BLOCK-tier
+    # under the shipped block_rules while `_f` stores WARN, so it is a MOVED
+    # row and would make a useless control here. That the fixture could store a
+    # verdict `classify` disagrees with is not a fixture bug -- it is the exact
+    # drift this field exists to surface, arrived at from the other direction.
+    assert "verdict_now" in rows["ruff1"], "verdict_now must be on EVERY row"
+    assert rows["ruff1"]["verdict_now"] == rows["ruff1"]["verdict"] == "warn"
+
+
+def test_show_reports_verdict_now_beside_the_stored_verdict(tmp_path, capsys):
+    root: Path = tmp_path
+    (root / "aramid.toml").write_text("[mutation]\nmutation_block_armed = true\n",
+                                       encoding="utf-8")
+    ledger = _ledger(root)
+    ledger.record_run("r1", "t1", "pre-push", {"mutation"}, {"src/pay.py"}, [_mutation_f()])
+    ledger.close()
+
+    assert cmd_ledger_show(root, "mut1") == 0
+    out = capsys.readouterr().out
+
+    assert "verdict: warn" in out
+    assert "verdict_now: block" in out
+
+
+def test_text_row_flags_a_moved_tier_and_stays_quiet_when_it_has_not_moved(tmp_path, capsys):
+    """Two arms in one test on purpose: the marker is only meaningful if its
+    ABSENCE is also verified. An implementation that appended `[now: ...]`
+    unconditionally would pass a one-armed version of this and turn every row
+    into noise."""
+    root: Path = tmp_path
+    (root / "aramid.toml").write_text("[mutation]\nmutation_block_armed = true\n",
+                                       encoding="utf-8")
+    ledger = _ledger(root)
+    ledger.record_run("r1", "t1", "pre-push", {"mutation", "ruff"}, {"src/pay.py", "a.py"},
+                       [_mutation_f(), _f("ruff1", rule="F401")])
+    ledger.close()
+
+    assert cmd_ledger_filter(root, status="open") == 0
+    out = capsys.readouterr().out
+    moved = next(ln for ln in out.splitlines() if "mut1" in ln)
+    unmoved = next(ln for ln in out.splitlines() if "ruff1" in ln)
+
+    assert "[now: block]" in moved
+    assert "now:" not in unmoved, "an unmoved tier must not be annotated"
+
+
+def test_an_unreadable_config_fails_the_query_rather_than_reporting_null_tiers(
+        tmp_path, capsys):
+    """Refuse, do not fabricate. `verdict_now` is on every row, so a config we
+    cannot read means the command cannot deliver what it now promises --
+    printing rows with a null tier invites exactly the misreading this field
+    exists to remove. Mirrors `aramid override`, which refuses on the same
+    reasoning: being unable to read the config is being unable to answer.
+
+    Note this deliberately differs from the suppressions handling above, where
+    a malformed file leaves the per-row marker ABSENT rather than false. That
+    is a marker whose absence is meaningful; this is a value on every row.
+    """
+    root: Path = tmp_path
+    (root / "aramid.toml").write_text("this is not = valid = toml\n", encoding="utf-8")
+    ledger = _ledger(root)
+    ledger.record_run("r1", "t1", "pre-push", {"mutation"}, {"src/pay.py"}, [_mutation_f()])
+    ledger.close()
+
+    rc = cmd_ledger_filter(root, as_json=True)
+    err = capsys.readouterr().err
+
+    assert rc == 3
+    assert "config" in err.lower()

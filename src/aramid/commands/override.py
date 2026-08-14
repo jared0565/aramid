@@ -42,9 +42,9 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from aramid import config as config_mod
-from aramid import policy, review
+from aramid import review, tier
 from aramid.ledger import Ledger
-from aramid.models import Event, EventType, Gate, Verdict
+from aramid.models import Event, EventType, Verdict
 
 
 def _now() -> str:
@@ -114,11 +114,20 @@ def _is_block_tier_now(cfg, rec: dict) -> bool:
     findings locally overridable -- and widening what a gitignored file may
     hide is the one direction this command must never move.
 
-    `severity` is stored post-`_map_severity`; feeding it back in as
-    `severity_raw` is sound because that mapping round-trips on all five
-    levels, and only classify's `_DEPS_TOOLS` branch reads severity at all.
-    PRE_PUSH is passed as the strictest gate; classify ignores the argument
-    entirely (policy.py's module docstring says so, and says why).
+    Delegates the tier question to `tier.verdict_now` rather than calling
+    `policy.classify` itself. That module is the single implementation of "what
+    tier is this finding now", shared with `ledger`'s read surfaces -- two
+    implementations of one question drift, and this repo has paid for that
+    lesson more than once.
+
+    WHAT IS *NOT* SHARED IS THE RATCHET, and it is the whole reason this
+    wrapper still exists. `tier.verdict_now` reports TRUTH and may answer WARN
+    for a row stored `block` (a demoted rule, a disarmed tool). The caller ORs
+    this with the stored verdict precisely so this command can only ever refuse
+    MORE. Do not "simplify" the call site to `verdict_now(...) is BLOCK`:
+    `test_a_stored_block_stays_refused_even_when_its_rule_no_longer_blocks`
+    goes red if you do, and the defect it describes is a gitignored file
+    silently gaining the power to hide a finding that used to block.
 
     Failure REFUSES. An earlier draft of this function caught everything and
     returned False, on the reasoning that it "degrades to today's behaviour" --
@@ -132,11 +141,9 @@ def _is_block_tier_now(cfg, rec: dict) -> bool:
     message; permitting costs a silently defeated BLOCK.
     """
     try:
-        _, verdict = policy.classify(str(rec.get("tool", "")), str(rec.get("rule", "")),
-                                      str(rec.get("severity", "")), Gate.PRE_PUSH, cfg)
+        return tier.verdict_now(cfg, rec) is Verdict.BLOCK
     except Exception:
         return True
-    return verdict is Verdict.BLOCK
 
 
 _CAUSE_TEXT = {

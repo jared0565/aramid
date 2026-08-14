@@ -23,7 +23,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from aramid import config as config_mod
-from aramid import toolset
+from aramid import tier, toolset
 from aramid.ledger import Ledger
 from aramid.models import Event, EventType
 
@@ -32,7 +32,32 @@ def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
-def _render_row(finding_id: str, rec: dict) -> str:
+def _config_or_error(root: Path, label: str):
+    """`(cfg, None)` or `(None, 3)`, having already explained itself.
+
+    REFUSE RATHER THAN FABRICATE. `verdict_now` is computed from the config in
+    force and appears on every row, so a config we cannot read means this
+    command cannot deliver what it now promises. Emitting rows with a null or
+    omitted tier would invite precisely the misreading the field exists to
+    remove -- a reader scanning 121 rows for what is outstanding would take
+    silence for "nothing has moved".
+
+    Mirrors `aramid override`, which refuses on the same reasoning. Note it
+    deliberately does NOT mirror the suppressions handling below, where a
+    malformed file leaves the per-row marker absent: that is a marker whose
+    absence carries meaning, this is a value promised on every row.
+    """
+    try:
+        return config_mod.load_config(root), None
+    except Exception as exc:
+        print(f"aramid: ledger {label}: cannot read the config ({exc}) -- refusing. "
+              f"Every row's verdict_now is computed from the config in force, so "
+              f"being unable to read it is being unable to answer. Fix aramid.toml "
+              f"and retry.", file=sys.stderr)
+        return None, 3
+
+
+def _render_row(finding_id: str, rec: dict, verdict_now: str | None = None) -> str:
     # ASCII `--`, not an em dash. This line carried a literal U+2014, which
     # cp1252 (Windows' encoding for a REDIRECTED stdout) writes as the single
     # byte 0x97 -- not valid UTF-8 in any position, so every programmatic
@@ -41,14 +66,26 @@ def _render_row(finding_id: str, rec: dict) -> str:
     # UTF-8 on redirected streams, which fixes the general class; this stays
     # ASCII because a separator has no reason not to be, and every other
     # rendered line in this codebase already uses `--`.
-    return (f"[{rec.get('status')}] {finding_id} {rec.get('tool')}:{rec.get('rule')} "
-            f"{rec.get('file')}:{rec.get('line')} -- {rec.get('message')}")
+    row = (f"[{rec.get('status')}] {finding_id} {rec.get('tool')}:{rec.get('rule')} "
+           f"{rec.get('file')}:{rec.get('line')} -- {rec.get('message')}")
+    # Annotated ONLY when the tier has actually moved. The unconditional rule
+    # applies to `--json`, where a field appearing on some rows and not others
+    # invites inference from its absence; this line is for a human, does not
+    # print `verdict` at all, and would be pure noise carrying `[now: warn]` on
+    # every unchanged row. Here the marker IS the signal: it means the stored
+    # tier on this row is misleading.
+    if verdict_now is not None and verdict_now != rec.get("verdict"):
+        row += f"  [now: {verdict_now}]"
+    return row
 
 
 # ------------------------------------------------------------------- list ---
 
 def cmd_ledger_list(root) -> int:
     root = Path(root)
+    cfg, err = _config_or_error(root, "list")
+    if err is not None:
+        return err
     ledger = Ledger(root / ".aramid" / "ledger.db")
     try:
         state = ledger.open_findings()
@@ -56,7 +93,7 @@ def cmd_ledger_list(root) -> int:
             print("aramid: ledger: no findings recorded")
             return 0
         for finding_id, rec in state.items():
-            print(_render_row(finding_id, rec))
+            print(_render_row(finding_id, rec, str(tier.verdict_now(cfg, rec))))
         return 0
     finally:
         ledger.close()
@@ -66,6 +103,9 @@ def cmd_ledger_list(root) -> int:
 
 def cmd_ledger_show(root, finding_id: str) -> int:
     root = Path(root)
+    cfg, err = _config_or_error(root, "show")
+    if err is not None:
+        return err
     ledger = Ledger(root / ".aramid" / "ledger.db")
     try:
         state = ledger.open_findings()
@@ -78,6 +118,11 @@ def cmd_ledger_show(root, finding_id: str) -> int:
         for key in ("tool", "rule", "file", "line", "severity", "verdict", "message",
                     "evidence", "historical", "status", "reason"):
             print(f"{key}: {rec.get(key)}")
+        # Printed immediately after the block above rather than inside it: the
+        # loop renders STORED keys, and this one is computed. Keeping it out of
+        # the tuple is what stops a future edit adding it to `_JSON_KEYS` too,
+        # where `rec.get("verdict_now")` would silently be None forever.
+        print(f"verdict_now: {tier.verdict_now(cfg, rec)}")
 
         print("events:")
         for e in ledger.events():
@@ -106,6 +151,9 @@ def cmd_ledger_filter(root, tool: str | None = None, rule: str | None = None,
                        status: str | None = None, severity: str | None = None,
                        as_json: bool = False) -> int:
     root = Path(root)
+    cfg, err = _config_or_error(root, "filter")
+    if err is not None:
+        return err
     ledger = Ledger(root / ".aramid" / "ledger.db")
     # WHICH OF THESE HAS ANYONE ACTUALLY LOOKED AT.
     #
@@ -145,8 +193,18 @@ def cmd_ledger_filter(root, tool: str | None = None, rule: str | None = None,
             # starts guessing -- and the text format's unparseability is the
             # defect this flag exists to fix, so it must not survive in the
             # one case where a caller is least likely to test.
+            # `verdict_now` is emitted on EVERY row, including the ones whose
+            # tier has not moved. graphite withdrew their own `verdict_gate`
+            # proposal on exactly this reasoning: a field present on some rows
+            # and absent on others invites the reader to infer meaning from the
+            # absence, and that inference is unverifiable from the row itself.
+            # So the pair is always both -- `verdict` is always the frozen
+            # snapshot, `verdict_now` is always the recomputed truth, and which
+            # one you are reading is answered structurally rather than by a
+            # provenance flag nobody can check.
             print(json.dumps(
                 [{"id": fid, **{k: rec.get(k) for k in _JSON_KEYS},
+                  "verdict_now": str(tier.verdict_now(cfg, rec)),
                   "suppressed": fid in suppressed_reasons,
                   "suppressed_reason": suppressed_reasons.get(fid)}
                  for fid, rec in matched.items()], indent=2))
@@ -155,7 +213,7 @@ def cmd_ledger_filter(root, tool: str | None = None, rule: str | None = None,
             print("aramid: ledger filter: no matching findings")
             return 0
         for finding_id, rec in matched.items():
-            row = _render_row(finding_id, rec)
+            row = _render_row(finding_id, rec, str(tier.verdict_now(cfg, rec)))
             if finding_id in suppressed_reasons:
                 row += f"  [suppressed: {suppressed_reasons[finding_id]}]"
             print(row)

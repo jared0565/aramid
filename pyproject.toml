@@ -140,6 +140,28 @@ aramid = ["data/*.toml", "data/*.tmpl", "rules/*.yml"]
 # Use pytest's own override instead, which does win:
 #
 #     python -m pytest -o pythonpath=/path/to/scratch/src -k <test>
+#
+# FORWARD SLASHES ARE LOAD-BEARING IN THAT COMMAND ON WINDOWS, and getting it
+# wrong produces a convincing non-experiment rather than an error. `pythonpath`
+# is a `paths`-type ini value, which pytest splits with shlex -- where `\` is
+# an escape character. A native Windows path is therefore eaten whole:
+#
+#     -o pythonpath=C:\Users\me\scratch\src
+#     sys.path[2] == 'C:Usersmescratchsrc'      <- every separator stripped
+#
+# That directory does not exist, nothing is added to the path, and the import
+# falls through to whatever aramid is INSTALLED -- so the perturbed run reports
+# on the wheel while appearing to test the scratch copy. Measured here: the run
+# went red, but on `ImportError: cannot import name 'tier'` from site-packages,
+# not on the assertion under test. A red for the wrong reason is not an
+# observation, and a perturbation whose mutant never loaded is the exact
+# failure this whole comment block exists to prevent -- arrived at a second
+# time, by a different mechanism, three commits later.
+#
+# Always confirm the treatment before trusting the result: print
+# `aramid.__file__` from inside the pytest process and check it names the
+# scratch copy. `-o` overriding the ini value is not the same as `-o` naming a
+# path that parsed.
 [tool.pytest.ini_options]
 pythonpath = ["src"]
 
