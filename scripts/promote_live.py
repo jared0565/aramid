@@ -45,7 +45,10 @@ WHEEL_ASSET = "aramid-{version}-py3-none-any.whl"
 
 
 def _run(argv: list[str], **kw) -> subprocess.CompletedProcess:
-    return subprocess.run(argv, capture_output=True, text=True, **kw)
+    # noqa convention matches runners/base.py: every argv here is built from
+    # literals plus a version string the operator typed, and is passed as a
+    # LIST with no shell, so there is nothing for an injection to reach.
+    return subprocess.run(argv, capture_output=True, text=True, **kw)  # noqa: S603
 
 
 def _clean_env() -> dict:
