@@ -141,6 +141,16 @@ class GateResult:
     # its JSON name (`tools`) made an undercount read as a complete count, and
     # someone asking "did the suite run in this gate?" got the wrong answer.
     tools_ran: tuple = ()
+    # {tool: repo-relative log path} for the logs this run ACTUALLY wrote.
+    #
+    # Carried rather than derived at render time for two reasons. The reporter
+    # is pure formatting -- it has no `root` and deliberately touches no
+    # filesystem -- and, more importantly, only `_write_logs` knows which files
+    # exist: consumer-produced findings (mutation, llm) have no RunnerResult
+    # and so no log. A reporter guessing `.aramid/logs/{tool}-{run_id}.log`
+    # would name a path that is sometimes absent, which is the same "points at
+    # nothing" defect this exists to fix, one layer along.
+    log_paths: dict = field(default_factory=dict)
 
 
 def _tool_provenance(selected) -> dict:
@@ -729,12 +739,27 @@ def _examined_by_tool(flat_results: list[RunnerResult]) -> dict[str, set[str]]:
 
 
 def _write_logs(root: Path, run_id: str, flat_results: list[RunnerResult],
-                 raw_secrets: list[str]) -> None:
+                 raw_secrets: list[str]) -> dict[str, str]:
+    """Write each runner's captured output, and RETURN what was written.
+
+    The return value is what lets the reporter point a reader at the full
+    output for a finding whose location is a `<...>` marker and therefore
+    discriminates nothing. It is built from the files this function actually
+    wrote rather than reconstructed downstream from `{tool}-{run_id}.log`,
+    because only here is it known which runners produced a result at all --
+    consumer findings (mutation, llm) never reach this function.
+    """
     logs_dir = root / ".aramid" / "logs"
     logs_dir.mkdir(parents=True, exist_ok=True)
+    written: dict[str, str] = {}
     for r in flat_results:
         scrubbed = redact.scrub(_log_body(r), raw_secrets)
         (logs_dir / f"{r.tool}-{run_id}.log").write_text(scrubbed, encoding="utf-8")
+        # Repo-relative with forward slashes: this is printed for a human to
+        # paste, and a backslashed absolute path is both machine-specific and
+        # awkward to quote in a shell.
+        written[r.tool] = f".aramid/logs/{r.tool}-{run_id}.log"
+    return written
 
 
 # --------------------------------------------------------------- overrides ---
@@ -866,7 +891,7 @@ def run_gate(root: Path, gate: Gate, mode: str, cfg: config_mod.Config, ledger: 
 
     # secrets never land in logs, raw -- collected before writing them out.
     raw_secrets = [r.secret for r in all_raws if r.secret]
-    _write_logs(root, run_id, flat_results, raw_secrets)
+    log_paths = _write_logs(root, run_id, flat_results, raw_secrets)
 
     # second ignore-path pass: drop any raw finding for an ignored path
     # BEFORE fingerprinting, regardless of whether it ever went through
@@ -1198,6 +1223,7 @@ def run_gate(root: Path, gate: Gate, mode: str, cfg: config_mod.Config, ledger: 
                        tool_provenance=_tool_provenance(selected),
                        ratchet_escalated=ratchet_escalated,
                        scope_widened=scope_widened,
+                       log_paths=log_paths,
                        # The SAME value record_run wrote to RUN_STARTED, not a
                        # re-derivation: the two surfaces disagreeing about what
                        # ran is the defect this closes.

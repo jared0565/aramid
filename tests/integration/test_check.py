@@ -198,6 +198,66 @@ def test_an_override_made_while_disarmed_does_not_defeat_the_block_after_arming(
     assert after["status"] == "overridden", after
 
 
+def test_a_blocked_suite_names_a_log_that_exists_and_holds_the_failing_test(
+        tmp_path, monkeypatch, capsys):
+    """Reported from a downstream repo (interop round 92): the whole blocking
+    line was
+
+        [BLOCK] 0eb10e21... python.exe:tests-failed <test-suite>:0
+                -- python.exe exited 1: test suite failed
+
+    and there was nowhere to go from it. Every component is a constant for the
+    repo -- tool, rule, the synthetic path, line 0, and a fixed message -- so
+    the identifier answers "is the suite failing?" while the surrounding prose
+    invites reading it as "has THIS failure recurred?". Which test failed
+    existed only in `.aramid/logs/`, 15KB of pytest output that nothing in the
+    blocked output mentioned. They found it on a hunch.
+
+    This drives the whole path -- runner to log file to GateResult to rendered
+    console -- because the two halves passing separately would not prove the
+    pointer names anything real. The assertions are deliberately that the file
+    EXISTS and CONTAINS the failing test name: a pointer to an absent path
+    would be the same "points at nothing" defect in a new costume.
+    """
+    import re
+
+    root = _repo(tmp_path)
+    _no_user_config(tmp_path, monkeypatch)
+    # The `tests` slot is only SELECTED where a suite is detected, so a repo
+    # with one `a.py` never reaches the runner being faked below. Naming the
+    # command explicitly is what puts the slot in scope.
+    (root / "aramid.toml").write_text(
+        '[tests]\ncommand = ["python", "-m", "pytest", "-q"]\n', encoding="utf-8")
+    (root / "tests").mkdir()
+    (root / "tests" / "test_probe.py").write_text("def test_x():\n    pass\n",
+                                                   encoding="utf-8")
+    _git(root, "add", "-A")
+    _git(root, "commit", "-q", "-m", "add suite")
+
+    pytest_output = ("FAILED tests/test_probe.py::test_timeout_carries_output "
+                     "- assert 0 > 0\n1 failed, 2925 passed")
+    raw = RawFinding(tool="python.exe", rule="tests-failed", severity_raw="high",
+                      file="<test-suite>", line=0,
+                      message="python.exe exited 1: test suite failed")
+    monkeypatch.setitem(pipeline.RUNNERS, "tests",
+                         _fake(RunnerResult("python.exe", ToolState.OK,
+                                            raw=pytest_output, returncode=1),
+                               raws=[raw]))
+    monkeypatch.setitem(pipeline.GATE_RUNNER_KEYS, Gate.PRE_PUSH, ["tests"])
+
+    rc = cmd_check(root, Gate.PRE_PUSH, "range")
+    out = capsys.readouterr().out
+
+    assert rc == 1, out
+    match = re.search(r"full output: (\S+)", out)
+    assert match, f"a finding located at a marker must name its log:\n{out}"
+
+    named = root / match.group(1)
+    assert named.exists(), f"the pointer names a path that does not exist: {named}"
+    assert "test_timeout_carries_output" in named.read_text(encoding="utf-8"), \
+        "the log must actually carry the discriminating information"
+
+
 # --------------------------- (e) fresh ledger, pre-push, degraded BLOCK-tier -
 
 def test_fresh_ledger_prepush_degraded_block_tier_still_blocks(tmp_path, monkeypatch):

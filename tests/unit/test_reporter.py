@@ -309,3 +309,73 @@ def test_json_ratchet_field_is_present_even_when_nothing_escalated():
 
     assert "escalated_by_ratchet" in f
     assert f["escalated_by_ratchet"] is False
+
+
+# ---------------------------------- a finding whose location is a marker ----
+# A downstream repo hit `[BLOCK] <id> python.exe:tests-failed <test-suite>:0`
+# and had nowhere to go from it. Reported in interop round 92.
+#
+# Every component of that line is a constant for a repo: the tool, the rule,
+# the synthetic `<test-suite>` path, line 0, and the fixed message. Which test
+# failed is nowhere in it -- it is in `.aramid/logs/<tool>-<run_id>.log`, 15KB
+# of pytest output, which the reporter never mentioned. The one line an
+# operator is shown at the moment they are blocked carried no discriminating
+# information and no pointer to any.
+#
+# The fingerprint staying stable is deliberate and is NOT what these pin: "the
+# suite is failing" should stay one persistent item rather than churning a new
+# id every run. What was wrong is that the output invited reading a constant
+# identity as "this same failure recurred" while naming nothing to look at.
+
+
+def test_a_finding_on_a_synthetic_marker_points_at_its_log(tmp_path):
+    ledger = Ledger(tmp_path / "l.db")
+    result = GateResult(
+        exit_code=1,
+        findings=[_f("suite1", tool="python.exe", rule="tests-failed",
+                     verdict=Verdict.BLOCK, file="<test-suite>", line=0)],
+        degraded=[], new_ids=[], stale_overrides=[], run_id="r1",
+        log_paths={"python.exe": ".aramid/logs/python.exe-r1.log"})
+
+    out = reporter.render_console(result, ledger)
+
+    assert ".aramid/logs/python.exe-r1.log" in out, \
+        "the only place the failing test name exists must be named"
+    ledger.close()
+
+
+def test_a_finding_with_a_real_path_is_not_cluttered_with_a_log_pointer(tmp_path):
+    """The pointer is for findings whose location cannot discriminate. A ruff
+    finding already says `a.py:1`; appending a log path to every one of those
+    would be noise, and noise is what stops people reading the output at all.
+    """
+    ledger = Ledger(tmp_path / "l.db")
+    result = GateResult(
+        exit_code=1, findings=[_f("r1", tool="ruff", file="a.py", line=1)],
+        degraded=[], new_ids=["r1"], stale_overrides=[], run_id="r1",
+        log_paths={"ruff": ".aramid/logs/ruff-r1.log"})
+
+    out = reporter.render_console(result, ledger)
+
+    assert ".aramid/logs" not in out, out
+    ledger.close()
+
+
+def test_no_log_pointer_is_invented_when_no_log_was_written(tmp_path):
+    """The defect being fixed is a line that points at nothing. Naming a path
+    that does not exist would reintroduce it in a new costume, so the pointer
+    is driven by the logs the run ACTUALLY wrote -- consumer-produced findings
+    (mutation, llm) have no RunnerResult and therefore no log.
+    """
+    ledger = Ledger(tmp_path / "l.db")
+    result = GateResult(
+        exit_code=1,
+        findings=[_f("m1", tool="mutation", rule="survived",
+                     verdict=Verdict.BLOCK, file="<mutation>", line=0)],
+        degraded=[], new_ids=[], stale_overrides=[], run_id="r1",
+        log_paths={})
+
+    out = reporter.render_console(result, ledger)
+
+    assert ".aramid/logs" not in out, out
+    ledger.close()

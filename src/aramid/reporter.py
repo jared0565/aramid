@@ -9,14 +9,14 @@ a simple open-finding count rather than an "open > 30 days" figure.
 import dataclasses
 import json
 
-from aramid.ledger import Ledger
+from aramid.ledger import Ledger, _is_synthetic_path
 from aramid.models import Finding, Verdict
 from aramid.pipeline import GateResult
 
 ROTATE_WARNING = "rotate the credential — deleting the line does not fix the leak"
 
 
-def _render_finding(f: Finding) -> str:
+def _render_finding(f: Finding, log_paths: dict | None = None) -> str:
     # ASCII `--`, for the reason `ledger_cmd._render_row` is: a literal U+2014
     # goes out as the single byte 0x97 under a redirected stdout on Windows,
     # which is not valid UTF-8. `cli.main` now reconfigures the stream so this
@@ -26,6 +26,20 @@ def _render_finding(f: Finding) -> str:
     line = f"  [{f.verdict.value.upper()}] {f.id} {f.tool}:{f.rule} {f.file}:{f.line} -- {f.message}"
     if f.tool == "gitleaks":
         line += f"\n      {ROTATE_WARNING}"
+    # A `<...>` marker is not a location -- it is a label standing in for a
+    # finding that has no file (`ledger._is_synthetic_path`, reused rather than
+    # re-matched because its own docstring asks new consumers to inherit the
+    # guard so a second marker never needs a second fix). For those, every
+    # component of the printed line is a constant for the repo, so the line
+    # discriminates nothing: which test failed lives only in the run log.
+    #
+    # Gated on a log this run actually wrote, never on a constructed path.
+    # Consumer-produced findings (mutation, llm) have no RunnerResult and no
+    # log, and naming a file that is not there would be the same defect this
+    # fixes wearing a different costume.
+    log = (log_paths or {}).get(f.tool)
+    if log and _is_synthetic_path(f.file):
+        line += f"\n      full output: {log}"
     return line
 
 
@@ -73,12 +87,12 @@ def render_console(result: GateResult, ledger: Ledger) -> str:
     if new_findings:
         lines.append(f"NEW findings ({len(new_findings)}):")
         for f in new_findings:
-            lines.append(_render_finding(f))
+            lines.append(_render_finding(f, result.log_paths))
     if still_blocking:
         lines.append(f"STILL BLOCKING ({len(still_blocking)}) -- seen before, "
                      "and still failing this gate:")
         for f in still_blocking:
-            lines.append(_render_finding(f))
+            lines.append(_render_finding(f, result.log_paths))
     if quiet_baseline:
         lines.append(f"(+{len(quiet_baseline)} baseline findings)")
     if not result.findings:
