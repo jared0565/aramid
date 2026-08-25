@@ -41,6 +41,7 @@ from aramid.normalizer import RawFinding, normalize
 from aramid.pack import RULES_REL_PATH
 from aramid.policy import OverrideRecord
 from aramid.runners import clippy, deps, eslint, gitleaks, ruff, semgrep, tests, typecheck
+from aramid.runners import shadow  # noqa: F401  (registry member)
 from aramid.runners.base import RunContext, RunnerResult, ToolState
 
 # --------------------------------------------------------------- registry ----
@@ -56,14 +57,15 @@ RUNNERS: dict[str, object] = {
     "typecheck": typecheck,
     "deps": deps,
     "tests": tests,
+    "shadow": shadow,
 }
 
 GATE_RUNNER_KEYS: dict[Gate, list[str]] = {
-    Gate.PRE_COMMIT: ["gitleaks", "ruff"],
-    Gate.PRE_PUSH: ["gitleaks", "semgrep", "eslint", "clippy", "typecheck", "deps", "tests"],
+    Gate.PRE_COMMIT: ["gitleaks", "ruff", "shadow"],
+    Gate.PRE_PUSH: ["gitleaks", "semgrep", "eslint", "clippy", "typecheck", "deps", "tests", "shadow"],
     # Gate.ALL isn't specified by the brief's runner-selection table; the
     # comprehensive (pre-push) set is the reasonable default for a full scan.
-    Gate.ALL: ["gitleaks", "semgrep", "eslint", "clippy", "typecheck", "deps", "tests"],
+    Gate.ALL: ["gitleaks", "semgrep", "eslint", "clippy", "typecheck", "deps", "tests", "shadow"],
 }
 
 # Tool keys whose degradation (MISSING/CRASHED/TIMEOUT) drives the pre-push

@@ -146,6 +146,21 @@ def classify(tool: str, rule: str, severity_raw: str, gate: Gate, cfg) -> tuple[
         armed = cfg.red_proof.get("red_proof_block_armed", False)
         return severity, Verdict.BLOCK if armed else Verdict.WARN
 
+    # A module-shadow hijacks the tool that is checking the repo, using the
+    # repo's own contents -- so the verdict is computed here at gate time from
+    # `[shadow].shadow_block_armed`, never stored, and arming applies
+    # retroactively like every other armable tool.
+    #
+    # SHIPS DISARMED, deliberately. The predicate is exact, but `graphite` is
+    # also a real distribution name and a repo may legitimately vendor one at
+    # its root; a new BLOCK-by-default would hand those repos an unattended
+    # red on upgrade. Reporting the hazard at all is the new capability --
+    # nothing on this machine reported it before. Arming is one line and is
+    # the operator's call.
+    if tool == "shadow":
+        armed = bool(cfg.shadow.get("shadow_block_armed", False))
+        return severity, Verdict.BLOCK if armed else Verdict.WARN
+
     ruff_block = block_rules.get("ruff", {}).get("block", [])
     if tool == "ruff" and rule in ruff_block:
         return severity, Verdict.BLOCK

@@ -141,3 +141,11 @@ pre_push_match_ci = true
 test_command = ["python", "-m", "pytest", "-q", "tests/unit"]
 wall_budget_s = 1800
 baseline_timeout_s = 900
+
+[shadow]
+# Armed HERE, on the repo that ships the check. A module-shadow of this tool at
+# this root would hijack aramid's own gate using aramid's own working tree, so
+# there is no bake case for it -- and the check is verified clean today: no
+# `aramid.py`, no `aramid/__init__.py`, no graphite equivalent at the root.
+# Ships DISARMED for consumers (policy.classify); this line is the opt-in.
+shadow_block_armed = true

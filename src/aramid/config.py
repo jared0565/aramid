@@ -51,6 +51,7 @@ class Config:
     tests: dict = field(default_factory=dict)
     deps: dict = field(default_factory=dict)
     hooks: dict = field(default_factory=dict)
+    shadow: dict = field(default_factory=dict)
 
 
 def arming_state(cfg: "Config") -> dict:
@@ -204,6 +205,7 @@ def load_config(root: Path) -> Config:
         pack=merged.get("pack", {}),
         llm=merged.get("llm", {}),
         mutation=merged.get("mutation", {}),
+        shadow=merged.get("shadow", {}),
         fuzz=merged.get("fuzz", {}),
         js_mutation=merged.get("js_mutation", {}),
         dast=merged.get("dast", {}),

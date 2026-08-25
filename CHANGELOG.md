@@ -10,6 +10,53 @@ to publish a tag that disagrees with it.
 
 ## [Unreleased]
 
+### Added
+
+- **`shadow` runner — a file at the repo root that hijacks `python -m` is now a
+  gate finding.** `python -m <name>` puts the current directory on
+  `sys.path[0]`, so `aramid.py` (or `aramid/__init__.py`) at a repo root is
+  imported *instead of* the installed tool by every `-m` launch from that root:
+  git hooks, agent hooks, MCP servers, editor tasks. Hooks discard output, so a
+  hijack is silent. Requested by the operator via interop round 117.
+
+  **It is a runner and deliberately not a self-check.** The obvious fix — a
+  guard inside aramid that refuses when `aramid.__file__` is not the installed
+  location — *cannot fire in the case it exists to catch*: when the shadow
+  wins, the real package is never imported, so nothing inside it runs. Measured
+  from a directory holding a hostile `aramid.py`, control firing:
+
+  ```
+  python -m aramid --version     -> *** SHADOW aramid.py EXECUTED ***  rc=0
+  python -P -m aramid --version  -> aramid 0.3.1
+  aramid --version (via PATH)    -> aramid 0.3.1
+  ```
+
+  A self-check would pass every test anyone could write for it and protect
+  nothing. Detection has to be a claim about the *file*, made by a process that
+  is not the one being hijacked — which is why `-P` (or a console script) is a
+  **precondition** for this check rather than an alternative to it.
+
+  The predicate excludes a measured false positive:
+
+  ```
+  <name>.py          at the root   -> HAZARD
+  <name>/__init__.py at the root   -> HAZARD
+  <name>/ without __init__.py      -> NOT a hazard, not reported
+  ```
+
+  A bare directory is only a PEP 420 namespace portion, and a namespace portion
+  loses to a regular package wherever it sits on `sys.path`.
+
+  Runs on **every** gate including pre-commit — the hazard fires on every
+  commit, and the check is a handful of `stat` calls with no subprocess, so it
+  can never be MISSING or TIMEOUT.
+
+  **Ships disarmed.** The predicate is exact, but `graphite` is also a real
+  distribution name and a repo may legitimately vendor one at its root; a new
+  BLOCK-by-default would hand those repos an unattended red on upgrade. The
+  reporting is the new capability — nothing reported this before. Arm with
+  `[shadow] shadow_block_armed = true`; this repo arms it.
+
 ### Fixed
 
 - **Four integration tests were time bombs that armed on 2026-08-20 and

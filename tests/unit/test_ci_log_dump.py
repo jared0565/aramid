@@ -308,8 +308,18 @@ def test_it_never_fails_the_job(tmp_path):
 #   typecheck -- tsc/mypy output over public sources.
 #   deps      -- advisory ids and package versions from pip-audit/cargo-audit.
 #                No index credentials exist in this workflow to be echoed.
+#   shadow    -- discloses STRICTLY LESS than any other entry here, and the
+#                reason is structural rather than a judgement about content:
+#                it never reads a byte of any file. `_hazards` decides purely
+#                on `Path.is_file()`, so its stdout is a JSON list of
+#                {name, path, shape} -- a repo-relative filename that exists
+#                at the root of a public repository, plus a literal drawn
+#                from {"module","package"}. There is no subprocess, so no
+#                stderr, and no path by which file CONTENT could reach the
+#                stream even if the file were a planted credential.
 _REVIEWED_FOR_PUBLICATION = frozenset({
     "gitleaks", "tests", "ruff", "semgrep", "eslint", "clippy", "typecheck", "deps",
+    "shadow",
 })
 
 
