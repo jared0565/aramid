@@ -123,6 +123,53 @@ def _existing_onboarded(path: Path) -> str | None:
     return m.group(1) if m else None
 
 
+def render_aramid_md_notice(root: Path) -> str:
+    """The one line `init` owes the operator about its own tracked artifact.
+
+    `_write_aramid_md` ALWAYS regenerates ARAMID.md, and the file is TRACKED --
+    so a template change leaves a consumer's tree dirty with a file they did
+    not write, and until now `init` printed nothing about it at all. In one
+    consumer it stayed uncommitted long enough that a different repo's agent
+    raised it as an open item, which is the tool making its own housekeeping
+    somebody else's chore.
+
+    A NOTICE, and deliberately not an auto-commit. Committing inside a
+    consumer's repo picks their branch, author and signing policy for them,
+    and would need `--no-verify` to stop `init` re-entering aramid's own
+    pre-commit gate -- shipping a hook bypass in the tool whose whole purpose
+    is that the hook runs. Interop round 117 asked for shadow-resistance to be
+    "automated"; the answer there was report it every run, not remediate it,
+    and the same reading applies here. Auto-commit is strictly more intrusive
+    than a BLOCK verdict, and `shadow` ships DISARMED.
+
+    Returns "" when there is nothing to say -- a line on every re-init is
+    noise that trains people to skip the whole summary. Silent, too, when git
+    cannot answer: telling someone to commit a file in a directory git does
+    not manage is worse than saying nothing.
+    """
+    path = root / "ARAMID.md"
+    if not path.is_file():
+        return ""
+    try:
+        on_disk = path.read_text(encoding="utf-8")
+    except OSError:
+        return ""
+    if gitutil._run(root, "rev-parse", "--is-inside-work-tree").returncode != 0:
+        return ""
+    if gitutil.is_tracked(root, "ARAMID.md"):
+        if gitutil.read_blob(root, "HEAD", "ARAMID.md") == on_disk:
+            return ""
+        state = "differs from the committed copy"
+    else:
+        state = "is not tracked yet"
+    lines = [
+        f"aramid: init: ARAMID.md {state} -- aramid owns and regenerates it,",
+        "aramid: init:   and other machines and agents read it from the repo:",
+        'aramid: init:       git add ARAMID.md && git commit -m "chore: sync ARAMID.md"',
+    ]
+    return "\n".join(lines)
+
+
 def _write_aramid_md(root: Path, stack: set[str], pkg_mgr: str | None) -> None:
     path = root / "ARAMID.md"
     rendered = _render_aramid_md(stack, pkg_mgr)
@@ -389,6 +436,10 @@ def _init_one(target: Path) -> int:
         ledger.close()
 
     # step 9: summary.
+    notice = render_aramid_md_notice(root)
+    if notice:
+        print(notice, file=sys.stderr)
+
     print("aramid: init: summary")
     print(f"  root:              {root}")
     if scope_subpath:

@@ -59,6 +59,35 @@ to publish a tag that disagrees with it.
 
 ### Fixed
 
+- **`aramid init` regenerated its own tracked `ARAMID.md` and said nothing about
+  it.** The file is aramid-owned and ALWAYS regenerated, so a template change
+  leaves a consumer's tree dirty with a file they did not write, no line of
+  output naming it, and nothing that mentions it again. In one consumer it sat
+  uncommitted long enough that a *different* repo's agent raised it as an open
+  item — the tool making its own housekeeping somebody else's chore.
+
+  `init` now names it and gives the command, on stderr, before the summary:
+
+  ```
+  aramid: init: ARAMID.md is not tracked yet -- aramid owns and regenerates it,
+  aramid: init:   and other machines and agents read it from the repo:
+  aramid: init:       git add ARAMID.md && git commit -m "chore: sync ARAMID.md"
+  ```
+
+  Silent when the committed copy already matches — a line on every re-init is
+  noise that trains people to skip the summary — and silent when git cannot
+  answer, because telling someone to commit a file in a directory git does not
+  manage is worse than saying nothing.
+
+  **Deliberately a notice and not an auto-commit.** Committing inside a
+  consumer's repo picks their branch, author and signing policy for them, and
+  would need `--no-verify` to stop `init` re-entering aramid's own pre-commit
+  gate — shipping a hook bypass in the tool whose whole purpose is that the
+  hook runs. Auto-commit is strictly more intrusive than a BLOCK verdict, and
+  the `shadow` runner in this same release ships disarmed for exactly that
+  reason. Known adjacent gap, unfixed: `_update_gitignore` is still silent
+  about the `.gitignore` it creates or appends to.
+
 - **Four integration tests were time bombs that armed on 2026-08-20 and
   blocked every push.** `cmd_drain` runs `queue.expire_stale(...)` against the
   wall clock with a 30-day default, and the tests enqueued at a hardcoded
