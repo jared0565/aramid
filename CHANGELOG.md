@@ -10,6 +10,8 @@ to publish a tag that disagrees with it.
 
 ## [Unreleased]
 
+## [0.4.0] — 2026-08-26
+
 ### Added
 
 - **`shadow` runner — a file at the repo root that hijacks `python -m` is now a
@@ -2853,7 +2855,8 @@ Stated plainly because each one changes how you should deploy this:
 - **PyPI publishing is not set up.** Install from a GitHub Release artifact or
   from git; `pip install aramid` does not work.
 
-[Unreleased]: https://github.com/jared0565/aramid/compare/v0.3.1...HEAD
+[Unreleased]: https://github.com/jared0565/aramid/compare/v0.4.0...HEAD
+[0.4.0]: https://github.com/jared0565/aramid/releases/tag/v0.4.0
 [0.3.1]: https://github.com/jared0565/aramid/releases/tag/v0.3.1
 [0.3.0]: https://github.com/jared0565/aramid/releases/tag/v0.3.0
 [0.2.0]: https://github.com/jared0565/aramid/releases/tag/v0.2.0
