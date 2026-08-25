@@ -297,7 +297,7 @@ def test_consumer_extra_merged_into_event_payload(tmp_path, monkeypatch):
     assert evs[0].payload["note"] == ""          # core key wins over extra
 
 
-def test_drain_rolls_up_autolearn_state(tmp_path, monkeypatch):
+def test_drain_rolls_up_autolearn_state(tmp_path, monkeypatch, recent_iso):
     """cmd_drain folds drained repos' selection events into the (test-
     isolated) machine-global state; a rollup failure never fails the drain."""
     import json as json_mod
@@ -328,7 +328,7 @@ def test_drain_rolls_up_autolearn_state(tmp_path, monkeypatch):
 
     led = Ledger(repo / ".aramid" / "ledger.db")
     try:
-        queue.enqueue(led, "2026-07-18T00:00:00+00:00", None,
+        queue.enqueue(led, recent_iso, None,
                       gitutil.rev_sha(repo, "HEAD"), 50, ["risky"])
     finally:
         led.close()

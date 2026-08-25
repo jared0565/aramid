@@ -9,9 +9,31 @@ registry). Autouse-patch the seam to a per-test tmp_path; individual tests
 that seed state simply call autolearn.save_state(...) and hit the same
 patched location.
 """
+from datetime import datetime, timedelta, timezone
+
 import pytest
 
 from aramid import autolearn, config, toolpath
+
+
+@pytest.fixture
+def recent_iso() -> str:
+    """An ISO-8601 timestamp an hour old, for anything a drain will see.
+
+    `cmd_drain` runs `queue.expire_stale(..., item_expiry_days)` against the
+    WALL CLOCK, so an item enqueued at a literal date ages out on a calendar
+    the test does not control. Four integration tests hardcoded
+    `2026-07-20T10:00:00+00:00`, passed for a month, then began failing on
+    2026-08-20 with nothing but `aramid drain: 0 item(s) drained, 0 left` --
+    and blocked every push, having never gone red in CI because the last run
+    predated the expiry.
+
+    An hour rather than `now`: far enough back that any "created before now"
+    ordering holds, near enough that no expiry window can reach it.
+    `tests/unit/test_queue_test_hygiene.py` keeps new drain tests off literal
+    dates; `tests/unit/test_queue.py` is the model for testing the expiry
+    boundary itself, which it does in offsets from a clock it owns."""
+    return (datetime.now(timezone.utc) - timedelta(hours=1)).isoformat()
 
 
 @pytest.fixture(autouse=True)

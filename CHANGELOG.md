@@ -12,6 +12,34 @@ to publish a tag that disagrees with it.
 
 ### Fixed
 
+- **Four integration tests were time bombs that armed on 2026-08-20 and
+  blocked every push.** `cmd_drain` runs `queue.expire_stale(...)` against the
+  wall clock with a 30-day default, and the tests enqueued at a hardcoded
+  `2026-07-20T10:00:00+00:00`. Thirty-one days later the item aged out, drain
+  found nothing, and four assertions failed with no clue why:
+
+  ```
+  aramid drain: 0 item(s) drained, 0 left
+  E  AssertionError: drain must have run the mutation consumer
+  ```
+
+  They failed in 5s instead of the 35s they take when they do real work — the
+  suite had gone vacuous before it went red. CI never caught it: the last run
+  was 2026-08-15, four days before the expiry, so the tests were green in
+  every run that ever executed them.
+
+  Fixed by enqueueing relative to now (a shared `recent_iso` fixture) rather
+  than at a literal date. `tests/unit/test_queue.py` already tested the expiry
+  boundary correctly, in offsets from a clock it owns; that is the model.
+
+  A new guard, `tests/unit/test_queue_test_hygiene.py`, keeps drain tests off
+  literal enqueue dates. It is scoped to files that actually call `cmd_drain`,
+  not to literal dates in general — `test_status.py` deliberately enqueues at a
+  fixed date and asserts on that exact string in rendered output, which is
+  correct. The hazard is the combination, so the guard names the combination,
+  and it carries its own anti-vacuity test because a sweep that matches no
+  files would pass while proving nothing.
+
 - **A hook shim relocated by another tool could never receive a template fix,
   so the round-57 `-P` guard never reached it — on a hook that fires on every
   commit and swallows all output.** When another managed tool (graphite) owns

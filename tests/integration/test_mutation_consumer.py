@@ -226,7 +226,7 @@ def test_worktree_removed_on_midloop_exception(tmp_path, monkeypatch):
     assert _no_worktrees(r), "finally must remove the worktree even on a crash"
 
 
-def test_drain_e2e_records_mutation_run(tmp_path, monkeypatch):
+def test_drain_e2e_records_mutation_run(tmp_path, monkeypatch, recent_iso):
     from aramid import registry
     from aramid.commands import drain as drain_mod
     from aramid.commands.drain import cmd_drain
@@ -241,7 +241,7 @@ def test_drain_e2e_records_mutation_run(tmp_path, monkeypatch):
     registry.register(r, "2026-07-20T10:00:00+00:00")
     led = Ledger(r / ".aramid" / "ledger.db")
     try:
-        queue_mod.enqueue(led, "2026-07-20T10:00:00+00:00", base, head, 55, ["seed"])
+        queue_mod.enqueue(led, recent_iso, base, head, 55, ["seed"])
     finally:
         led.close()
 
@@ -756,7 +756,7 @@ def test_pin_occurrence_declared_only_on_variable_set_consumers():
         "regression-pack fingerprints must keep exact gate parity"
 
 
-def test_drain_passes_pin_flag_per_consumer(tmp_path, monkeypatch):
+def test_drain_passes_pin_flag_per_consumer(tmp_path, monkeypatch, recent_iso):
     # Flag-flow teeth: spy on drain's normalize and record the kwarg each
     # consumer's batch was normalized with.
     from aramid import registry
@@ -772,7 +772,7 @@ def test_drain_passes_pin_flag_per_consumer(tmp_path, monkeypatch):
     registry.register(r, "2026-07-20T10:00:00+00:00")
     led = Ledger(r / ".aramid" / "ledger.db")
     try:
-        queue_mod.enqueue(led, "2026-07-20T10:00:00+00:00", base, head, 55, ["seed"])
+        queue_mod.enqueue(led, recent_iso, base, head, 55, ["seed"])
     finally:
         led.close()
 

@@ -200,7 +200,7 @@ def test_import_failure_not_counted_as_fuzzed(tmp_path, monkeypatch):
     assert any(f.file == "lib.py" for f in res.findings)
 
 
-def test_drain_e2e_records_fuzz_run(tmp_path, monkeypatch):
+def test_drain_e2e_records_fuzz_run(tmp_path, monkeypatch, recent_iso):
     from aramid import registry
     from aramid.commands import drain as drain_mod
     from aramid.commands.drain import cmd_drain
@@ -215,7 +215,7 @@ def test_drain_e2e_records_fuzz_run(tmp_path, monkeypatch):
     registry.register(r, "2026-07-20T10:00:00+00:00")
     led = Ledger(r / ".aramid" / "ledger.db")
     try:
-        queue_mod.enqueue(led, "2026-07-20T10:00:00+00:00", base, head, 55, ["seed"])
+        queue_mod.enqueue(led, recent_iso, base, head, 55, ["seed"])
     finally:
         led.close()
 
