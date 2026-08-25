@@ -366,16 +366,72 @@ def _find_chained_aramid_shim(hdir: Path, hook: str) -> Path | None:
     return None
 
 
+def _refresh_relocated_shim(relocated: Path | None, hook: str,
+                            current: bytes) -> str:
+    """Regenerate aramid's OWN relocated shim in place. Returns what actually
+    happened: "refreshed", "current", "stale" (differs and could NOT be
+    rewritten) or "skipped".
+
+    THREE states, not two, and the third is the point. Regeneration is
+    best-effort -- a read-only or locked file must not fail the whole install
+    -- but "we could not rewrite it" and "it did not need rewriting" are
+    different facts. Collapsing them into one boolean reports an unrepaired
+    pre-`-P` shim as current, which is the very lie this change set exists to
+    remove; the first draft of this function did exactly that.
+
+    `install()` refuses the FOREIGN slot -- correctly, since chaining a
+    managed hook double-runs both tools' gates. But the relocated sibling is
+    aramid's own file, and skipping it at the SLOT level meant it could never
+    receive a template fix for as long as the other tool occupied the slot:
+    the round-57 `-P` guard never reached it, on a hook that fires on every
+    commit and swallows all output. Refusing the foreign slot and refreshing
+    our own sibling are different decisions; only the first was ever intended
+    (interop round 112).
+
+    NEVER rewrites `<hook>.aramid-chained`. That path is what a shim EXECS,
+    so writing a shim into it would make it exec itself -- an unbounded loop
+    on every commit. `_find_chained_aramid_shim` matches it on the same
+    `startswith(hook)` + marker test as a real relocation, so the exclusion
+    has to be explicit here rather than implied by the search. (In practice
+    `install()` only ever moves FOREIGN hooks there, so it should not carry
+    aramid's marker at all -- this is a guard against the case where it
+    somehow does, not a routine path.)"""
+    if relocated is None or relocated.name == f"{hook}{CHAINED_SUFFIX}":
+        return "skipped"
+    try:
+        if relocated.read_bytes() == current:
+            return "current"
+        relocated.write_bytes(current)
+    except OSError:
+        # Never fatal -- a shim we cannot refresh is still the ARMED shim it
+        # was a moment ago, and failing the whole install over it is a worse
+        # outcome. But it IS stale, and the notice must say so.
+        return "stale"
+    _make_executable(relocated)
+    return "refreshed"
+
+
+_RELOCATED_STATE_TEXT = {
+    "refreshed": "REGENERATED in place to the current template",
+    "current": "already current",
+    "stale": ("STALE and could NOT be regenerated (write refused) -- "
+              "resolve it manually"),
+    "skipped": "left as-is",
+}
+
+
 def _warn_foreign_managed_conflict(
-    hook: str, foreign_tool: str, chained_via: Path | None = None
+    hook: str, foreign_tool: str, chained_via: Path | None = None,
+    state: str = "skipped",
 ) -> None:
     if chained_via is not None:
         print(f"aramid: install: {hook}: already managed by '{foreign_tool}' -- "
               f"refusing to chain another tool's managed hook (chaining it would "
               f"silently double-run both tools' gates on every {hook}). aramid's "
               f"own {hook} shim survives at '{chained_via.name}' and still runs "
-              f"via '{foreign_tool}'s chain -- not stale, nothing to resolve; "
-              f"only this slot's regeneration is skipped until '{foreign_tool}' "
+              f"via '{foreign_tool}'s chain -- "
+              + _RELOCATED_STATE_TEXT.get(state, "left as-is")
+              + f"; this slot itself stays untouched until '{foreign_tool}' "
               f"no longer occupies it.", file=sys.stderr)
         return
     print(f"aramid: install: {hook}: already managed by '{foreign_tool}' -- "
@@ -434,9 +490,11 @@ def install(root: Path, interpreter: Path) -> None:
         if shim_path.exists() and not _is_aramid_shim(shim_path):
             foreign_tool = _foreign_managed_tool(shim_path)
             if foreign_tool is not None:
+                relocated = _find_chained_aramid_shim(hdir, hook)
+                state = _refresh_relocated_shim(
+                    relocated, hook, render_shim(gate, interpreter, match_ci))
                 _warn_foreign_managed_conflict(
-                    hook, foreign_tool, _find_chained_aramid_shim(hdir, hook)
-                )
+                    hook, foreign_tool, relocated, state)
                 continue
 
             # A real foreign hook (not ours) occupies this slot -- chain it.
@@ -459,9 +517,11 @@ def install(root: Path, interpreter: Path) -> None:
     if shim_path.exists() and not _is_aramid_shim(shim_path):
         foreign_tool = _foreign_managed_tool(shim_path)
         if foreign_tool is not None:
+            relocated = _find_chained_aramid_shim(hdir, hook)
+            state = _refresh_relocated_shim(
+                relocated, hook, render_triage_shim(interpreter))
             _warn_foreign_managed_conflict(
-                hook, foreign_tool, _find_chained_aramid_shim(hdir, hook)
-            )
+                hook, foreign_tool, relocated, state)
             skip_triage = True
         else:
             # A real foreign hook (not ours) occupies this slot -- chain it.

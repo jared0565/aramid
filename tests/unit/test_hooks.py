@@ -513,3 +513,128 @@ def test_install_defaults_to_the_narrow_shim_without_config(tmp_path):
 
     body = (root / ".git" / "hooks" / "pre-push").read_text(encoding="utf-8")
     assert "--all" not in body
+
+
+def _stale(shim: bytes) -> bytes:
+    """A genuine aramid-managed shim from BEFORE the round-57 `-P` fix:
+    identical to what the current template emits except for the guard. Built
+    by removing `-P` from the live template rather than pasting a literal, so
+    it cannot drift into testing a shape the generator never produced."""
+    out = shim.replace(b" -P -m aramid", b" -m aramid")
+    assert out != shim, "fixture must actually differ from the current template"
+    return out
+
+
+_FOREIGN = (b"#!/bin/sh\n# >>> graphite managed >>>\necho gt\n"
+            b"# <<< graphite managed <<<\n")
+
+
+def test_install_regenerates_a_stale_relocated_triage_shim_in_place(tmp_path):
+    """The relocated shim is aramid's OWN file, and `install()` skipping it
+    means it can never receive a template fix for as long as the other tool
+    occupies the slot -- so the round-57 `-P` guard never reaches it. Refusing
+    the FOREIGN slot is correct and must stay; refusing to refresh aramid's own
+    relocated sibling was a consequence of the slot-level skip, not the intent.
+    Interop round 112."""
+    r = _repo(tmp_path)
+    hdir = r / ".git" / "hooks"
+    hdir.mkdir(exist_ok=True)
+    interp = Path("C:/py/python.exe")
+    current = render_triage_shim(interp)
+    (hdir / "post-commit").write_bytes(_FOREIGN)
+    (hdir / "post-commit.local").write_bytes(_stale(current))
+
+    install(r, interp)
+
+    assert (hdir / "post-commit").read_bytes() == _FOREIGN, (
+        "the foreign-managed slot itself must STILL be left untouched")
+    assert (hdir / "post-commit.local").read_bytes() == current, (
+        "aramid's own relocated shim must be regenerated to the current template")
+
+
+def test_install_regenerates_a_stale_relocated_gate_shim_in_place(tmp_path):
+    """Same property for a GATE slot, so the fix is not triage-specific."""
+    r = _repo(tmp_path)
+    hdir = r / ".git" / "hooks"
+    hdir.mkdir(exist_ok=True)
+    interp = Path("C:/py/python.exe")
+    current = render_shim(Gate.PRE_COMMIT, interp)
+    (hdir / "pre-commit").write_bytes(_FOREIGN)
+    (hdir / "pre-commit.local").write_bytes(_stale(current))
+
+    install(r, interp)
+
+    assert (hdir / "pre-commit").read_bytes() == _FOREIGN
+    assert (hdir / "pre-commit.local").read_bytes() == current
+
+
+def test_install_does_not_claim_a_regenerated_shim_was_never_stale(tmp_path, capsys):
+    """The notice used to assert `not stale, nothing to resolve` from a check
+    that only established the shim was still ARMED. Arming and staleness are
+    different questions, and answering the second with the first is what hid a
+    pre-`-P` shim on every commit in every graphite-managed repo."""
+    r = _repo(tmp_path)
+    hdir = r / ".git" / "hooks"
+    hdir.mkdir(exist_ok=True)
+    interp = Path("C:/py/python.exe")
+    (hdir / "post-commit").write_bytes(_FOREIGN)
+    (hdir / "post-commit.local").write_bytes(_stale(render_triage_shim(interp)))
+
+    install(r, interp)
+
+    err = capsys.readouterr().err
+    assert "not stale" not in err.lower(), (
+        "it WAS stale -- the notice must not assert otherwise")
+    assert "post-commit.local" in err, "still must name the sibling it acted on"
+
+
+def test_install_never_regenerates_the_chained_sibling_into_itself(tmp_path):
+    """`<hook>.aramid-chained` is what a shim EXECS. Writing a shim into it
+    would make it exec itself -- an unbounded loop on every commit. It matches
+    the same `startswith(hook)` + aramid-marker test as a relocation, so the
+    regeneration must exclude it explicitly."""
+    r = _repo(tmp_path)
+    hdir = r / ".git" / "hooks"
+    hdir.mkdir(exist_ok=True)
+    interp = Path("C:/py/python.exe")
+    victim = _stale(render_triage_shim(interp))
+    (hdir / "post-commit").write_bytes(_FOREIGN)
+    (hdir / "post-commit.aramid-chained").write_bytes(victim)
+
+    install(r, interp)
+
+    assert (hdir / "post-commit.aramid-chained").read_bytes() == victim, (
+        "must not rewrite the exec target into a self-referential shim")
+
+
+def test_install_does_not_call_an_unrefreshable_stale_shim_current(
+        tmp_path, capsys, monkeypatch):
+    """Regeneration is best-effort -- a read-only or locked file must not fail
+    the whole install. But "we could not rewrite it" and "it did not need
+    rewriting" are different facts, and reporting the first as the second is
+    the SAME lie this change set exists to remove: the operator is told the
+    shim is current while a pre-`-P` shim keeps firing on every commit."""
+    r = _repo(tmp_path)
+    hdir = r / ".git" / "hooks"
+    hdir.mkdir(exist_ok=True)
+    interp = Path("C:/py/python.exe")
+    stale = _stale(render_triage_shim(interp))
+    (hdir / "post-commit").write_bytes(_FOREIGN)
+    (hdir / "post-commit.local").write_bytes(stale)
+
+    real_write = Path.write_bytes
+
+    def refuse(self, data):
+        if self.name == "post-commit.local":
+            raise OSError("read-only file system")
+        return real_write(self, data)
+
+    monkeypatch.setattr(Path, "write_bytes", refuse)
+    install(r, interp)
+
+    assert (hdir / "post-commit.local").read_bytes() == stale, (
+        "precondition: the write really was refused, so it is still stale")
+    err = capsys.readouterr().err
+    assert "already current" not in err, (
+        "it is stale and we failed to fix it -- must not report it as current")
+    assert "post-commit.local" in err

@@ -10,6 +10,54 @@ to publish a tag that disagrees with it.
 
 ## [Unreleased]
 
+### Fixed
+
+- **A hook shim relocated by another tool could never receive a template fix,
+  so the round-57 `-P` guard never reached it — on a hook that fires on every
+  commit and swallows all output.** When another managed tool (graphite) owns
+  `post-commit`, aramid's own shim survives beside it as `post-commit.local`
+  and keeps running via that tool's chain. `install()` refused the *slot* —
+  correctly, since chaining a managed hook double-runs both tools' gates — but
+  the refusal was slot-level, so aramid's own relocated sibling was skipped
+  too, permanently. Found by the graphite agent running `aramid init` and
+  watching it fix two slots out of three (interop rounds 112/114).
+
+  The artifact this left behind, in every graphite-managed repo that also runs
+  aramid:
+
+  ```
+  "$INTERP" -m aramid triage HEAD --budget 15 >/dev/null 2>&1 || true
+  ```
+
+  `python -m aramid` with the repo root as `sys.path[0]`, no `-P`, on every
+  commit, with all output discarded — so a shadowing `aramid.py` at the repo
+  root would execute silently. Latent rather than live wherever no such file
+  exists, but nothing reported it and re-running `init` did not fix it.
+
+  `install()` now regenerates aramid's own relocated shim in place. Refusing
+  the foreign slot and refreshing our own sibling were always different
+  decisions; only the first was intended.
+
+  It never rewrites `<hook>.aramid-chained` — that path is what a shim *execs*,
+  so writing a shim into it would make it exec itself, an unbounded loop on
+  every commit. It matches the same `startswith(hook)` + marker test as a real
+  relocation, so the exclusion is explicit and pinned by its own test.
+
+- **The notice for that slot asserted a staleness result from an arming
+  check.** It read "not stale, nothing to resolve" whenever a relocated shim
+  existed — but the check that produced it only established the shim was still
+  *armed*, never that it was *current*. Those are different questions, and
+  answering the second with the first is what kept a pre-`-P` shim invisible.
+  The notice now reports what actually happened: regenerated, already current,
+  or **stale and not regenerated**.
+
+  That third state exists because regeneration is best-effort — a read-only or
+  locked file must not fail the whole install — and "we could not rewrite it"
+  is not "it did not need rewriting". The first draft of this fix collapsed
+  those two into one boolean and so reported an unrepaired stale shim as
+  current, reintroducing the same lie one layer down.
+
+
 ## [0.3.1] — 2026-08-15
 
 ### Fixed
