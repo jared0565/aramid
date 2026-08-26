@@ -64,6 +64,9 @@ _SCORE_KEY_RE = re.compile(
 _RP_KEY_RE = re.compile(
     r"(?m)^red_proof_block_armed[^\S\n]*=[^\S\n]*[^\s#]+(?P<c>[^\S\n]*#[^\n]*)?[^\S\n]*$")
 _RP_SECTION_RE = re.compile(r"(?m)^\[red_proof\]\s*$")
+_SHADOW_KEY_RE = re.compile(
+    r"(?m)^shadow_block_armed[^\S\n]*=[^\S\n]*[^\s#]+(?P<c>[^\S\n]*#[^\n]*)?[^\S\n]*$")
+_SHADOW_SECTION_RE = re.compile(r"(?m)^\[shadow\]\s*$")
 _AL_SECTION_RE = re.compile(r"(?m)^\[llm\.autolearn\]\s*$")
 _AL_KEY_RE = re.compile(
     r"(?m)^armed[^\S\n]*=[^\S\n]*[^\s#]+(?P<c>[^\S\n]*#[^\n]*)?[^\S\n]*$")
@@ -157,9 +160,25 @@ def _arm_autolearn_text(text: str) -> str:
     return text + prefix + "[llm.autolearn]\narmed = true\n"
 
 
+def _arm_shadow_text(text: str) -> str:
+    """Comment-preserving single-key rewrite into the [shadow] table (mirrors
+    _arm_red_proof_text): key exists -> substitute; [shadow] section exists ->
+    insert the key under the header; neither -> append a fresh [shadow]
+    section. shadow_block_armed is a globally unique key name, so no section
+    scoping is needed and no sibling regex can reach it."""
+    if _SHADOW_KEY_RE.search(text):
+        return _armed_sub(_SHADOW_KEY_RE, "shadow_block_armed = true", text)
+    m = _SHADOW_SECTION_RE.search(text)
+    if m:
+        insert_at = m.end()
+        return text[:insert_at] + "\nshadow_block_armed = true" + text[insert_at:]
+    prefix = "" if not text or text.endswith("\n") else "\n"
+    return text + prefix + "[shadow]\nshadow_block_armed = true\n"
+
+
 def cmd_arm(root, llm: bool = False, autolearn: bool = False, tdd: bool = False,
             mutation: bool = False, mutation_score: bool = False,
-            red_proof: bool = False) -> int:
+            red_proof: bool = False, shadow: bool = False) -> int:
     root = Path(root)
     toml_path = root / "aramid.toml"
     if not toml_path.exists():
@@ -211,6 +230,16 @@ def cmd_arm(root, llm: bool = False, autolearn: bool = False, tdd: bool = False,
         print(f"aramid: arm: red_proof_block_armed=true written to {toml_path}")
         print("aramid: arm: red-first bake ended -- never-red test findings "
               "now BLOCK at pre-push.")
+        return 0
+
+    if shadow:
+        toml_path.write_text(_arm_shadow_text(text), encoding="utf-8")
+        print(f"aramid: arm: shadow_block_armed=true written to {toml_path}")
+        # NOT "at pre-push" like its siblings: `shadow` is in _GATE_TOOLS for
+        # PRE_COMMIT as well, so arming it changes what happens at COMMIT time.
+        # An operator told "pre-push" would not expect the next commit refused.
+        print("aramid: arm: shadow bake ended -- a repo-root file that hijacks "
+              "`python -m aramid` now BLOCKS at every gate, pre-commit included.")
         return 0
 
     if tdd:

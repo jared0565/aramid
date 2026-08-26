@@ -6,6 +6,7 @@ style -- these need real argparse/SystemExit/process semantics) plus
 in-process dispatch-mapping tests (monkeypatching the cmd_* names bound
 into aramid.cli's own namespace) for argument translation.
 """
+import argparse
 import subprocess
 import sys
 from pathlib import Path
@@ -271,7 +272,7 @@ def test_pack_no_subcommand_returns_3(capsys):
 def test_arm_dispatch(monkeypatch):
     calls = []
     monkeypatch.setattr(cli, "cmd_arm",
-                        lambda root, llm=False, autolearn=False, tdd=False, mutation=False, mutation_score=False, red_proof=False: calls.append((root, llm, autolearn, tdd)) or 0)
+                        lambda root, llm=False, autolearn=False, tdd=False, mutation=False, mutation_score=False, red_proof=False, shadow=False: calls.append((root, llm, autolearn, tdd)) or 0)
 
     assert cli.main(["arm"]) == 0
     assert len(calls) == 1
@@ -281,7 +282,7 @@ def test_arm_dispatch(monkeypatch):
 def test_arm_dispatch_with_llm_flag(monkeypatch):
     calls = []
     monkeypatch.setattr(cli, "cmd_arm",
-                        lambda root, llm=False, autolearn=False, tdd=False, mutation=False, mutation_score=False, red_proof=False: calls.append((root, llm, autolearn, tdd)) or 0)
+                        lambda root, llm=False, autolearn=False, tdd=False, mutation=False, mutation_score=False, red_proof=False, shadow=False: calls.append((root, llm, autolearn, tdd)) or 0)
 
     assert cli.main(["arm", "--llm"]) == 0
     assert len(calls) == 1
@@ -291,7 +292,7 @@ def test_arm_dispatch_with_llm_flag(monkeypatch):
 def test_arm_dispatch_with_autolearn_flag(monkeypatch):
     captured = {}
     monkeypatch.setattr(cli, "cmd_arm",
-                        lambda root, llm=False, autolearn=False, tdd=False, mutation=False, mutation_score=False, red_proof=False: captured.update(llm=llm, autolearn=autolearn, tdd=tdd) or 0)
+                        lambda root, llm=False, autolearn=False, tdd=False, mutation=False, mutation_score=False, red_proof=False, shadow=False: captured.update(llm=llm, autolearn=autolearn, tdd=tdd) or 0)
 
     assert cli.main(["arm", "--autolearn"]) == 0
     assert captured["autolearn"] is True
@@ -302,12 +303,50 @@ def test_arm_dispatch_with_autolearn_flag(monkeypatch):
 def test_arm_dispatch_with_tdd_flag(monkeypatch):
     captured = {}
     monkeypatch.setattr(cli, "cmd_arm",
-                        lambda root, llm=False, autolearn=False, tdd=False, mutation=False, mutation_score=False, red_proof=False: captured.update(llm=llm, autolearn=autolearn, tdd=tdd) or 0)
+                        lambda root, llm=False, autolearn=False, tdd=False, mutation=False, mutation_score=False, red_proof=False, shadow=False: captured.update(llm=llm, autolearn=autolearn, tdd=tdd) or 0)
 
     assert cli.main(["arm", "--tdd"]) == 0
     assert captured["tdd"] is True
     assert captured["llm"] is False
     assert captured["autolearn"] is False
+
+
+def test_arm_dispatch_with_shadow_flag(monkeypatch):
+    """Round 126 section 4a: `shadow` was armable by config but had no CLI
+    path, so `aramid arm --help` told an operator it could not be armed.
+
+    IN-PROCESS on purpose. `_run` above spawns `python -m aramid`, which
+    inherits none of pytest's `pythonpath` ini setting and therefore resolves
+    the INSTALLED WHEEL -- measured: site-packages, not this checkout. A
+    subprocess test of a NEW flag would exercise a wheel that does not have it,
+    and an exit-code assertion would pass for the wrong reason.
+    """
+    captured = {}
+    monkeypatch.setattr(cli, "cmd_arm",
+                        lambda root, llm=False, autolearn=False, tdd=False, mutation=False, mutation_score=False, red_proof=False, shadow=False: captured.update(shadow=shadow, llm=llm, red_proof=red_proof) or 0)
+
+    assert cli.main(["arm", "--shadow"]) == 0
+    assert captured["shadow"] is True
+    assert captured["llm"] is False
+    assert captured["red_proof"] is False
+
+
+def test_arm_shadow_is_offered_by_the_parser():
+    """The literal complaint in round 126 section 4a: an operator runs
+    `aramid arm --help`, reads the options, and concludes shadow cannot be
+    armed. Asserted against the built parser, so it reflects THIS checkout --
+    a --help subprocess would render the installed wheel's parser instead.
+    """
+    parser = cli.build_parser()
+    sub = next(a for a in parser._actions
+               if isinstance(a, argparse._SubParsersAction))
+    arm = sub.choices["arm"]
+    flags = {opt for act in arm._actions for opt in act.option_strings}
+
+    assert "--shadow" in flags, f"arm offers no --shadow; it offers {sorted(flags)}"
+    # Non-vacuity: if the navigation above ever returned the wrong parser, an
+    # empty or foreign flag set would satisfy the assertion by accident.
+    assert {"--llm", "--mutation", "--red-proof"} <= flags, sorted(flags)
 
 
 def test_arm_dispatch_llm_and_autolearn_mutually_exclusive():
@@ -325,7 +364,7 @@ def test_arm_dispatch_tdd_and_llm_mutually_exclusive():
 def test_arm_dispatch_with_mutation_flag(monkeypatch):
     captured = {}
     monkeypatch.setattr(cli, "cmd_arm",
-                        lambda root, llm=False, autolearn=False, tdd=False, mutation=False, mutation_score=False, red_proof=False:
+                        lambda root, llm=False, autolearn=False, tdd=False, mutation=False, mutation_score=False, red_proof=False, shadow=False:
                         captured.update(llm=llm, autolearn=autolearn, tdd=tdd,
                                         mutation=mutation) or 0)
 
@@ -346,7 +385,7 @@ def test_arm_dispatch_with_mutation_score_flag(monkeypatch):
     captured = {}
     monkeypatch.setattr(cli, "cmd_arm",
                         lambda root, llm=False, autolearn=False, tdd=False,
-                        mutation=False, mutation_score=False, red_proof=False:
+                        mutation=False, mutation_score=False, red_proof=False, shadow=False:
                         captured.update(llm=llm, autolearn=autolearn,
                                         tdd=tdd, mutation=mutation,
                                         mutation_score=mutation_score) or 0)
@@ -370,7 +409,7 @@ def test_arm_dispatch_with_red_proof_flag(monkeypatch):
     captured = {}
     monkeypatch.setattr(cli, "cmd_arm",
                         lambda root, llm=False, autolearn=False, tdd=False,
-                        mutation=False, mutation_score=False, red_proof=False:
+                        mutation=False, mutation_score=False, red_proof=False, shadow=False:
                         captured.update(llm=llm, autolearn=autolearn,
                                         tdd=tdd, mutation=mutation,
                                         mutation_score=mutation_score,

@@ -10,6 +10,23 @@ to publish a tag that disagrees with it.
 
 ## [Unreleased]
 
+### Added
+
+- **`aramid arm --shadow`.** `shadow` was the only armable consumer with no CLI
+  path: the key `[shadow].shadow_block_armed` was read by `policy.classify` from
+  the moment the runner shipped, but `aramid arm --help` listed
+  `--llm/--autolearn/--tdd/--mutation/--mutation-score/--red-proof` and nothing
+  for it, so an operator reaching for the command that exists to arm things
+  concluded it could not be armed. Reported by a consumer (interop round 126
+  section 4a). The gap was the surface, not the mechanism.
+
+  **Its message deliberately does not mirror its siblings.** Every other arm
+  flag reports "now BLOCK at pre-push", because every other armable runner is
+  pre-push only. `shadow` is in `pipeline._GATE_TOOLS` for `PRE_COMMIT`,
+  `PRE_PUSH` and `ALL`, so arming it changes what happens at COMMIT time as
+  well, and it says so. An operator told "pre-push" would not expect the next
+  commit to be refused.
+
 ## [0.4.1] — 2026-08-26
 
 ### Security
