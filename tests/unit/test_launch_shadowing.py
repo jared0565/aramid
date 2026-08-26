@@ -95,6 +95,34 @@ def _render(node: ast.AST) -> str | None:
     return None
 
 
+def _executable_segments(chunk: str) -> list[str]:
+    """The parts of a line OUTSIDE backticks -- the parts that could be a launch.
+
+    Excluding docstrings was not enough, and the first new code to mention the
+    hazard proved it: `arm --shadow`'s help text and confirmation message both
+    say "a repo-root file that hijacks `python -m aramid`", which is a
+    CITATION of the hazard, not an instance of it. Those are runtime strings,
+    not docstrings, so the original scan flagged them and blocked a correct
+    commit.
+
+    Backticks are the discriminator, and the reason is mechanical rather than
+    stylistic: in `sh` a backtick is COMMAND SUBSTITUTION, so a launch template
+    that wrapped its own command in a pair of them would be broken. Measured
+    across this package before relying on it -- zero real launch templates in
+    `hooks.py` or `schedule.py` contain a backtick, and every prose mention of
+    the command is wrapped in a pair.
+
+    Fails CLOSED on an unbalanced count: the pairing is then ambiguous, so the
+    whole line is treated as executable and gets checked. A guard that gave up
+    quietly on odd input would be the false-clean shape this file exists to
+    prevent.
+    """
+    parts = chunk.split("`")
+    if len(parts) % 2 == 0:          # even parts == odd backticks == unbalanced
+        return [chunk]
+    return parts[0::2]
+
+
 def _unguarded_launches() -> list[str]:
     """Every executable string literal in the package that reaches `-m aramid`
     without `-P` in front of it. Returns `file:line: text` for each."""
@@ -113,13 +141,16 @@ def _unguarded_launches() -> list[str]:
             if text is None or "-m aramid" not in text:
                 continue
             for chunk in text.splitlines():
-                if "-m aramid" not in chunk:
-                    continue
-                before = chunk.split("-m aramid")[0]
-                if not before.rstrip().endswith("-P"):
-                    rel = path.relative_to(SRC.parent)
-                    offenders.append(
-                        f"{rel}:{getattr(node, 'lineno', '?')}: {chunk.strip()}")
+                # Per OCCURRENCE, not per line: a line may cite the hazard in
+                # backticks and launch it for real in the same breath.
+                for seg in _executable_segments(chunk):
+                    if "-m aramid" not in seg:
+                        continue
+                    before = seg.split("-m aramid")[0]
+                    if not before.rstrip().endswith("-P"):
+                        rel = path.relative_to(SRC.parent)
+                        offenders.append(
+                            f"{rel}:{getattr(node, 'lineno', '?')}: {chunk.strip()}")
     return offenders
 
 
@@ -184,6 +215,34 @@ def test_no_ci_workflow_reaches_dash_m_without_dash_P():
     assert not offenders, (
         "these CI launches reach `-m aramid` without `-P`, and Actions runs "
         "them from the checkout root:\n  " + "\n  ".join(offenders))
+
+
+def test_a_backticked_citation_is_not_a_launch():
+    """The false positive that blocked a correct commit, pinned in both
+    directions so the fix cannot quietly become an escape hatch.
+
+    `arm --shadow` describes the hazard in its help text and its confirmation
+    message. Those are runtime strings, not docstrings, so docstring exclusion
+    alone did not cover them.
+    """
+    cited = "aramid: arm: a repo-root file that hijacks `python -m aramid` now BLOCKS."
+    assert _executable_segments(cited) and "-m aramid" not in "".join(
+        _executable_segments(cited)), f"citation still reads as executable: {cited}"
+
+    # ...and the guard must still catch a REAL launch on a line that also
+    # cites the hazard. This is the case a whole-line skip would have missed.
+    mixed = 'echo "see `python -m aramid`" && "$INTERP" -m aramid check'
+    segs = _executable_segments(mixed)
+    assert any("-m aramid" in s and not s.split("-m aramid")[0].rstrip().endswith("-P")
+               for s in segs), f"a real launch beside a citation was skipped: {segs}"
+
+
+def test_unbalanced_backticks_fail_closed():
+    """An odd count makes the pairing ambiguous. The line must then be checked
+    in full rather than silently skipped -- a guard that gives up quietly on
+    malformed input is the false-clean this file exists to prevent."""
+    odd = 'launch `python -m aramid check'
+    assert _executable_segments(odd) == [odd]
 
 
 def test_the_scan_would_catch_an_unguarded_launch():
