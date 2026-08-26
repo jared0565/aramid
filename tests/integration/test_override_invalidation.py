@@ -21,7 +21,8 @@ implementation gets wrong:
 """
 from pathlib import Path
 
-from aramid.commands.override import cmd_override, invalidate_stale_overrides
+from aramid.commands.override import (_CAUSE_TEXT, cmd_override,
+                                      invalidate_stale_overrides)
 from aramid.ledger import Ledger
 from aramid.models import Event, EventType, Finding, Gate, Severity, Source, Verdict
 from aramid import config as config_mod
@@ -183,3 +184,96 @@ def test_disarming_after_an_invalidation_does_not_restore_the_override(tmp_path)
 
     assert _status(root, "mut1") == "open", "disarming restored a revoked suppression"
     assert _sweep(root) == []
+
+
+def test_the_refusal_names_the_sweep_as_the_reason_the_finding_is_back(tmp_path, capsys):
+    """The other half of the loop this module tests. The sweep reopens an
+    adjudicated finding; the operator's next move is to re-run `aramid
+    override` on it, and until now the refusal explained the TIER rule
+    without ever saying that a sweep is what put them there.
+
+    Meeting one of these on an unrelated push, the missing sentence is
+    causal: "a local override is not permitted" answers a question the
+    operator did not ask, while "your earlier override was revoked" answers
+    the one they did (interop round 118 section 3).
+    """
+    root: Path = tmp_path
+    ledger = _ledger(root)
+    ledger.record_run("r1", "t1", "pre-push", {"mutation"}, {"src/pay.py"},
+                       [_mutation_finding()])
+    ledger.close()
+
+    assert cmd_override(root, "mut1", "accepted as a warn") == 0
+    (root / "aramid.toml").write_text(ARMED_TOML, encoding="utf-8")
+    assert len(_sweep(root)) == 1
+
+    capsys.readouterr()
+    rc = cmd_override(root, "mut1", "still fine by me")
+    err = capsys.readouterr().err
+
+    assert rc == 3
+    assert "sweep" in err, f"refusal never mentions the sweep:\n{err}"
+    # ...and the CAUSE, in the same words the gate-start notice used, so the
+    # two surfaces describe one event identically rather than inventing a
+    # second vocabulary for it.
+    assert _CAUSE_TEXT["recorded_disarmed"] in err, (
+        f"refusal names the sweep but not why it fired:\n{err}")
+    # The redirect it already made must survive the addition.
+    assert ".aramid-suppressions.toml" in err
+    assert "[[suppress]]" in err
+
+
+def test_the_refusal_claims_no_sweep_when_no_sweep_reopened_the_finding(tmp_path, capsys):
+    """The falsifiability half, and the reason the sentence is conditional.
+
+    A finding that is BLOCK-tier on first detection was never overridden and
+    never swept -- telling its operator that "a sweep revoked your earlier
+    override" would be a fabricated causal claim, which is the same defect
+    class as asserting a staleness result from an arming check (round 112).
+    """
+    root: Path = tmp_path
+    ledger = _ledger(root)
+    ledger.record_run("r1", "t1", "pre-push", {"gitleaks"}, {"a.py"},
+                       [Finding("block1", "gitleaks", "aws-key", "high", Severity.HIGH,
+                                Verdict.BLOCK, "a.py", 1, "key", "evidence",
+                                Gate.PRE_PUSH)])
+    ledger.close()
+
+    rc = cmd_override(root, "block1", "please just let me push")
+    err = capsys.readouterr().err
+
+    assert rc == 3
+    assert ".aramid-suppressions.toml" in err, "the refusal itself regressed"
+    assert "sweep" not in err.lower(), (
+        f"refusal invented a sweep that never ran:\n{err}")
+    for text in _CAUSE_TEXT.values():
+        assert text not in err, f"refusal attributed a cause with no sweep:\n{err}"
+
+
+def test_the_refusal_reports_how_many_findings_that_same_sweep_reopened(tmp_path, capsys):
+    """Round 118 section 3's actual complaint was the BATCH: 26 refusals on one
+    unrelated push, each reading as its own isolated denial. They are one
+    re-adjudication, and the count is what says so. It is read from the
+    invalidating events sharing a run_id, so it is the real batch size rather
+    than a number the message asserts.
+    """
+    root: Path = tmp_path
+    ledger = _ledger(root)
+    ledger.record_run("r1", "t1", "pre-push", {"mutation"}, {"src/pay.py"},
+                       [_mutation_finding("mut1"), _mutation_finding("mut2"),
+                        _mutation_finding("mut3")])
+    ledger.close()
+
+    for fid in ("mut1", "mut2", "mut3"):
+        assert cmd_override(root, fid, "accepted as a warn") == 0
+    (root / "aramid.toml").write_text(ARMED_TOML, encoding="utf-8")
+    assert len(_sweep(root)) == 3
+
+    capsys.readouterr()
+    assert cmd_override(root, "mut2", "still fine by me") == 3
+    err = capsys.readouterr().err
+
+    # The exact count, not a bare "3" -- a digit floating anywhere in an id
+    # or a snippet would satisfy that and prove nothing.
+    assert "reopened 3 findings" in err, (
+        f"refusal never reports the batch size:\n{err}")

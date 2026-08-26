@@ -233,6 +233,58 @@ def invalidate_stale_overrides(ledger, cfg, *, run_id: str, at: str) -> list[dic
     return invalidated
 
 
+def _sweep_context(ledger, finding_id: str) -> tuple[str, int] | None:
+    """The sweep that reopened this finding, as (cause, findings it reopened),
+    or None when no sweep is responsible for it being open.
+
+    Conditional on purpose. A finding that is BLOCK-tier on FIRST DETECTION
+    was never overridden and so was never swept, and telling its operator
+    that "your earlier override was revoked" would be a fabricated causal
+    claim -- the same defect as asserting a staleness result from an arming
+    check (interop round 112). The ledger is the only thing that knows which
+    of the two an operator is looking at, so it is what gets asked.
+
+    The LAST invalidation wins: a finding can be re-overridden after a
+    re-detect and swept again, and only the most recent sweep is the one the
+    operator has just walked into. That sweep's `run_id` is shared by every
+    override it revoked, which is what makes the count the REAL batch size
+    rather than a number the message asserts.
+    """
+    last = None
+    by_run: dict[str, set[str]] = {}
+    for e in ledger.events():
+        if e.type.value != EventType.FINDING_OVERRIDE_INVALIDATED.value:
+            continue
+        by_run.setdefault(e.run_id, set()).add(e.finding_id)
+        if e.finding_id == finding_id:
+            last = e
+    if last is None:
+        return None
+    return last.payload.get("cause", ""), len(by_run.get(last.run_id, ()))
+
+
+def render_sweep_reason(cause: str, swept: int) -> str:
+    """Why this finding is back, for the refusal to say out loud.
+
+    Shares `_CAUSE_TEXT` with `render_invalidations` deliberately, so the
+    gate-start notice and the refusal an operator hits minutes later describe
+    one event in one vocabulary instead of two.
+
+    The batch line exists because round 118 section 3's complaint was not that
+    the refusal was wrong -- it was that meeting 26 of them on an unrelated
+    push reads as 26 isolated denials when it is one re-adjudication, and
+    nothing on the surface said so.
+    """
+    lines = [f"aramid: override: it is back because a gate-start sweep revoked your "
+             f"earlier override of it -- {_CAUSE_TEXT.get(cause, cause)}. Arming is "
+             f"retroactive, so that judgement is due again in the committed file."]
+    if swept > 1:
+        lines.append(f"aramid: override: the same sweep reopened {swept} findings -- a "
+                     f"run of these refusals is one re-adjudication, not {swept} "
+                     f"unrelated denials.")
+    return "\n".join(lines)
+
+
 def cmd_override(root, finding_id: str, reason: str) -> int:
     root = Path(root)
     reason = (reason or "").strip()
@@ -276,8 +328,13 @@ def cmd_override(root, finding_id: str, reason: str) -> int:
                 or is_llm_confirmed_critical):
             print(f"aramid: override: {finding_id} is a BLOCK-tier finding -- a local "
                   f"override is not permitted; add a reasoned entry to "
-                  f".aramid-suppressions.toml instead (design doc section 6).\n"
-                  f"Append this, review it, and commit it:\n", file=sys.stderr)
+                  f".aramid-suppressions.toml instead (design doc section 6).",
+                  file=sys.stderr)
+            # Only when the LEDGER says a sweep is why this row is open again.
+            sweep = _sweep_context(ledger, finding_id)
+            if sweep is not None:
+                print(render_sweep_reason(*sweep), file=sys.stderr)
+            print("Append this, review it, and commit it:\n", file=sys.stderr)
             print(_suppression_snippet(finding_id, rec, reason), file=sys.stderr)
             return 3
 
