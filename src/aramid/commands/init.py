@@ -184,15 +184,61 @@ def _write_aramid_md(root: Path, stack: set[str], pkg_mgr: str | None) -> None:
 
 # --------------------------------------------------------------- gitignore ---
 
-def _update_gitignore(root: Path) -> None:
+def _update_gitignore(root: Path) -> tuple[list[str], bool]:
+    """Append aramid's ignore entries; return (entries added, file created).
+
+    Returns what it did so `init` can SAY what it did. aramid writes this file
+    into a consumer's tree and printed nothing about it, which is the tool
+    making its own housekeeping somebody else's chore -- the same defect
+    `render_aramid_md_notice` was added for, measured on the same fresh
+    onboard (interop round 121 section 4).
+
+    Only ever writes entries that are MISSING, and that is what makes the
+    notice one-time rather than recurring: a second `init` has nothing to add
+    and so says nothing, by construction rather than by a guard.
+    """
     path = root / ".gitignore"
-    text = path.read_text(encoding="utf-8") if path.exists() else ""
+    existed = path.exists()
+    text = path.read_text(encoding="utf-8") if existed else ""
     existing = {line.strip() for line in text.splitlines()}
     missing = [entry for entry in GITIGNORE_ENTRIES if entry not in existing]
     if not missing:
-        return
+        return [], False
     prefix = "" if not text or text.endswith("\n") else "\n"
     path.write_text(text + prefix + "\n".join(missing) + "\n", encoding="utf-8")
+    return missing, not existed
+
+
+def render_gitignore_notice(root: Path, added: list[str], created: bool) -> str:
+    """The line `init` owes the operator about the .gitignore it just wrote.
+
+    Sibling of `render_aramid_md_notice`, and it follows the same three rules:
+    name the artifact, give the command rather than a complaint, and stay
+    silent when git cannot answer -- telling someone to commit a file in a
+    directory git does not manage is worse than saying nothing.
+
+    Lists the entries it ACTUALLY added rather than GITIGNORE_ENTRIES
+    wholesale. A notice naming a line that was already in the file sends a
+    teammate looking for it in a diff that does not contain it, and that is
+    the kind of claim which reads as true until somebody checks.
+
+    Distinguishes creating the file from appending to it because the two leave
+    the operator's `git status` looking different -- one new untracked file
+    versus one tracked file gone dirty.
+    """
+    if not added:
+        return ""
+    if gitutil._run(root, "rev-parse", "--is-inside-work-tree").returncode != 0:
+        return ""
+    plural = "y" if len(added) == 1 else "ies"
+    what = ("created .gitignore" if created
+            else f"added {len(added)} entr{plural} to .gitignore")
+    return "\n".join([
+        f"aramid: init: {what} -- aramid's machine-local state must not be",
+        f"aramid: init:   committed, and teammates need the same entries "
+        f"({', '.join(added)}):",
+        'aramid: init:       git add .gitignore && git commit -m "chore: ignore aramid state"',
+    ])
 
 
 # ------------------------------------------------------- full-history scan ---
@@ -404,7 +450,7 @@ def _init_one(target: Path) -> int:
         print(f"aramid: init: wrote {toml_path}")
 
     _write_aramid_md(root, stack, pkg_mgr)
-    _update_gitignore(root)
+    gi_added, gi_created = _update_gitignore(root)
 
     # step 5: install (idempotent, chain-never-clobber) hook shims.
     interpreter = Path(sys.executable)
@@ -436,9 +482,12 @@ def _init_one(target: Path) -> int:
         ledger.close()
 
     # step 9: summary.
-    notice = render_aramid_md_notice(root)
-    if notice:
-        print(notice, file=sys.stderr)
+    # Both artifacts aramid owns and wrote into someone else's tree,
+    # reported together because they are one chore for the operator.
+    for notice in (render_aramid_md_notice(root),
+                   render_gitignore_notice(root, gi_added, gi_created)):
+        if notice:
+            print(notice, file=sys.stderr)
 
     print("aramid: init: summary")
     print(f"  root:              {root}")
