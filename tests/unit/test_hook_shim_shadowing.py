@@ -53,10 +53,20 @@ def _shims() -> list[tuple[str, str]]:
 
 
 def test_the_guard_sees_every_generator():
-    """Non-vacuity. hooks.py has THREE renderers and it is the one that gets
-    forgotten that matters -- the triage shim was missed in the first pass of
-    exactly this fix upstream. If a fourth is added and not listed here, this
-    count assertion is the thing that says so."""
+    """Non-vacuity for the RENDERED-OUTPUT checks below, and no more than that.
+
+    This assertion CANNOT see a renderer missing from `_shims()`. Both sides of
+    `len(shims) == 2 * len(GATES) + 1` derive from that same hand-maintained
+    list, so it proves the list is internally consistent, never that it is
+    complete. Measured 2026-08-26: a fourth renderer emitting `-m aramid` with
+    no `-P` left every test in this file GREEN. This docstring previously
+    claimed the opposite -- that the count was "the thing that says so" -- and
+    that claim is what let commands/schedule.py carry two unguarded launches.
+
+    Launches this file does not know about are covered by
+    `tests/unit/test_launch_shadowing.py`, which discovers them from the source
+    rather than from a list.
+    """
     shims = _shims()
     assert len(shims) == 2 * len(hooks.GATES) + 1, [n for n, _ in shims]
     assert all("-m aramid" in body for _, body in shims), \

@@ -47,7 +47,7 @@ _XML_TEMPLATE = """<?xml version="1.0" encoding="UTF-16"?>
   <Actions Context="Author">
     <Exec>
       <Command>{interpreter}</Command>
-      <Arguments>-m aramid drain --all</Arguments>
+      <Arguments>-P -m aramid drain --all</Arguments>
     </Exec>
   </Actions>
 </Task>
@@ -129,7 +129,12 @@ def render_cron_line(interpreter: Path, interval_hours: int) -> str:
             "aramid: schedule: refusing to install -- the interpreter path "
             f"contains a line break, which no crontab line can carry: {text!r}")
     command = shlex.quote(text).replace("%", "\\%")
-    return f"{when} {command} -m aramid drain --all  {CRON_MARKER}"
+    # `-P` for the same reason every hook shim carries it: `-m` puts the
+    # CWD at sys.path[0], so an aramid.py wherever this happens to run
+    # would be imported instead of the installed package. A scheduled
+    # launch is the worst case of that -- it fires on a TIMER, with no
+    # human present to notice, and cron's default cwd is $HOME.
+    return f"{when} {command} -P -m aramid drain --all  {CRON_MARKER}"
 
 
 def strip_aramid_lines(text: str) -> str:
