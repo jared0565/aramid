@@ -10,6 +10,77 @@ to publish a tag that disagrees with it.
 
 ## [Unreleased]
 
+## [0.4.1] — 2026-08-26
+
+### Security
+
+- **Two generated launches reached `python -m aramid` without `-P`, and both
+  fire by themselves.** `aramid schedule install` rendered a Windows Scheduled
+  Task `<Arguments>-m aramid drain --all</Arguments>` and a crontab line of the
+  same shape. `-m` puts the current directory on `sys.path[0]`, so an
+  `aramid.py` at whatever directory the launch happens to run from is imported
+  instead of the installed package.
+
+  Worse than a hook, for two reasons. These fire on a **timer**, so there is no
+  human present to notice anything odd. And **cron's default working directory
+  is `$HOME`** — user-writable, and not a repo root, so the `shadow` runner
+  added in 0.4.0 does not scan it.
+
+  ⚠️ **Upgrading does not fix an already-installed task or crontab line.**
+  The generator is fixed; the artifact it wrote earlier is not. Re-run
+  `aramid schedule install` **after upgrading** to regenerate it —
+  `schtasks /Create` passes `/F` and the cron path replaces by marker, so both
+  overwrite cleanly. Re-running it on 0.4.0 or earlier reinstalls the old,
+  unguarded form.
+
+- **aramid's own CI gate ran `python -m aramid` from the checkout root.**
+  `.github/workflows/aramid.yml` invoked the gate twice with no `-P`, and
+  GitHub Actions runs steps from the workspace root. A commit — or a fork
+  pull request — adding `aramid.py` at the repo root would be imported
+  instead of the installed package **in the job whose purpose is to detect that
+  file**. The `shadow` runner cannot cover this: the hijack happens at import,
+  before the gate that would have run the detector.
+
+- **The guard against exactly this could not see either of them, and said it
+  could.** `tests/unit/test_hook_shim_shadowing.py` read only `hooks.py`, and
+  its non-vacuity check asserted `len(shims) == 2 * len(GATES) + 1` — both
+  sides derived from the same hand-maintained list, so it proved the list was
+  internally consistent, never that it was complete. Measured: adding a fourth
+  renderer emitting `-m aramid` with no `-P` left all twelve of those tests
+  green. Its docstring claimed that count was what would catch such a renderer;
+  that claim is corrected rather than left standing.
+
+  `tests/unit/test_launch_shadowing.py` replaces enumeration with **discovery**
+  — it walks every string literal in the package by AST and asserts each one
+  reaching `-m aramid` is preceded by `-P`, with a separate scan of
+  `.github/workflows/`. Nothing to keep current, and nothing to escape by
+  naming a renderer differently. Docstrings are excluded deliberately:
+  `runners/shadow.py` documents this very attack, and flagging the description
+  of a hazard as the hazard is how a guard accumulates exemptions until it
+  means nothing.
+
+### Fixed
+
+- **`aramid override` refused a BLOCK-tier finding without ever saying that a
+  gate-start sweep was why it was back.** Meeting a run of these on an
+  unrelated push, "a local override is not permitted" answers a question the
+  operator did not ask. The refusal now reads the ledger and — **only when a
+  sweep actually revoked an earlier override of that finding** — names the
+  sweep, its cause in the same words the gate-start notice uses, and how many
+  findings that same sweep reopened, so a batch reads as one re-adjudication
+  rather than N unrelated denials. A finding that is BLOCK-tier on first
+  detection was never swept and is told nothing, because a fabricated causal
+  claim is worse than no explanation.
+
+- **`init` wrote or appended to `.gitignore` and said nothing about it.** The
+  last of the three artifacts a fresh onboard leaves in a consumer's tree
+  (`aramid.toml` was already announced; `ARAMID.md` was fixed in 0.4.0). It now
+  names the file, distinguishes creating it from appending to it, and lists the
+  entries it **actually** added rather than all of them — naming a line that
+  was already there sends a teammate looking for it in a diff that does not
+  contain it. Silent on re-init, by construction: only missing entries are ever
+  written.
+
 ## [0.4.0] — 2026-08-26
 
 ### Added
@@ -2855,7 +2926,8 @@ Stated plainly because each one changes how you should deploy this:
 - **PyPI publishing is not set up.** Install from a GitHub Release artifact or
   from git; `pip install aramid` does not work.
 
-[Unreleased]: https://github.com/jared0565/aramid/compare/v0.4.0...HEAD
+[Unreleased]: https://github.com/jared0565/aramid/compare/v0.4.1...HEAD
+[0.4.1]: https://github.com/jared0565/aramid/releases/tag/v0.4.1
 [0.4.0]: https://github.com/jared0565/aramid/releases/tag/v0.4.0
 [0.3.1]: https://github.com/jared0565/aramid/releases/tag/v0.3.1
 [0.3.0]: https://github.com/jared0565/aramid/releases/tag/v0.3.0
