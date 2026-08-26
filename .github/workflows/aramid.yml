@@ -99,7 +99,7 @@ jobs:
       #   3 = engine error. --strict remaps 2 and 3 onto 1 so CI treats "couldn't
       #   tell" the same as "failed" instead of silently passing.
       - name: Run aramid gate (--all --strict --json)
-        run: python -m aramid check --all --strict --json
+        run: python -P -m aramid check --all --strict --json
 
       # THE STEP ABOVE IS PRE-COMMIT TIER, WHICH IS WEAKER THAN IT READS.
       # `--all` widens the FILE set, never the runner set, and `--gate` defaults
@@ -135,7 +135,7 @@ jobs:
       # AWS credential, this exits 1 with a gitleaks BLOCK. Against the clean
       # tree it exits 0 with zero findings and nothing degraded.
       - name: Run aramid gate at pre-push tier (semgrep + tests)
-        run: python -m aramid check --gate pre-push --all --strict --json
+        run: python -P -m aramid check --gate pre-push --all --strict --json
 
       # The step above is only worth having if semgrep ACTUALLY ran, and its
       # own exit code cannot tell you that: runner selection is gate- AND

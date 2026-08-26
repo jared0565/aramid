@@ -36,9 +36,14 @@ string that is assigned, returned or formatted can.
 import ast
 from pathlib import Path
 
+import pytest
+
 import aramid
 
 SRC = Path(aramid.__file__).parent
+# From THIS file, not from the package -- under an installed wheel the package
+# lives in site-packages and `.github/` would not be found relative to it.
+REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 
 
 def _docstring_nodes(tree: ast.AST) -> set[int]:
@@ -145,6 +150,40 @@ def test_the_scan_actually_reads_the_package():
         except (OSError, SyntaxError):
             pass
     assert parsed == len(modules), f"only {parsed}/{len(modules)} modules parsed"
+
+
+def test_no_ci_workflow_reaches_dash_m_without_dash_P():
+    """The repo's OWN launches, which the package scan above cannot see.
+
+    `.github/workflows/aramid.yml` ran `python -m aramid check ...` with no
+    `-P`, and GitHub Actions runs steps from the checkout root -- so a commit
+    or pull request adding an `aramid.py` at the repo root would be imported
+    instead of the installed package, in the job whose whole purpose is to
+    detect exactly that. The `shadow` runner cannot save this one: the hijack
+    happens at import, before the gate it would have run inside.
+
+    Scoped to `.github/workflows/` deliberately. A repo-wide text scan would
+    have to exempt CHANGELOG.md and docs/, which legitimately quote the
+    UNGUARDED form when recording the hazard -- and a guard that accumulates
+    exemptions stops meaning anything.
+    """
+    workflows = REPO_ROOT / ".github" / "workflows"
+    if not workflows.is_dir():  # pragma: no cover - sdist / wheel checkout
+        pytest.skip(f"no workflows directory at {workflows}")
+
+    files = sorted(workflows.glob("*.yml")) + sorted(workflows.glob("*.yaml"))
+    assert files, f"no workflow files under {workflows} -- scan would be vacuous"
+
+    offenders = []
+    for path in files:
+        for i, ln in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
+            if "-m aramid" not in ln:
+                continue
+            if not ln.split("-m aramid")[0].rstrip().endswith("-P"):
+                offenders.append(f"{path.name}:{i}: {ln.strip()}")
+    assert not offenders, (
+        "these CI launches reach `-m aramid` without `-P`, and Actions runs "
+        "them from the checkout root:\n  " + "\n  ".join(offenders))
 
 
 def test_the_scan_would_catch_an_unguarded_launch():
