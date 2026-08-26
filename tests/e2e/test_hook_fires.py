@@ -71,12 +71,14 @@ def _fake_engine(tmp_path) -> Path:
 
 # --- 1. real engine, no fakes -------------------------------------------
 
-def test_real_engine_pre_commit_fails_open_on_unimplemented_check(tmp_path):
+def test_real_engine_pre_commit_fails_open_on_unimplemented_check(tmp_path, checkout_env):
     r = _repo(tmp_path)
     hooks.install(r, Path(sys.executable))
     (r / "a.txt").write_text("hello\n")
     _git(r, "add", "a.txt")
-    cp = _git(r, "commit", "-m", "c1")
+    # env: the shim runs `python -P -m aramid`, which would otherwise resolve
+    # the installed wheel rather than this checkout (tests/conftest.py)
+    cp = _git(r, "commit", "-m", "c1", env=checkout_env)
     assert cp.returncode == 0, cp.stdout + cp.stderr
 
 

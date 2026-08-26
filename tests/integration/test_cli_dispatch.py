@@ -5,48 +5,71 @@ Process-level exit-code tests (subprocess, mirroring test_version.py's own
 style -- these need real argparse/SystemExit/process semantics) plus
 in-process dispatch-mapping tests (monkeypatching the cmd_* names bound
 into aramid.cli's own namespace) for argument translation.
+
+EVERY SUBPROCESS HERE IS BOUND TO THIS CHECKOUT, via `run_cli` on top of the
+suite-wide `checkout_env` fixture. Until 2026-08-26 the helper spawned a bare
+`python -m aramid`, which on a two-aramid machine resolves the INSTALLED
+WHEEL: the mutual-exclusion tests below asserted exit 3 and would have passed
+against a wheel that had never heard of the flag -- also exit 3. Measured with
+`arm --shadow --llm`: the wheel said "unrecognized arguments: --shadow", the
+checkout said "--llm: not allowed with argument --shadow", both exited 3.
+Only the program differed. CI never saw it (CI installs `-e`, so a bare
+child finds the checkout by accident); the local pre-push gate did.
 """
 import argparse
 import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+
 from aramid import cli
 from aramid.models import Gate
 
 
-def _run(*args):
-    return subprocess.run([sys.executable, "-m", "aramid", *args],
-                           capture_output=True, text=True)
+@pytest.fixture
+def run_cli(checkout_env):
+    """`python -P -m aramid <args>` as a child process of THIS checkout.
+
+    `-P` for the same reason every shim carries it: without it the child's
+    sys.path[0] is the CWD, and a repo-root aramid.py would beat the
+    PYTHONPATH the fixture just set. `cwd` is for tests that need a
+    particular tree under the command; the default is wherever pytest runs.
+    """
+    def _run(*args, cwd=None):
+        return subprocess.run([sys.executable, "-P", "-m", "aramid", *args],
+                              capture_output=True, text=True,
+                              env=checkout_env, cwd=cwd)
+    return _run
 
 
 # ------------------------------------------------------- process-level ------
 
-def test_version_flag_still_works():
-    out = _run("--version")
+def test_version_flag_still_works(run_cli):
+    out = run_cli("--version")
     assert out.returncode == 0
     assert out.stdout.strip().startswith("aramid ")
 
 
-def test_check_help_exits_0():
-    out = _run("check", "--help")
+def test_check_help_exits_0(run_cli):
+    out = run_cli("check", "--help")
     assert out.returncode == 0
 
 
-def test_unknown_command_exits_3():
-    out = _run("definitely-not-a-real-command")
+def test_unknown_command_exits_3(run_cli):
+    out = run_cli("definitely-not-a-real-command")
     assert out.returncode == 3
 
 
-def test_no_command_exits_3():
+def test_no_command_exits_3(run_cli):
     """Deferred from Task 0.1 (progress.md): `python -m aramid` with no
     command must return exit 3, not silently succeed."""
-    out = _run()
+    out = run_cli()
     assert out.returncode == 3
 
 
-def test_bad_flag_exits_3_not_argparses_own_2():
-    out = _run("check", "--not-a-real-flag")
+def test_bad_flag_exits_3_not_argparses_own_2(run_cli):
+    out = run_cli("check", "--not-a-real-flag")
     assert out.returncode == 3
 
 
@@ -315,11 +338,11 @@ def test_arm_dispatch_with_shadow_flag(monkeypatch):
     """Round 126 section 4a: `shadow` was armable by config but had no CLI
     path, so `aramid arm --help` told an operator it could not be armed.
 
-    IN-PROCESS on purpose. `_run` above spawns `python -m aramid`, which
-    inherits none of pytest's `pythonpath` ini setting and therefore resolves
-    the INSTALLED WHEEL -- measured: site-packages, not this checkout. A
-    subprocess test of a NEW flag would exercise a wheel that does not have it,
-    and an exit-code assertion would pass for the wrong reason.
+    In-process like its siblings: this pins the DISPATCH MAPPING, which
+    keyword the flag becomes. When it was written the subprocess helper still
+    resolved the installed wheel, so in-process was also the only way to test
+    a flag the wheel lacked; `run_cli` now binds to the checkout, and
+    test_arm_dispatch_shadow_and_llm_mutually_exclusive covers that side.
     """
     captured = {}
     monkeypatch.setattr(cli, "cmd_arm",
@@ -334,8 +357,9 @@ def test_arm_dispatch_with_shadow_flag(monkeypatch):
 def test_arm_shadow_is_offered_by_the_parser():
     """The literal complaint in round 126 section 4a: an operator runs
     `aramid arm --help`, reads the options, and concludes shadow cannot be
-    armed. Asserted against the built parser, so it reflects THIS checkout --
-    a --help subprocess would render the installed wheel's parser instead.
+    armed. Asserted against the built parser OBJECT; the rendered `--help`
+    of the same checkout is what test_arm_shadow_is_offered_by_the_real_cli
+    reads.
     """
     parser = cli.build_parser()
     sub = next(a for a in parser._actions
@@ -349,15 +373,22 @@ def test_arm_shadow_is_offered_by_the_parser():
     assert {"--llm", "--mutation", "--red-proof"} <= flags, sorted(flags)
 
 
-def test_arm_dispatch_llm_and_autolearn_mutually_exclusive():
-    rc = subprocess.run([sys.executable, "-m", "aramid", "arm", "--llm", "--autolearn"],
-                        capture_output=True, text=True)
+def test_arm_shadow_is_offered_by_the_real_cli(run_cli):
+    """The same complaint end to end: the text an operator actually reads.
+    Against the installed 0.4.1 wheel this line is absent -- which is what
+    the old helper would have rendered, and called a pass of THIS checkout."""
+    out = run_cli("arm", "--help")
+    assert out.returncode == 0, out.stderr
+    assert "--shadow" in out.stdout, out.stdout
+
+
+def test_arm_dispatch_llm_and_autolearn_mutually_exclusive(run_cli):
+    rc = run_cli("arm", "--llm", "--autolearn")
     assert rc.returncode == 3
 
 
-def test_arm_dispatch_tdd_and_llm_mutually_exclusive():
-    rc = subprocess.run([sys.executable, "-m", "aramid", "arm", "--tdd", "--llm"],
-                        capture_output=True, text=True)
+def test_arm_dispatch_tdd_and_llm_mutually_exclusive(run_cli):
+    rc = run_cli("arm", "--tdd", "--llm")
     assert rc.returncode == 3
 
 
@@ -375,9 +406,8 @@ def test_arm_dispatch_with_mutation_flag(monkeypatch):
     assert captured["tdd"] is False
 
 
-def test_arm_dispatch_mutation_and_llm_mutually_exclusive():
-    rc = subprocess.run([sys.executable, "-m", "aramid", "arm", "--mutation", "--llm"],
-                        capture_output=True, text=True)
+def test_arm_dispatch_mutation_and_llm_mutually_exclusive(run_cli):
+    rc = run_cli("arm", "--mutation", "--llm")
     assert rc.returncode == 3
 
 
@@ -398,10 +428,8 @@ def test_arm_dispatch_with_mutation_score_flag(monkeypatch):
     assert captured["tdd"] is False
 
 
-def test_arm_dispatch_mutation_score_and_mutation_mutually_exclusive():
-    rc = subprocess.run([sys.executable, "-m", "aramid", "arm",
-                         "--mutation-score", "--mutation"],
-                        capture_output=True, text=True)
+def test_arm_dispatch_mutation_score_and_mutation_mutually_exclusive(run_cli):
+    rc = run_cli("arm", "--mutation-score", "--mutation")
     assert rc.returncode == 3
 
 
@@ -424,11 +452,20 @@ def test_arm_dispatch_with_red_proof_flag(monkeypatch):
     assert captured["tdd"] is False
 
 
-def test_arm_dispatch_red_proof_and_tdd_mutually_exclusive():
-    rc = subprocess.run([sys.executable, "-m", "aramid", "arm",
-                         "--red-proof", "--tdd"],
-                        capture_output=True, text=True)
+def test_arm_dispatch_red_proof_and_tdd_mutually_exclusive(run_cli):
+    rc = run_cli("arm", "--red-proof", "--tdd")
     assert rc.returncode == 3
+
+
+def test_arm_dispatch_shadow_and_llm_mutually_exclusive(run_cli):
+    """The case that exposed the false green. Exit 3 alone cannot tell "these
+    two flags exclude each other" from "this program has never heard of
+    --shadow" -- the installed wheel said the latter, and exited 3 too. So
+    the REASON is asserted alongside the code, in both directions."""
+    rc = run_cli("arm", "--shadow", "--llm")
+    assert rc.returncode == 3
+    assert "not allowed with" in rc.stderr, rc.stderr
+    assert "unrecognized" not in rc.stderr, rc.stderr
 
 
 def test_update_rules_dispatch(monkeypatch):

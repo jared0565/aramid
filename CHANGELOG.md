@@ -27,6 +27,36 @@ to publish a tag that disagrees with it.
   well, and it says so. An operator told "pre-push" would not expect the next
   commit to be refused.
 
+### Fixed
+
+- **The suite's subprocess tests graded the installed wheel, not the
+  checkout.** `pythonpath = ["src"]` is a pytest ini setting: it shapes the
+  pytest process's `sys.path`, and a child process inherits none of it. So
+  every test that spawned `python -m aramid` -- the CLI exit-code tests, the
+  ledger encoding test, the triage dispatch test, and the six e2e commits that
+  fire a real shim -- resolved whatever aramid the machine had INSTALLED. On a
+  machine running the two-aramid separation that is the promoted wheel, a
+  different program from the one under test, and the suite had run that way
+  since the separation was built. Measured: with `aramid arm --shadow --llm`
+  the wheel answered "unrecognized arguments: --shadow", the checkout answered
+  "--llm: not allowed with argument --shadow", and both exited 3 -- so a
+  mutual-exclusion test for a new flag passed against the wrong program for the
+  wrong reason. CI never saw it: CI installs `-e`, and a bare child finds the
+  checkout by accident of the install mode. The local pre-push gate, which runs
+  this suite, is exactly where it landed. `tests/unit/test_version.py` had
+  already solved this for itself, in isolation, and said why.
+
+  Now a suite-wide `checkout_env` fixture (`tests/conftest.py`) prepends the
+  parent's own `src/` to PYTHONPATH -- derived from `aramid.__file__`, so a
+  perturbation run pointed at a scratch tree stays honest; prepended rather
+  than assigned, the product's own `run_subprocess` rule -- and every launch
+  site binds explicitly, with `-P`. Nothing mutates `os.environ`: that would
+  silently re-bind the product's own gate subprocesses, whose tests assert what
+  THEY prepend. Guarded by `tests/unit/test_checkout_env.py`, whose control
+  measures whether a bare child on the running machine is a different program
+  and SKIPS BY NAME where it is not (an editable install), so a vacuous
+  identity test is reported rather than counted as a pass.
+
 ## [0.4.1] — 2026-08-26
 
 ### Security

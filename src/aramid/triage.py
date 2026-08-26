@@ -94,14 +94,26 @@ def dependents(root: Path, paths: list[str]) -> list[str]:
     graph_file = root / "graph-out" / "graph.json"
     if not graph_file.exists():
         return []
-    # Graphite's real schema resolves "imports" edges to PLACEHOLDER
-    # module-name nodes (kind "unknown", no source_file) -- edges never
-    # target the file-node ids. So edge targets are matched against alias
-    # ids derived from each changed path (every path-suffix joined with
-    # "_"). Best-effort heuristic: a generically-named module (e.g.
-    # "queue") can collide with same-named third-party/stdlib imports,
-    # biasing the risk signal upward -- acceptable for a 0-25 advisory
-    # weight.
+    # Two ways an edge can point INTO a changed file. Which one carries the
+    # answer depends on the graph in front of us, not on this code:
+    #   1. `source_file` -- any node (function, class, module) graphite
+    #      placed in a changed path. Under graphite >= 0.5.0 nearly every
+    #      edge lands on such a node, so this path finds nearly every
+    #      dependent, and it is immune to id-scheme changes (0.5.0 re-keyed
+    #      almost every id; this path did not move).
+    #   2. alias ids derived from the path -- every path-suffix joined with
+    #      "_", so "src/aramid/queue.py" -> queue, aramid_queue, ... This
+    #      exists for import edges that land on PLACEHOLDER module-name
+    #      nodes (kind "unknown", no source_file), which older schemas
+    #      produced for every import and current ones still produce for
+    #      some. Best-effort: a generically-named module ("queue") can
+    #      collide with a same-named third-party/stdlib import and bias the
+    #      signal upward -- acceptable for a 0-25 advisory weight.
+    # An earlier version of this comment said edges NEVER target file nodes
+    # and that the alias path was therefore the mechanism. Measured false on
+    # 2026-08-26 (interop round 124): in this repo the alias path matched a
+    # single id -- a true positive -- while source_file matched nearly every
+    # file. A near-silent alias path is the expected shape, not a defect.
     try:
         data = json.loads(graph_file.read_text(encoding="utf-8"))
         changed = {normalize_path(p) for p in paths}

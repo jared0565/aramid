@@ -118,10 +118,11 @@ def test_no_budget_arms_no_timer(tmp_path, monkeypatch):
     assert created == []
 
 
-def test_cli_dispatches_triage(tmp_path):
+def test_cli_dispatches_triage(tmp_path, checkout_env):
     r = _repo(tmp_path)
     _commit(r, "src/auth/login.py", "def f(x):\n    exec(x)\n", "risky")
-    out = subprocess.run([sys.executable, "-m", "aramid", "triage"],
-                         cwd=r, capture_output=True, text=True)
+    # env: bound to THIS checkout, not the installed wheel (tests/conftest.py)
+    out = subprocess.run([sys.executable, "-P", "-m", "aramid", "triage"],
+                         cwd=r, capture_output=True, text=True, env=checkout_env)
     assert out.returncode == 0
     assert "triage" in (out.stdout + out.stderr).lower()

@@ -9,10 +9,13 @@ registry). Autouse-patch the seam to a per-test tmp_path; individual tests
 that seed state simply call autolearn.save_state(...) and hit the same
 patched location.
 """
+import os
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 
 import pytest
 
+import aramid
 from aramid import autolearn, config, toolpath
 
 
@@ -113,3 +116,37 @@ def _isolated_user_config(tmp_path, monkeypatch):
     today's typical clean-machine behavior instead of inventing a new one."""
     monkeypatch.setattr(config, "_user_config_path",
                         lambda: tmp_path / "no-such-user-config.toml")
+
+
+@pytest.fixture
+def checkout_env() -> dict[str, str]:
+    """`os.environ` with the aramid THIS process imported first on PYTHONPATH.
+
+    For any test that spawns `python -m aramid`, or anything that reaches it
+    (a git hook, a shim). `pythonpath = ["src"]` in pyproject is a pytest ini
+    setting: it shapes this process's `sys.path`, and a child inherits none of
+    it. On a machine running the two-aramid separation (RELEASING.md, "Two
+    aramids share this machine") a bare child therefore resolves the INSTALLED
+    WHEEL -- a different program from the one under test. Measured 2026-08-26:
+    the parent had imported `src/aramid`; the child printed
+    `site-packages/aramid`. CI never sees this, because CI installs `-e` and
+    a bare child finds the checkout by accident of the install mode. The
+    local pre-push gate, which runs this suite, is exactly where it lands.
+
+    Derived from `aramid.__file__` rather than a hardcoded `src` so the child
+    is bound to whatever the parent actually imported (test_version.py's
+    rationale: a perturbation run pointed at a scratch tree stays honest).
+    PREPENDED, not assigned: the product's own `run_subprocess` prepends for
+    the same reason -- assigning would drop whatever the developer's
+    environment needed (tests/unit/test_worktree_import_env.py).
+
+    Returned as a NEW dict. Editing os.environ in place would bind every later
+    child in the session, including the product's own gate subprocesses,
+    whose tests assert what THEY prepend. Binding is explicit, per call site.
+    Guarded by tests/unit/test_checkout_env.py.
+    """
+    src_root = Path(aramid.__file__).resolve().parent.parent
+    env = dict(os.environ)
+    prior = env.get("PYTHONPATH")
+    env["PYTHONPATH"] = str(src_root) + (os.pathsep + prior if prior else "")
+    return env

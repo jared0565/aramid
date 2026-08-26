@@ -22,6 +22,9 @@ from aramid import config as config_mod
 
 TASK_NAME = "aramid-drain"
 
+# <Arguments> below carries `-P`. The rationale -- and the MEASURED cwd this
+# task actually runs from -- is at render_cron_line, next to the cron line
+# that carries the same flag for a different severity of the same reason.
 _XML_TEMPLATE = """<?xml version="1.0" encoding="UTF-16"?>
 <Task version="1.2" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">
   <RegistrationInfo>
@@ -133,7 +136,20 @@ def render_cron_line(interpreter: Path, interval_hours: int) -> str:
     # CWD at sys.path[0], so an aramid.py wherever this happens to run
     # would be imported instead of the installed package. A scheduled
     # launch is the worst case of that -- it fires on a TIMER, with no
-    # human present to notice, and cron's default cwd is $HOME.
+    # human present to notice. WHERE it fires from differs by scheduler,
+    # and so does what `-P` is closing:
+    #   cron     cwd is $HOME. Documented behaviour of Vixie-derived crons
+    #            (the daemon chdirs to the owner's home before exec); NOT
+    #            measured here, there is no cron on the development machine.
+    #            $HOME is user-writable, so a hijack needs no privilege the
+    #            account does not already have -- a live hole without `-P`.
+    #   Windows  an empty <WorkingDirectory> in _XML_TEMPLATE resolves to
+    #            C:/WINDOWS/system32. MEASURED 2026-08-26 by registering a
+    #            task from that very template, running it, and reading
+    #            os.getcwd(). Writing there needs admin, so on Windows `-P`
+    #            is defence-in-depth, not the close of a live exposure.
+    # Same flag on both; the comment splits because one sentence for two
+    # platforms was wrong about one of them (interop rounds 126 and 127).
     return f"{when} {command} -P -m aramid drain --all  {CRON_MARKER}"
 
 

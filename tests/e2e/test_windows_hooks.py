@@ -97,19 +97,23 @@ def _path_without_gitleaks(path_value: str) -> str:
     return os.pathsep.join(kept)
 
 
-def _live_ruff_env() -> dict:
+def _live_ruff_env(base: dict | None = None) -> dict:
     """PATH extended with ruff's own directory (and scrubbed of gitleaks).
     The REAL `aramid check` process spawned through git's hook dispatch
     inherits this all the way down the chain (git commit -> sh hook -> baked
     interpreter -> `aramid check` subprocess) -- git does not sanitize hook
     environments (hooks.py's module docstring) -- and
     `aramid.runners.base.run_subprocess` gates on `shutil.which(argv[0])`
-    before it will even attempt to run "ruff"."""
+    before it will even attempt to run "ruff".
+
+    `base` is the environment to extend. Pass `checkout_env` (tests/conftest.py)
+    so the `aramid check` at the end of that chain is THIS checkout and not
+    the installed wheel -- same chain, same inheritance, same reason."""
     assert _RUFF_BIN is not None
     path = str(_RUFF_BIN.parent) + os.pathsep + _path_without_gitleaks(os.environ.get("PATH", ""))
     assert shutil.which("gitleaks", path=path) is None, \
         "gitleaks must be absent from the hook PATH for the fail-open assertions"
-    return {**os.environ, "PATH": path}
+    return {**(os.environ if base is None else base), "PATH": path}
 
 
 # --- repo helpers ---------------------------------------------------------
@@ -153,12 +157,12 @@ def _ledger_ran(root: Path) -> bool:
 # --- 1. real pre-commit BLOCK via live ruff, then a real clean commit ----
 
 @pytest.mark.skipif(_RUFF_BIN is None, reason=_SKIP_RUFF)
-def test_real_precommit_blocks_on_live_ruff_s102_then_clean_commit_succeeds(tmp_path):
+def test_real_precommit_blocks_on_live_ruff_s102_then_clean_commit_succeeds(tmp_path, checkout_env):
     r = _repo(tmp_path)
     hooks.install(r, Path(sys.executable))
     assert (r / ".git" / "hooks" / "pre-commit").exists()
 
-    env = _live_ruff_env()
+    env = _live_ruff_env(checkout_env)
 
     # --- BLOCK path: exec(x) trips ruff S102, a curated BLOCK-tier rule
     # (data/block_rules.toml [ruff].block) -- real ruff, real git dispatch,
@@ -193,7 +197,7 @@ def test_real_precommit_blocks_on_live_ruff_s102_then_clean_commit_succeeds(tmp_
 
 # --- 2. chaining: a foreign pre-commit hook runs alongside aramid's own --
 
-def test_chained_foreign_hook_runs_alongside_aramid_through_real_git_dispatch(tmp_path):
+def test_chained_foreign_hook_runs_alongside_aramid_through_real_git_dispatch(tmp_path, checkout_env):
     r = _repo(tmp_path)
     hdir = r / ".git" / "hooks"
     hdir.mkdir(exist_ok=True)
@@ -212,7 +216,7 @@ def test_chained_foreign_hook_runs_alongside_aramid_through_real_git_dispatch(tm
     # chained foreign hook and aramid's own real engine.
     (r / "clean.py").write_text("x = 1\n", encoding="utf-8")
     _git(r, "add", "clean.py")
-    cp = _git(r, "commit", "-m", "c1")
+    cp = _git(r, "commit", "-m", "c1", env=checkout_env)
 
     assert cp.returncode == 0, cp.stdout + cp.stderr
     assert marker.exists(), "chained foreign hook must actually run through real git dispatch"
@@ -229,7 +233,7 @@ def test_chained_foreign_hook_runs_alongside_aramid_through_real_git_dispatch(tm
 
     (r / "clean2.py").write_text("y = 2\n", encoding="utf-8")
     _git(r, "add", "clean2.py")
-    cp2 = _git(r, "commit", "-m", "c2")
+    cp2 = _git(r, "commit", "-m", "c2", env=checkout_env)
 
     assert cp2.returncode == 0, cp2.stdout + cp2.stderr
     assert marker.exists(), "restored foreign hook must actually execute through real git dispatch"
@@ -237,7 +241,7 @@ def test_chained_foreign_hook_runs_alongside_aramid_through_real_git_dispatch(tm
 
 # --- 3. uninstall reversal: shim gone, chained original restored, ledger kept
 
-def test_uninstall_removes_shim_restores_chained_original_and_keeps_ledger(tmp_path):
+def test_uninstall_removes_shim_restores_chained_original_and_keeps_ledger(tmp_path, checkout_env):
     r = _repo(tmp_path)
     hdir = r / ".git" / "hooks"
     hdir.mkdir(exist_ok=True)
@@ -248,7 +252,7 @@ def test_uninstall_removes_shim_restores_chained_original_and_keeps_ledger(tmp_p
 
     (r / "clean.py").write_text("x = 1\n", encoding="utf-8")
     _git(r, "add", "clean.py")
-    cp = _git(r, "commit", "-m", "c1")
+    cp = _git(r, "commit", "-m", "c1", env=checkout_env)
     assert cp.returncode == 0, cp.stdout + cp.stderr
     assert _ledger_ran(r), "aramid's real engine must have run before uninstall"
 
@@ -268,7 +272,7 @@ def test_uninstall_removes_shim_restores_chained_original_and_keeps_ledger(tmp_p
 
 # --- 4. post-commit triage fires through real git dispatch ---------------
 
-def test_real_commit_triggers_triage_enqueue(tmp_path):
+def test_real_commit_triggers_triage_enqueue(tmp_path, checkout_env):
     from aramid import queue as queue_mod
     r = _repo(tmp_path)
     hooks.install(r, Path(sys.executable))
@@ -279,7 +283,7 @@ def test_real_commit_triggers_triage_enqueue(tmp_path):
     (r / "src").mkdir()
     (r / "src" / "auth_login.py").write_text("def f(x):\n    exec(x)\n", encoding="utf-8")
     _git(r, "add", "src/auth_login.py")
-    cp = _git(r, "commit", "-m", "risky", env={**os.environ})
+    cp = _git(r, "commit", "-m", "risky", env=checkout_env)
     assert cp.returncode == 0, cp.stdout + cp.stderr  # post-commit can NEVER block
     led = Ledger(r / ".aramid" / "ledger.db")
     try:

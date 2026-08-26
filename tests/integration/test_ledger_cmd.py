@@ -1,7 +1,6 @@
 """integration: `aramid ledger list|show|filter|mark-rotated|mark-not-a-secret|
 mark-unreachable`."""
 import json
-import os
 import subprocess
 import sys
 from pathlib import Path
@@ -200,19 +199,21 @@ def test_filter_json_flag_is_wired_through_the_cli(tmp_path, monkeypatch, capsys
 # pass vacuously on the Linux and macOS legs, which is precisely the shape of
 # green that hid the original defect.
 
-def _run_cli(root: Path, *args: str) -> bytes:
+def _run_cli(root: Path, base_env: dict, *args: str) -> bytes:
     """Run the real CLI with stdout REDIRECTED, under a legacy encoding, and
     return the raw bytes it wrote. Redirection is the whole point: it is what
-    makes Python pick the locale encoding instead of the console's."""
-    env = dict(os.environ, PYTHONIOENCODING="cp1252")
+    makes Python pick the locale encoding instead of the console's.
+    `base_env` is `checkout_env` (tests/conftest.py): without it the child
+    resolves the installed wheel, not this checkout."""
+    env = dict(base_env, PYTHONIOENCODING="cp1252")
     out_path = root / "cli-stdout.bin"
     with open(out_path, "wb") as fh:
-        subprocess.run([sys.executable, "-m", "aramid", *args],
+        subprocess.run([sys.executable, "-P", "-m", "aramid", *args],
                        cwd=root, stdout=fh, stderr=subprocess.PIPE, env=env)
     return out_path.read_bytes()
 
 
-def test_redirected_ledger_output_is_valid_utf8(tmp_path):
+def test_redirected_ledger_output_is_valid_utf8(tmp_path, checkout_env):
     """A finding whose message is non-ASCII must still come back as UTF-8.
 
     Falsifiability: before the fix this raises UnicodeDecodeError on byte
@@ -225,7 +226,7 @@ def test_redirected_ledger_output_is_valid_utf8(tmp_path):
                        [_f("f1", message="unsafe “query” built in café.py")])
     ledger.close()
 
-    raw = _run_cli(root, "ledger", "list")
+    raw = _run_cli(root, checkout_env, "ledger", "list")
 
     text = raw.decode("utf-8")          # strict: raises on any invalid byte
     assert "f1" in text
