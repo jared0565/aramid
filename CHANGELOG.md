@@ -73,6 +73,27 @@ to publish a tag that disagrees with it.
   security guard, all three real launch shapes were perturbed back to
   unguarded and each was still caught.
 
+- **`aramid arm` could rewrite a same-named key in the wrong place, report
+  success, and arm nothing.** Every sectioned rewrite (`--llm`, `--mutation`,
+  `--mutation-score`, `--red-proof`, and the new `--shadow`) searched the whole
+  file for its key, so a stray `shadow_block_armed = false` at the TOP LEVEL --
+  an easy mistake, because `semgrep_block_armed` and `tdd_block_armed`
+  genuinely live there -- was rewritten to `true`, the command printed "now
+  BLOCKS at every gate" and returned 0, and `[shadow].shadow_block_armed`, the
+  only key `policy.classify` reads, stayed unset. The two root rewrites had the
+  mirror hole: a twin inside some `[table]` would be rewritten while the loader
+  reads the top level. Reported by the llm-review consumer on the commit that
+  added `--shadow`, reproduced before anything was tagged, and the tag was held
+  for it.
+
+  Every rewrite is now scoped to the span the loader reads from -- the shape
+  `--autolearn` already had -- through one shared pair of helpers. A same-named
+  key outside that span is never the target: it is left exactly as written
+  (it is the operator's text, not aramid's to delete) and named on stderr with
+  its line number. The old docstrings justified the missing scope with "the
+  key name is globally unique"; uniqueness across sections was never the risk,
+  placement was.
+
 ## [0.4.1] — 2026-08-26
 
 ### Security

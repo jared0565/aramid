@@ -79,101 +79,120 @@ def _armed_sub(key_re: re.Pattern, new_line: str, text: str, count: int = 0) -> 
     return key_re.sub(lambda m: new_line + (m.group("c") or ""), text, count=count)
 
 
-def _arm_llm_text(text: str) -> str:
-    """Comment-preserving single-key rewrite, mirroring the semgrep path:
-    key exists -> substitute; [llm] section exists -> insert the key right
-    under the header; neither -> append a fresh [llm] section (a bare
-    key at EOF would land inside whatever table happens to be last)."""
-    if _LLM_KEY_RE.search(text):
-        return _armed_sub(_LLM_KEY_RE, "llm_block_armed = true", text)
-    m = _LLM_SECTION_RE.search(text)
-    if m:
-        insert_at = m.end()
-        return text[:insert_at] + "\nllm_block_armed = true" + text[insert_at:]
+# WHERE A KEY IS READ DECIDES WHERE IT MAY BE WRITTEN. Every rewrite below is
+# scoped to the span the loader actually reads the key from -- a [section]'s
+# body, or the root span before the first header -- and a same-named key
+# anywhere else is never the target. That scoping used to exist only for
+# `armed` under [llm.autolearn], justified by its generic name; the others
+# searched the whole file, and their docstrings said a globally unique key
+# name made scoping unnecessary. Measured 2026-08-27, on the commit that added
+# --shadow: a stray top-level `shadow_block_armed = false` was rewritten to
+# true, `arm --shadow` printed its BLOCKS line and returned 0, and
+# `[shadow].shadow_block_armed` -- the only key policy.classify reads --
+# stayed unset. Uniqueness across sections was never the risk; placement was.
+
+
+def _section_span(text: str, section_re: re.Pattern) -> tuple[int, int] | None:
+    """(start, end) of the BODY of the section `section_re` heads: from the
+    end of its header line to the next `[` header or EOF. None if absent."""
+    m = section_re.search(text)
+    if not m:
+        return None
+    nxt = _NEXT_SECTION_RE.search(text, m.end())
+    return m.end(), (nxt.start() if nxt else len(text))
+
+
+def _root_span(text: str) -> tuple[int, int]:
+    """(0, end) of the root table: everything before the first `[` header."""
+    m = _NEXT_SECTION_RE.search(text)
+    return 0, (m.start() if m else len(text))
+
+
+def _misplaced_lines(text: str, key_re: re.Pattern,
+                     span: tuple[int, int] | None) -> list[int]:
+    """1-based line numbers of `key_re` matches OUTSIDE `span` -- copies the
+    loader never reads. With no span at all, every match is misplaced."""
+    lo, hi = span if span else (0, 0)
+    return [text.count("\n", 0, m.start()) + 1
+            for m in key_re.finditer(text) if not (lo <= m.start() < hi)]
+
+
+def _arm_sectioned_key(text: str, section_re: re.Pattern, key_re: re.Pattern,
+                       new_line: str, header: str) -> str:
+    """Comment-preserving single-key rewrite scoped to `header`'s section:
+    key inside the section -> substitute in place; section without the key ->
+    insert under the header; no section -> append a fresh one (a bare key at
+    EOF would land inside whatever table happens to be last)."""
+    span = _section_span(text, section_re)
+    if span:
+        start, end = span
+        body = text[start:end]
+        if key_re.search(body):
+            return text[:start] + _armed_sub(key_re, new_line, body, count=1) + text[end:]
+        return text[:start] + "\n" + new_line + text[start:]
     prefix = "" if not text or text.endswith("\n") else "\n"
-    return text + prefix + "[llm]\nllm_block_armed = true\n"
+    return text + prefix + header + "\n" + new_line + "\n"
+
+
+def _arm_root_key(text: str, key_re: re.Pattern, new_line: str) -> str:
+    """The same for a ROOT key, scoped to the span before the first header:
+    key at the root -> substitute in place; a section follows -> insert before
+    its header (appending at EOF would land the key inside the last table);
+    no sections -> append."""
+    start, end = _root_span(text)
+    body = text[start:end]
+    if key_re.search(body):
+        return text[:start] + _armed_sub(key_re, new_line, body, count=1) + text[end:]
+    if end < len(text):
+        return text[:end] + new_line + "\n" + text[end:]
+    prefix = "" if not text or text.endswith("\n") else "\n"
+    return text + prefix + new_line + "\n"
+
+
+def _report_misplaced(text: str, key_re: re.Pattern, span: tuple[int, int] | None,
+                      key: str, where: str) -> None:
+    """Name every same-named key the rewrite deliberately left alone. It is
+    the operator's text, so it is not deleted -- but ignoring it silently is
+    how a stray `= true` keeps looking armed. Only for the six uniquely-named
+    keys: `armed` under [llm.autolearn] is generic, and an `armed` in some
+    other table is legitimately somebody else's."""
+    for ln in _misplaced_lines(text, key_re, span):
+        print(f"aramid: arm: NOTE: `{key}` at line {ln} is outside {where}, where "
+              f"aramid never reads it -- left untouched; delete it to avoid confusion.",
+              file=sys.stderr)
+
+
+def _arm_llm_text(text: str) -> str:
+    return _arm_sectioned_key(text, _LLM_SECTION_RE, _LLM_KEY_RE,
+                              "llm_block_armed = true", "[llm]")
 
 
 def _arm_mutation_text(text: str) -> str:
-    """Comment-preserving single-key rewrite into the [mutation] table (mirrors
-    _arm_llm_text): key exists -> substitute; [mutation] section exists ->
-    insert the key under the header; neither -> append a fresh [mutation]
-    section. Never matches [js_mutation] (section regex anchors on [mutation])."""
-    if _MUT_KEY_RE.search(text):
-        return _armed_sub(_MUT_KEY_RE, "mutation_block_armed = true", text)
-    m = _MUT_SECTION_RE.search(text)
-    if m:
-        insert_at = m.end()
-        return text[:insert_at] + "\nmutation_block_armed = true" + text[insert_at:]
-    prefix = "" if not text or text.endswith("\n") else "\n"
-    return text + prefix + "[mutation]\nmutation_block_armed = true\n"
+    """Never matches [js_mutation]: the section regex anchors on [mutation]."""
+    return _arm_sectioned_key(text, _MUT_SECTION_RE, _MUT_KEY_RE,
+                              "mutation_block_armed = true", "[mutation]")
 
 
 def _arm_mutation_score_text(text: str) -> str:
-    """Comment-preserving single-key rewrite into the [mutation] table
-    (mirrors _arm_mutation_text): key exists -> substitute; [mutation]
-    section exists -> insert the key under the header; neither -> append a
-    fresh [mutation] section. score_block_armed is a globally unique key
-    name, so no section scoping is needed; _MUT_KEY_RE (literal
-    mutation_block_armed) can never match it and vice versa."""
-    if _SCORE_KEY_RE.search(text):
-        return _armed_sub(_SCORE_KEY_RE, "score_block_armed = true", text)
-    m = _MUT_SECTION_RE.search(text)
-    if m:
-        insert_at = m.end()
-        return text[:insert_at] + "\nscore_block_armed = true" + text[insert_at:]
-    prefix = "" if not text or text.endswith("\n") else "\n"
-    return text + prefix + "[mutation]\nscore_block_armed = true\n"
+    return _arm_sectioned_key(text, _MUT_SECTION_RE, _SCORE_KEY_RE,
+                              "score_block_armed = true", "[mutation]")
 
 
 def _arm_red_proof_text(text: str) -> str:
-    """Comment-preserving single-key rewrite into the [red_proof] table
-    (mirrors _arm_mutation_score_text): key exists -> substitute; [red_proof]
-    section exists -> insert the key under the header; neither -> append a
-    fresh [red_proof] section. red_proof_block_armed is a globally unique
-    key name, so no section scoping is needed."""
-    if _RP_KEY_RE.search(text):
-        return _armed_sub(_RP_KEY_RE, "red_proof_block_armed = true", text)
-    m = _RP_SECTION_RE.search(text)
-    if m:
-        insert_at = m.end()
-        return text[:insert_at] + "\nred_proof_block_armed = true" + text[insert_at:]
-    prefix = "" if not text or text.endswith("\n") else "\n"
-    return text + prefix + "[red_proof]\nred_proof_block_armed = true\n"
+    return _arm_sectioned_key(text, _RP_SECTION_RE, _RP_KEY_RE,
+                              "red_proof_block_armed = true", "[red_proof]")
 
 
 def _arm_autolearn_text(text: str) -> str:
-    """Comment-preserving single-key rewrite, mirroring _arm_llm_text -- but
-    `armed` is a generic key name, so the substitution is SCOPED to the
-    [llm.autolearn] section's span (an `armed =` in any other table is
-    never touched)."""
-    m = _AL_SECTION_RE.search(text)
-    if m:
-        nxt = _NEXT_SECTION_RE.search(text, m.end())
-        span_end = nxt.start() if nxt else len(text)
-        section = text[m.end():span_end]
-        if _AL_KEY_RE.search(section):
-            return (text[:m.end()] + _armed_sub(_AL_KEY_RE, "armed = true",
-                                                section, count=1) + text[span_end:])
-        return text[:m.end()] + "\narmed = true" + text[m.end():]
-    prefix = "" if not text or text.endswith("\n") else "\n"
-    return text + prefix + "[llm.autolearn]\narmed = true\n"
+    """`armed` is a generic key name, so this one was scoped from the start;
+    it is now the same code path as the rest."""
+    return _arm_sectioned_key(text, _AL_SECTION_RE, _AL_KEY_RE,
+                              "armed = true", "[llm.autolearn]")
 
 
 def _arm_shadow_text(text: str) -> str:
-    """Comment-preserving single-key rewrite into the [shadow] table (mirrors
-    _arm_red_proof_text): key exists -> substitute; [shadow] section exists ->
-    insert the key under the header; neither -> append a fresh [shadow]
-    section. shadow_block_armed is a globally unique key name, so no section
-    scoping is needed and no sibling regex can reach it."""
-    if _SHADOW_KEY_RE.search(text):
-        return _armed_sub(_SHADOW_KEY_RE, "shadow_block_armed = true", text)
-    m = _SHADOW_SECTION_RE.search(text)
-    if m:
-        insert_at = m.end()
-        return text[:insert_at] + "\nshadow_block_armed = true" + text[insert_at:]
-    prefix = "" if not text or text.endswith("\n") else "\n"
-    return text + prefix + "[shadow]\nshadow_block_armed = true\n"
+    return _arm_sectioned_key(text, _SHADOW_SECTION_RE, _SHADOW_KEY_RE,
+                              "shadow_block_armed = true", "[shadow]")
 
 
 def cmd_arm(root, llm: bool = False, autolearn: bool = False, tdd: bool = False,
@@ -206,6 +225,8 @@ def cmd_arm(root, llm: bool = False, autolearn: bool = False, tdd: bool = False,
 
     if llm:
         toml_path.write_text(_arm_llm_text(text), encoding="utf-8")
+        _report_misplaced(text, _LLM_KEY_RE, _section_span(text, _LLM_SECTION_RE),
+                          "llm_block_armed", "[llm]")
         print(f"aramid: arm: llm_block_armed=true written to {toml_path}")
         print("aramid: arm: LLM bake ended -- confirmed-CRITICAL llm-review "
               "findings now BLOCK at pre-push.")
@@ -213,6 +234,8 @@ def cmd_arm(root, llm: bool = False, autolearn: bool = False, tdd: bool = False,
 
     if mutation:
         toml_path.write_text(_arm_mutation_text(text), encoding="utf-8")
+        _report_misplaced(text, _MUT_KEY_RE, _section_span(text, _MUT_SECTION_RE),
+                          "mutation_block_armed", "[mutation]")
         print(f"aramid: arm: mutation_block_armed=true written to {toml_path}")
         print("aramid: arm: mutation bake ended -- surviving-mutant findings "
               "now BLOCK at pre-push.")
@@ -220,6 +243,8 @@ def cmd_arm(root, llm: bool = False, autolearn: bool = False, tdd: bool = False,
 
     if mutation_score:
         toml_path.write_text(_arm_mutation_score_text(text), encoding="utf-8")
+        _report_misplaced(text, _SCORE_KEY_RE, _section_span(text, _MUT_SECTION_RE),
+                          "score_block_armed", "[mutation]")
         print(f"aramid: arm: score_block_armed=true written to {toml_path}")
         print("aramid: arm: mutation-score bake ended -- transition "
               "regressions now BLOCK at pre-push.")
@@ -227,6 +252,8 @@ def cmd_arm(root, llm: bool = False, autolearn: bool = False, tdd: bool = False,
 
     if red_proof:
         toml_path.write_text(_arm_red_proof_text(text), encoding="utf-8")
+        _report_misplaced(text, _RP_KEY_RE, _section_span(text, _RP_SECTION_RE),
+                          "red_proof_block_armed", "[red_proof]")
         print(f"aramid: arm: red_proof_block_armed=true written to {toml_path}")
         print("aramid: arm: red-first bake ended -- never-red test findings "
               "now BLOCK at pre-push.")
@@ -234,6 +261,8 @@ def cmd_arm(root, llm: bool = False, autolearn: bool = False, tdd: bool = False,
 
     if shadow:
         toml_path.write_text(_arm_shadow_text(text), encoding="utf-8")
+        _report_misplaced(text, _SHADOW_KEY_RE, _section_span(text, _SHADOW_SECTION_RE),
+                          "shadow_block_armed", "[shadow]")
         print(f"aramid: arm: shadow_block_armed=true written to {toml_path}")
         # NOT "at pre-push" like its siblings: `shadow` is in _GATE_TOOLS for
         # PRE_COMMIT as well, so arming it changes what happens at COMMIT time.
@@ -243,33 +272,17 @@ def cmd_arm(root, llm: bool = False, autolearn: bool = False, tdd: bool = False,
         return 0
 
     if tdd:
-        if _TDD_KEY_RE.search(text):
-            new_text = _armed_sub(_TDD_KEY_RE, "tdd_block_armed = true", text)
-        else:
-            m = _NEXT_SECTION_RE.search(text)
-            if m:
-                new_text = (text[:m.start()] + "tdd_block_armed = true\n" + text[m.start():])
-            else:
-                prefix = "" if not text or text.endswith("\n") else "\n"
-                new_text = text + prefix + "tdd_block_armed = true\n"
+        new_text = _arm_root_key(text, _TDD_KEY_RE, "tdd_block_armed = true")
+        _report_misplaced(text, _TDD_KEY_RE, _root_span(text),
+                          "tdd_block_armed", "the root table")
         toml_path.write_text(new_text, encoding="utf-8")
         print(f"aramid: arm: tdd_block_armed=true written to {toml_path}")
         print("aramid: arm: TDD bake ended -- code-without-test findings now BLOCK at pre-push.")
         return 0
 
-    if _KEY_RE.search(text):
-        new_text = _armed_sub(_KEY_RE, "semgrep_block_armed = true", text)
-    else:
-        m = _NEXT_SECTION_RE.search(text)
-        if m:
-            # A bare key appended at EOF would land inside whatever [table]
-            # happens to be last (e.g. the [llm] section arm --llm writes) --
-            # a ROOT key must be inserted before the first section header.
-            new_text = (text[:m.start()] + "semgrep_block_armed = true\n"
-                        + text[m.start():])
-        else:
-            prefix = "" if not text or text.endswith("\n") else "\n"
-            new_text = text + prefix + "semgrep_block_armed = true\n"
+    new_text = _arm_root_key(text, _KEY_RE, "semgrep_block_armed = true")
+    _report_misplaced(text, _KEY_RE, _root_span(text),
+                      "semgrep_block_armed", "the root table")
 
     toml_path.write_text(new_text, encoding="utf-8")
     print(f"aramid: arm: semgrep_block_armed=true written to {toml_path}")
