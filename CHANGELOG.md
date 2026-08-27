@@ -10,6 +10,8 @@ to publish a tag that disagrees with it.
 
 ## [Unreleased]
 
+## [0.5.0] — 2026-08-27
+
 ### Added
 
 - **`aramid arm --shadow`.** `shadow` was the only armable consumer with no CLI
@@ -56,6 +58,20 @@ to publish a tag that disagrees with it.
   measures whether a bare child on the running machine is a different program
   and SKIPS BY NAME where it is not (an editable install), so a vacuous
   identity test is reported rather than counted as a pass.
+
+- **The launch guard flagged prose that cites the hazard as the hazard.**
+  `tests/unit/test_launch_shadowing.py` (0.4.1) excluded docstrings and nothing
+  else, so the first runtime string to *mention* `python -m aramid` -- the
+  `arm --shadow` help text and its confirmation message -- was reported as an
+  unguarded launch and blocked a correct commit. The discriminator is now
+  mechanical rather than a list of exemptions: in `sh` a backtick is command
+  substitution, so no real launch template can wrap its own command in a pair
+  of them, and every prose mention does. Measured before relying on it (zero
+  of the real templates contain one; three of three prose mentions do),
+  applied per occurrence so a line that cites AND launches is still checked,
+  and it fails closed on an unbalanced count. Because this *relaxes* a
+  security guard, all three real launch shapes were perturbed back to
+  unguarded and each was still caught.
 
 ## [0.4.1] — 2026-08-26
 
@@ -2973,7 +2989,8 @@ Stated plainly because each one changes how you should deploy this:
 - **PyPI publishing is not set up.** Install from a GitHub Release artifact or
   from git; `pip install aramid` does not work.
 
-[Unreleased]: https://github.com/jared0565/aramid/compare/v0.4.1...HEAD
+[Unreleased]: https://github.com/jared0565/aramid/compare/v0.5.0...HEAD
+[0.5.0]: https://github.com/jared0565/aramid/releases/tag/v0.5.0
 [0.4.1]: https://github.com/jared0565/aramid/releases/tag/v0.4.1
 [0.4.0]: https://github.com/jared0565/aramid/releases/tag/v0.4.0
 [0.3.1]: https://github.com/jared0565/aramid/releases/tag/v0.3.1
