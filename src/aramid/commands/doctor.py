@@ -255,28 +255,71 @@ def install_mode_lines(direct_url: str | None) -> list[str]:
     copies rather than links. `editable` is the discriminating key, not the
     presence of `dir_info`.
 
-    Advisory, never a failure, matching `divergence_lines` below: an operator
+    Advisory ON ITS OWN, matching `divergence_lines` below: an operator
     running an editable install on a machine with no consumers is doing
     something legitimate. What they should not have to do is guess that every
-    other repo is now running their working tree.
+    other repo is now running their working tree -- and once any repo IS
+    registered that guess is a fact, and doctor fails: see
+    `editable_consumers_lines`, the half of this check that exits 2.
     """
-    if not direct_url:
-        return []
-    try:
-        data = json.loads(direct_url)
-    except (ValueError, TypeError):
-        # doctor reports; it does not crash because a packaging file is odd.
-        # Silence can only UNDER-report here, since the case being detected
-        # has a positive marker rather than being the default.
-        return []
-    if not isinstance(data, dict) or not data.get("dir_info", {}).get("editable"):
+    source = _editable_source(direct_url)
+    if source is None:
         return []
     return [
-        f"  EDITABLE aramid is installed editable from {data.get('url', 'an unknown location')}",
+        f"  EDITABLE aramid is installed editable from {source}",
         "           every repo on this machine runs that working tree, including "
         "uncommitted edits",
         "           promote a built wheel instead (see RELEASING.md, "
         "\"Promoting a release to the live tool\")",
+    ]
+
+
+def _editable_source(direct_url: str | None) -> str | None:
+    """The `url` an EDITABLE install is live-linked to, else None.
+
+    Shared by the advisory notice and the consumer-gated failure so the two
+    cannot disagree about what "editable" means. Silence can only
+    UNDER-report here -- the case being detected has a positive marker
+    rather than being the default -- so an odd or unparseable packaging
+    file reads as "not editable": doctor reports, it does not crash because
+    a packaging file is odd."""
+    if not direct_url:
+        return None
+    try:
+        data = json.loads(direct_url)
+    except (ValueError, TypeError):
+        return None
+    if not isinstance(data, dict) or not data.get("dir_info", {}).get("editable"):
+        return None
+    return data.get("url") or "an unknown location"
+
+
+def editable_consumers_lines(direct_url: str | None, registered: list[dict]) -> list[str]:
+    """The failure half of `install_mode_lines`: the stderr line, and the
+    exit 2, for an editable live install on a machine that has consumers.
+
+    Every registered repo's hooks run `python -P -m aramid`, which resolves
+    to the LIVE install. When that install is editable, every one of those
+    gates executes this working tree -- uncommitted edits included -- and a
+    `doctor` that answers 0 is the same false green light the `unenforced`
+    branch already refuses to give. Ledger 53073121 / 02e89b6e, which
+    argued (correctly) that `promote_live.py` refusing the state at
+    promotion time protects nothing against a later `pip install -e .`.
+
+    The repo being doctored counts: its own hooks are consumers too. An
+    unreadable registry reads as empty, and `load_registry` says so on
+    stderr -- the direction it takes everywhere, kept here rather than
+    inventing a stricter one for a file that is loud about being broken.
+    """
+    if _editable_source(direct_url) is None or not registered:
+        return []
+    n = len(registered)
+    return [
+        f"aramid: doctor: aramid is installed EDITABLE while {n} registered "
+        "repo(s) run it -- every one of their hooks executes this working "
+        "tree, uncommitted edits included. Promote a built wheel: "
+        "`python scripts/promote_live.py <version>` (RELEASING.md, "
+        '"Promoting a release to the live tool").',
     ]
 
 
@@ -768,6 +811,16 @@ def cmd_doctor(root: Path, fix: bool = False) -> int:
     docstring). A repo with no test suite, or with `[tests].enabled =
     false`, is a legitimate state and never contributes here.
 
+    Also returns 2 when aramid ITSELF is installed editable while any repo
+    is registered (`editable_consumers_lines`): every registered repo's
+    hooks resolve `python -P -m aramid` to the live install, so an editable
+    live install gates all of them with this working tree. Advisory with
+    nothing registered (`install_mode_lines`), a failure the moment
+    something is -- the same widening of 2 as "configured but not
+    enforced", and for the same reason: 0 would be a false green light.
+    `init` prints this report but keys on `probe_toolchain` directly, so
+    onboarding is unaffected.
+
     [review] Also returns 3 -- the "engine or config error" tier used
     throughout this codebase (cli.py's argparse-failure remap;
     cmd_status's identical `except Exception: ... return 3` around this
@@ -822,7 +875,8 @@ def cmd_doctor(root: Path, fix: bool = False) -> int:
     for s in probe_deps(root):
         print(_report_line(s))
     print(_report_line(statuses["interpreter"]))
-    for line in install_mode_lines(_installed_direct_url()):
+    direct_url = _installed_direct_url()
+    for line in install_mode_lines(direct_url):
         print(line)
     for line in divergence_lines():
         print(line)
@@ -837,6 +891,11 @@ def cmd_doctor(root: Path, fix: bool = False) -> int:
     unenforced = probe_enforcement(root)
     if unenforced:
         print(f"aramid: doctor: {unenforced}", file=sys.stderr)
+
+    from aramid import registry as registry_mod
+    editable_gate = editable_consumers_lines(direct_url, registry_mod.load_registry())
+    for line in editable_gate:
+        print(line, file=sys.stderr)
 
     if config_error is not None:
         print(f"aramid: doctor: aramid.toml is unparseable -- {config_error} "
@@ -860,6 +919,8 @@ def cmd_doctor(root: Path, fix: bool = False) -> int:
 
     if unenforced:
         return 2                        # tools fine, but nothing is gating
+    if editable_gate:
+        return 2                        # tools fine, but the gate is a working tree
 
     warn_tests = [s for s in test_statuses if s.warn]
     for s in warn_tests:

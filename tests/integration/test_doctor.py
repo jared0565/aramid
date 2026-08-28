@@ -672,3 +672,96 @@ def test_no_detectable_suite_does_not_change_doctor_exit_code(
     capsys.readouterr()
 
     assert code == 0
+
+
+# --- an EDITABLE live install with registered repos is a failure -----------
+#
+# `install_mode_lines` reports an editable aramid and, on its own, never
+# fails: an operator with an editable install and NO consumers is doing
+# something legitimate. The moment a repo is registered that stops being
+# true -- its hooks run `python -P -m aramid`, which resolves to the live
+# install, which is this working tree, uncommitted edits included. That is
+# the state every consumer's gate is compromised in, and `doctor` answering
+# 0 to it was a false green light of exactly the kind its `unenforced`
+# branch already refuses to give. Ledger 53073121 / 02e89b6e.
+#
+# Both inputs are seamed: the probe (`_installed_direct_url`) because CI
+# installs this checkout editable and would otherwise decide these tests
+# by its own install mode, and the registry via the autouse isolation.
+
+_EDITABLE_DIRECT_URL = ('{"url": "file:///F:/Projects/aramid", '
+                        '"dir_info": {"editable": true}}')
+_WHEEL_DIRECT_URL = ('{"url": "file:///tmp/aramid-0.5.1-py3-none-any.whl", '
+                     '"archive_info": {"hash": "sha256=abc"}}')
+
+
+def _register(tmp_path, *names):
+    from aramid import registry
+    for name in names:
+        p = tmp_path / name
+        p.mkdir(exist_ok=True)
+        registry.register(p, "2026-08-28T00:00:00+00:00")
+
+
+def test_editable_install_with_registered_repos_returns_2_and_names_the_remedy(
+        tmp_path, monkeypatch, capsys):
+    monkeypatch.setattr(doctor, "probe_toolchain", lambda r: _all_present())
+    monkeypatch.setattr(doctor, "_installed_direct_url", lambda: _EDITABLE_DIRECT_URL)
+    _register(tmp_path, "consumer-a", "consumer-b")
+
+    rc = doctor.cmd_doctor(_repo(tmp_path))
+    out = capsys.readouterr()
+
+    assert rc == 2
+    assert "EDITABLE" in out.out, "the advisory notice still prints"
+    assert ("aramid: doctor: aramid is installed EDITABLE while 2 registered "
+            "repo(s) run it") in out.err
+    assert "promote_live.py" in out.err, "the remedy is named, not implied"
+
+
+def test_editable_install_with_nothing_registered_stays_advisory(
+        tmp_path, monkeypatch, capsys):
+    """The docstring's own words: no consumers, nothing compromised."""
+    monkeypatch.setattr(doctor, "probe_toolchain", lambda r: _all_present())
+    monkeypatch.setattr(doctor, "_installed_direct_url", lambda: _EDITABLE_DIRECT_URL)
+
+    rc = doctor.cmd_doctor(_repo(tmp_path))
+    out = capsys.readouterr()
+
+    assert rc == 0
+    assert "EDITABLE" in out.out
+    assert "registered" not in out.err
+
+
+def test_a_promoted_wheel_with_registered_repos_is_not_flagged(
+        tmp_path, monkeypatch, capsys):
+    """The promoted state -- `archive_info`, no `dir_info` -- with consumers
+    is exactly what the machine should look like."""
+    monkeypatch.setattr(doctor, "probe_toolchain", lambda r: _all_present())
+    monkeypatch.setattr(doctor, "_installed_direct_url", lambda: _WHEEL_DIRECT_URL)
+    _register(tmp_path, "consumer-a")
+
+    rc = doctor.cmd_doctor(_repo(tmp_path))
+    out = capsys.readouterr()
+
+    assert rc == 0
+    assert "EDITABLE" not in out.out + out.err
+
+
+def test_the_repo_being_doctored_counts_as_a_registered_consumer(
+        tmp_path, monkeypatch, capsys):
+    """Registering only the checkout itself still fails. Its own hooks run
+    the live install too, and an editable live install makes them gate the
+    working tree with the working tree -- the state this repo's own history
+    calls a hazard, not a dogfooding convenience."""
+    monkeypatch.setattr(doctor, "probe_toolchain", lambda r: _all_present())
+    monkeypatch.setattr(doctor, "_installed_direct_url", lambda: _EDITABLE_DIRECT_URL)
+    root = _repo(tmp_path)
+    from aramid import registry
+    registry.register(root, "2026-08-28T00:00:00+00:00")
+
+    rc = doctor.cmd_doctor(root)
+    out = capsys.readouterr()
+
+    assert rc == 2
+    assert "while 1 registered repo(s) run it" in out.err

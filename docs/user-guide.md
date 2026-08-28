@@ -382,7 +382,7 @@ aramid doctor
 
 Probes `gitleaks`, `semgrep`, `ruff`, `pip-audit` (each via `<exe> --version`, never raising), plus the interpreter path baked into the installed pre-commit shim. Also prints LLM-provider probe lines (`claude`/`codex` CLIs on PATH, `OPENROUTER_API_KEY`/`OLLAMA_API_KEY` env presence, this-month OpenRouter spend) and an autolearn state-health line — all informational, none of it affects the exit code.
 
-Exit is `0` if both BLOCK-tier tools (gitleaks, semgrep) are present, `2` if either is missing. WARN-tier tool absence (ruff, pip-audit) never changes the exit code.
+Exit is `0` if both BLOCK-tier tools (gitleaks, semgrep) are present, `2` if either is missing. WARN-tier tool absence (ruff, pip-audit) never changes the exit code. Exit is also `2` when the repo is configured but its hooks are not installed ("configured but NOT enforced"), when a detected test suite's own tool cannot be resolved, and when **aramid itself is installed editable while any repo is registered** — every registered repo's hooks then run that working tree, uncommitted edits included; the `EDITABLE` notice alone (nothing registered) stays advisory. The remedy for the last is to promote a built wheel (`scripts/promote_live.py`, see RELEASING.md).
 
 ```powershell
 aramid doctor --fix

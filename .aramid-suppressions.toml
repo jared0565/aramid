@@ -242,13 +242,6 @@ path = "src/aramid/mutation_gate.py"
 reason = "DOCUMENTED RESIDUAL, not a discovery. The finding restates residual 1 of the two the resolver's own docstring names ('TWO RESIDUALS, both accepted ... State them rather than discover them'): `test_<stem>_*` cannot tell duplicate stems apart, and no such duplicate exists in this repo. The docstring also gives the reason the proposed fix (package-qualified stems) was not taken: it would break the plain `test_<module>.py` form most repos use. The liberal direction is the licensed one -- a wrong resolve lets a test-gap slip until the re-drain re-reports it."
 
 [[suppress]]
-id = "530731212c1067911ac601b6ca0a1efe839816868ff074bd027cc3eb583f1666"
-tool = "llm-review"
-rule = "llm/a05"
-path = "src/aramid/commands/doctor.py"
-reason = "DELIBERATELY ADVISORY, at the cited line. `editable_install_lines` reports and never fails, matching `divergence_lines` beside it, because an editable install on a machine with no consumers is legitimate (the docstring's own words). The premise is right -- an editable live install does compromise every consumer's gate -- and the alternative the note proposes (non-zero only when consumers are onboarded, e.g. other repos in ~/.aramid/repos.toml) is sound but changes doctor's exit-code contract, which other agents run in automation; that is a design decision to take on the channel, not a defect to patch. promote_live.py now refuses the same state at promotion time (0.5.0+1), which is where it actually bites."
-
-[[suppress]]
 id = "a3dde01524dfb0892c7bfd94e82f80a0e0e52d292dea650d6749c45e8710d6db"
 tool = "llm-review"
 rule = "llm/a05"

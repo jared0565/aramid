@@ -10,6 +10,23 @@ to publish a tag that disagrees with it.
 
 ## [Unreleased]
 
+### Changed
+
+- **`aramid doctor` exits 2 when aramid itself is installed editable while
+  any repo is registered.** Every registered repo's hooks resolve
+  `python -P -m aramid` to the live install, so an editable live install
+  gates all of them with a working tree, uncommitted edits included -- the
+  state this project's own history calls a hazard. The `EDITABLE` notice was
+  advisory because an editable install on a machine with no consumers is
+  legitimate; it still is, and stays advisory with nothing registered. With
+  consumers it now fails, the same widening of exit 2 as "configured but not
+  enforced" and for the same reason: 0 was a false green light. The stderr
+  line names the registered count and the remedy (`scripts/promote_live.py`).
+  `init` prints doctor's report but keys on the toolchain probe directly, so
+  onboarding is unchanged. Raised by the llm-review consumer twice (ledger
+  53073121, then 02e89b6e disputing the suppression of the first); the
+  suppression is retired with this change.
+
 ### Fixed
 
 - **`aramid resolvers` graded the python `mutant_killed` resolver nowhere,

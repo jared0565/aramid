@@ -16,7 +16,7 @@ from pathlib import Path
 import pytest
 
 import aramid
-from aramid import autolearn, config, toolpath
+from aramid import autolearn, config, registry, toolpath
 
 
 @pytest.fixture
@@ -43,6 +43,23 @@ def recent_iso() -> str:
 def _isolated_autolearn_state(tmp_path, monkeypatch):
     monkeypatch.setattr(autolearn, "state_path",
                         lambda: tmp_path / "autolearn_state.json")
+
+
+@pytest.fixture(autouse=True)
+def _isolated_registry(tmp_path, monkeypatch):
+    """Keep `registry.registry_path()` off the real `~/.aramid/repos.toml`.
+
+    Lived in tests/integration/conftest.py while only `cmd_init` (register)
+    and `cmd_uninstall` (deregister) touched the registry -- a WRITE seam,
+    guarding the developer's real file from the suite. `doctor` now READS it
+    too: an editable live install fails doctor only when repos are
+    registered, so a unit test calling `cmd_doctor` on a machine with real
+    consumers and an editable install would see exit 2 while CI (empty home,
+    editable checkout) sees 0. Same class as the three fixtures below: real
+    machine state deciding a test. Repo-wide, like them. A later
+    `monkeypatch.setattr(registry, "registry_path", ...)` in a test body
+    still wins."""
+    monkeypatch.setattr(registry, "registry_path", lambda: tmp_path / "repos.toml")
 
 
 @pytest.fixture(autouse=True)
