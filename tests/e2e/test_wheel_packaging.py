@@ -43,6 +43,9 @@ import zipfile
 from pathlib import Path
 
 import pytest
+from packaging.version import Version
+
+import aramid
 
 REPO = Path(__file__).resolve().parents[2]
 PKG = REPO / "src" / "aramid"
@@ -79,20 +82,27 @@ def test_the_glob_list_here_matches_the_one_pyproject_declares():
         f"test keeps checking all of them: {patterns}")
 
 
-def test_every_packaged_data_file_is_present_in_the_built_wheel(tmp_path):
-    expected = _expected_members()
-    assert expected, "no data files matched the globs -- the test would be vacuous"
-
+@pytest.fixture(scope="module")
+def built_wheel(tmp_path_factory) -> Path:
+    """One real `python -m build --wheel` for every test in this module --
+    ~15 s once, and every assertion below reads the SAME artifact."""
+    outdir = tmp_path_factory.mktemp("wheel")
     build = subprocess.run(  # noqa: S603
-        [sys.executable, "-m", "build", "--wheel", "--outdir", str(tmp_path)],
+        [sys.executable, "-m", "build", "--wheel", "--outdir", str(outdir)],
         cwd=REPO, capture_output=True, text=True)
     if build.returncode != 0:
         pytest.fail("wheel build failed:\n"
                     f"{build.stdout[-2000:]}\n{build.stderr[-2000:]}")
-
-    wheels = list(tmp_path.glob("*.whl"))
+    wheels = list(outdir.glob("*.whl"))
     assert len(wheels) == 1, f"expected exactly one wheel, got {wheels}"
-    with zipfile.ZipFile(wheels[0]) as zf:
+    return wheels[0]
+
+
+def test_every_packaged_data_file_is_present_in_the_built_wheel(built_wheel):
+    expected = _expected_members()
+    assert expected, "no data files matched the globs -- the test would be vacuous"
+
+    with zipfile.ZipFile(built_wheel) as zf:
         members = set(zf.namelist())
 
     missing = sorted(expected - members)
@@ -100,3 +110,35 @@ def test_every_packaged_data_file_is_present_in_the_built_wheel(tmp_path):
         f"data files declared in pyproject are absent from the wheel: {missing}. "
         "aramid loads these by path at runtime, so the installed package would "
         "start cleanly and be unable to do its job.")
+
+
+def test_the_wheel_metadata_version_is_the_source_dunder_version(built_wheel):
+    """`pyproject.toml` declares `dynamic = ["version"]` reading
+    `aramid.__version__`. If that attr reference breaks, setuptools falls back
+    to a different string and the published wheel disagrees with the code
+    inside it -- silent, and visible only after shipping.
+
+    THIS is where that belongs: the artifact, built from this tree, compared
+    with this tree. The unit-level guard in tests/unit/test_version.py can
+    only compare the tree with whatever distribution `importlib.metadata`
+    answers for -- in this checkout the regenerated egg-info, but in a FRESH
+    WORKTREE the promoted wheel in site-packages -- and that comparison turned
+    the mutation consumer's baseline red for a whole release window
+    (2026-08-28: three drains, 1452 passed, that one test failed). It now
+    skips when the answering distribution is not the imported tree's, and
+    points here.
+
+    Parsed rather than string-compared: setuptools normalises `0.1.0-rc1` to
+    `0.1.0rc1` in the metadata. Teeth proven by perturbation before commit:
+    with `dynamic` replaced by a static `version = "9.9.9"` this fails."""
+    with zipfile.ZipFile(built_wheel) as zf:
+        metadata = [n for n in zf.namelist() if n.endswith(".dist-info/METADATA")]
+        assert len(metadata) == 1, metadata
+        text = zf.read(metadata[0]).decode("utf-8")
+    versions = [ln.split(":", 1)[1].strip()
+                for ln in text.splitlines() if ln.startswith("Version:")]
+    assert len(versions) == 1, versions
+    assert Version(versions[0]) == Version(aramid.__version__), (
+        f"the wheel's METADATA says {versions[0]!r} but the source it was built "
+        f"from says {aramid.__version__!r} -- the dynamic-version wiring in "
+        "pyproject.toml is broken")

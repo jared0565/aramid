@@ -29,6 +29,22 @@ to publish a tag that disagrees with it.
 
 ### Fixed
 
+- **The mutation consumer's baseline no longer depends on which wheel is
+  promoted.** `tests/unit/test_version.py::test_installed_metadata_matches_dunder_version`
+  compared the tree's `__version__` with whatever distribution
+  `importlib.metadata` answered for. In the checkout that is the regenerated
+  egg-info; in a fresh drain worktree there is none, so the promoted wheel
+  answered and the suite went red at every promotion for every queued item
+  whose head predated it -- three drains on 2026-08-28 reported "baseline
+  failing" over 1452 passing tests and one machine-shaped comparison, and
+  three at one head trips the consumer's give-up. The guard now skips, naming
+  both paths, unless the answering distribution describes the imported tree
+  (metadata beside the package, or an editable install of this tree -- the
+  CI shape, pinned hermetically); the artifact assertion moved to
+  `tests/e2e/test_wheel_packaging.py`, where the wheel is compared with the
+  tree it was built from (perturbation-proven: a static `version = "9.9.9"`
+  fails it).
+
 - **`aramid resolvers` graded the python `mutant_killed` resolver nowhere,
   and now cannot lose a resolver that way again.** `consumers/mutation.py`
   claims `Repaired(tool="mutation", reason="mutant_killed")` and
