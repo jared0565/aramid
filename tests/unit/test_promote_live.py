@@ -151,3 +151,35 @@ def test_post_install_fails_if_what_is_live_is_still_editable(
     assert rc == 3
     assert "FAILED" in out.err and "editable" in out.err, out.err
     assert "Consumers now run" not in out.out
+
+# --- what the operator reads --------------------------------------------------
+
+def test_help_leads_with_the_scripts_purpose(pl, monkeypatch, capsys):
+    """The argparse description is the docstring's FIRST line; the second is
+    blank. A `--help` that opens with an empty description is the mutant."""
+    monkeypatch.setattr(sys, "argv", ["promote_live.py", "--help"])
+    with pytest.raises(SystemExit) as exc:
+        pl.main()
+    assert exc.value.code == 0
+    out = capsys.readouterr().out
+    assert "Promote a released aramid to the LIVE tool" in out
+
+
+def test_a_failed_probe_is_reported_as_not_installed(pl, monkeypatch, capsys):
+    """`None or 'not installed'` / `None or '-'`: the two lines an operator
+    reads first. Under `and` they would print `None`."""
+    rc, calls = _main(pl, monkeypatch, ["0.5.0"], [(None, None, None)])
+    out = capsys.readouterr().out
+    assert "live now : not installed" in out
+    assert "           -" in out
+    assert calls, "an unknown live state must still go on to promote"
+
+
+def test_a_known_live_version_is_printed_not_a_placeholder(
+        pl, monkeypatch, tmp_path, capsys):
+    """The other direction of the same `or`: with a real version, `and` would
+    print the placeholder instead of the version."""
+    rc, _ = _main(pl, monkeypatch, ["0.5.0"], [("0.4.1", _outside(tmp_path), False)])
+    out = capsys.readouterr().out
+    assert "live now : 0.4.1" in out
+    assert _outside(tmp_path) in out
