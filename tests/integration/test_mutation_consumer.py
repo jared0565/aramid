@@ -1270,3 +1270,176 @@ def test_this_repos_mutation_baseline_is_not_the_whole_tree(monkeypatch, tmp_pat
     assert mutation_argv != gate_argv, (
         "mutation's baseline is the gate's whole-tree suite again; its budget "
         f"cannot fit it: {mutation_argv}")
+
+
+# --- re-test OPEN survivors when a test file changes -------------------------
+#
+# A survivor is recorded at head N. At head N+1 the only change is a NEW TEST
+# that kills it. Nothing in the item's range is a python source file, so before
+# this the item returned "no python files in range" and the survivor stayed
+# open for good: `mutant_killed` never got a chance, and the gate's
+# `gap_addressed` needs a test-stem mapping that ordinary test names do not
+# satisfy (this repo: `test_runner_shadow.py` vs `runners/shadow.py`, killed
+# by perturbation on 2026-08-28 and unclosable). THE SUITE IS THE MAPPING:
+# regenerate the recorded mutant from its fingerprint and put it through the
+# same stage-1 / full-suite confirmation path a fresh mutant gets. A kill
+# claimed here is exactly the claim stage 2 already makes.
+
+KILLER = ("from calc import is_adult\n"
+          "def test_boundary_elsewhere():\n"
+          "    assert is_adult(18) is True\n"
+          "    assert is_adult(17) is False\n"
+          "    assert is_adult(19) is True\n")
+HARMLESS = ("from calc import is_adult\n"
+            "def test_still_weak():\n"
+            "    assert is_adult(50) in (True, False)\n")
+
+
+def _ids_of(r, findings) -> set[str]:
+    lines = (r / "calc.py").read_text(encoding="utf-8").splitlines()
+    return {mut_consumer._mutant_fp(f.file, f.rule, f.line, lines) for f in findings}
+
+
+def _record_open_survivors(r, res) -> set[str]:
+    """Write the run's confirmed survivors into the ledger as OPEN findings
+    under the ids the drain would give them (`_mutant_fp` is the same
+    `compute_fingerprint` call `normalize` makes), and return those ids."""
+    from aramid.models import Finding, Gate, Severity, Verdict
+    lines = (r / "calc.py").read_text(encoding="utf-8").splitlines()
+    found = [Finding(id=mut_consumer._mutant_fp(f.file, f.rule, f.line, lines),
+                     tool="mutation", rule=f.rule, severity_raw="medium",
+                     severity=Severity.MEDIUM, verdict=Verdict.WARN, file=f.file,
+                     line=f.line, message=f.message, evidence="", gate=Gate.ALL)
+             for f in res.findings]
+    led = Ledger(r / ".aramid" / "ledger.db")
+    try:
+        led.record_run("seed", "2026-08-28T00:00:00+00:00", "drain",
+                       {"mutation"}, {"calc.py"}, found)
+    finally:
+        led.close()
+    return {f.id for f in found}
+
+
+def _commit_file(r, rel, body) -> str:
+    (r / rel).write_text(body, encoding="utf-8")
+    _git(r, "add", "-A")
+    _git(r, "commit", "-q", "-m", f"add {rel}")
+    return _sha(r)
+
+
+def _with_recorded_survivors(tmp_path, monkeypatch):
+    r, base, head = _repo(tmp_path, WEAK_TEST)
+    res = _consume(r, base, head, monkeypatch, tmp_path)
+    ids = _record_open_survivors(r, res)
+    assert ids, "the weak suite must leave a confirmed survivor to re-test"
+    return r, head, ids
+
+
+def test_a_new_test_that_kills_a_recorded_survivor_claims_it(tmp_path, monkeypatch):
+    r, head, ids = _with_recorded_survivors(tmp_path, monkeypatch)
+    head2 = _commit_file(r, "tests/test_other.py", KILLER)
+
+    res = _consume(r, head, head2, monkeypatch, tmp_path, item_id="q2")
+
+    assert res.state == "ok", res.note
+    assert res.repaired is not None and set(res.repaired.ids) == ids, (res.repaired, ids)
+    assert res.extra["retested"] == len(ids)
+    assert res.extra["retest_killed"] == len(ids)
+    assert f"re-tested {len(ids)} of {len(ids)} open survivor(s), {len(ids)} killed" in res.note
+    assert _no_worktrees(r)
+
+
+def test_a_new_test_that_kills_nothing_claims_nothing_and_reconfirms(tmp_path, monkeypatch):
+    r, head, ids = _with_recorded_survivors(tmp_path, monkeypatch)
+    head2 = _commit_file(r, "tests/test_other.py", HARMLESS)
+
+    res = _consume(r, head, head2, monkeypatch, tmp_path, item_id="q2")
+
+    assert res.repaired is None
+    assert res.extra["retested"] == len(ids)
+    assert res.extra["retest_killed"] == 0
+    assert _ids_of(r, res.findings) == ids, "still surviving: re-reported under the same ids"
+
+
+def test_a_push_that_touches_no_test_spends_nothing_on_retests(tmp_path, monkeypatch):
+    """Docs-only push with survivors on the books: no baseline, no mutants,
+    and the note is the one the item always had."""
+    r, head, ids = _with_recorded_survivors(tmp_path, monkeypatch)
+    head2 = _commit_file(r, "README.md", "docs only\n")
+    calls = []
+    real = mut_consumer.run_subprocess
+
+    def spy(*a, **k):
+        calls.append(a)
+        return real(*a, **k)
+    monkeypatch.setattr(mut_consumer, "run_subprocess", spy)
+
+    res = _consume(r, head, head2, monkeypatch, tmp_path, item_id="q2")
+
+    assert res.note == "no python files in range"
+    assert calls == [], "nothing changed that could kill anything, so nothing runs"
+
+
+def test_retest_cap_bounds_the_hygiene_pass_and_says_so(tmp_path, monkeypatch):
+    r, head, ids = _with_recorded_survivors(tmp_path, monkeypatch)
+    assert len(ids) >= 2, "fixture must leave at least two survivors for a cap of 1 to bite"
+    toml = r / "aramid.toml"
+    toml.write_text(toml.read_text(encoding="utf-8") + "retest_cap = 1\n", encoding="utf-8")
+    head2 = _commit_file(r, "tests/test_other.py", KILLER)
+
+    res = _consume(r, head, head2, monkeypatch, tmp_path, item_id="q2")
+
+    assert res.extra["retested"] == 1
+    assert res.extra["retest_truncated"] is True
+    assert f"re-tested 1 of {len(ids)} open survivor(s), 1 killed" in res.note
+
+
+def test_retests_can_be_switched_off(tmp_path, monkeypatch):
+    r, head, ids = _with_recorded_survivors(tmp_path, monkeypatch)
+    toml = r / "aramid.toml"
+    toml.write_text(toml.read_text(encoding="utf-8") + "retest_open_survivors = false\n",
+                    encoding="utf-8")
+    head2 = _commit_file(r, "tests/test_other.py", KILLER)
+
+    res = _consume(r, head, head2, monkeypatch, tmp_path, item_id="q2")
+
+    assert res.note == "no python files in range"
+    assert res.repaired is None
+
+
+def test_a_suppressed_survivor_is_not_retested(tmp_path, monkeypatch):
+    """An `equivalent mutant` suppression says "unkillable"; re-testing it
+    would burn a full-suite run per drain forever and could never claim."""
+    r, head, ids = _with_recorded_survivors(tmp_path, monkeypatch)
+    fid = sorted(ids)[0]
+    (r / ".aramid-suppressions.toml").write_text(
+        f'[[suppress]]\nid = "{fid}"\ntool = "mutation"\nrule = "x"\n'
+        'path = "calc.py"\nreason = "equivalent mutant"\n', encoding="utf-8")
+    head2 = _commit_file(r, "tests/test_other.py", KILLER)
+
+    res = _consume(r, head, head2, monkeypatch, tmp_path, item_id="q2")
+
+    assert res.extra["retested"] == len(ids) - 1
+    assert res.repaired is not None and fid not in res.repaired.ids
+    assert set(res.repaired.ids) == ids - {fid}
+
+
+def test_a_survivor_whose_line_changed_is_left_to_the_gate_resolvers():
+    """The fingerprint is keyed on the line's CONTENT, not its number. So a
+    pure shift (a comment added above) still regenerates the SAME mutant --
+    the id follows the content, as the ledger's `finding_moved` already
+    assumes -- while a line that now says something else fingerprints to
+    nothing and the retest skips it: `gap_addressed` / `file_departed` own
+    that case. The first draft of this test asserted the opposite of the
+    shift and was refuted by the real fingerprint."""
+    from aramid import mutation
+    lines = ADULT.splitlines()
+    m = mutation.generate_mutants(ADULT, {2})[0]
+    fid = mut_consumer._mutant_fp("calc.py", m.op, m.line, lines)
+
+    assert mut_consumer._survivor_mutant("calc.py", m.line, fid, ADULT) is not None
+    shifted = "# a comment shifts every line\n" + ADULT
+    found = mut_consumer._survivor_mutant("calc.py", m.line, fid, shifted)
+    assert found is not None and found.line == m.line + 1, "same mutant, one line down"
+    rewritten = ADULT.replace("age >= 18", "age >= 21")
+    assert mut_consumer._survivor_mutant("calc.py", m.line, fid, rewritten) is None

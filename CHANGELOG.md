@@ -10,6 +10,26 @@ to publish a tag that disagrees with it.
 
 ## [Unreleased]
 
+### Added
+
+- **The mutation consumer re-tests recorded survivors when a test changes.**
+  A survivor recorded at one head was re-tested only when its own module
+  changed again, so the ordinary way a survivor dies -- someone writes the
+  test, in a test file, on a module the range never touches -- reached no
+  resolver: `mutant_killed` never got a run, and the gate's `gap_addressed`
+  needs a test-stem mapping plain names do not satisfy (`test_runner_shadow.py`
+  never maps to `runners/shadow.py`; that survivor was killed by perturbation
+  on 2026-08-28 and could not close). Now, when the item's range changes any
+  test file, open mutation survivors are regenerated from their fingerprints
+  and put through the identical stage-1 / full-suite confirmation path, and a
+  confirmed kill is claimed as `mutant_killed` -- the proof stage 2 already
+  makes, on the suite that defined the finding. Runs after the range's own
+  mutants, skips survivors bound by `.aramid-suppressions.toml` (an
+  equivalent-mutant entry says unkillable), leaves the range's mutation scores
+  untouched, and is bounded by `[mutation].retest_cap` (3) inside the item's
+  budget; `retest_open_survivors = false` switches it off. The note reads
+  `re-tested N of M open survivor(s), K killed`.
+
 ### Changed
 
 - **`aramid doctor` exits 2 when aramid itself is installed editable while

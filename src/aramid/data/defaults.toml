@@ -152,6 +152,13 @@ max_mutants = 20        # generated-and-tested per queue item
 wall_budget_s = 600     # whole-item wall clock for the mutant loop
 mutant_timeout_s = 120  # per pytest invocation (stage 1 and stage 2 alike)
 confirm_cap = 3         # full-suite confirmation runs per item
+# Re-test recorded OPEN survivors when a TEST file changes in the item's range:
+# the ordinary way a survivor dies is that someone writes the test, on a module
+# the range never touches, and only the suite can say so. Each re-test costs a
+# stage-1 run plus, usually, one full-suite confirmation (the same price a fresh
+# mutant pays); runs after the range's own mutants and stops at `retest_cap`.
+retest_open_survivors = true
+retest_cap = 3
 mutation_block_armed = false   # NEW (1b) -- arms surviving-mutant findings; see policy.classify
 score_block_armed = false      # NEW (2b) -- arms mutation-score transition regressions; see policy.classify
 

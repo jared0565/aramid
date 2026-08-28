@@ -558,6 +558,8 @@ max_mutants = 20
 wall_budget_s = 600
 mutant_timeout_s = 120
 confirm_cap = 3
+retest_open_survivors = true   # when a TEST file changes, re-test recorded open survivors
+retest_cap = 3                 # ...at most this many per item, after the range's own mutants
 ```
 
 Requirement: a pytest test stack must be detected — a real `test_*.py`, `*_test.py`, or `conftest.py` file; a bare `tests/` directory by itself no longer counts — otherwise it OK-skips permanently and harmlessly (`"no python test stack (mutation skipped)"`) rather than pinning the queue item forever.

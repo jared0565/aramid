@@ -100,6 +100,14 @@ def _maps_to_module(test_stem: str, module_path: str) -> bool:
     wrong resolve lets a test-gap slip until the re-drain re-reports it. The
     alternative -- full dotted-path matching -- would break the plain
     `test_<module>.py` form that most repos actually use.
+
+    The mapping's other blind spot -- a test whose stem maps to NOTHING
+    (`test_runner_shadow.py` for `runners/shadow.py`) -- is not patched here
+    with another naming rule. The mutation consumer covers it from the proof
+    side: when a test file changes, it regenerates each open survivor from its
+    fingerprint and re-runs it, claiming `mutant_killed` only on a confirmed
+    kill (`consumers/mutation.py`, `_retest_candidates`). A name is a guess;
+    the suite is the answer.
     """
     p = Path(module_path)
     module, parent = p.stem, p.parent.name
