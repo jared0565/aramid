@@ -640,7 +640,9 @@ def test_status_points_at_a_dead_resolver(tmp_path, monkeypatch, capsys):
     assert cmd_status(root) == 0
 
     out = capsys.readouterr().out
-    assert "resolver defects: 2 (run `aramid resolvers`)" in out
+    # Three resolvers are keyed to the `mutation` producer (`gap_addressed`,
+    # `file_departed`, `mutant_killed`), and all three stayed silent here.
+    assert "resolver defects: 3 (run `aramid resolvers`)" in out
 
 
 def test_status_stays_silent_when_every_resolver_is_healthy(tmp_path, monkeypatch, capsys):

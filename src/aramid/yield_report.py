@@ -4,7 +4,7 @@ what it cleared. Never mutates the ledger, never runs a gate.
 WHY THIS EXISTS. A resolution writes itself into the ledger; a non-resolution
 writes nothing. So a resolver that examined a hundred candidates and declined
 them all leaves exactly the same trace as one that was never called -- none --
-and those two want opposite responses from whoever is reading. Four times in
+and those two want opposite responses from whoever is reading. Five times in
 this repo the second wore the first's clothes, and every one of them was found
 by hand, once, by someone who happened to count:
 
@@ -17,6 +17,16 @@ by hand, once, by someone who happened to count:
   * The module-mapped test rule reaching no subpackage module.
   * `js-mutation`, `fuzz` and `dast` with no resolver of any kind, so a
     genuine repair cleared nothing at all.
+  * `mutant_killed` for the PYTHON mutation producer, missing from THIS
+    MODULE'S registry. The consumer claimed kills, `resolve_repaired`
+    recorded three yields for the pair (six candidates, three resolutions),
+    and the report graded eleven resolvers and dropped the twelfth -- the
+    one that had actually fired -- because `collect` walked only the
+    registry. Found
+    2026-08-28 by reading the events table directly, after a handover had
+    repeated the report's silence as "python mutation has no
+    `mutant_killed`". An observed pair the registry lacks is now a defect
+    row (`UNREGISTERED`), never a dropped one.
 
 `ledger.note_yield` records the missing half. This module grades it.
 
@@ -48,6 +58,10 @@ LIVE = "live"
 NOT_INSTRUMENTED = "not instrumented"
 NEVER_RAN = "NEVER RAN"
 BLIND = "BLIND"
+# Not a grade of the resolver but of THIS REPORT: yield events exist for a
+# (resolver, tool) pair that `_SPECS` never learned. The numbers on the row
+# are real; the defect is that nothing below would have graded them.
+UNREGISTERED = "UNREGISTERED"
 
 # ONLY MECHANISM FAULTS ARE DEFECTS. `NEVER RAN` and `BLIND` both say the
 # resolver could not have worked -- it was not called, or its filter matches
@@ -79,7 +93,7 @@ BLIND = "BLIND"
 # push touched their source file. The prediction came from a replay that had
 # hard-coded `resolved=0` instead of deriving it. Conclusion unchanged,
 # reasoning replaced.)
-_DEFECTS = frozenset({NEVER_RAN, BLIND})
+_DEFECTS = frozenset({NEVER_RAN, BLIND, UNREGISTERED})
 
 
 def _by_tool(name: str) -> Callable[[dict], bool]:
@@ -101,6 +115,11 @@ class _Spec:
 # that stops emitting must still get a row -- that silence IS the signal, and
 # a report built from what it happened to see could never show it.
 #
+# The converse is enforced too: a pair that EMITS without a registry entry is
+# appended as an `UNREGISTERED` defect row, never dropped. A registry that
+# lags the code is how the python `mutant_killed` row went missing while its
+# events sat in the ledger (docstring, fifth bullet).
+#
 # Keyed on (resolver, tool) rather than resolver alone because two of these
 # are emitted once per opted-in producer: `file_departed` runs for each name
 # in `pipeline.run_gate`'s tuple, and `resolve_repaired` carries whichever
@@ -120,6 +139,10 @@ _SPECS = (
     _Spec("file_departed", "mutation", _by_tool("mutation")),
     _Spec("file_departed", "tdd", _by_tool("tdd")),
     _Spec("file_departed", "red-proof", _by_tool("red-proof")),
+    # `resolve_repaired` carries the CLAIMING producer's tool, and both
+    # mutation consumers claim `mutant_killed` -- one row each, or the python
+    # one's kills are graded nowhere (they were, for sixteen days).
+    _Spec("mutant_killed", "mutation", _by_tool("mutation")),
     _Spec("mutant_killed", "js-mutation", _by_tool("js-mutation")),
     _Spec("crash_not_reproduced", "fuzz", _by_tool("fuzz")),
     _Spec("endpoint_reprobed", "dast", _by_tool("dast")),
@@ -196,6 +219,10 @@ def collect(ledger: Ledger) -> list[Row]:
     # alarms is a report that gets muted on day one, and a muted detector
     # detects nothing.
     instrumented = bool(seen)
+    # Snapshot BEFORE the registry walk: `seen` is a defaultdict, and reading
+    # a registry key below inserts it, which would make every registered pair
+    # look observed.
+    observed = list(seen)
 
     state = ledger.open_findings()
     rows = []
@@ -208,6 +235,16 @@ def collect(ledger: Ledger) -> list[Row]:
                    if instrumented else NOT_INSTRUMENTED)
         rows.append(Row(spec.resolver, spec.tool, runs, considered, resolved,
                         volume, open_now, verdict))
+    # Pairs the ledger recorded that the registry never learned. No `match`
+    # exists for them, so volume and open count are unknowable here -- the
+    # row carries the yield numbers and the grade says why nothing graded
+    # them. Registry order first, then first-seen order.
+    for key in observed:
+        if key in EXPECTED:
+            continue
+        runs, considered, resolved = seen[key]
+        rows.append(Row(key[0], key[1], runs, considered, resolved,
+                        0, 0, UNREGISTERED))
     return rows
 
 
@@ -239,7 +276,9 @@ def render(rows: list[Row]) -> str:
     elif flagged:
         out.append(f"{len(flagged)} of {len(rows)} resolvers flagged. "
                    "NEVER RAN = no yield events while its producer has findings; "
-                   "BLIND = ran but matched nothing while findings are open. "
+                   "BLIND = ran but matched nothing while findings are open; "
+                   "UNREGISTERED = it emits, but this report's registry has no "
+                   "row for the pair (add one to `yield_report._SPECS`). "
                    "`no clears yet` is not a defect -- it usually means the "
                    "findings have not been fixed.")
     else:

@@ -19,9 +19,11 @@ was AVAILABLE to it, and the grades are the product:
     live             cleared something
     NEVER RAN        no yield events at all, but its producer HAS findings
     BLIND            ran, saw zero candidates, producer has open findings now
+    UNREGISTERED     emits, but the report's own registry has no row for it
 
-The two upper-case ones are defects, and only those two, because only those
-two are about the resolver's MECHANISM. Everything else is about outcomes,
+The upper-case ones are defects, and only those, because only those are
+about a MECHANISM -- the resolver's for the first two, the report's own for
+the third. Everything else is about outcomes,
 and outcomes are confounded: "nothing cleared" is overwhelmingly "nothing was
 fixed", which is not a fault in the gate. Measured on this repo -- see
 `test_a_resolver_that_sees_candidates_and_clears_none_is_reported_not_accused`
@@ -277,9 +279,11 @@ def test_the_render_names_the_defect_and_the_numbers_behind_it(led):
     # that does not exist ships with thirteen green tests behind it.
     assert ("  NEVER RAN      gap_addressed         mutation     "
             "0 runs   [2 open, 2 ever]") in out
-    # Two rows are keyed to the `mutation` producer -- `gap_addressed` and
-    # `file_departed` -- so seeding one producer flags exactly two resolvers.
-    assert "2 of 11 resolvers flagged" in out
+    # Three rows are keyed to the `mutation` producer -- `gap_addressed`,
+    # `file_departed` and `mutant_killed` -- so seeding one producer flags
+    # exactly three resolvers. (Two of eleven until the python `mutant_killed`
+    # pair was registered; that count moving is the fix, not a regression.)
+    assert "3 of 12 resolvers flagged" in out
 
 
 def test_a_clean_report_says_so_rather_than_printing_nothing(led):
@@ -289,3 +293,54 @@ def test_a_clean_report_says_so_rather_than_printing_nothing(led):
     out = yield_report.render(yield_report.collect(led))
 
     assert "no resolver defects" in out
+
+
+# ------------------------------------ the registry itself can be the gap ---
+
+def test_the_python_mutation_kill_resolver_has_a_row_of_its_own(led):
+    """`consumers/mutation.py` claims `Repaired(tool="mutation",
+    reason="mutant_killed")` and `resolve_repaired` records the yield under
+    exactly that pair -- this repo's ledger holds six such events, three of
+    them resolutions. The registry knew `mutant_killed` only for js-mutation,
+    so the report walked past a resolver that fires and printed
+    "no resolver defects (11 resolvers graded)" over it. The row is keyed on
+    the PYTHON producer, and its volume joins to mutation findings."""
+    _seed_findings(led, _finding("a" * 64))
+    _yield(led, "mutant_killed", "mutation", considered=3, resolved=3)
+
+    row = _row(led, "mutant_killed", "mutation")
+
+    assert row.verdict == "live"
+    assert (row.runs, row.considered, row.resolved) == (1, 3, 3)
+    assert (row.volume, row.open_now) == (1, 1)
+
+
+def test_a_yield_from_a_pair_the_registry_never_learned_is_flagged_not_dropped(led):
+    """The mechanism behind the row above. `collect` folds EVERY observed
+    (resolver, tool) key into its totals and then iterates only the registry,
+    so a pair the registry has not been told about is dropped on the floor --
+    the exact silence this module exists to end, one level up. An observed
+    pair with no registry entry must come out as a DEFECT row: the numbers
+    are real, the grade says the registry is behind the code, and the
+    summary line counts it."""
+    _yield(led, "grown_overnight", "mutation", considered=2, resolved=1)
+
+    rows = {(r.resolver, r.tool): r for r in yield_report.collect(led)}
+    row = rows[("grown_overnight", "mutation")]
+
+    assert row.verdict == "UNREGISTERED"
+    assert row.flagged
+    assert (row.runs, row.considered, row.resolved) == (1, 2, 1)
+    out = yield_report.render(yield_report.collect(led))
+    assert ("  UNREGISTERED   grown_overnight       mutation     "
+            "1 run, 2 considered, 1 resolved") in out
+    assert "UNREGISTERED = " in out, "the summary must say what the grade means"
+
+
+def test_an_empty_ledger_still_shows_exactly_the_registry(led):
+    """The flagged-extra rule adds rows only for pairs actually observed; it
+    never invents any, so the registry remains the floor and the ceiling of a
+    quiet ledger."""
+    rows = [(r.resolver, r.tool) for r in yield_report.collect(led)]
+
+    assert rows == list(yield_report.EXPECTED)

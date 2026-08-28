@@ -10,6 +10,22 @@ to publish a tag that disagrees with it.
 
 ## [Unreleased]
 
+### Fixed
+
+- **`aramid resolvers` graded the python `mutant_killed` resolver nowhere,
+  and now cannot lose a resolver that way again.** `consumers/mutation.py`
+  claims `Repaired(tool="mutation", reason="mutant_killed")` and
+  `resolve_repaired` records the yield under that pair, but the report's
+  registry knew `mutant_killed` only for `js-mutation`; `collect` walked the
+  registry and dropped every observed pair it lacked, so this repo's own
+  ledger -- three such yields since 2026-08-12, three resolutions -- rendered
+  as "no resolver defects (11 resolvers graded)". A twelfth row now exists,
+  and an observed pair the registry never learned is rendered as an
+  `UNREGISTERED` defect row with its real numbers instead of vanishing.
+  Found by reading the events table directly after a handover repeated the
+  report's silence as fact. `status`'s "resolver defects: N" counts the new
+  row like any other.
+
 ## [0.5.1] — 2026-08-28
 
 ### Fixed
