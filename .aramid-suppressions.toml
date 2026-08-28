@@ -223,3 +223,34 @@ tool = "mutation"
 rule = "not-drop"
 path = "src/aramid/pipeline.py"
 reason = "False survivor. `if not resolve_rng` -> `if resolve_rng` at pipeline.py:211 -- the no-upstream guard. Applied by line number and verified: tests/integration/test_resolution_scope.py fails (1 failed, 2 passed), specifically the no-upstream case that exists for exactly this inversion. Unreported because [mutation].test_command excludes tests/integration."
+
+# --- llm-review findings the code already answers, at the line they cite ----
+#
+# Three WARN-tier notes that sat open for two weeks beside a real one
+# (arm.py:169, which held the 0.5.0 tag). Each was re-read at the cited line
+# on 2026-08-28 before being written down here; each names the design the
+# note argues against and the alternative it proposes, so a later reader can
+# reopen the decision rather than re-derive it. None is a false positive in
+# the "the model misread the code" sense -- each is a real trade-off the code
+# made deliberately and documents at the very line the finding points at.
+
+[[suppress]]
+id = "8f9118e5677fb6d95ad3a03575f719e5e48b7f4da10dab4a550a922945219ada"
+tool = "llm-review"
+rule = "llm/logic"
+path = "src/aramid/mutation_gate.py"
+reason = "DOCUMENTED RESIDUAL, not a discovery. The finding restates residual 1 of the two the resolver's own docstring names ('TWO RESIDUALS, both accepted ... State them rather than discover them'): `test_<stem>_*` cannot tell duplicate stems apart, and no such duplicate exists in this repo. The docstring also gives the reason the proposed fix (package-qualified stems) was not taken: it would break the plain `test_<module>.py` form most repos use. The liberal direction is the licensed one -- a wrong resolve lets a test-gap slip until the re-drain re-reports it."
+
+[[suppress]]
+id = "530731212c1067911ac601b6ca0a1efe839816868ff074bd027cc3eb583f1666"
+tool = "llm-review"
+rule = "llm/a05"
+path = "src/aramid/commands/doctor.py"
+reason = "DELIBERATELY ADVISORY, at the cited line. `editable_install_lines` reports and never fails, matching `divergence_lines` beside it, because an editable install on a machine with no consumers is legitimate (the docstring's own words). The premise is right -- an editable live install does compromise every consumer's gate -- and the alternative the note proposes (non-zero only when consumers are onboarded, e.g. other repos in ~/.aramid/repos.toml) is sound but changes doctor's exit-code contract, which other agents run in automation; that is a design decision to take on the channel, not a defect to patch. promote_live.py now refuses the same state at promotion time (0.5.0+1), which is where it actually bites."
+
+[[suppress]]
+id = "a3dde01524dfb0892c7bfd94e82f80a0e0e52d292dea650d6749c45e8710d6db"
+tool = "llm-review"
+rule = "llm/a05"
+path = "src/aramid/reporter.py"
+reason = "THE PATH IS THE ANSWER THE FIELD EXISTS TO GIVE. `tools` in the JSON payload records WHICH BINARY backed each analyzer -- added after a PATH-first ruff produced 1 finding where the pinned one produced 3 and nothing in the output said which had run. A redacted location class cannot distinguish two ruffs on the same machine. The payload is local output read by consumers on this machine (graphite reads `check --json`), and in CI the paths are an ephemeral runner's. The proposed verbose-flag gating is a reasonable future shape; it is not a fix for a disclosure, because no credential or private content is in a tool path. Re-read at the cited line 2026-08-28 (the line has since moved to the `\"tools\":` key; the id follows the content, not the number)."

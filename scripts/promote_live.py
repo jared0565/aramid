@@ -64,18 +64,60 @@ def _clean_env() -> dict:
     return env
 
 
-def _live() -> tuple[str | None, str | None]:
-    """(version, path) of the installed aramid, as a clean interpreter sees it."""
-    probe = ("import aramid, json;"
-             "print(json.dumps([aramid.__version__, aramid.__file__]))")
+def _live() -> tuple[str | None, str | None, bool | None]:
+    """(version, path, editable) of the installed aramid, as a clean
+    interpreter sees it. All three are None when the probe fails, whatever it
+    managed to print.
+
+    `editable` is read from the installed distribution's `direct_url.json`
+    (`dir_info.editable`, the key `aramid doctor` keys on) because the path
+    check in `_not_promoted` cannot see an editable install of some OTHER
+    clone of aramid -- that resolves outside this checkout and looks
+    promoted. None when there is no distribution metadata to read: that is
+    not evidence of a wheel, so the caller treats it as unconfirmed.
+    """
+    probe = (
+        "import aramid, json, importlib.metadata as m\n"
+        "try:\n"
+        "    raw = m.distribution('aramid').read_text('direct_url.json')\n"
+        "except m.PackageNotFoundError:\n"
+        "    editable = None\n"
+        "else:\n"
+        "    editable = False\n"
+        "    if raw:\n"
+        "        try:\n"
+        "            editable = bool(json.loads(raw).get('dir_info', {}).get('editable'))\n"
+        "        except (ValueError, AttributeError):\n"
+        "            editable = None\n"
+        "print(json.dumps([aramid.__version__, aramid.__file__, editable]))\n")
     r = _run([sys.executable, "-P", "-c", probe], env=_clean_env())
     if r.returncode != 0:
-        return None, None
+        return None, None, None
     try:
-        version, path = json.loads(r.stdout.strip())
-        return version, path
+        version, path, editable = json.loads(r.stdout.strip())
+        return version, path, editable
     except (ValueError, TypeError):
-        return None, None
+        return None, None, None
+
+
+def _not_promoted(path: str | None, editable: bool | None, repo: Path) -> str | None:
+    """Why what is live is NOT a promoted wheel, or None if it is.
+
+    Version equality says nothing here: an editable install of this checkout
+    carries the released `__version__` the moment the bump commit lands, and
+    that is the state this script exists to replace, not to accept. Found by
+    the llm-review consumer (ledger be79fea8): the pre-check returned 0 on
+    the version alone, so the one time anyone would run this -- to undo an
+    accidental `pip install -e .` right after a release -- it said "already
+    live. Nothing to do." and left every consumer on the working tree.
+    """
+    if path and repo in Path(path).resolve().parents:
+        return f"it resolves INSIDE this checkout ({path}); consumers run the working tree"
+    if editable:
+        return "the installed distribution is editable (direct_url.json: dir_info.editable)"
+    if editable is None:
+        return "the installed distribution has no metadata that vouches for a wheel"
+    return None
 
 
 def _release_digest(tag: str, asset: str) -> str | None:
@@ -100,14 +142,19 @@ def main() -> int:
     tag = f"v{args.version}"
     asset = WHEEL_ASSET.format(version=args.version)
 
-    cur_version, cur_path = _live()
+    repo = Path(__file__).resolve().parent.parent
+    cur_version, cur_path, cur_editable = _live()
     print(f"live now : {cur_version or 'not installed'}")
     print(f"           {cur_path or '-'}")
     print(f"promoting: {args.version}  (from release {tag})")
 
     if cur_version == args.version:
-        print(f"\nalready live: {args.version} is installed. Nothing to do.")
-        return 0
+        problem = _not_promoted(cur_path, cur_editable, repo)
+        if not problem:
+            print(f"\nalready live: {args.version} is installed. Nothing to do.")
+            return 0
+        print(f"\n{args.version} is live but NOT as a promoted wheel: {problem}.\n"
+              f"  Reinstalling the released wheel over it.")
 
     digest = _release_digest(tag, asset)
     if not digest:
@@ -149,20 +196,21 @@ def main() -> int:
             print(f"\ninstall failed\n{r.stdout}\n{r.stderr}", file=sys.stderr)
             return 3
 
-    new_version, new_path = _live()
+    new_version, new_path, new_editable = _live()
     print(f"\nlive now : {new_version}")
     print(f"           {new_path}")
 
-    # Post-verify, both halves. Version alone would pass for an editable
+    # Post-verify, all of it. Version alone would pass for an editable
     # install of a checkout that happens to carry the same __version__ --
-    # which is exactly the state this script exists to keep out.
-    repo = Path(__file__).resolve().parent.parent
+    # which is exactly the state this script exists to keep out -- and the
+    # same predicate the pre-check used decides here, so the two cannot drift.
     if new_version != args.version:
         print(f"\nFAILED: expected {args.version}, got {new_version}", file=sys.stderr)
         return 3
-    if new_path and repo in Path(new_path).resolve().parents:
-        print(f"\nFAILED: live aramid resolves INSIDE this checkout ({new_path}).\n"
-              f"  Consumers would be running the working tree.", file=sys.stderr)
+    problem = _not_promoted(new_path, new_editable, repo)
+    if problem:
+        print(f"\nFAILED: {problem}.\n  Consumers would not be running the released wheel.",
+              file=sys.stderr)
         return 3
 
     print(f"\nOK. Consumers now run {args.version}.")

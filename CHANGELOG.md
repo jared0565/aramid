@@ -10,6 +10,56 @@ to publish a tag that disagrees with it.
 
 ## [Unreleased]
 
+### Fixed
+
+- **`aramid arm` accepts every spelling TOML accepts -- and refuses, rather
+  than corrupts, when it cannot.** The section and key patterns matched only
+  the canonical column-0 form. An indented header (`  [shadow]`), a trailing
+  comment on a header (`[shadow]  # bake started ...`), whitespace inside the
+  brackets (`[ shadow ]`) or an indented key were all legal TOML that the
+  loader read and `arm` could not see, so it appended a SECOND header or key,
+  `tomllib` refused the result ("Cannot declare ('shadow',) twice"), and `arm`
+  had already printed its success line and returned 0. The next `aramid check`
+  then crashed in `load_config` -- on a file aramid itself had broken.
+  Reported by the llm-review consumer against the 0.5.0 arm fix; reproduced on
+  four shapes, not the one reported. Two layers: the patterns now accept
+  indentation, inner whitespace and header comments, and re-emit a key's
+  indentation; and every rewrite is parsed with the loader's own parser before
+  it is written, with the key required to read `true` where the loader reads
+  it. A spelling no line pattern can see (a dotted key, a quoted header) now
+  ends in a refusal that names the key and leaves the file byte-for-byte
+  unchanged, exit 3, instead of a success line over a broken config. A file
+  that does not parse before `arm` runs is refused the same way.
+
+- **`scripts/promote_live.py` no longer accepts an editable install as
+  "already live" because its version matches.** The pre-check returned 0 on
+  version equality alone. The one time anyone runs this script -- to undo an
+  accidental `pip install -e .` right after a release -- is exactly when the
+  checkout's `__version__` equals the version being promoted, so it printed
+  "Nothing to do." and left every consumer on the working tree. The probe now
+  also reports whether the installed distribution is editable
+  (`direct_url.json`, the key `aramid doctor` reads), and one predicate decides
+  both the pre-check and the post-install check: resolving inside the checkout,
+  an editable distribution, or no distribution metadata at all is "not
+  promoted", and the released wheel is reinstalled over it. Reported by the
+  llm-review consumer. The script had no tests; it now has.
+
+### Tests
+
+- Four surviving mutants killed, each proven by applying the mutant and
+  watching its test fail: `_misplaced_lines`'s empty-span sentinel (a key on
+  line 1 with no section was silently exempt from the NOTE), the shadow
+  runner's `line=1`, and both `_live()` branches in `promote_live.py`.
+- Three llm-review notes that the code already answers at the cited line are
+  suppressed in `.aramid-suppressions.toml`, each with the design it argues
+  against and the alternative it proposes, so the open set is the set that
+  needs reading. A fourth (the cli.py:210 mutant) was already suppressed as an
+  equivalent mutant; `ledger list` shows it `[open]` because the tracked file
+  is applied on read -- `ledger filter` is the view that answers "what is
+  actually open".
+- `test_version.py` binds its subprocess through the `checkout_env` fixture
+  like every other subprocess test, with `-P`.
+
 ## [0.5.0] — 2026-08-27
 
 ### Added

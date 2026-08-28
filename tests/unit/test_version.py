@@ -23,11 +23,9 @@ Python packaging is PEP 440, not semver, so the guards now use
 PEP 440 accepts two-component versions like "0.1", so the release tuple is
 checked explicitly for MAJOR.MINOR.PATCH.
 """
-import os
 import subprocess
 import sys
 from importlib.metadata import version as distribution_version
-from pathlib import Path
 
 import pytest
 from packaging.version import InvalidVersion, Version
@@ -49,7 +47,7 @@ def test_dunder_version_is_pep440_with_a_full_release_tuple():
         f"{parsed.release} -- want MAJOR.MINOR.PATCH")
 
 
-def test_version_flag_prints_the_real_version():
+def test_version_flag_prints_the_real_version(checkout_env):
     """The original form of this test asserted only that stdout started with
     'aramid ', despite being named ...prints_semver -- it would have passed on
     `aramid banana`.
@@ -70,12 +68,13 @@ def test_version_flag_prints_the_real_version():
     Deriving PYTHONPATH from `aramid.__file__` rather than hardcoding `src`
     keeps the child bound to whatever aramid the parent actually imported, so a
     perturbation run pointed at a scratch tree stays honest instead of being
-    silently redirected back to the checkout.
+    silently redirected back to the checkout. That derivation now lives in the
+    `checkout_env` fixture (tests/conftest.py) shared by every subprocess test:
+    it PREPENDS rather than assigns, and pairs with `-P` so the child's cwd
+    cannot shadow the package it was just bound to.
     """
-    src_root = Path(aramid.__file__).resolve().parent.parent
-    env = {**os.environ, "PYTHONPATH": str(src_root)}
-    out = subprocess.run([sys.executable, "-m", "aramid", "--version"],
-                         capture_output=True, text=True, env=env)
+    out = subprocess.run([sys.executable, "-P", "-m", "aramid", "--version"],
+                         capture_output=True, text=True, env=checkout_env)
     assert out.returncode == 0, out.stderr
     printed = out.stdout.strip()
     assert printed == f"aramid {aramid.__version__}", printed

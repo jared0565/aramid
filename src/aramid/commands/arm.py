@@ -39,6 +39,7 @@ style.
 """
 import re
 import sys
+import tomllib
 from pathlib import Path
 
 # Key-line rewrite family. Horizontal-whitespace-only classes ([^\S\n]) so a
@@ -49,34 +50,57 @@ from pathlib import Path
 # "Cannot overwrite a value" corruption). The value class excludes `#` so a
 # comment abutting the value (`false#x`) lands in `c` instead of being
 # swallowed -- safe because these keys only ever hold true/false.
-_KEY_RE = re.compile(
-    r"(?m)^semgrep_block_armed[^\S\n]*=[^\S\n]*[^\s#]+(?P<c>[^\S\n]*#[^\n]*)?[^\S\n]*$")
-_TDD_KEY_RE = re.compile(
-    r"(?m)^tdd_block_armed[^\S\n]*=[^\S\n]*[^\s#]+(?P<c>[^\S\n]*#[^\n]*)?[^\S\n]*$")
-_LLM_KEY_RE = re.compile(
-    r"(?m)^llm_block_armed[^\S\n]*=[^\S\n]*[^\s#]+(?P<c>[^\S\n]*#[^\n]*)?[^\S\n]*$")
-_LLM_SECTION_RE = re.compile(r"(?m)^\[llm\]\s*$")
-_MUT_KEY_RE = re.compile(
-    r"(?m)^mutation_block_armed[^\S\n]*=[^\S\n]*[^\s#]+(?P<c>[^\S\n]*#[^\n]*)?[^\S\n]*$")
-_MUT_SECTION_RE = re.compile(r"(?m)^\[mutation\]\s*$")
-_SCORE_KEY_RE = re.compile(
-    r"(?m)^score_block_armed[^\S\n]*=[^\S\n]*[^\s#]+(?P<c>[^\S\n]*#[^\n]*)?[^\S\n]*$")
-_RP_KEY_RE = re.compile(
-    r"(?m)^red_proof_block_armed[^\S\n]*=[^\S\n]*[^\s#]+(?P<c>[^\S\n]*#[^\n]*)?[^\S\n]*$")
-_RP_SECTION_RE = re.compile(r"(?m)^\[red_proof\]\s*$")
-_SHADOW_KEY_RE = re.compile(
-    r"(?m)^shadow_block_armed[^\S\n]*=[^\S\n]*[^\s#]+(?P<c>[^\S\n]*#[^\n]*)?[^\S\n]*$")
-_SHADOW_SECTION_RE = re.compile(r"(?m)^\[shadow\]\s*$")
-_AL_SECTION_RE = re.compile(r"(?m)^\[llm\.autolearn\]\s*$")
-_AL_KEY_RE = re.compile(
-    r"(?m)^armed[^\S\n]*=[^\S\n]*[^\s#]+(?P<c>[^\S\n]*#[^\n]*)?[^\S\n]*$")
-_NEXT_SECTION_RE = re.compile(r"(?m)^\[")
+#
+# WHAT TOML ACCEPTS, THESE MUST ACCEPT. Measured 2026-08-28 on the 0.5.0 code
+# (ledger c543ff6e, reported by the llm-review consumer): a header or key
+# that was legal TOML in any spelling but the canonical column-0 one --
+# `  [shadow]`, `[shadow]  # comment`, `[ shadow ]`, `  shadow_block_armed =
+# false` -- was invisible to a pattern anchored on the bare form, so the
+# rewrite appended a SECOND header or key, tomllib refused the file, and
+# `arm` had already printed its success line. Leading indentation is captured
+# in group `i` and re-emitted; a trailing comment on a header and whitespace
+# inside the brackets are accepted. Quoted headers and dotted keys are NOT
+# matched -- no line pattern will ever cover every spelling, which is why
+# _write_armed parses the result before anything is written.
+_HWS = r"[^\S\n]*"
+
+
+def _key_re(key: str) -> re.Pattern:
+    return re.compile(
+        rf"(?m)^(?P<i>{_HWS}){key}{_HWS}={_HWS}[^\s#]+(?P<c>{_HWS}#[^\n]*)?{_HWS}$")
+
+
+def _section_re(table: str) -> re.Pattern:
+    """`[table]` on a line of its own: indented or not, spaces inside the
+    brackets or not, with or without a trailing comment."""
+    return re.compile(
+        rf"(?m)^{_HWS}\[{_HWS}{re.escape(table)}{_HWS}\]{_HWS}(?:#[^\n]*)?$")
+
+
+_KEY_RE = _key_re("semgrep_block_armed")
+_TDD_KEY_RE = _key_re("tdd_block_armed")
+_LLM_KEY_RE = _key_re("llm_block_armed")
+_LLM_SECTION_RE = _section_re("llm")
+_MUT_KEY_RE = _key_re("mutation_block_armed")
+_MUT_SECTION_RE = _section_re("mutation")
+_SCORE_KEY_RE = _key_re("score_block_armed")
+_RP_KEY_RE = _key_re("red_proof_block_armed")
+_RP_SECTION_RE = _section_re("red_proof")
+_SHADOW_KEY_RE = _key_re("shadow_block_armed")
+_SHADOW_SECTION_RE = _section_re("shadow")
+_AL_SECTION_RE = _section_re("llm.autolearn")
+_AL_KEY_RE = _key_re("armed")
+# Any header, indented or not: the end of a section body, and of the root.
+_NEXT_SECTION_RE = re.compile(rf"(?m)^{_HWS}\[")
 
 
 def _armed_sub(key_re: re.Pattern, new_line: str, text: str, count: int = 0) -> str:
-    """Comment-preserving key rewrite: whatever trailing `# ...` the old line
-    carried is re-emitted verbatim after the new value."""
-    return key_re.sub(lambda m: new_line + (m.group("c") or ""), text, count=count)
+    """Indentation- and comment-preserving key rewrite: whatever leading
+    whitespace and trailing `# ...` the old line carried are re-emitted
+    verbatim around the new value."""
+    return key_re.sub(
+        lambda m: (m.group("i") or "") + new_line + (m.group("c") or ""),
+        text, count=count)
 
 
 # WHERE A KEY IS READ DECIDES WHERE IT MAY BE WRITTEN. Every rewrite below is
@@ -162,6 +186,52 @@ def _report_misplaced(text: str, key_re: re.Pattern, span: tuple[int, int] | Non
               file=sys.stderr)
 
 
+def _where(table: tuple[str, ...]) -> str:
+    return "[" + ".".join(table) + "]" if table else "the root table"
+
+
+def _verify_armed(new_text: str, table: tuple[str, ...], key: str) -> str | None:
+    """Why the rewritten text must NOT be written, or None if it may be.
+
+    The patterns above accept what TOML accepts as far as a line pattern can
+    go, and that is never all the way: a dotted key
+    (`shadow.shadow_block_armed = false`) or a quoted header (`["shadow"]`)
+    declares the same table in a spelling no line-anchored pattern sees, and
+    appending a `[shadow]` after it is a second declaration tomllib refuses.
+    So the rewrite is parsed with the loader's own parser, and the key must
+    read true where the loader reads it -- the check the operator would do by
+    hand, done BEFORE the success line rather than by the next gate crashing.
+    """
+    try:
+        data = tomllib.loads(new_text)
+    except tomllib.TOMLDecodeError as exc:
+        return f"the rewritten file would not parse ({exc})"
+    for part in table:
+        data = data.get(part) if isinstance(data, dict) else None
+    if not isinstance(data, dict) or data.get(key) is not True:
+        return f"`{key}` would not read true under {_where(table)}"
+    return None
+
+
+def _write_armed(toml_path: Path, text: str, new_text: str,
+                 table: tuple[str, ...], key: str) -> bool:
+    """Write the rewrite only if the loader will read it as armed. On refusal
+    the file is untouched and stderr says exactly what to set by hand."""
+    try:
+        tomllib.loads(text)
+    except tomllib.TOMLDecodeError as exc:
+        print(f"aramid: arm: {toml_path} does not parse as TOML ({exc}); left "
+              f"unchanged -- repair it, then re-run.", file=sys.stderr)
+        return False
+    problem = _verify_armed(new_text, table, key)
+    if problem:
+        print(f"aramid: arm: REFUSING: {problem}. {toml_path} is left unchanged -- "
+              f"set `{key} = true` under {_where(table)} by hand.", file=sys.stderr)
+        return False
+    toml_path.write_text(new_text, encoding="utf-8")
+    return True
+
+
 def _arm_llm_text(text: str) -> str:
     return _arm_sectioned_key(text, _LLM_SECTION_RE, _LLM_KEY_RE,
                               "llm_block_armed = true", "[llm]")
@@ -206,7 +276,9 @@ def cmd_arm(root, llm: bool = False, autolearn: bool = False, tdd: bool = False,
 
     text = toml_path.read_text(encoding="utf-8")
     if autolearn:
-        toml_path.write_text(_arm_autolearn_text(text), encoding="utf-8")
+        if not _write_armed(toml_path, text, _arm_autolearn_text(text),
+                            ("llm", "autolearn"), "armed"):
+            return 3
         print(f"aramid: arm: [llm.autolearn] armed=true written to {toml_path}")
         # Arming is an informed act: show the shadow record it stands on.
         try:
@@ -224,7 +296,8 @@ def cmd_arm(root, llm: bool = False, autolearn: bool = False, tdd: bool = False,
         return 0
 
     if llm:
-        toml_path.write_text(_arm_llm_text(text), encoding="utf-8")
+        if not _write_armed(toml_path, text, _arm_llm_text(text), ("llm",), "llm_block_armed"):
+            return 3
         _report_misplaced(text, _LLM_KEY_RE, _section_span(text, _LLM_SECTION_RE),
                           "llm_block_armed", "[llm]")
         print(f"aramid: arm: llm_block_armed=true written to {toml_path}")
@@ -233,7 +306,9 @@ def cmd_arm(root, llm: bool = False, autolearn: bool = False, tdd: bool = False,
         return 0
 
     if mutation:
-        toml_path.write_text(_arm_mutation_text(text), encoding="utf-8")
+        if not _write_armed(toml_path, text, _arm_mutation_text(text),
+                            ("mutation",), "mutation_block_armed"):
+            return 3
         _report_misplaced(text, _MUT_KEY_RE, _section_span(text, _MUT_SECTION_RE),
                           "mutation_block_armed", "[mutation]")
         print(f"aramid: arm: mutation_block_armed=true written to {toml_path}")
@@ -242,7 +317,9 @@ def cmd_arm(root, llm: bool = False, autolearn: bool = False, tdd: bool = False,
         return 0
 
     if mutation_score:
-        toml_path.write_text(_arm_mutation_score_text(text), encoding="utf-8")
+        if not _write_armed(toml_path, text, _arm_mutation_score_text(text),
+                            ("mutation",), "score_block_armed"):
+            return 3
         _report_misplaced(text, _SCORE_KEY_RE, _section_span(text, _MUT_SECTION_RE),
                           "score_block_armed", "[mutation]")
         print(f"aramid: arm: score_block_armed=true written to {toml_path}")
@@ -251,7 +328,9 @@ def cmd_arm(root, llm: bool = False, autolearn: bool = False, tdd: bool = False,
         return 0
 
     if red_proof:
-        toml_path.write_text(_arm_red_proof_text(text), encoding="utf-8")
+        if not _write_armed(toml_path, text, _arm_red_proof_text(text),
+                            ("red_proof",), "red_proof_block_armed"):
+            return 3
         _report_misplaced(text, _RP_KEY_RE, _section_span(text, _RP_SECTION_RE),
                           "red_proof_block_armed", "[red_proof]")
         print(f"aramid: arm: red_proof_block_armed=true written to {toml_path}")
@@ -260,7 +339,9 @@ def cmd_arm(root, llm: bool = False, autolearn: bool = False, tdd: bool = False,
         return 0
 
     if shadow:
-        toml_path.write_text(_arm_shadow_text(text), encoding="utf-8")
+        if not _write_armed(toml_path, text, _arm_shadow_text(text),
+                            ("shadow",), "shadow_block_armed"):
+            return 3
         _report_misplaced(text, _SHADOW_KEY_RE, _section_span(text, _SHADOW_SECTION_RE),
                           "shadow_block_armed", "[shadow]")
         print(f"aramid: arm: shadow_block_armed=true written to {toml_path}")
@@ -273,18 +354,20 @@ def cmd_arm(root, llm: bool = False, autolearn: bool = False, tdd: bool = False,
 
     if tdd:
         new_text = _arm_root_key(text, _TDD_KEY_RE, "tdd_block_armed = true")
+        if not _write_armed(toml_path, text, new_text, (), "tdd_block_armed"):
+            return 3
         _report_misplaced(text, _TDD_KEY_RE, _root_span(text),
                           "tdd_block_armed", "the root table")
-        toml_path.write_text(new_text, encoding="utf-8")
         print(f"aramid: arm: tdd_block_armed=true written to {toml_path}")
         print("aramid: arm: TDD bake ended -- code-without-test findings now BLOCK at pre-push.")
         return 0
 
     new_text = _arm_root_key(text, _KEY_RE, "semgrep_block_armed = true")
+    if not _write_armed(toml_path, text, new_text, (), "semgrep_block_armed"):
+        return 3
     _report_misplaced(text, _KEY_RE, _root_span(text),
                       "semgrep_block_armed", "the root table")
 
-    toml_path.write_text(new_text, encoding="utf-8")
     print(f"aramid: arm: semgrep_block_armed=true written to {toml_path}")
     print("aramid: arm: WARN-only bake ended -- semgrep BLOCK-tier findings now block.")
     return 0

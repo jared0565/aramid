@@ -27,6 +27,7 @@ def test_a_module_named_after_the_tool_is_a_finding(tmp_path):
     hits = _findings(tmp_path)
     assert len(hits) == 1
     assert hits[0].file == "aramid.py"
+    assert hits[0].line == 1, "a file-level hazard is reported at line 1 (pinned: a mutant moved it)"
     assert "aramid" in hits[0].message
 
 
