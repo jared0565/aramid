@@ -342,6 +342,9 @@ def cmd_ledger_mark_unreachable(root, finding_id: str, reason: str) -> int:
                 "overridden": "already overridden.",
                 "rotated": "already retired by rotation.",
                 "not_a_secret": "already marked not-a-secret.",
+                # The line was rewritten; the sibling that replaced it is the
+                # row that now needs a decision. `reason` carries its id.
+                "superseded": f"{rec.get('reason') or 'rewritten'} -- decide on that finding instead.",
             }
             tail = tails.get(status, "mark-unreachable only applies to an open finding.")
             print(f"aramid: ledger mark-unreachable: {finding_id} is not open "

@@ -55,6 +55,7 @@ def _open_counts_line(state: dict) -> str:
             f"overridden: {counts.get('overridden', 0)}, "
             f"unreachable: {counts.get('unreachable', 0)}, "
             f"fixed: {counts.get('fixed', 0)}, "
+            f"superseded: {counts.get('superseded', 0)}, "
             f"rotated: {counts.get('rotated', 0)})")
 
 

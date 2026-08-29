@@ -191,3 +191,75 @@ def test_overridden_rotated_not_a_secret_do_not_reopen_on_redetect(tmp_path):
 
         assert led.open_findings()["id1"]["status"] == before, status_event
         led.close()
+
+
+# ------------------------------------ a REWRITTEN line is superseded, not fixed ---
+# Interop round 135 s3, from a consumer's own ledger: rewriting
+# `result = subprocess.run(` as `with subprocess.Popen(` re-keyed the
+# content-hashed S603 row. The old id went `finding_resolved` with status
+# `fixed` and a new id opened on the same call in the same run. Nothing was
+# fixed -- the ids hash content on purpose, so a rewrite is a new id -- but
+# `fixed` is what `ledger list` said at exactly the moment the call was being
+# rewritten, which is when the finding most needs re-reading. `rebaseline`'s
+# docstring had already accepted this shape as "expected"; it is now named.
+
+def test_a_rewritten_line_is_superseded_not_fixed(tmp_path):
+    led = Ledger(tmp_path / "l.db")
+    led.record_run("r1", "t", "pre-push", {"ruff"}, {"a.py"}, [_f("old", line=369)])
+    # Same tool, rule and file; new content, so a new id; a few lines away.
+    led.record_run("r2", "t", "pre-push", {"ruff"}, {"a.py"}, [_f("new", line=383)])
+    state = led.open_findings()
+    assert state["old"]["status"] == "superseded"
+    assert "new" in state["old"]["reason"], "the reason must name the sibling that replaced it"
+    assert state["new"]["status"] == "open"
+
+
+def test_a_vanished_finding_with_no_sibling_is_still_fixed(tmp_path):
+    """The counterfactual: absence with nothing of the same kind arriving is
+    the ordinary repair, and stays `fixed`."""
+    led = Ledger(tmp_path / "l.db")
+    led.record_run("r1", "t", "pre-push", {"ruff"}, {"a.py"}, [_f("old", line=369)])
+    led.record_run("r2", "t", "pre-push", {"ruff"}, {"a.py"}, [])
+    assert led.open_findings()["old"]["status"] == "fixed"
+
+
+def test_a_new_sibling_far_from_the_vanished_line_does_not_claim_it(tmp_path):
+    """Same tool/rule/file is not enough on its own: one site genuinely
+    fixed and an unrelated new one introduced 300 lines away in the same
+    commit must not read as a rewrite. Nearness is the second signal."""
+    led = Ledger(tmp_path / "l.db")
+    led.record_run("r1", "t", "pre-push", {"ruff"}, {"a.py"}, [_f("old", line=10)])
+    led.record_run("r2", "t", "pre-push", {"ruff"}, {"a.py"}, [_f("far", line=310)])
+    state = led.open_findings()
+    assert state["old"]["status"] == "fixed"
+    assert state["far"]["status"] == "open"
+
+
+def test_each_new_sibling_supersedes_at_most_the_nearest_vanished_finding(tmp_path):
+    led = Ledger(tmp_path / "l.db")
+    led.record_run("r1", "t", "pre-push", {"ruff"}, {"a.py"},
+                   [_f("near", line=10), _f("other", line=30)])
+    led.record_run("r2", "t", "pre-push", {"ruff"}, {"a.py"}, [_f("new", line=12)])
+    state = led.open_findings()
+    assert state["near"]["status"] == "superseded"
+    assert state["other"]["status"] == "fixed", "one sibling cannot supersede two findings"
+
+
+def test_a_different_rule_or_tool_never_supersedes(tmp_path):
+    led = Ledger(tmp_path / "l.db")
+    led.record_run("r1", "t", "pre-push", {"ruff", "semgrep"}, {"a.py"}, [_f("old", line=10)])
+    led.record_run("r2", "t", "pre-push", {"ruff", "semgrep"}, {"a.py"},
+                   [_f("semg", tool="semgrep", line=11)])
+    assert led.open_findings()["old"]["status"] == "fixed"
+
+
+def test_a_superseded_finding_reopens_if_its_content_returns(tmp_path):
+    """A revert brings the old content -- and so the old id -- back. Like
+    `fixed` and `unreachable`, `superseded` is a resting state a re-detect
+    must leave, not a permanent one."""
+    led = Ledger(tmp_path / "l.db")
+    led.record_run("r1", "t", "pre-push", {"ruff"}, {"a.py"}, [_f("old", line=10)])
+    led.record_run("r2", "t", "pre-push", {"ruff"}, {"a.py"}, [_f("new", line=12)])
+    assert led.open_findings()["old"]["status"] == "superseded"
+    led.record_run("r3", "t", "pre-push", {"ruff"}, {"a.py"}, [_f("old", line=10)])
+    assert led.open_findings()["old"]["status"] == "open"

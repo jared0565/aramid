@@ -409,6 +409,46 @@ def resolve_repaired(ledger, run_id: str, at: str, *, tool: str, reason: str,
     return resolved
 
 
+# How far a rewritten line may have moved and still be the same site. The
+# reporting case (round 135 s3) was 369 -> 383; a rewrite that grows a call
+# into a `with` block moves the flagged line by the lines it added, not by
+# hundreds. Same tool/rule/file alone is NOT enough: one site genuinely
+# fixed and an unrelated one introduced elsewhere in the same file would
+# otherwise read as a rewrite, which is the opposite lie.
+_REWRITE_WINDOW = 40
+
+
+def _successors(state: dict, present: set[str], findings: list, new_ids: list[str]) -> dict[str, str]:
+    """Map each open finding that vanished this run to the NEW finding that
+    rewrote it: same tool, rule and file, within `_REWRITE_WINDOW` lines of
+    its last recorded line, nearest first, each sibling claiming at most
+    one. Ids hash content, so a rewrite always arrives as a new id beside
+    an absent old one; without this pairing the old one is written `fixed`
+    at exactly the moment the call is being rewritten."""
+    fresh = [f for f in findings if f.id in set(new_ids)]
+    vanished = [(fid, rec) for fid, rec in state.items()
+                if rec.get("status") == "open" and fid not in present]
+    pairs = []
+    for fid, rec in vanished:
+        for f in fresh:
+            if (f.tool, f.rule, f.file) != (rec.get("tool"), rec.get("rule"), rec.get("file")):
+                continue
+            old_line = rec.get("line")
+            if not isinstance(old_line, int) or f.line is None:
+                continue
+            distance = abs(f.line - old_line)
+            if distance <= _REWRITE_WINDOW:
+                pairs.append((distance, fid, f.id))
+    out: dict[str, str] = {}
+    claimed: set[str] = set()
+    for _, fid, new in sorted(pairs):
+        if fid in out or new in claimed:
+            continue
+        out[fid] = new
+        claimed.add(new)
+    return out
+
+
 def _detect_payload(f: Finding) -> dict:
     return {"tool": f.tool, "file": f.file, "rule": f.rule, "verdict": str(f.verdict),
             "severity": str(f.severity), "line": f.line, "message": f.message,
@@ -427,7 +467,12 @@ def _materialize(events):
                                    "status": "historical" if e.payload.get("historical") else "open"}
         elif e.type.value == "finding_resolved":
             if e.finding_id in state:
-                state[e.finding_id]["status"] = "fixed"
+                successor = e.payload.get("superseded_by")
+                if successor:
+                    state[e.finding_id]["status"] = "superseded"
+                    state[e.finding_id]["reason"] = f"rewritten -- superseded by {successor}"
+                else:
+                    state[e.finding_id]["status"] = "fixed"
         elif e.type.value == "finding_overridden":
             if e.finding_id in state:
                 state[e.finding_id]["status"] = "overridden"
@@ -519,7 +564,7 @@ class Ledger:
         self.append(Event(EventType.RUN_STARTED, run_id, at, payload=payload))
         new_ids = []
         for f in findings:
-            if f.id not in state or state[f.id]["status"] in ("fixed", "unreachable"):
+            if f.id not in state or state[f.id]["status"] in ("fixed", "unreachable", "superseded"):
                 self.append(Event(EventType.FINDING_DETECTED, run_id, at,
                                   finding_id=f.id, payload=_detect_payload(f)))
             elif state[f.id].get("line") != f.line:
@@ -538,6 +583,7 @@ class Ledger:
                                   finding_id=f.id, payload={"line": f.line}))
             if f.id not in seen:
                 new_ids.append(f.id)
+        successors = _successors(state, present, findings, new_ids)
         for fid, rec in state.items():
             if rec["status"] != "open" or fid in present:
                 continue
@@ -607,7 +653,11 @@ class Ledger:
             in_scope = (rec.get("file") in scope_files
                         and (tool_scope is None or rec.get("file") in tool_scope))
             if in_scope or _departed(root, rec.get("file")):
-                self.append(Event(EventType.FINDING_RESOLVED, run_id, at, finding_id=fid))
+                payload = {}
+                if fid in successors:
+                    payload = {"auto_resolved": "rewritten", "superseded_by": successors[fid]}
+                self.append(Event(EventType.FINDING_RESOLVED, run_id, at, finding_id=fid,
+                                  payload=payload))
         # `at` is the run's IDENTITY stamp and every event in the run carries
         # it, so on its own RUN_FINISHED could not tell a ten-minute gate from
         # a one-second one (interop round 130 s3 -- the consumer had to read

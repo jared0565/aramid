@@ -309,6 +309,15 @@ def cmd_override(root, finding_id: str, reason: str) -> int:
             print(f"aramid: override: {finding_id} is unreachable -- its tool does not "
                   f"run in this repo, so there is nothing to override", file=sys.stderr)
             return 3
+        # Same argument for a REWRITTEN line: its old id is not the row that
+        # needs a decision -- the sibling that replaced it is still open --
+        # and an override here would stop a revert of the rewrite from
+        # re-detecting, since overridden findings never resurrect.
+        if rec.get("status") == "superseded":
+            print(f"aramid: override: {finding_id} is superseded -- "
+                  f"{rec.get('reason') or 'its line was rewritten'}; decide on that "
+                  f"finding instead", file=sys.stderr)
+            return 3
 
         # Loaded HERE, and a failure refuses rather than falling through to the
         # stored verdict: whether this finding is BLOCK-tier is a question about

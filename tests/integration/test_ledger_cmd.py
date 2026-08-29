@@ -859,3 +859,25 @@ def test_an_unreadable_config_fails_the_query_rather_than_reporting_null_tiers(
 
     assert rc == 3
     assert "config" in err.lower()
+
+
+def test_mark_unreachable_refuses_a_superseded_finding_and_points_at_its_successor(
+        tmp_path, capsys, monkeypatch):
+    """Round 135 s3: a rewritten line resolves as `superseded`, not `fixed`.
+    The old id is not open, so retiring it by hand is refused -- and the
+    refusal names the sibling that replaced it, which is the row that now
+    needs a decision."""
+    from aramid import config as config_mod
+    root: Path = tmp_path
+    monkeypatch.setattr(config_mod, "_user_config_path", lambda: tmp_path / "no-user.toml")
+    ledger = _ledger(root)
+    ledger.record_run("r1", "t1", "pre-push", {"ruff"}, {"a.py"}, [_f("old", tool="ruff")])
+    ledger.record_run("r2", "t2", "pre-push", {"ruff"}, {"a.py"}, [_f("new", tool="ruff")])
+    ledger.close()
+
+    rc = cmd_ledger_mark_unreachable(root, "old", "a reason")
+    err = capsys.readouterr().err
+
+    assert rc == 3
+    assert "status=superseded" in err
+    assert "new" in err, "the refusal must name the successor"

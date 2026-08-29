@@ -476,3 +476,28 @@ def test_an_unreadable_config_refuses_rather_than_falling_back_to_the_stored_ver
         assert [e for e in ledger.events() if e.type.value == "finding_overridden"] == []
     finally:
         ledger.close()
+
+
+def test_a_superseded_finding_is_refused_and_points_at_its_successor(tmp_path, capsys):
+    """Same shape as the unreachable refusal (T-8 section 7.1), same cost if
+    allowed: overriding the OLD id of a rewritten line grants nothing -- the
+    sibling that replaced it is still open -- and would stop a revert of the
+    rewrite from re-detecting, because overridden findings never resurrect.
+    Round 135 s3."""
+    root: Path = tmp_path
+    ledger = _ledger(root)
+    ledger.record_run("r1", "t1", "pre-push", {"ruff"}, {"a.py"}, [_f("old", tool="ruff")])
+    ledger.record_run("r2", "t2", "pre-push", {"ruff"}, {"a.py"}, [_f("new", tool="ruff")])
+    ledger.close()
+
+    rc = cmd_override(root, "old", "let me override it anyway")
+    err = capsys.readouterr().err
+
+    assert rc == 3
+    assert "superseded" in err and "new" in err
+    ledger = _ledger(root)
+    try:
+        assert ledger.open_findings()["old"]["status"] == "superseded"
+        assert [e for e in ledger.events() if e.type.value == "finding_overridden"] == []
+    finally:
+        ledger.close()

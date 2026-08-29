@@ -22,6 +22,11 @@ class Status(StrEnum):
     # matches the substring "SECRET" in the identifier, nothing else.
     NOT_A_SECRET = "not_a_secret"  # noqa: S105
     UNREACHABLE = "unreachable"
+    # The line was REWRITTEN, not repaired: ids hash content, so a rewrite
+    # is a new id, and the old one vanishes in the same run a sibling of the
+    # same tool/rule/file appears nearby. `fixed` is what this used to read
+    # -- at exactly the moment the call was being rewritten (round 135 s3).
+    SUPERSEDED = "superseded"
 class Gate(StrEnum):
     PRE_COMMIT = "pre-commit"
     PRE_PUSH = "pre-push"

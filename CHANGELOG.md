@@ -12,6 +12,22 @@ to publish a tag that disagrees with it.
 
 ### Added
 
+- **A rewritten line resolves as `superseded`, not `fixed`.** Ids hash
+  content, so rewriting a flagged call re-keys its row: the old id vanished
+  and a new one opened on the same call in the same run, and the ledger
+  wrote `fixed` for the old one -- at exactly the moment the call was being
+  rewritten, which is when the finding most needs re-reading (interop
+  round 135 s3; `rebaseline` had documented the shape as expected).
+  `record_run` now pairs each vanished open finding with the nearest NEW
+  finding of the same tool, rule and file within 40 lines, each sibling
+  claiming at most one; the resolve event carries `superseded_by`, the row
+  reads `[superseded]` with `reason: rewritten -- superseded by <id>`, and
+  `status` gains a `superseded:` bucket. Same tool/rule/file alone is not
+  enough -- a site genuinely fixed while an unrelated one appears 300 lines
+  away stays `fixed`. A superseded id re-detects if a revert brings its
+  content back; `override` and `mark-unreachable` refuse it and name the
+  successor, since that is the row that needs the decision.
+
 - **`run_finished` now says when the run finished.** Every event in a
   run carries the run's `at`, which is its identity stamp -- so the
   ledger could not tell a ten-minute gate from a one-second one, and a
