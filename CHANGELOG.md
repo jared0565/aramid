@@ -10,6 +10,23 @@ to publish a tag that disagrees with it.
 
 ## [Unreleased]
 
+### Fixed
+
+- **The typecheck runner hands mypy only Python files.** It passed the
+  gate's whole file set, and mypy tokenises any explicit path as Python: a
+  push whose only change was `.github/workflows/ci.yml` blocked on a
+  BLOCK-tier `mypy:syntax` ("Leading zeros in decimal integer literals"),
+  while two non-Python files in range made mypy bail on a duplicate
+  `__main__` before parsing and the push passed -- the same edit
+  false-failing or false-passing on what else was in the range. Reported
+  with logs by the graphite agent (interop round 139). Now scoped to
+  `.py`/`.pyi` like the ruff runner; with no Python in range it is a clean
+  no-op that invokes nothing and vouches for nothing (`examined` is the empty
+  set), so no finding resolves off a run that never looked. A mypy finding
+  already recorded against a non-Python file stays open under its
+  suppression -- this runner will never examine that file again -- which is
+  a named follow-up, not a silent close.
+
 ## [0.6.0] — 2026-08-29
 
 ### Added

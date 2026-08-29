@@ -196,3 +196,47 @@ def test_run_mypy_argv(tmp_path, monkeypatch):
     assert "--no-error-summary" in argv
     assert "--show-column-numbers" in argv
     assert "a.py" in argv
+
+
+# --- mypy is handed ONLY Python files (graphite, interop round 139 s1) --------
+
+def test_run_mypy_hands_mypy_only_python_files(tmp_path, monkeypatch):
+    """`ctx.files` is the gate's whole file set, and mypy tokenises whatever
+    path it is given as Python. Measured by graphite on its own gate: a lone
+    `ci.yml` in range became a BLOCK-tier `mypy:syntax` on its first
+    tokenizer error ("Leading zeros in decimal integer literals"), while two
+    non-Python files made mypy bail on a duplicate `__main__` before parsing
+    and the push passed. Same edit, opposite verdicts, decided by what else
+    was in the range. Mirror of the ruff runner's `_py_files` scoping."""
+    captured = {}
+
+    def fake_run_subprocess(argv, cwd, timeout_s, env=None):
+        captured["argv"] = argv
+        return RunnerResult(tool="mypy", state=ToolState.OK, raw="")
+    monkeypatch.setattr(typecheck, "run_subprocess", fake_run_subprocess)
+
+    typecheck.run_mypy(RunContext(root=tmp_path, files=[
+        "a.py", ".github/workflows/ci.yml", "CONTRIBUTING.md", "pkg/b.pyi", "Makefile"]))
+
+    assert captured["argv"][-2:] == ["a.py", "pkg/b.pyi"], captured["argv"]
+    assert not [p for p in captured["argv"] if p.endswith((".yml", ".md")) or p == "Makefile"]
+
+
+def test_run_mypy_with_no_python_in_range_is_a_clean_no_op(tmp_path, monkeypatch):
+    """No invocation at all: mypy given zero paths would fall back to its
+    config's `files=` (or complain), and either way it would be a run that
+    examined none of the range. OK, and vouching for nothing -- the empty
+    set, not None, so nothing resolves off a run that never looked."""
+    calls = []
+
+    def fake_run_subprocess(*a, **k):
+        calls.append(a)
+        return RunnerResult("mypy", ToolState.OK, raw="")
+    monkeypatch.setattr(typecheck, "run_subprocess", fake_run_subprocess)
+
+    result = typecheck.run_mypy(RunContext(root=tmp_path, files=[".github/workflows/ci.yml"]))
+
+    assert calls == [], "a no-op must not invoke mypy"
+    assert result.tool == typecheck.NAME_MYPY and result.state is ToolState.OK
+    assert result.examined == frozenset()
+    assert typecheck.parse(result, RunContext(root=tmp_path, files=[])) == []

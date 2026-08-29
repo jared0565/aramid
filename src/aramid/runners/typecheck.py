@@ -9,7 +9,9 @@ tsc only runs when tsconfig.json exists at the repo root, resolved
 repo-locally like eslint (node_modules/.bin/tsc[.cmd], MISSING if absent,
 never a global fallback). mypy only runs when a mypy config
 ([tool.mypy] in pyproject.toml, or mypy.ini) is present, and is looked up
-on PATH (it isn't part of aramid's own owned/vendored toolchain).
+on PATH (it isn't part of aramid's own owned/vendored toolchain). It is
+handed only the `.py`/`.pyi` files in range -- see `_PY_SUFFIXES` for the
+false BLOCK that handing it everything produced.
 """
 import dataclasses
 import re
@@ -132,8 +134,31 @@ def run_tsc(ctx) -> RunnerResult:
     return dataclasses.replace(result, raw=raw, examined=examined)
 
 
+# ctx.files is the gate's whole file set. mypy tokenises whatever explicit
+# path it is handed as Python, so a YAML or Markdown file in range is a
+# `syntax` error at its first odd token -- BLOCK-tier, since the rule id
+# says "syntax". Measured by graphite on its own gate (interop round 139):
+# a lone `ci.yml` blocked a push on "Leading zeros in decimal integer
+# literals"; two non-Python files made mypy bail on a duplicate `__main__`
+# BEFORE parsing and the push passed. Same edit, opposite verdicts, decided
+# by what else was in the range. Same scoping as the ruff runner.
+_PY_SUFFIXES = (".py", ".pyi")
+
+
+def _py_files(ctx) -> list[str]:
+    return [f for f in ctx.files if f.lower().endswith(_PY_SUFFIXES)]
+
+
 def run_mypy(ctx) -> RunnerResult:
-    argv = ["mypy", "--no-error-summary", "--show-column-numbers", *ctx.files]
+    files = _py_files(ctx)
+    if not files:
+        # No Python in scope: a clean no-op, NOT a tool invocation -- mypy
+        # given zero paths falls back to its config's `files=` (or errors),
+        # either way a run that looked at none of the range. It examined
+        # nothing and says so (the empty set, not None), so nothing
+        # resolves off this run.
+        return RunnerResult(NAME_MYPY, ToolState.OK, raw="", examined=frozenset())
+    argv = ["mypy", "--no-error-summary", "--show-column-numbers", *files]
     return run_subprocess(argv, ctx.root, TIMEOUT_S)
 
 
