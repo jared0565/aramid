@@ -282,3 +282,45 @@ def test_expected_is_a_subset_of_selected(tmp_path, monkeypatch):
     selected = toolset.selected_tool_names(root, cfg)
     for gate in (Gate.PRE_COMMIT, Gate.PRE_PUSH):
         assert toolset.expected_tool_names(root, cfg, gate) <= selected, gate
+
+
+# --- examines_path: does THIS runner ever look at THIS path? -----------------
+# The predicate `ledger resolve --out-of-scope` gates on. Read from each
+# runner's own suffix constant, never a second copy, so the runner and the
+# retire path cannot drift apart (round 139 was exactly a runner whose scope
+# changed).
+
+def test_examines_path_reads_each_runners_own_suffix_rule():
+    from aramid.runners import eslint, ruff, typecheck
+    assert toolset.examines_path("ruff", "a.py") is True
+    assert toolset.examines_path("ruff", ".github/workflows/ci.yml") is False
+    assert toolset.examines_path("mypy", "pkg/b.pyi") is True
+    assert toolset.examines_path("mypy", "README.md") is False
+    assert toolset.examines_path("eslint", "src/app.tsx") is True
+    assert toolset.examines_path("eslint", "Makefile") is False
+    assert toolset.examines_path("clippy", "src/lib.rs") is True
+    assert toolset.examines_path("clippy", "Cargo.toml") is False
+    # The table is the runners' constants, not a copy of them.
+    assert all(toolset.examines_path("ruff", f"x{s}") for s in ruff._PY_SUFFIXES)
+    assert all(toolset.examines_path("mypy", f"x{s}") for s in typecheck._PY_SUFFIXES)
+    assert all(toolset.examines_path("eslint", f"x{s}") for s in eslint._JS_SUFFIXES)
+
+
+def test_examines_path_is_unknown_for_a_tool_without_a_suffix_scope():
+    """gitleaks and semgrep read every file; tests/deps scope by manifest and
+    suite, not by suffix. None means "cannot say", which the retire path
+    treats as a refusal -- never as permission."""
+    for tool in ("gitleaks", "semgrep", "tests", "pytest", "pip-audit", "npm", "tsc"):
+        assert toolset.examines_path(tool, "anything.yml") is None, tool
+
+
+def test_out_of_scope_candidates_are_open_selected_and_unexaminable():
+    state = {
+        "a": {"status": "open", "tool": "mypy", "file": ".github/workflows/ci.yml"},
+        "b": {"status": "open", "tool": "mypy", "file": "pkg/x.py"},        # still examinable
+        "c": {"status": "open", "tool": "gitleaks", "file": "ci.yml"},     # scope unknown
+        "d": {"status": "open", "tool": "ruff", "file": "ci.yml"},         # ruff NOT selected
+        "e": {"status": "fixed", "tool": "mypy", "file": "ci.yml"},        # not open
+    }
+    got = toolset.out_of_scope_candidates(state, selected={"mypy", "gitleaks"})
+    assert set(got) == {"a"}

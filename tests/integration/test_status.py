@@ -1084,3 +1084,51 @@ def test_status_last_run_line_stays_silent_about_duration_on_an_older_ledger(
     assert rc == 0
     assert "last run: 2026-08-29T10:00:00+00:00 (run run1, 0 blocking)" in out
     assert "took" not in out.split("last run:")[1].splitlines()[0]
+
+
+# ----------------------------------------------- out-of-scope candidates ---
+
+def test_status_lists_out_of_scope_candidate_and_the_exact_resolve_command(
+        tmp_path, monkeypatch, capsys):
+    """Interop round 144: two `mypy:syntax` rows recorded against `ci.yml`
+    and `README.md` before the runner was scoped to .py/.pyi. Their tool is
+    still selected, so they are not ghosts; their path is one the runner will
+    never examine again, so they can never resolve. `status` has to say so
+    and name the command, or the operator must already suspect it."""
+    root = _repo(tmp_path)                       # writes a.py -> ruff selected
+    _no_user_config(tmp_path, monkeypatch)
+    _write_toml(root, armed=True, bake_started=None)
+
+    ledger = Ledger(root / ".aramid" / "ledger.db")
+    ledger.record_run("run1", "2026-01-01T00:00:00+00:00", "pre-commit", {"ruff"},
+                      {".github/workflows/ci.yml"},
+                      [_f("f1", tool="ruff", rule="syntax", file=".github/workflows/ci.yml")])
+    ledger.close()
+
+    rc = cmd_status(root)
+    out = capsys.readouterr().out
+
+    assert rc == 0
+    assert "out-of-scope candidates:" in out
+    assert "`aramid ledger resolve f1 --out-of-scope --reason ...`" in out
+    assert "unreachable candidates:" not in out, "ruff is still selected -- not a ghost"
+
+
+def test_status_counts_out_of_scope_findings_in_their_own_bucket(tmp_path, monkeypatch, capsys):
+    root = _repo(tmp_path)
+    _no_user_config(tmp_path, monkeypatch)
+    _write_toml(root, armed=True, bake_started=None)
+
+    ledger = Ledger(root / ".aramid" / "ledger.db")
+    ledger.record_run("run1", "2026-01-01T00:00:00+00:00", "pre-commit", {"ruff"},
+                      {"ci.yml"}, [_f("f1", tool="ruff", file="ci.yml")])
+    ledger.append(Event(EventType.FINDING_OUT_OF_SCOPE, "r2", "2026-01-02T00:00:00+00:00",
+                        finding_id="f1", payload={"reason": "scoped", "tool": "ruff", "file": "ci.yml"}))
+    ledger.close()
+
+    rc = cmd_status(root)
+    out = capsys.readouterr().out
+
+    assert rc == 0
+    assert "open findings: 0" in out
+    assert "out-of-scope: 1" in out

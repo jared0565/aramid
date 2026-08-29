@@ -881,3 +881,151 @@ def test_mark_unreachable_refuses_a_superseded_finding_and_points_at_its_success
     assert rc == 3
     assert "status=superseded" in err
     assert "new" in err, "the refusal must name the successor"
+
+
+def _resolve(root, finding_id, out_of_scope, reason):
+    """Lazy import: while the command does not exist yet this reads as a
+    failing test, not a broken file."""
+    from aramid.commands.ledger_cmd import cmd_ledger_resolve
+    return cmd_ledger_resolve(root, finding_id, out_of_scope=out_of_scope, reason=reason)
+
+
+# --- resolve --out-of-scope: a runner that no longer EXAMINES the path ----------
+# Interop rounds 139/144/145. The typecheck runner used to hand mypy every file
+# in range; once scoped to .py/.pyi, a `mypy:syntax` row recorded against
+# `ci.yml` can never resolve -- resolution needs a run that EXAMINES the file,
+# and this runner never will again -- and `mark-unreachable` refuses because
+# mypy is still selected. The consumer chose (ii): a resolution that records
+# WHY as its own event kind, refusing while a selected runner can still
+# examine the path so it cannot become a general-purpose silencer.
+
+def _python_repo(tmp_path, monkeypatch) -> Path:
+    from aramid import config as config_mod
+    monkeypatch.setattr(config_mod, "_user_config_path", lambda: tmp_path / "no-user.toml")
+    (tmp_path / "pyproject.toml").write_text("[tool.x]\n", encoding="utf-8")  # ruff selected
+    return tmp_path
+
+
+def test_resolve_out_of_scope_retires_a_finding_its_runner_no_longer_examines(
+        tmp_path, capsys, monkeypatch):
+    root = _python_repo(tmp_path, monkeypatch)
+    ledger = _ledger(root)
+    ledger.record_run("r1", "t1", "pre-push", {"ruff"}, {".github/workflows/ci.yml"},
+                      [_f("f1", tool="ruff", file=".github/workflows/ci.yml")])
+    ledger.close()
+
+    rc = _resolve(root, "f1", out_of_scope=True,
+                            reason="runner scoped to .py/.pyi in 0.6.1")
+    out = capsys.readouterr()
+
+    assert rc == 0, out.err
+    ledger = _ledger(root)
+    try:
+        rec = ledger.open_findings()["f1"]
+        assert rec["status"] == "out_of_scope"
+        assert rec["reason"] == "runner scoped to .py/.pyi in 0.6.1"
+        events = [e for e in ledger.events() if e.type.value == "finding_out_of_scope"]
+        assert len(events) == 1 and events[0].payload["tool"] == "ruff"
+    finally:
+        ledger.close()
+
+
+def test_resolve_out_of_scope_refuses_while_the_runner_still_examines_the_path(
+        tmp_path, capsys, monkeypatch):
+    """The guard the consumer asked for: a `.py` path is still ruff's to
+    examine, so the next run that looks resolves or re-reports it -- by hand
+    is a silencer."""
+    root = _python_repo(tmp_path, monkeypatch)
+    ledger = _ledger(root)
+    ledger.record_run("r1", "t1", "pre-push", {"ruff"}, {"a.py"}, [_f("f1", tool="ruff", file="a.py")])
+    ledger.close()
+
+    rc = _resolve(root, "f1", out_of_scope=True, reason="please")
+    err = capsys.readouterr().err
+
+    assert rc == 3
+    assert "still examines" in err and "a.py" in err
+    ledger = _ledger(root)
+    try:
+        assert ledger.open_findings()["f1"]["status"] == "open"
+    finally:
+        ledger.close()
+
+
+def test_resolve_out_of_scope_refuses_a_tool_that_examines_every_file(
+        tmp_path, capsys, monkeypatch):
+    """gitleaks has no suffix scope, so no path can be out of ITS scope;
+    a vanished secret resolves on the next run like any other finding."""
+    root = _python_repo(tmp_path, monkeypatch)
+    ledger = _ledger(root)
+    ledger.record_run("r1", "t1", "pre-push", {"gitleaks"}, {"ci.yml"},
+                      [_f("f1", tool="gitleaks", file="ci.yml")])
+    ledger.close()
+
+    rc = _resolve(root, "f1", out_of_scope=True, reason="please")
+    err = capsys.readouterr().err
+
+    assert rc == 3
+    assert "gitleaks" in err and "every file" in err
+
+
+def test_resolve_out_of_scope_redirects_to_mark_unreachable_when_the_tool_left(
+        tmp_path, capsys, monkeypatch):
+    """No pyproject: ruff is not selected at all. That is the OTHER retire
+    path's case, and the two must not blur into each other."""
+    from aramid import config as config_mod
+    root: Path = tmp_path
+    monkeypatch.setattr(config_mod, "_user_config_path", lambda: tmp_path / "no-user.toml")
+    ledger = _ledger(root)
+    ledger.record_run("r1", "t1", "pre-push", {"ruff"}, {"ci.yml"}, [_f("f1", tool="ruff", file="ci.yml")])
+    ledger.close()
+
+    rc = _resolve(root, "f1", out_of_scope=True, reason="please")
+    err = capsys.readouterr().err
+
+    assert rc == 3
+    assert "mark-unreachable" in err
+
+
+def test_resolve_without_a_kind_is_refused(tmp_path, capsys, monkeypatch):
+    root = _python_repo(tmp_path, monkeypatch)
+    ledger = _ledger(root)
+    ledger.record_run("r1", "t1", "pre-push", {"ruff"}, {"ci.yml"}, [_f("f1", tool="ruff", file="ci.yml")])
+    ledger.close()
+
+    rc = _resolve(root, "f1", out_of_scope=False, reason="please")
+    err = capsys.readouterr().err
+
+    assert rc == 3
+    assert "--out-of-scope" in err
+
+
+def test_resolve_out_of_scope_requires_a_reason_and_an_open_finding(tmp_path, capsys, monkeypatch):
+    root = _python_repo(tmp_path, monkeypatch)
+    ledger = _ledger(root)
+    ledger.record_run("r1", "t1", "pre-push", {"ruff"}, {"ci.yml"}, [_f("f1", tool="ruff", file="ci.yml")])
+    ledger.close()
+
+    assert _resolve(root, "f1", out_of_scope=True, reason="  ") == 3
+    assert "--reason is required" in capsys.readouterr().err
+    assert _resolve(root, "f1", out_of_scope=True, reason="ok") == 0
+    capsys.readouterr()
+    assert _resolve(root, "f1", out_of_scope=True, reason="again") == 3
+    assert "status=out_of_scope" in capsys.readouterr().err
+
+
+def test_an_out_of_scope_finding_reopens_if_its_runner_reports_it_again(tmp_path, capsys, monkeypatch):
+    """Like `fixed`, `unreachable` and `superseded`: a resting state a
+    re-detect leaves. If a future runner ever examines the path and reports
+    the same content, the row is open again."""
+    root = _python_repo(tmp_path, monkeypatch)
+    ledger = _ledger(root)
+    ledger.record_run("r1", "t1", "pre-push", {"ruff"}, {"ci.yml"}, [_f("f1", tool="ruff", file="ci.yml")])
+    ledger.close()
+    assert _resolve(root, "f1", out_of_scope=True, reason="scoped") == 0
+    ledger = _ledger(root)
+    try:
+        ledger.record_run("r2", "t2", "pre-push", {"ruff"}, {"ci.yml"}, [_f("f1", tool="ruff", file="ci.yml")])
+        assert ledger.open_findings()["f1"]["status"] == "open"
+    finally:
+        ledger.close()

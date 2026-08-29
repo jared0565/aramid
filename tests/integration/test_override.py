@@ -501,3 +501,28 @@ def test_a_superseded_finding_is_refused_and_points_at_its_successor(tmp_path, c
         assert [e for e in ledger.events() if e.type.value == "finding_overridden"] == []
     finally:
         ledger.close()
+
+
+def test_an_out_of_scope_finding_is_refused(tmp_path, capsys):
+    """Same shape as unreachable/superseded: the row is resolved for a
+    recorded reason; an override on it grants nothing and would stop a
+    future re-detect from resurrecting it."""
+    from aramid.models import Event, EventType
+    root: Path = tmp_path
+    ledger = _ledger(root)
+    ledger.record_run("r1", "t1", "pre-push", {"ruff"}, {"ci.yml"}, [_f("f1", tool="ruff", file="ci.yml")])
+    ledger.append(Event(EventType.FINDING_OUT_OF_SCOPE, "r2", "t2",
+                        finding_id="f1", payload={"reason": "scoped", "tool": "ruff", "file": "ci.yml"}))
+    ledger.close()
+
+    rc = cmd_override(root, "f1", "let me override it anyway")
+    err = capsys.readouterr().err
+
+    assert rc == 3
+    assert "out of scope" in err or "out_of_scope" in err
+    ledger = _ledger(root)
+    try:
+        assert ledger.open_findings()["f1"]["status"] == "out_of_scope"
+        assert [e for e in ledger.events() if e.type.value == "finding_overridden"] == []
+    finally:
+        ledger.close()

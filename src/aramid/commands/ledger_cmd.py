@@ -345,6 +345,7 @@ def cmd_ledger_mark_unreachable(root, finding_id: str, reason: str) -> int:
                 # The line was rewritten; the sibling that replaced it is the
                 # row that now needs a decision. `reason` carries its id.
                 "superseded": f"{rec.get('reason') or 'rewritten'} -- decide on that finding instead.",
+                "out_of_scope": "already resolved as out of scope.",
             }
             tail = tails.get(status, "mark-unreachable only applies to an open finding.")
             print(f"aramid: ledger mark-unreachable: {finding_id} is not open "
@@ -361,6 +362,99 @@ def cmd_ledger_mark_unreachable(root, finding_id: str, reason: str) -> int:
         ledger.append(Event(EventType.FINDING_UNREACHABLE, uuid.uuid4().hex, _now(),
                              finding_id=finding_id, payload={"reason": reason}))
         print(f"aramid: ledger: {finding_id} marked unreachable ({reason})")
+        return 0
+    finally:
+        ledger.close()
+
+
+# ---------------------------------------------------------------- resolve ---
+
+def cmd_ledger_resolve(root, finding_id: str, out_of_scope: bool, reason: str) -> int:
+    """`aramid ledger resolve <id> --out-of-scope --reason R`: retire an OPEN
+    runner finding whose tool still runs here but whose path that runner no
+    longer examines, recording WHY as its own event kind.
+
+    The case, interop rounds 139/144/145: the typecheck runner used to hand
+    mypy every file in range; scoped to `.py`/`.pyi`, a `mypy:syntax` row
+    recorded against `ci.yml` can never resolve -- resolution needs a run
+    that EXAMINES the file and this runner never will again -- while
+    `mark-unreachable` rightly refuses, because mypy is still selected. The
+    consumer chose this shape over widening `mark-unreachable` because the
+    ledger must later be able to tell "the tool left" from "the path left
+    the tool's scope" without reading payloads.
+
+    The guard that keeps it from becoming a silencer: it refuses while a
+    selected runner CAN still examine the path -- decided by the runner's
+    own suffix rule (`toolset.examines_path`), and refused outright for a
+    tool with no such rule, since "cannot say" is not "no". A tool that is
+    not selected at all is `mark-unreachable`'s case and is redirected
+    there. Exit 3 on every refusal; a re-detect by the runner re-opens the
+    row exactly as it does for `fixed` and `unreachable`."""
+    root = Path(root)
+    reason = (reason or "").strip()
+    if not out_of_scope:
+        print("aramid: ledger resolve: --out-of-scope is required -- it is the only "
+              "resolution a person can record; a finding that is simply gone "
+              "resolves on the next run that examines its file", file=sys.stderr)
+        return 3
+    if not reason:
+        print("aramid: ledger resolve: --reason is required", file=sys.stderr)
+        return 3
+
+    try:
+        cfg = config_mod.load_config(root)
+    except Exception as exc:
+        print(f"aramid: ledger resolve: engine error: {exc}", file=sys.stderr)
+        return 3
+
+    ledger = Ledger(root / ".aramid" / "ledger.db")
+    try:
+        state = ledger.open_findings()
+        rec = state.get(finding_id)
+        if rec is None:
+            print(f"aramid: ledger resolve: unknown finding id {finding_id}", file=sys.stderr)
+            return 3
+
+        tool = str(rec.get("tool"))
+        path = str(rec.get("file") or "")
+        if tool not in toolset.RUNNER_TOOL_NAMES:
+            print(f"aramid: ledger resolve: {finding_id} is a {tool!r} finding -- "
+                  f"producer/consumer findings resolve through their own producer's "
+                  f"mechanism, never by hand", file=sys.stderr)
+            return 3
+
+        status = rec.get("status")
+        if status != "open":
+            print(f"aramid: ledger resolve: {finding_id} is not open (status={status}) "
+                  f"-- resolve --out-of-scope only applies to an open finding",
+                  file=sys.stderr)
+            return 3
+
+        selected = toolset.selected_tool_names(root, cfg)
+        if tool not in selected:
+            print(f"aramid: ledger resolve: {finding_id}'s tool ({tool}) no longer runs "
+                  f"in this repo at all -- that is `aramid ledger mark-unreachable "
+                  f"{finding_id} --reason ...`, not out-of-scope", file=sys.stderr)
+            return 3
+
+        examines = toolset.examines_path(tool, path)
+        if examines is None:
+            print(f"aramid: ledger resolve: {tool} examines every file it is handed "
+                  f"(no suffix scope), so no path is out of its scope -- if the "
+                  f"finding is gone, the next run that examines {path} resolves it",
+                  file=sys.stderr)
+            return 3
+        if examines:
+            print(f"aramid: ledger resolve: {tool} still examines {path} here -- the "
+                  f"next run that looks at it resolves or re-reports {finding_id}; "
+                  f"resolving it by hand would be a silencer", file=sys.stderr)
+            return 3
+
+        ledger.append(Event(EventType.FINDING_OUT_OF_SCOPE, uuid.uuid4().hex, _now(),
+                            finding_id=finding_id,
+                            payload={"reason": reason, "tool": tool, "file": path}))
+        print(f"aramid: ledger: {finding_id} resolved as out of scope -- {tool} no "
+              f"longer examines {path} ({reason})")
         return 0
     finally:
         ledger.close()

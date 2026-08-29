@@ -27,6 +27,12 @@ class Status(StrEnum):
     # same tool/rule/file appears nearby. `fixed` is what this used to read
     # -- at exactly the moment the call was being rewritten (round 135 s3).
     SUPERSEDED = "superseded"
+    # Its runner still runs here but no longer EXAMINES this path (a runner
+    # whose file scope narrowed -- typecheck to .py/.pyi, round 139), so no
+    # run can ever resolve it and `mark-unreachable` rightly refuses. Set
+    # only by `ledger resolve --out-of-scope`, which records WHY as its own
+    # event kind and refuses while the runner can still examine the path.
+    OUT_OF_SCOPE = "out_of_scope"
 class Gate(StrEnum):
     PRE_COMMIT = "pre-commit"
     PRE_PUSH = "pre-push"
@@ -45,6 +51,11 @@ class EventType(StrEnum):
     # EventType member name/value, not a credential.
     FINDING_NOT_A_SECRET = "finding_not_a_secret"  # noqa: S105
     FINDING_UNREACHABLE = "finding_unreachable"
+    # A resolution by hand for a path the finding's runner no longer
+    # examines. Its own kind rather than a FINDING_RESOLVED with a note:
+    # the ledger must be able to tell "a run examined the file and it was
+    # clean" from "a person said no run ever will" without reading payloads.
+    FINDING_OUT_OF_SCOPE = "finding_out_of_scope"
     # The same finding, at a new line. Its own event type rather than a
     # re-issued FINDING_DETECTED because `_materialize` rebuilds a finding's
     # WHOLE record from a detect payload and resets `status` to open -- so

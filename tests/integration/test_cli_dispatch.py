@@ -494,3 +494,27 @@ def test_schedule_dispatch_maps_action(monkeypatch):
 
     assert rc == 0
     assert captured["action"] == "install"
+
+
+def test_ledger_resolve_out_of_scope_dispatch(monkeypatch):
+    captured = {}
+    monkeypatch.setattr(cli, "cmd_ledger_resolve",
+                         lambda root, id, out_of_scope, reason: captured.update(
+                             id=id, out_of_scope=out_of_scope, reason=reason) or 0)
+
+    assert cli.main(["ledger", "resolve", "abc123", "--out-of-scope",
+                     "--reason", "runner scoped to .py/.pyi"]) == 0
+
+    assert captured == {"id": "abc123", "out_of_scope": True,
+                        "reason": "runner scoped to .py/.pyi"}
+
+
+def test_ledger_resolve_without_out_of_scope_flag_still_reaches_the_command(monkeypatch):
+    """The refusal is the command's, with its own message -- not argparse's."""
+    captured = {}
+    monkeypatch.setattr(cli, "cmd_ledger_resolve",
+                         lambda root, id, out_of_scope, reason: captured.update(
+                             out_of_scope=out_of_scope) or 3)
+
+    assert cli.main(["ledger", "resolve", "abc123", "--reason", "x"]) == 3
+    assert captured["out_of_scope"] is False

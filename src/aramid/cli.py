@@ -28,6 +28,7 @@ from aramid.commands.ledger_cmd import (
     cmd_ledger_mark_not_a_secret,
     cmd_ledger_mark_rotated,
     cmd_ledger_mark_unreachable,
+    cmd_ledger_resolve,
     cmd_ledger_show,
 )
 from aramid.commands.mutation_score import cmd_mutation_score
@@ -111,6 +112,12 @@ def build_parser() -> argparse.ArgumentParser:
     p_unreachable = ledger_sub.add_parser("mark-unreachable")
     p_unreachable.add_argument("id")
     p_unreachable.add_argument("--reason", required=True)
+    p_resolve = ledger_sub.add_parser("resolve")
+    p_resolve.add_argument("id")
+    p_resolve.add_argument("--out-of-scope", action="store_true", dest="out_of_scope",
+                           help="the finding's runner still runs here but no longer "
+                                "examines this path (its file scope narrowed)")
+    p_resolve.add_argument("--reason", required=True)
 
     p_override = sub.add_parser("override", help="suppress a WARN finding (ledger-logged)")
     p_override.add_argument("id")
@@ -263,8 +270,10 @@ def main(argv: list[str] | None = None) -> int:
             return cmd_ledger_mark_not_a_secret(root, args.id, args.reason)
         if args.ledger_command == "mark-unreachable":
             return cmd_ledger_mark_unreachable(root, args.id, args.reason)
+        if args.ledger_command == "resolve":
+            return cmd_ledger_resolve(root, args.id, args.out_of_scope, args.reason)
         print("aramid: ledger: a subcommand is required "
-              "(list|show|filter|mark-rotated|mark-not-a-secret|mark-unreachable)",
+              "(list|show|filter|mark-rotated|mark-not-a-secret|mark-unreachable|resolve)",
               file=sys.stderr)
         return 3
 

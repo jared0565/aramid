@@ -12,6 +12,22 @@ to publish a tag that disagrees with it.
 
 ### Added
 
+- **`aramid ledger resolve <id> --out-of-scope --reason …`** retires a
+  finding whose tool still runs here but whose runner will never examine
+  that path again. The case (interop rounds 139/144/145): once the
+  typecheck runner was scoped to `.py`/`.pyi`, `mypy:syntax` rows recorded
+  against `ci.yml` and `README.md` could neither re-report nor resolve,
+  and `mark-unreachable` rightly refused because mypy was still selected.
+  It records `finding_out_of_scope` -- its own event kind, chosen by the
+  consumer so the ledger can tell "the tool left" from "the path left the
+  tool's scope" without reading payloads -- and the row reads
+  `out_of_scope` with the reason. Refuses while the runner can still
+  examine the path (each runner's own suffix rule, read from the runner,
+  never copied), refuses outright for a tool with no suffix scope, and
+  redirects to `mark-unreachable` when the tool is not selected. `status`
+  lists "out-of-scope candidates" with the exact command and counts the
+  new bucket; `override` refuses the status; a re-detect re-opens it.
+
 - **`doctor` reports a stale or missing relocated shim, read-only.** When
   another managing tool's trampoline occupies a hook slot, aramid's own
   shim survives relocated beside it; `install()` regenerates that sibling

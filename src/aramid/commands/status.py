@@ -56,6 +56,7 @@ def _open_counts_line(state: dict) -> str:
             f"unreachable: {counts.get('unreachable', 0)}, "
             f"fixed: {counts.get('fixed', 0)}, "
             f"superseded: {counts.get('superseded', 0)}, "
+            f"out-of-scope: {counts.get('out_of_scope', 0)}, "
             f"rotated: {counts.get('rotated', 0)})")
 
 
@@ -199,6 +200,22 @@ def _unreachable_candidate_lines(root: Path, cfg, state: dict) -> list[str]:
         f"  {fid} {rec.get('tool')}:{rec.get('rule')} {rec.get('file')} -- "
         f"tool no longer runs in this repo? "
         f"`aramid ledger mark-unreachable {fid} --reason ...`"
+        for fid, rec in candidates.items()
+    ]
+
+
+def _out_of_scope_candidate_lines(root: Path, cfg, state: dict) -> list[str]:
+    """The other stranded shape: an open finding whose tool is still selected
+    (so it is not a ghost) but whose path that tool's runner will never
+    examine again (so no run can resolve it). Interop round 144: two
+    `mypy:syntax` rows on `ci.yml`/`README.md` after the runner was scoped
+    to .py/.pyi. One line per candidate, naming the exact command."""
+    selected = toolset.selected_tool_names(root, cfg)
+    candidates = toolset.out_of_scope_candidates(state, selected)
+    return [
+        f"  {fid} {rec.get('tool')}:{rec.get('rule')} {rec.get('file')} -- "
+        f"{rec.get('tool')} no longer examines this path? "
+        f"`aramid ledger resolve {fid} --out-of-scope --reason ...`"
         for fid, rec in candidates.items()
     ]
 
@@ -574,6 +591,10 @@ def cmd_status(root) -> int:
         if unreachable_candidates:
             lines.append("  unreachable candidates:")
             lines.extend(unreachable_candidates)
+        out_of_scope_candidates = _out_of_scope_candidate_lines(root, cfg, state)
+        if out_of_scope_candidates:
+            lines.append("  out-of-scope candidates:")
+            lines.extend(out_of_scope_candidates)
 
         lines.extend(_bake_lines(cfg, state))
 

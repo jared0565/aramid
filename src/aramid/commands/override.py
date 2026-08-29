@@ -313,6 +313,11 @@ def cmd_override(root, finding_id: str, reason: str) -> int:
         # needs a decision -- the sibling that replaced it is still open --
         # and an override here would stop a revert of the rewrite from
         # re-detecting, since overridden findings never resurrect.
+        if rec.get("status") == "out_of_scope":
+            print(f"aramid: override: {finding_id} is resolved as out of scope -- its "
+                  f"runner no longer examines {rec.get('file')}, so there is nothing "
+                  f"to override", file=sys.stderr)
+            return 3
         if rec.get("status") == "superseded":
             print(f"aramid: override: {finding_id} is superseded -- "
                   f"{rec.get('reason') or 'its line was rewritten'}; decide on that "

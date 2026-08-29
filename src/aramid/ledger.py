@@ -509,6 +509,10 @@ def _materialize(events):
             if e.finding_id in state:
                 state[e.finding_id]["status"] = "unreachable"
                 state[e.finding_id]["reason"] = e.payload.get("reason", "")
+        elif e.type.value == "finding_out_of_scope":
+            if e.finding_id in state:
+                state[e.finding_id]["status"] = "out_of_scope"
+                state[e.finding_id]["reason"] = e.payload.get("reason", "")
     return state, seen
 
 
@@ -564,7 +568,7 @@ class Ledger:
         self.append(Event(EventType.RUN_STARTED, run_id, at, payload=payload))
         new_ids = []
         for f in findings:
-            if f.id not in state or state[f.id]["status"] in ("fixed", "unreachable", "superseded"):
+            if f.id not in state or state[f.id]["status"] in ("fixed", "unreachable", "superseded", "out_of_scope"):
                 self.append(Event(EventType.FINDING_DETECTED, run_id, at,
                                   finding_id=f.id, payload=_detect_payload(f)))
             elif state[f.id].get("line") != f.line:

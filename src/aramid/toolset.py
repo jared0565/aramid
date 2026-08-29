@@ -15,7 +15,7 @@ from pathlib import Path
 
 from aramid.detectors import detect_package_manager, detect_stacks, detect_tests
 from aramid.pipeline import GATE_RUNNER_KEYS, _is_applicable
-from aramid.runners import clippy, deps, typecheck
+from aramid.runners import clippy, deps, eslint, ruff, typecheck
 from aramid.runners import tests as tests_runner
 from aramid.runners.base import RunContext
 
@@ -196,4 +196,43 @@ def ghost_candidates(state: dict, selected: set[str]) -> dict[str, dict]:
         if rec.get("status") == "open"
         and rec.get("tool") in RUNNER_TOOL_NAMES
         and rec.get("tool") not in selected
+    }
+
+
+# Which paths a runner EXAMINES, read from each runner's own suffix rule so
+# the runner and the retire path below cannot drift apart -- round 139 was a
+# runner whose scope narrowed. A tool absent from this table has no suffix
+# scope (gitleaks and semgrep read every file; tests and deps scope by suite
+# and manifest), and for it the answer is "cannot say", never "no".
+_SUFFIX_SCOPE: dict[str, tuple[str, ...]] = {
+    "ruff": ruff._PY_SUFFIXES,
+    typecheck.NAME_MYPY: typecheck._PY_SUFFIXES,
+    "eslint": eslint._JS_SUFFIXES,
+    clippy.NAME: (".rs",),
+}
+
+
+def examines_path(tool: str, path: str) -> bool | None:
+    """True/False when `tool`'s runner scopes files by suffix and the answer
+    follows from the path alone; None when the tool has no such scope."""
+    suffixes = _SUFFIX_SCOPE.get(tool)
+    if suffixes is None:
+        return None
+    return str(path).lower().endswith(tuple(s.lower() for s in suffixes))
+
+
+def out_of_scope_candidates(state: dict, selected: set[str]) -> dict[str, dict]:
+    """Every OPEN finding whose tool is still selected here but whose path
+    that tool's runner will never examine again -- the set `aramid status`
+    lists and `aramid ledger resolve --out-of-scope` accepts. Disjoint from
+    `ghost_candidates` by construction: a ghost's tool is NOT selected.
+    candidate(finding) <=> finding.status == "open"
+                         and finding.tool in selected
+                         and examines_path(finding.tool, finding.file) is False
+    """
+    return {
+        fid: rec for fid, rec in state.items()
+        if rec.get("status") == "open"
+        and rec.get("tool") in selected
+        and examines_path(str(rec.get("tool")), str(rec.get("file") or "")) is False
     }
