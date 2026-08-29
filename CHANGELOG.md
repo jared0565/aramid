@@ -12,6 +12,21 @@ to publish a tag that disagrees with it.
 
 ### Added
 
+- **`aramid check --gate all` sees both tiers.** `ruff` runs only at
+  pre-commit and `semgrep`/`tests` only at pre-push, so no hook gate could
+  show both halves of one edit: annotating a line for one tool re-keyed
+  the other tool's committed suppression id on that same line, and
+  `--gate pre-push --all` read exit 0 while four ruff BLOCKs waited in the
+  other tier (interop round 126 s4b). `Gate.ALL` was the pre-push list
+  under another name -- so `rebaseline`, which runs it, never baselined a
+  ruff finding either -- and was unreachable from the CLI. It is now the
+  union of both tiers, pinned by a test that fails when a runner added to
+  either tier is left out, and `--gate all` is accepted, defaulting to the
+  whole tree. Informational: it never ratchets and no shim invokes it.
+  The user guide's claim that `--all` "runs the full pre-push runner set
+  regardless of gate" was false and is corrected: `--all` widens the FILE
+  set only.
+
 - **`aramid ledger resolve <id> --out-of-scope --reason …`** retires a
   finding whose tool still runs here but whose runner will never examine
   that path again. The case (interop rounds 139/144/145): once the

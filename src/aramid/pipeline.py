@@ -63,9 +63,14 @@ RUNNERS: dict[str, object] = {
 GATE_RUNNER_KEYS: dict[Gate, list[str]] = {
     Gate.PRE_COMMIT: ["gitleaks", "ruff", "shadow"],
     Gate.PRE_PUSH: ["gitleaks", "semgrep", "eslint", "clippy", "typecheck", "deps", "tests", "shadow"],
-    # Gate.ALL isn't specified by the brief's runner-selection table; the
-    # comprehensive (pre-push) set is the reasonable default for a full scan.
-    Gate.ALL: ["gitleaks", "semgrep", "eslint", "clippy", "typecheck", "deps", "tests", "shadow"],
+    # Gate.ALL isn't specified by the brief's runner-selection table. It
+    # used to be the pre-push list under another name, which left it BLIND
+    # to the one runner that is pre-commit-only: a consumer's `--gate
+    # pre-push --all` read exit 0 while four ruff BLOCKs waited in the other
+    # tier (interop round 126 s4b), and `rebaseline`, which runs this gate,
+    # never baselined a ruff finding. It is now the union of both tiers,
+    # pinned mechanically by test_gate_all_runs_every_runner_either_tier_runs.
+    Gate.ALL: ["gitleaks", "ruff", "semgrep", "eslint", "clippy", "typecheck", "deps", "tests", "shadow"],
 }
 
 # Tool keys whose degradation (MISSING/CRASHED/TIMEOUT) drives the pre-push

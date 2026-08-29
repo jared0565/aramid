@@ -2629,3 +2629,16 @@ def test_run_finished_records_when_the_run_actually_finished(tmp_path, monkeypat
     assert started.at == "2026-08-29T10:00:00+00:00"
     assert finished.at == started.at, "every event in a run keeps the run's `at`"
     assert finished.payload["finished_at"] == "2026-08-29T10:09:30+00:00"
+
+
+# ------------------------------------ Gate.ALL sees BOTH tiers, mechanically ---
+
+def test_gate_all_runs_every_runner_either_tier_runs():
+    """Interop round 126 s4b: no single tier saw both halves of one edit --
+    ruff is pre-commit-only, semgrep pre-push-only -- and `Gate.ALL` was
+    the pre-push list under another name, so even `rebaseline` (which runs
+    it) never saw a ruff finding. A guard, not a fixed list: the NEXT runner
+    added to either tier fails this test if it is left out of ALL."""
+    union = set(pipeline.GATE_RUNNER_KEYS[Gate.PRE_COMMIT]) | set(pipeline.GATE_RUNNER_KEYS[Gate.PRE_PUSH])
+    missing = union - set(pipeline.GATE_RUNNER_KEYS[Gate.ALL])
+    assert not missing, f"Gate.ALL omits {sorted(missing)} -- a full scan that skips a tier is not full"

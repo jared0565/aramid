@@ -518,3 +518,30 @@ def test_ledger_resolve_without_out_of_scope_flag_still_reaches_the_command(monk
 
     assert cli.main(["ledger", "resolve", "abc123", "--reason", "x"]) == 3
     assert captured["out_of_scope"] is False
+
+
+def test_check_dispatch_accepts_gate_all_and_defaults_to_the_whole_tree(monkeypatch):
+    """Interop round 126 s4b: ruff runs only at pre-commit and semgrep only
+    at pre-push, so `--gate pre-push --all` read exit 0 while four ruff
+    BLOCKs waited in the other tier. `--gate all` is the one invocation that
+    sees both halves; with no mode given it scans the whole tree, since a
+    tier that exists to see everything should not default to a range."""
+    captured = {}
+    monkeypatch.setattr(cli, "cmd_check",
+                         lambda root, gate, mode, **kw: captured.update(gate=gate, mode=mode) or 0)
+
+    assert cli.main(["check", "--gate", "all"]) == 0
+
+    assert captured["gate"] is Gate.ALL
+    assert captured["mode"] == "all"
+
+
+def test_check_dispatch_gate_all_still_honours_an_explicit_mode(monkeypatch):
+    captured = {}
+    monkeypatch.setattr(cli, "cmd_check",
+                         lambda root, gate, mode, **kw: captured.update(gate=gate, mode=mode) or 0)
+
+    cli.main(["check", "--gate", "all", "--range"])
+
+    assert captured["gate"] is Gate.ALL
+    assert captured["mode"] == "range"

@@ -197,7 +197,7 @@ aramid check --gate pre-commit
 aramid check --gate pre-push
 ```
 
-`--gate` defaults to `pre-commit`.
+`--gate` defaults to `pre-commit`. `--gate all` runs every runner either tier runs -- the one invocation that sees both halves of an edit, since `ruff` runs only at pre-commit and `semgrep`/`tests` only at pre-push (an edit that annotates a line for one tool re-keys the other tool's committed suppression id on that same line, and neither hook gate can show you both). It defaults to scanning the whole tree, never ratchets, and no hook invokes it; exit codes are as for any gate.
 
 ### Scan mode
 
@@ -207,7 +207,7 @@ aramid check --range
 aramid check --all
 ```
 
-These three are mutually exclusive. If none is given, the mode defaults per gate: `staged` for `--gate pre-commit`, `range` for `--gate pre-push`. `--all` runs the full pre-push runner set regardless of gate.
+These three are mutually exclusive. If none is given, the mode defaults per gate: `staged` for `--gate pre-commit`, `range` for `--gate pre-push`, `all` for `--gate all`. `--all` widens the FILE set to the whole tracked tree (and takes the pre-push time budget); it does not change which runners run -- that is `--gate`'s job, so `--gate pre-commit --all` is still a gitleaks+ruff scan. For both tiers at once, use `--gate all`.
 
 ### CI / automation flags
 

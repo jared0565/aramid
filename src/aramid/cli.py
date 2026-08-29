@@ -54,7 +54,11 @@ def build_parser() -> argparse.ArgumentParser:
     p_init.add_argument("--discover", action="store_true")
 
     p_check = sub.add_parser("check", help="run the gate pipeline")
-    p_check.add_argument("--gate", choices=["pre-commit", "pre-push"], default="pre-commit")
+    # "all" is the one invocation that sees BOTH tiers -- ruff runs only at
+    # pre-commit and semgrep only at pre-push, so neither hook gate can
+    # (interop round 126 s4b). Informational: it never ratchets, and no
+    # shim invokes it.
+    p_check.add_argument("--gate", choices=["pre-commit", "pre-push", "all"], default="pre-commit")
     mode = p_check.add_mutually_exclusive_group()
     mode.add_argument("--staged", action="store_true")
     mode.add_argument("--range", action="store_true")
@@ -172,6 +176,8 @@ def _check_mode(args: argparse.Namespace) -> str:
         return "range"
     if args.staged:
         return "staged"
+    if args.gate == "all":
+        return "all"                # a gate that exists to see everything scans everything
     return "staged" if args.gate == "pre-commit" else "range"
 
 
