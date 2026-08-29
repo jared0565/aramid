@@ -10,6 +10,8 @@ to publish a tag that disagrees with it.
 
 ## [Unreleased]
 
+## [0.6.1] — 2026-08-29
+
 ### Fixed
 
 - **The typecheck runner hands mypy only Python files.** It passed the
@@ -3157,7 +3159,8 @@ Stated plainly because each one changes how you should deploy this:
 - **PyPI publishing is not set up.** Install from a GitHub Release artifact or
   from git; `pip install aramid` does not work.
 
-[Unreleased]: https://github.com/jared0565/aramid/compare/v0.6.0...HEAD
+[Unreleased]: https://github.com/jared0565/aramid/compare/v0.6.1...HEAD
+[0.6.1]: https://github.com/jared0565/aramid/releases/tag/v0.6.1
 [0.6.0]: https://github.com/jared0565/aramid/releases/tag/v0.6.0
 [0.5.1]: https://github.com/jared0565/aramid/releases/tag/v0.5.1
 [0.5.0]: https://github.com/jared0565/aramid/releases/tag/v0.5.0
