@@ -27,6 +27,13 @@ to publish a tag that disagrees with it.
   suppression -- this runner will never examine that file again -- which is
   a named follow-up, not a silent close.
 
+- **Docs: `doctor` exits 2 on every CI checkout.** Hooks are not cloned, so
+  a runner's checkout is "configured but NOT enforced" by construction, and
+  GitHub's default `pwsh` step wrapper reports that 2 as 1 unless the script
+  ends with `exit $LASTEXITCODE`. Reported as a crash in interop round 139,
+  measured to be this in round 141; the user guide and knowledge base now
+  say so, so the next reader skips the detour.
+
 ## [0.6.0] — 2026-08-29
 
 ### Added

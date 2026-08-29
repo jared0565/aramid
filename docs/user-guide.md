@@ -384,6 +384,8 @@ Probes `gitleaks`, `semgrep`, `ruff`, `pip-audit` (each via `<exe> --version`, n
 
 Exit is `0` if both BLOCK-tier tools (gitleaks, semgrep) are present, `2` if either is missing. WARN-tier tool absence (ruff, pip-audit) never changes the exit code. Exit is also `2` when the repo is configured but its hooks are not installed ("configured but NOT enforced"), when a detected test suite's own tool cannot be resolved, and when **aramid itself is installed editable while any repo is registered** — every registered repo's hooks then run that working tree, uncommitted edits included; the `EDITABLE` notice alone (nothing registered) stays advisory. The remedy for the last is to promote a built wheel (`scripts/promote_live.py`, see RELEASING.md).
 
+**In CI, expect `2`.** Git hooks are not cloned, so every CI checkout is "configured but NOT enforced" and `doctor` exits `2` by construction — even with every BLOCK-tier tool present. Run it informationally there and read the report for a `MISSING` BLOCK-tier tool, and capture the status explicitly: GitHub's default Windows `pwsh` step wrapper reports any non-zero native exit as `1` unless the script ends with `exit $LASTEXITCODE`, which is how a `2` was once read as a crash.
+
 ```powershell
 aramid doctor --fix
 ```
