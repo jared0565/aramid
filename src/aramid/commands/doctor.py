@@ -369,6 +369,17 @@ def _sh_path_to_win(interp_sh: str) -> Path | None:
     return Path(interp_sh) if interp_sh else None
 
 
+def _baked_interpreter(shim: bytes) -> str | None:
+    """The `INTERP="..."` value `render_shim` bakes into a shim, or None
+    when the bytes carry no such line (a foreign hook, or not a shim)."""
+    text = shim.decode("utf-8", errors="replace")
+    for line in text.splitlines():
+        line = line.strip()
+        if line.startswith('INTERP="') and line.endswith('"'):
+            return line[len('INTERP="'):-1]
+    return None
+
+
 def probe_interpreter(root: Path) -> ToolStatus:
     """Probe the interpreter baked into the installed pre-commit shim, if
     any -- parses the `INTERP="..."` line `render_shim` writes. Falls back
@@ -381,13 +392,7 @@ def probe_interpreter(root: Path) -> ToolStatus:
         return ToolStatus("interpreter", True, sys.executable,
                            detail="no shim installed yet -- reporting the current interpreter")
 
-    text = shim.read_bytes().decode("utf-8", errors="replace")
-    interp_sh = None
-    for line in text.splitlines():
-        line = line.strip()
-        if line.startswith('INTERP="') and line.endswith('"'):
-            interp_sh = line[len('INTERP="'):-1]
-            break
+    interp_sh = _baked_interpreter(shim.read_bytes())
 
     if interp_sh is None:
         return ToolStatus("interpreter", False, detail="could not parse the installed shim")
@@ -790,6 +795,70 @@ def probe_enforcement(root: Path) -> str | None:
         return None                     # fail open: never break doctor
 
 
+def probe_relocated_shims(root: Path) -> list[str]:
+    """Read-only report on aramid's RELOCATED shims -- the `<hook>.<x>`
+    sibling aramid's own shim survives as when another managing tool's
+    trampoline occupies the slot and chains to it (interop round 112).
+
+    Two states, both invisible to `probe_enforcement` because the slot
+    itself EXISTS:
+      * the relocated shim differs from what `render_shim` emits today for
+        its own baked interpreter -- STALE (a pre-`-P` shim was exactly
+        this, on every commit in every graphite-managed repo);
+      * no relocated shim survives at all -- the other tool chains to a
+        file that is not there, so aramid's gate is NOT running.
+
+    `install()` regenerates a stale sibling in place and names the case
+    where it could not. That is a WRITE; this is the read-only surface, so
+    `doctor` (and `status` through it) can say the same thing without
+    touching a hook. Compared against the shim's OWN baked interpreter,
+    not the one doctor runs under: the question is "is this the current
+    template", and a different python would make a different shim in any
+    case. A plain foreign hook with no managed marker is `install()`'s
+    chaining case, not this probe's question. Never raises."""
+    try:
+        if not (root / "aramid.toml").exists():
+            return []
+        from aramid import hooks as hooks_mod
+        hdir = hooks_mod.hooks_dir(root)
+        if not hdir.is_dir():
+            return []
+        match_ci = hooks_mod._match_ci(root)
+        renderers = [(g.value, lambda interp, g=g: hooks_mod.render_shim(g, interp, match_ci))
+                     for g in hooks_mod.GATES]
+        renderers.append((hooks_mod.TRIAGE_HOOK, hooks_mod.render_triage_shim))
+        lines = []
+        for hook, render in renderers:
+            slot = hdir / hook
+            if not slot.exists() or hooks_mod._is_aramid_shim(slot):
+                continue
+            tool = hooks_mod._foreign_managed_tool(slot)
+            if tool is None:
+                continue
+            relocated = hooks_mod._find_chained_aramid_shim(hdir, hook)
+            if relocated is None:
+                lines.append(f"hooks: {hook} is managed by '{tool}' and no relocated aramid "
+                             f"shim survives beside it in {hdir} -- aramid's {hook} gate is "
+                             f"NOT running here; run `aramid init .`")
+                continue
+            current = relocated.read_bytes()
+            interp_sh = _baked_interpreter(current)
+            interp = _sh_path_to_win(interp_sh) if interp_sh else None
+            if interp is None:
+                lines.append(f"hooks: {hook} is managed by '{tool}'; aramid's relocated shim "
+                             f"{relocated.name} carries no INTERP line, so it cannot be "
+                             f"checked against the template -- run `aramid init .`")
+                continue
+            if render(interp) != current:
+                lines.append(f"hooks: {hook} is managed by '{tool}'; aramid's relocated shim "
+                             f"{relocated.name} is STALE (differs from the current template) "
+                             f"-- run `aramid init .` to regenerate it; doctor never rewrites "
+                             f"a hook")
+        return lines
+    except Exception:
+        return []                   # fail open: never break doctor
+
+
 def cmd_doctor(root: Path, fix: bool = False) -> int:
     """Probe the toolchain (and shim interpreter); when `fix`, repair
     what's missing/owned and re-probe. Returns 0 if both BLOCK-tier tools
@@ -797,7 +866,9 @@ def cmd_doctor(root: Path, fix: bool = False) -> int:
     (ruff, pip-audit) is reported but never changes the exit code.
 
     Also returns 2 for "configured but NOT enforced" (see
-    `probe_enforcement`). That widens 2 from "a BLOCK-tier tool is missing"
+    `probe_enforcement`), and for a RELOCATED shim that is stale or missing
+    behind another tool's trampoline (see `probe_relocated_shims`) -- the
+    read-only counterpart of what `install()` repairs. That widens 2 from "a BLOCK-tier tool is missing"
     to "the gate is not fully operational", which covers both: in each case
     the repo is not actually being gated, and reporting 0 would be a false
     green light.
@@ -891,6 +962,9 @@ def cmd_doctor(root: Path, fix: bool = False) -> int:
     unenforced = probe_enforcement(root)
     if unenforced:
         print(f"aramid: doctor: {unenforced}", file=sys.stderr)
+    relocated_gate = probe_relocated_shims(root)
+    for line in relocated_gate:
+        print(f"aramid: doctor: {line}", file=sys.stderr)
 
     from aramid import registry as registry_mod
     editable_gate = editable_consumers_lines(direct_url, registry_mod.load_registry())
@@ -919,6 +993,8 @@ def cmd_doctor(root: Path, fix: bool = False) -> int:
 
     if unenforced:
         return 2                        # tools fine, but nothing is gating
+    if relocated_gate:
+        return 2                        # tools fine, but the relocated shim is not what init installs
     if editable_gate:
         return 2                        # tools fine, but the gate is a working tree
 

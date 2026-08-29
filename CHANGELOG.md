@@ -12,6 +12,17 @@ to publish a tag that disagrees with it.
 
 ### Added
 
+- **`doctor` reports a stale or missing relocated shim, read-only.** When
+  another managing tool's trampoline occupies a hook slot, aramid's own
+  shim survives relocated beside it; `install()` regenerates that sibling
+  in place (interop round 112) but is a write, and no read-only surface
+  said anything -- `probe_enforcement` is quiet because the slot itself
+  exists. `probe_relocated_shims` compares the sibling against the
+  current template rendered for its OWN baked interpreter and names it
+  STALE, or names the gate as NOT running when no sibling survives at
+  all; either exits `2` with `aramid init .` as the remedy. `doctor` still
+  never rewrites a hook.
+
 - **A rewritten line resolves as `superseded`, not `fixed`.** Ids hash
   content, so rewriting a flagged call re-keys its row: the old id vanished
   and a new one opened on the same call in the same run, and the ledger

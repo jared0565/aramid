@@ -765,3 +765,77 @@ def test_the_repo_being_doctored_counts_as_a_registered_consumer(
 
     assert rc == 2
     assert "while 1 registered repo(s) run it" in out.err
+
+
+# --- relocated shims: doctor REPORTS a stale one and never rewrites it ---------
+# Interop round 112 gave `install()` the refresh: when another managing tool
+# occupies a hook slot, aramid's own shim survives relocated beside it and
+# `install()` regenerates that sibling in place, naming it "STALE" only when
+# the write is refused. But `install()` is a write; the read-only surfaces
+# (`doctor`, and `status` through it) said nothing, so a pre-`-P` relocated
+# shim was invisible to every command that does not rewrite hooks -- and
+# `probe_enforcement` is quiet too, because the slot itself EXISTS.
+
+_FOREIGN_SLOT = (b"#!/bin/sh\n# >>> graphite managed >>>\necho gt\n"
+                 b"# <<< graphite managed <<<\n")
+_INTERP = Path("C:/py/python.exe")
+
+
+def _foreign_managed(tmp_path, relocated: bytes | None):
+    from aramid import hooks
+    root = _onboarded(tmp_path, with_shim=True)
+    hdir = hooks.hooks_dir(root)
+    (hdir / "pre-commit").write_bytes(_FOREIGN_SLOT)
+    if relocated is not None:
+        (hdir / "pre-commit.local").write_bytes(relocated)
+    return root, hdir
+
+
+def test_doctor_reports_a_stale_relocated_shim_and_leaves_it_alone(tmp_path, monkeypatch, capsys):
+    from aramid import hooks
+    from aramid.models import Gate
+    monkeypatch.setattr(doctor, "probe_toolchain", lambda root: _all_present())
+    stale = hooks.render_shim(Gate.PRE_COMMIT, _INTERP).replace(b" -P -m aramid", b" -m aramid")
+    root, hdir = _foreign_managed(tmp_path, stale)
+
+    rc = doctor.cmd_doctor(root)
+    out = capsys.readouterr()
+    blob = out.out + out.err
+
+    assert rc == 2, "a stale relocated shim means the gate is not what init would install"
+    assert "STALE" in blob and "pre-commit.local" in blob
+    assert "aramid init" in blob, "must say how to regenerate it"
+    assert (hdir / "pre-commit.local").read_bytes() == stale, "doctor is read-only"
+    assert (hdir / "pre-commit").read_bytes() == _FOREIGN_SLOT
+
+
+def test_doctor_is_quiet_about_a_current_relocated_shim(tmp_path, monkeypatch, capsys):
+    """The counterfactual: proves the flag keys on the BYTES differing, not
+    on the slot being foreign-managed."""
+    from aramid import hooks
+    from aramid.models import Gate
+    monkeypatch.setattr(doctor, "probe_toolchain", lambda root: _all_present())
+    root, _ = _foreign_managed(tmp_path, hooks.render_shim(Gate.PRE_COMMIT, _INTERP))
+
+    rc = doctor.cmd_doctor(root)
+    out = capsys.readouterr()
+    blob = out.out + out.err
+
+    assert rc == 0
+    assert "STALE" not in blob and "NOT running" not in blob
+
+
+def test_doctor_flags_a_foreign_managed_slot_with_no_surviving_relocation(tmp_path, monkeypatch, capsys):
+    """`probe_enforcement` sees a slot that exists and says nothing, yet
+    aramid's gate is not running at all: the other tool's trampoline chains
+    to a file that is not there. `init` catches this at onboarding; doctor
+    has to catch it afterwards."""
+    monkeypatch.setattr(doctor, "probe_toolchain", lambda root: _all_present())
+    root, _ = _foreign_managed(tmp_path, None)
+
+    rc = doctor.cmd_doctor(root)
+    out = capsys.readouterr()
+    blob = out.out + out.err
+
+    assert rc == 2
+    assert "NOT running" in blob and "graphite" in blob and "pre-commit" in blob
