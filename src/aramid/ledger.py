@@ -497,7 +497,8 @@ class Ledger:
                    selected_tools: set[str] | None = None,
                    expected_tools: set[str] | None = None,
                    root: Path | None = None,
-                   examined_by_tool: dict[str, set[str]] | None = None):
+                   examined_by_tool: dict[str, set[str]] | None = None,
+                   finished_at: str | None = None):
         state, seen = _materialize(self.events())
         present = {f.id for f in findings}
         payload = {"gate": gate, "tools": sorted(scope_tools)}
@@ -607,8 +608,17 @@ class Ledger:
                         and (tool_scope is None or rec.get("file") in tool_scope))
             if in_scope or _departed(root, rec.get("file")):
                 self.append(Event(EventType.FINDING_RESOLVED, run_id, at, finding_id=fid))
-        self.append(Event(EventType.RUN_FINISHED, run_id, at,
-                          payload={"blocking": sum(1 for f in findings if str(f.verdict)=="block")}))
+        # `at` is the run's IDENTITY stamp and every event in the run carries
+        # it, so on its own RUN_FINISHED could not tell a ten-minute gate from
+        # a one-second one (interop round 130 s3 -- the consumer had to read
+        # a push log's mtimes instead). `finished_at` is a second clock read,
+        # taken by the caller when the run's findings were recorded. Written
+        # only when supplied, never copied from `at`: absent means 'too old
+        # to have recorded it', which a reader must not confuse with zero.
+        finished = {"blocking": sum(1 for f in findings if str(f.verdict)=="block")}
+        if finished_at is not None:
+            finished["finished_at"] = finished_at
+        self.append(Event(EventType.RUN_FINISHED, run_id, at, payload=finished))
         return new_ids
 
     def has_baseline(self) -> bool:

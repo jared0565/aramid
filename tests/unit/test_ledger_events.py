@@ -77,3 +77,30 @@ def test_record_run_selected_key_absent_when_not_passed(tmp_path):
     run_started = [e for e in led.events() if e.type is EventType.RUN_STARTED][0]
     assert "selected" not in run_started.payload
     led.close()
+
+
+# ------------------------------------------- RUN_FINISHED says WHEN it finished ---
+# Interop round 130 s3, from a consumer reading its own gate's ledger: every
+# event in a run carries the run's `at`, so `run_finished` could not tell a
+# ten-minute gate from a one-second one, and the consumer had to establish the
+# wall clock from a push log's mtimes. `at` stays the run's identity stamp;
+# `finished_at` is the clock read when the run's findings were recorded.
+
+def test_run_finished_carries_finished_at_when_supplied(tmp_path):
+    led = Ledger(tmp_path / "l.db")
+    led.record_run("r1", "2026-08-29T10:00:00+00:00", "pre-push", {"ruff"}, {"a.py"}, [],
+                   finished_at="2026-08-29T10:09:30+00:00")
+    fin = [e for e in led.events() if e.type is EventType.RUN_FINISHED]
+    led.close()
+    assert fin[-1].payload["finished_at"] == "2026-08-29T10:09:30+00:00"
+    assert fin[-1].at == "2026-08-29T10:00:00+00:00", "`at` stays the run's identity stamp"
+
+
+def test_run_finished_omits_finished_at_when_the_caller_cannot_supply_it(tmp_path):
+    """Absent, never a copy of `at`: a reader must be able to tell 'too old
+    to have recorded it' from 'finished in zero seconds'."""
+    led = Ledger(tmp_path / "l.db")
+    led.record_run("r1", "2026-08-29T10:00:00+00:00", "pre-push", {"ruff"}, {"a.py"}, [])
+    fin = [e for e in led.events() if e.type is EventType.RUN_FINISHED]
+    led.close()
+    assert "finished_at" not in fin[-1].payload

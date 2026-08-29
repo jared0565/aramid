@@ -2600,3 +2600,32 @@ def test_a_never_started_scanner_reaches_status_end_to_end(tmp_path, monkeypatch
 
     out = capsys.readouterr().out
     assert "semgrep: skipped last 2 pre-push run(s)" in out, out
+
+
+# ------------------------------------ RUN_FINISHED carries the real finish time ---
+
+def test_run_finished_records_when_the_run_actually_finished(tmp_path, monkeypatch):
+    """Round 130 s3: `run_started` and `run_finished` carried the SAME `at`,
+    so the ledger could not answer how long a gate took or whether the test
+    suite actually ran for any time at all. The clock is read again when the
+    run is recorded; `at` is unchanged so run identity stays one value."""
+    root = _repo(tmp_path)
+    cfg = _cfg(root, tmp_path, monkeypatch)
+    ledger = _ledger(tmp_path)
+    monkeypatch.setitem(pipeline.RUNNERS, "fake", _fake(RunnerResult("fake", ToolState.OK)))
+    monkeypatch.setitem(pipeline.GATE_RUNNER_KEYS, Gate.PRE_COMMIT, ["fake"])
+
+    ticks = ["2026-08-29T10:00:00+00:00", "2026-08-29T10:09:30+00:00"]
+    reads = []
+
+    def clock():
+        reads.append(1)
+        return ticks[min(len(reads) - 1, len(ticks) - 1)]
+
+    pipeline.run_gate(root, Gate.PRE_COMMIT, "staged", cfg, ledger, run_id="run-c", clock=clock)
+
+    started = [e for e in ledger.events() if e.type is EventType.RUN_STARTED][-1]
+    finished = [e for e in ledger.events() if e.type is EventType.RUN_FINISHED][-1]
+    assert started.at == "2026-08-29T10:00:00+00:00"
+    assert finished.at == started.at, "every event in a run keeps the run's `at`"
+    assert finished.payload["finished_at"] == "2026-08-29T10:09:30+00:00"

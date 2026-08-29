@@ -10,6 +10,18 @@ to publish a tag that disagrees with it.
 
 ## [Unreleased]
 
+### Added
+
+- **`run_finished` now says when the run finished.** Every event in a
+  run carries the run's `at`, which is its identity stamp -- so the
+  ledger could not tell a ten-minute gate from a one-second one, and a
+  consumer reading its own gate's history had to establish the wall clock
+  from a push log's mtimes (interop round 130 s3). `record_run` takes a
+  keyword-only `finished_at`, the gate passes a second clock read once
+  every runner has returned, and `aramid status`'s last-run line adds
+  `took Ns`. Written only when supplied and never copied from `at`: an
+  older ledger reads as unknown, not as zero seconds.
+
 ## [0.6.1] — 2026-08-29
 
 ### Fixed

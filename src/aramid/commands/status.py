@@ -34,7 +34,17 @@ def _last_run_line(ledger: Ledger) -> str:
     if not runs:
         return "last run: none"
     last = runs[-1]
-    return f"last run: {last.at} (run {last.run_id}, {last.payload.get('blocking', 0)} blocking)"
+    line = f"last run: {last.at} (run {last.run_id}, {last.payload.get('blocking', 0)} blocking"
+    # `finished_at` is newer than `at`; a ledger written before it has none,
+    # and that reads as unknown rather than as zero seconds.
+    finished = last.payload.get("finished_at")
+    if finished:
+        try:
+            took = (datetime.fromisoformat(finished) - datetime.fromisoformat(last.at)).total_seconds()
+            line += f", took {took:.0f}s"
+        except (TypeError, ValueError):
+            pass
+    return line + ")"
 
 
 def _open_counts_line(state: dict) -> str:

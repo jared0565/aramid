@@ -1044,3 +1044,43 @@ def test_runs_without_expected_still_use_the_observed_universe(tmp_path,
     assert cmd_status(root) == 0
 
     assert "semgrep: skipped last 1 pre-push run(s)" in capsys.readouterr().out
+
+
+# ------------------------------------------------ last run: how long it took ---
+
+def test_status_last_run_line_says_how_long_the_run_took(tmp_path, monkeypatch, capsys):
+    """Round 130 s3: a consumer could not tell a ten-minute gate from a
+    one-second one from the ledger. When RUN_FINISHED carries `finished_at`,
+    the last-run line says the wall clock in seconds."""
+    root = _repo(tmp_path)
+    _no_user_config(tmp_path, monkeypatch)
+    _write_toml(root, armed=True, bake_started=None)
+    ledger = Ledger(root / ".aramid" / "ledger.db")
+    ledger.record_run("run1", "2026-08-29T10:00:00+00:00", "pre-push", {"semgrep"},
+                      {"a.py"}, [], finished_at="2026-08-29T10:09:30+00:00")
+    ledger.close()
+
+    rc = cmd_status(root)
+    out = capsys.readouterr().out
+
+    assert rc == 0
+    assert "last run: 2026-08-29T10:00:00+00:00 (run run1, 0 blocking, took 570s)" in out
+
+
+def test_status_last_run_line_stays_silent_about_duration_on_an_older_ledger(
+        tmp_path, monkeypatch, capsys):
+    """No `finished_at` recorded means unknown, not zero."""
+    root = _repo(tmp_path)
+    _no_user_config(tmp_path, monkeypatch)
+    _write_toml(root, armed=True, bake_started=None)
+    ledger = Ledger(root / ".aramid" / "ledger.db")
+    ledger.record_run("run1", "2026-08-29T10:00:00+00:00", "pre-push", {"semgrep"},
+                      {"a.py"}, [])
+    ledger.close()
+
+    rc = cmd_status(root)
+    out = capsys.readouterr().out
+
+    assert rc == 0
+    assert "last run: 2026-08-29T10:00:00+00:00 (run run1, 0 blocking)" in out
+    assert "took" not in out.split("last run:")[1].splitlines()[0]

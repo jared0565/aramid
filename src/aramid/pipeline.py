@@ -945,7 +945,11 @@ def run_gate(root: Path, gate: Gate, mode: str, cfg: config_mod.Config, ledger: 
     new_ids = ledger.record_run(run_id, at, str(gate), scope_tools, scope_files, findings,
                                 selected_tools=selected_tools,
                                 expected_tools=expected_tools, root=root,
-                                examined_by_tool=examined_by_tool)
+                                examined_by_tool=examined_by_tool,
+                                # Every runner has returned by here; this is
+                                # the wall clock the ledger could not carry
+                                # while `at` was its only timestamp.
+                                finished_at=clock())
 
     # record_run above can NEVER resolve a whole-suite finding: those carry the
     # synthetic `<test-suite>` marker, which is not a path and so is never in
