@@ -129,14 +129,21 @@ def test_degraded_run_vouches_for_nothing(tmp_path, monkeypatch):
     assert result.examined is not None and not result.examined
 
 
-def test_mypy_arm_still_reports_that_it_cannot_vouch(tmp_path, monkeypatch):
-    """mypy has no `--listFiles` equivalent, so it must report None -- "cannot
-    report", falling back -- rather than the empty set, which would block every
-    mypy resolution outright."""
+def test_mypy_arm_vouches_for_exactly_the_paths_it_was_handed(tmp_path, monkeypatch):
+    """This used to pin `examined is None`: mypy has no `--listFiles`, and the
+    choice was framed as None ("cannot report", fall back) versus the empty
+    set (block every mypy resolution). The third answer is the right one and
+    was measured wrong the other way (interop round 149 s1): None fell back
+    to the gate's whole file scope, and two `mypy:syntax` rows on ci.yml and
+    README.md resolved off pushes that carried .py files beside them --
+    credited to a runner that never opened those files. Unlike tsc, which
+    checks a PROJECT, mypy checks the explicit paths it is given (`exclude`
+    does not apply to paths passed on the command line), so the argv set is
+    exactly what it examined. Same contract as ruff."""
     monkeypatch.setattr(
         typecheck, "run_subprocess",
         lambda argv, cwd, t, env=None: RunnerResult("mypy", ToolState.OK, raw=""))
 
-    result = typecheck.run_mypy(RunContext(root=tmp_path, files=["a.py"]))
+    result = typecheck.run_mypy(RunContext(root=tmp_path, files=["a.py", "notes.md"]))
 
-    assert result.examined is None
+    assert result.examined == frozenset({"a.py"})
