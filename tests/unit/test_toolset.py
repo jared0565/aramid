@@ -324,3 +324,25 @@ def test_out_of_scope_candidates_are_open_selected_and_unexaminable():
     }
     got = toolset.out_of_scope_candidates(state, selected={"mypy", "gitleaks"})
     assert set(got) == {"a"}
+
+
+def test_examines_path_for_mypy_honours_the_repos_own_files_scope(tmp_path):
+    """The runner and the retire path must agree: once `run_mypy` hands mypy
+    only paths inside `[tool.mypy] files`, a `.py` outside that scope is one
+    mypy will never examine here -- and `resolve --out-of-scope` has to know
+    it, or a consumer's 683 out-of-scope rows could never be retired."""
+    (tmp_path / "pyproject.toml").write_text('[tool.mypy]\nfiles = ["src"]\n', encoding="utf-8")
+    assert toolset.examines_path("mypy", "src/a.py", root=tmp_path) is True
+    assert toolset.examines_path("mypy", "tests/test_a.py", root=tmp_path) is False
+    assert toolset.examines_path("mypy", "tests/test_a.py") is True, "without a root the suffix rule alone answers"
+    assert toolset.examines_path("ruff", "tests/test_a.py", root=tmp_path) is True, "ruff has no such scope"
+
+
+def test_out_of_scope_candidates_use_the_mypy_scope_when_given_a_root(tmp_path):
+    (tmp_path / "pyproject.toml").write_text('[tool.mypy]\nfiles = ["src"]\n', encoding="utf-8")
+    state = {
+        "in": {"status": "open", "tool": "mypy", "file": "src/a.py"},
+        "out": {"status": "open", "tool": "mypy", "file": "tests/test_a.py"},
+    }
+    assert set(toolset.out_of_scope_candidates(state, {"mypy"}, root=tmp_path)) == {"out"}
+    assert set(toolset.out_of_scope_candidates(state, {"mypy"})) == set()

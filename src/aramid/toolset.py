@@ -212,16 +212,29 @@ _SUFFIX_SCOPE: dict[str, tuple[str, ...]] = {
 }
 
 
-def examines_path(tool: str, path: str) -> bool | None:
+def examines_path(tool: str, path: str, root: Path | None = None) -> bool | None:
     """True/False when `tool`'s runner scopes files by suffix and the answer
-    follows from the path alone; None when the tool has no such scope."""
+    follows from the path alone; None when the tool has no such scope.
+
+    With `root`, mypy's answer also honours the repo's own `[tool.mypy]
+    files`/`exclude` (round 149 b) -- the same helper `run_mypy` filters by,
+    so what the retire path calls out of scope is exactly what the runner
+    will never hand over."""
     suffixes = _SUFFIX_SCOPE.get(tool)
     if suffixes is None:
         return None
-    return str(path).lower().endswith(tuple(s.lower() for s in suffixes))
+    if not str(path).lower().endswith(tuple(s.lower() for s in suffixes)):
+        return False
+    if root is not None and tool == typecheck.NAME_MYPY:
+        try:
+            return typecheck.in_mypy_scope(str(path), typecheck.mypy_scope(root))
+        except Exception:
+            return True                 # cannot read the scope: assume examinable, never "no"
+    return True
 
 
-def out_of_scope_candidates(state: dict, selected: set[str]) -> dict[str, dict]:
+def out_of_scope_candidates(state: dict, selected: set[str],
+                            root: Path | None = None) -> dict[str, dict]:
     """Every OPEN finding whose tool is still selected here but whose path
     that tool's runner will never examine again -- the set `aramid status`
     lists and `aramid ledger resolve --out-of-scope` accepts. Disjoint from
@@ -234,5 +247,5 @@ def out_of_scope_candidates(state: dict, selected: set[str]) -> dict[str, dict]:
         fid: rec for fid, rec in state.items()
         if rec.get("status") == "open"
         and rec.get("tool") in selected
-        and examines_path(str(rec.get("tool")), str(rec.get("file") or "")) is False
+        and examines_path(str(rec.get("tool")), str(rec.get("file") or ""), root=root) is False
     }

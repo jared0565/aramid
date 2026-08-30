@@ -12,6 +12,17 @@ to publish a tag that disagrees with it.
 
 ### Fixed
 
+- **The typecheck slot honours mypy's own `files`/`exclude`.** It handed
+  mypy every `.py`/`.pyi` in range, so a repo whose `[tool.mypy] files =
+  ["src/pkg"]` deliberately leaves tests/ and scripts/ untyped got 786
+  block-tier findings from one whole-tree run (interop round 149 b).
+  `run_mypy` now filters by `typecheck.mypy_scope(root)` (pyproject or
+  mypy.ini; list or comma-string `files`; `exclude` as the regex mypy reads)
+  and vouches only for what its scope let it see; `examines_path("mypy",
+  path, root=…)` consults the same helper, so `resolve --out-of-scope` and
+  `status`'s candidates agree with the runner and rows on untyped files can
+  be retired with their reason. No `files` setting means everything in
+  range, as before.
 - **A real mypy run now vouches only for the files it was handed.** The
   no-op branch stamped `examined` as the empty set (0.6.1), but a run that
   actually invoked mypy came back with `examined=None`, which resolution

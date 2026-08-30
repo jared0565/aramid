@@ -1050,3 +1050,24 @@ def test_mark_unreachable_reports_an_unreadable_config_as_an_engine_error(tmp_pa
 
     assert rc == 3
     assert "engine error" in err and "unreadable" in err
+
+
+def test_resolve_out_of_scope_accepts_a_python_path_outside_mypys_own_files_scope(
+        tmp_path, capsys, monkeypatch):
+    """Round 149 (b)/(c): 683 mypy rows on files a repo's `[tool.mypy]
+    files = [...]` deliberately leaves untyped. With the runner honouring
+    that scope, those paths are ones mypy will never examine here, so the
+    retire path must accept them -- the same guard, now config-aware."""
+    from aramid import config as config_mod
+    root: Path = tmp_path
+    monkeypatch.setattr(config_mod, "_user_config_path", lambda: tmp_path / "no-user.toml")
+    (root / "pyproject.toml").write_text('[tool.mypy]\nfiles = ["src"]\n', encoding="utf-8")   # mypy selected, scoped
+    ledger = _ledger(root)
+    ledger.record_run("r1", "t1", "pre-push", {"mypy"}, {"tests/test_a.py", "src/a.py"},
+                      [_f("t1", tool="mypy", file="tests/test_a.py"), _f("s1", tool="mypy", file="src/a.py")])
+    ledger.close()
+
+    assert _resolve(root, "t1", out_of_scope=True, reason="outside [tool.mypy] files") == 0
+    capsys.readouterr()
+    assert _resolve(root, "s1", out_of_scope=True, reason="please") == 3
+    assert "still examines" in capsys.readouterr().err

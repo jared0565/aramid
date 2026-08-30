@@ -14,6 +14,7 @@ handed only the `.py`/`.pyi` files in range -- see `_PY_SUFFIXES` for the
 false BLOCK that handing it everything produced.
 """
 import dataclasses
+import fnmatch
 import re
 import sys
 import tomllib
@@ -61,6 +62,73 @@ def has_mypy_config(root: Path) -> bool:
         except (tomllib.TOMLDecodeError, OSError):
             return False
         return "mypy" in data.get("tool", {})
+    return False
+
+
+def mypy_scope(root: Path) -> tuple[list[str], list[str]] | None:
+    """mypy's OWN scope: `(files, exclude)` from `[tool.mypy]` in pyproject.toml
+    or `[mypy]` in mypy.ini, or None when no `files` is set (mypy then types
+    whatever it is handed, and so does this runner).
+
+    Interop round 149 (b): a consumer whose `files = ["src/graphite"]`
+    deliberately leaves tests/, scripts/ and benchmarks/ untyped got 786
+    block-tier findings from a whole-tree gate run, because the runner handed
+    mypy every .py in range regardless. What the gate types is what the repo
+    types. `files` accepts mypy's list or comma-string forms; entries are
+    files, directories (prefix) or globs; `exclude` is a regex (or a list of
+    them) searched against the path, as mypy reads it."""
+    files_raw = exclude_raw = None
+    ini = root / "mypy.ini"
+    if ini.exists():
+        try:
+            import configparser
+            cp = configparser.ConfigParser()
+            cp.read(ini, encoding="utf-8")
+            if cp.has_section("mypy"):
+                files_raw = cp.get("mypy", "files", fallback=None)
+                exclude_raw = cp.get("mypy", "exclude", fallback=None)
+        except Exception:
+            return None
+    else:
+        pp = root / "pyproject.toml"
+        if not pp.exists():
+            return None
+        try:
+            section = tomllib.loads(pp.read_text(encoding="utf-8")).get("tool", {}).get("mypy", {})
+        except (tomllib.TOMLDecodeError, OSError):
+            return None
+        files_raw = section.get("files")
+        exclude_raw = section.get("exclude")
+    if not files_raw:
+        return None
+
+    def _as_list(v) -> list[str]:
+        if isinstance(v, str):
+            return [x.strip() for x in v.split(",") if x.strip()]
+        return [str(x).strip() for x in (v or []) if str(x).strip()]
+
+    return [f.replace("\\", "/").rstrip("/") for f in _as_list(files_raw)], _as_list(exclude_raw)
+
+
+def in_mypy_scope(path: str, scope: tuple[list[str], list[str]] | None) -> bool:
+    """Would mypy, configured with `scope`, type `path`? None means "no
+    `files` set" -- everything handed over is in scope."""
+    if scope is None:
+        return True
+    files, exclude = scope
+    norm = path.replace("\\", "/")
+    for pat in exclude:
+        try:
+            if re.search(pat, norm):
+                return False
+        except re.error:
+            continue
+    for entry in files:
+        if any(ch in entry for ch in "*?["):
+            if fnmatch.fnmatch(norm, entry) or fnmatch.fnmatch(norm, entry + "/*"):
+                return True
+        elif norm == entry or norm.startswith(entry + "/"):
+            return True
     return False
 
 
@@ -150,7 +218,10 @@ def _py_files(ctx) -> list[str]:
 
 
 def run_mypy(ctx) -> RunnerResult:
-    files = _py_files(ctx)
+    # Its own scope first (round 149 b): a path the repo's `[tool.mypy]
+    # files` leaves untyped is not this runner's to type either.
+    scope = mypy_scope(ctx.root)
+    files = [f for f in _py_files(ctx) if in_mypy_scope(f, scope)]
     if not files:
         # No Python in scope: a clean no-op, NOT a tool invocation -- mypy
         # given zero paths falls back to its config's `files=` (or errors),

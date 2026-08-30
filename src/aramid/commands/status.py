@@ -212,7 +212,7 @@ def _out_of_scope_candidate_lines(root: Path, cfg, state: dict) -> list[str]:
     `mypy:syntax` rows on `ci.yml`/`README.md` after the runner was scoped
     to .py/.pyi. One line per candidate, naming the exact command."""
     selected = toolset.selected_tool_names(root, cfg)
-    candidates = toolset.out_of_scope_candidates(state, selected)
+    candidates = toolset.out_of_scope_candidates(state, selected, root=root)
     return [
         f"  {fid} {rec.get('tool')}:{rec.get('rule')} {rec.get('file')} -- "
         f"{rec.get('tool')} no longer examines this path? "

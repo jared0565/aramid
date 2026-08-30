@@ -439,7 +439,7 @@ def cmd_ledger_resolve(root, finding_id: str, out_of_scope: bool, reason: str) -
                   f"{finding_id} --reason ...`, not out-of-scope", file=sys.stderr)
             return 3
 
-        examines = toolset.examines_path(tool, path)
+        examines = toolset.examines_path(tool, path, root=root)
         if examines is None:
             print(f"aramid: ledger resolve: {tool} examines every file it is handed "
                   f"(no suffix scope), so no path is out of its scope -- if the "

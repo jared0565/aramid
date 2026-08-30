@@ -259,3 +259,65 @@ def test_run_mypy_vouches_only_for_the_files_it_was_handed(tmp_path, monkeypatch
         "a.py", ".github/workflows/ci.yml", "pkg/b.pyi", "README.md"]))
 
     assert result.examined == frozenset({"a.py", "pkg/b.pyi"})
+
+
+# --- mypy's OWN scope: `[tool.mypy] files` / `exclude` -------------------------
+# Interop round 149 (b): a consumer whose `[tool.mypy] files = ["src/graphite"]`
+# deliberately leaves tests/, scripts/ and benchmarks/ untyped got 786
+# block-tier `mypy` findings from a whole-tree gate run, because the runner
+# handed mypy every .py in range regardless of the repo's own type gate.
+# The slot now honours that scope, read from the same config it already
+# keys applicability on, so what the gate types is what the repo types.
+
+def test_mypy_scope_reads_files_and_exclude_from_pyproject(tmp_path):
+    (tmp_path / "pyproject.toml").write_text(
+        '[tool.mypy]\nfiles = ["src/pkg", "tools/run.py"]\nexclude = "src/pkg/vendored/"\n',
+        encoding="utf-8")
+    scope = typecheck.mypy_scope(tmp_path)
+    assert scope is not None
+    assert typecheck.in_mypy_scope("src/pkg/a.py", scope) is True
+    assert typecheck.in_mypy_scope("tools/run.py", scope) is True
+    assert typecheck.in_mypy_scope("tests/test_a.py", scope) is False
+    assert typecheck.in_mypy_scope("src/pkg/vendored/x.py", scope) is False, "exclude is a regex, as mypy reads it"
+
+
+def test_mypy_scope_accepts_the_comma_string_form_and_mypy_ini(tmp_path):
+    (tmp_path / "mypy.ini").write_text("[mypy]\nfiles = src, scripts/one.py\n", encoding="utf-8")
+    scope = typecheck.mypy_scope(tmp_path)
+    assert typecheck.in_mypy_scope("src/deep/b.py", scope) is True
+    assert typecheck.in_mypy_scope("scripts/one.py", scope) is True
+    assert typecheck.in_mypy_scope("scripts/two.py", scope) is False
+
+
+def test_mypy_scope_is_none_without_a_files_setting(tmp_path):
+    """No `files` means mypy's own default -- whatever it is handed -- so the
+    runner keeps handing it every Python file in range."""
+    (tmp_path / "pyproject.toml").write_text("[tool.mypy]\nstrict = true\n", encoding="utf-8")
+    assert typecheck.mypy_scope(tmp_path) is None
+
+
+def test_run_mypy_hands_mypy_only_the_paths_inside_its_own_scope(tmp_path, monkeypatch):
+    (tmp_path / "pyproject.toml").write_text('[tool.mypy]\nfiles = ["src"]\n', encoding="utf-8")
+    captured = {}
+
+    def fake_run_subprocess(argv, cwd, timeout_s, env=None):
+        captured["argv"] = argv
+        return RunnerResult(tool="mypy", state=ToolState.OK, raw="")
+    monkeypatch.setattr(typecheck, "run_subprocess", fake_run_subprocess)
+
+    result = typecheck.run_mypy(RunContext(root=tmp_path, files=[
+        "src/a.py", "tests/test_a.py", "scripts/b.py"]))
+
+    assert [p for p in captured["argv"] if not p.startswith("--")][1:] == ["src/a.py"]
+    assert result.examined == frozenset({"src/a.py"}), "it vouches only for what its scope let it see"
+
+
+def test_run_mypy_with_nothing_inside_its_scope_is_the_clean_no_op(tmp_path, monkeypatch):
+    (tmp_path / "pyproject.toml").write_text('[tool.mypy]\nfiles = ["src"]\n', encoding="utf-8")
+    calls = []
+    monkeypatch.setattr(typecheck, "run_subprocess", lambda *a, **k: calls.append(a) or RunnerResult("mypy", ToolState.OK, raw=""))
+
+    result = typecheck.run_mypy(RunContext(root=tmp_path, files=["tests/test_a.py"]))
+
+    assert calls == []
+    assert result.state is ToolState.OK and result.examined == frozenset()
