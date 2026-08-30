@@ -437,6 +437,24 @@ def probe_deps(root: Path) -> list[ToolStatus]:
     never produce is its own kind of lie. Report, do not block.
     """
     statuses: list[ToolStatus] = []
+    # PRESENT is not RUNNING (interop round 149 s2): the deps runner audits
+    # requirements*.txt at the repo root and nothing else, so on a
+    # pyproject-only Python repo pip-audit is selected by nobody, runs in no
+    # gate, and `OK  pip-audit` above was read as a dependency audit that
+    # never happened -- on two machines. Reported as WARN, never folded into
+    # the exit code: `deps` is not BLOCK-tier and the gate would never fail
+    # on it.
+    try:
+        from aramid.detectors import detect_stacks
+        python_stack = "python" in detect_stacks(root, root)
+    except Exception:
+        python_stack = False
+    if python_stack and not deps_runner._find_requirements(root):
+        statuses.append(ToolStatus(
+            deps_runner.NAME_PIP_AUDIT, True, warn=True,
+            detail="audits requirements*.txt at the repo root only and none is "
+                   "here, so the Python dependency audit does NOT run in any "
+                   "gate (a pyproject-only project is not audited)"))
     if (root / "Cargo.lock").exists():
         resolved = toolpath.resolve(deps_runner.NAME_CARGO_AUDIT)
         statuses.append(

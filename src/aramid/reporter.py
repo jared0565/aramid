@@ -189,5 +189,13 @@ def render_json(result: GateResult) -> str:
         # than the delta. A consumer diffing finding counts between two runs
         # cannot otherwise tell a regression from a scope change.
         "scope_widened": getattr(result, "scope_widened", None),
+        # Both always present. `true` + a non-empty list means the fresh-ledger
+        # rule downgraded this run's exit and these are the ratchet-escalated
+        # ids it waved through; a CI checkout that gitignores `.aramid/` is a
+        # fresh ledger EVERY run, so a step reading rc alone never sees the
+        # ratchet bite (interop rounds 149 s3 / 150). Absent means an aramid
+        # too old to record it.
+        "fresh_ledger_baseline": bool(getattr(result, "fresh_ledger_baseline", False)),
+        "grandfathered": sorted(getattr(result, "grandfathered", ()) or ()),
     }
     return json.dumps(payload, indent=2)

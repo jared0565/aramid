@@ -159,7 +159,15 @@ def run_mypy(ctx) -> RunnerResult:
         # resolves off this run.
         return RunnerResult(NAME_MYPY, ToolState.OK, raw="", examined=frozenset())
     argv = ["mypy", "--no-error-summary", "--show-column-numbers", *files]
-    return run_subprocess(argv, ctx.root, TIMEOUT_S)
+    # Vouch for exactly what was handed over, as ruff does. `run_subprocess`
+    # returns `examined=None`, and None means "could not report": resolution
+    # then falls back to the gate's whole file scope and credits mypy for
+    # files it never opened -- two `mypy:syntax` rows on ci.yml/README.md
+    # were written `fixed` that way by pushes carrying .py files beside
+    # them (interop round 149 s1). The no-op branch above already says
+    # "nothing"; the real run must say "these".
+    return dataclasses.replace(run_subprocess(argv, ctx.root, TIMEOUT_S),
+                               examined=frozenset(files))
 
 
 def run(ctx) -> RunnerResult:

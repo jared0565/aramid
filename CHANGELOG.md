@@ -10,6 +10,36 @@ to publish a tag that disagrees with it.
 
 ## [Unreleased]
 
+### Fixed
+
+- **A real mypy run now vouches only for the files it was handed.** The
+  no-op branch stamped `examined` as the empty set (0.6.1), but a run that
+  actually invoked mypy came back with `examined=None`, which resolution
+  reads as "could not report" and falls back to the gate's whole file
+  scope -- so a `mypy:syntax` row recorded against `ci.yml` resolved as
+  `fixed` off a push that carried `.py` files beside it, credited to a
+  runner that never opened the file (interop round 149 s1; two rows on a
+  consumer's ledger). The real run stamps exactly its argv's paths, as
+  ruff does; a non-Python row can never resolve off a mypy run again.
+
+### Added
+
+- **The `--json` report says when the fresh-ledger rule downgraded the
+  exit.** `fresh_ledger_baseline: true` and `grandfathered: [ids]` (both
+  keys always present; `false`/`[]` otherwise). A consumer's CI read
+  `exit_code: 0` over 786 ratchet-escalated block-tier findings, on 0.6.1
+  and again on 0.7.0, with only a stderr line to explain it (interop
+  rounds 149 s3 / 150): `.aramid/` is gitignored, so every CI checkout is a
+  fresh ledger, every CI run is "the first pre-push run", and the ratchet
+  can never fail a CI step by rc alone. Designed, now visible where a CI
+  step reads. The user guide and knowledge base say so.
+- **`doctor` says when pip-audit is present but does not run.** The deps
+  runner audits `requirements*.txt` at the repo root and nothing else, so
+  on a pyproject-only Python repo pip-audit is selected by nobody and runs
+  in no gate -- while `doctor` printed `OK  pip-audit` (interop round 149
+  s2, two machines). Now a WARN line under the table; never the exit code,
+  since `deps` is not BLOCK-tier and the gate would never fail on it.
+
 ### Changed
 
 - **The mutation gate's optimistic resolve records `pending_retest`, not

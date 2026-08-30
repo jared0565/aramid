@@ -839,3 +839,43 @@ def test_doctor_flags_a_foreign_managed_slot_with_no_surviving_relocation(tmp_pa
 
     assert rc == 2
     assert "NOT running" in blob and "graphite" in blob and "pre-commit" in blob
+
+
+# --- pip-audit: PRESENT is not RUNNING ---------------------------------------
+# Interop round 149 s2: `doctor` printed `OK  pip-audit` on two machines while
+# no gate run had ever emitted it -- the deps runner audits requirements*.txt
+# at the repo root and nothing else, so a pyproject-only Python repo is never
+# audited, and nothing said so. Same "control that looks like coverage and is
+# not" shape as the cargo-audit case above. Report, do not block.
+
+def test_probe_deps_says_pip_audit_does_not_run_on_a_pyproject_only_python_repo(tmp_path, monkeypatch):
+    root = _repo(tmp_path)
+    (root / "pyproject.toml").write_text("[project]\nname='x'\n", encoding="utf-8")
+    monkeypatch.setattr(doctor.toolpath, "resolve", lambda name: None)
+
+    statuses = doctor.probe_deps(root)
+
+    assert [s.name for s in statuses] == ["pip-audit"]
+    assert statuses[0].warn is True
+    assert "requirements" in statuses[0].detail and "does NOT run" in statuses[0].detail
+
+
+def test_probe_deps_stays_quiet_about_pip_audit_when_a_requirements_file_exists(tmp_path, monkeypatch):
+    root = _repo(tmp_path)
+    (root / "pyproject.toml").write_text("[project]\nname='x'\n", encoding="utf-8")
+    (root / "requirements.txt").write_text("requests==2.32.0\n", encoding="utf-8")
+    monkeypatch.setattr(doctor.toolpath, "resolve", lambda name: None)
+
+    assert doctor.probe_deps(root) == []
+
+
+def test_pip_audit_applicability_note_does_not_change_doctor_exit_code(tmp_path, monkeypatch, capsys):
+    monkeypatch.setattr(doctor, "probe_toolchain", lambda root: _all_present())
+    root = _onboarded(tmp_path, with_shim=True)
+    (root / "pyproject.toml").write_text("[project]\nname='x'\n", encoding="utf-8")
+
+    rc = doctor.cmd_doctor(root)
+    out = capsys.readouterr()
+
+    assert rc == 0
+    assert "pip-audit" in out.out and "does NOT run" in out.out

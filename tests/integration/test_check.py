@@ -14,6 +14,8 @@ from aramid import pipeline
 from aramid.commands.check import cmd_check
 from aramid.ledger import Ledger
 from aramid.models import Finding, Gate, Severity, Source, Verdict
+import json
+
 from aramid.normalizer import RawFinding
 from aramid.runners.base import RunnerResult, ToolState
 
@@ -481,3 +483,51 @@ def test_env_accept_degraded_is_read_when_flag_arg_absent(tmp_path, monkeypatch)
     assert len(events) == 1
     assert events[0].payload["reason"] == "ci has no fake binary"
     ledger.close()
+
+
+# ---------------------- (e) the fresh-ledger downgrade is IN THE REPORT ---
+# Interop rounds 149 s3 / 150: a consumer's CI read `--strict --json` reports
+# carrying 786 block-tier, ratchet-escalated findings and `exit_code: 0`, on
+# 0.6.1 and again on 0.7.0. The cause was rule (c) above -- every CI checkout
+# of a repo that gitignores `.aramid/` is a fresh ledger, so every CI run is
+# "the first pre-push run" and the ratchet can never bite there. That is
+# designed, but the ONLY trace of it was one stderr line; the JSON, which is
+# what a CI step reads, said nothing. A report that cannot tell "0 because
+# clean" from "0 because grandfathered" is the absent-vs-clean defect again.
+
+def test_fresh_ledger_downgrade_is_recorded_in_the_json_report(tmp_path, monkeypatch, capsys):
+    root = _repo(tmp_path)
+    _no_user_config(tmp_path, monkeypatch)
+    raw = RawFinding(tool="eslint", rule="no-unused-vars", severity_raw="1",
+                      file="a.py", line=1, message="unused var")
+    monkeypatch.setitem(pipeline.RUNNERS, "fake",
+                         _fake(RunnerResult("fake", ToolState.OK), raws=[raw]))
+    monkeypatch.setitem(pipeline.GATE_RUNNER_KEYS, Gate.PRE_PUSH, ["fake"])
+
+    rc = cmd_check(root, Gate.PRE_PUSH, "range", as_json=True)
+    out = capsys.readouterr().out
+    report = json.loads(out)
+
+    assert rc == 0 and report["exit_code"] == 0
+    assert report["fresh_ledger_baseline"] is True
+    escalated = [f["id"] for f in report["findings"] if f["escalated_by_ratchet"]]
+    assert escalated, "the fixture must produce a ratchet-escalated finding"
+    assert sorted(report["grandfathered"]) == sorted(escalated), (
+        "the report must name exactly the ids the downgrade waved through")
+
+
+def test_a_run_with_a_baseline_reports_no_grandfathering(tmp_path, monkeypatch, capsys):
+    """Both keys always present -- absent means an aramid too old to record
+    this, `false`/`[]` means it looked."""
+    root = _repo(tmp_path)
+    _no_user_config(tmp_path, monkeypatch)
+    monkeypatch.setitem(pipeline.RUNNERS, "fake", _fake(RunnerResult("fake", ToolState.OK)))
+    monkeypatch.setitem(pipeline.GATE_RUNNER_KEYS, Gate.PRE_PUSH, ["fake"])
+    cmd_check(root, Gate.PRE_PUSH, "range", as_json=True)     # first run writes the baseline
+    capsys.readouterr()
+
+    cmd_check(root, Gate.PRE_PUSH, "range", as_json=True)
+    report = json.loads(capsys.readouterr().out)
+
+    assert report["fresh_ledger_baseline"] is False
+    assert report["grandfathered"] == []

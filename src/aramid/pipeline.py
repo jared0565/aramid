@@ -158,6 +158,15 @@ class GateResult:
     # would name a path that is sometimes absent, which is the same "points at
     # nothing" defect this exists to fix, one layer along.
     log_paths: dict = field(default_factory=dict)
+    # The fresh-ledger rule (commands/check.py): the FIRST pre-push run on a
+    # ledger with no baseline writes one and does not let the ratchet's own
+    # WARN->BLOCK escalations block. `fresh_ledger_baseline` says the rule
+    # applied; `grandfathered` names the ids it waved through. Carried so
+    # the JSON can say so: a consumer's CI, where every checkout is a fresh
+    # ledger, read `exit_code: 0` over 786 block-tier findings and had only
+    # a stderr line to explain it (interop rounds 149 s3 / 150).
+    fresh_ledger_baseline: bool = False
+    grandfathered: tuple = ()
 
 
 def _tool_provenance(selected) -> dict:

@@ -163,7 +163,13 @@ def cmd_check(root, gate: Gate, mode: str, strict: bool = False, as_json: bool =
         exit_code = result.exit_code
         if fresh:
             ledger.write_baseline(result.run_id, _now(), {f.id for f in result.findings})
+            result = dataclasses.replace(result, fresh_ledger_baseline=True)
             if exit_code == 1 and not _has_genuine_block(result, cfg):
+                # Said in the JSON as well as on stderr: a CI step reads the
+                # report, and `exit_code: 0` beside block-tier findings has to
+                # explain itself there (interop rounds 149 s3 / 150).
+                result = dataclasses.replace(
+                    result, grandfathered=tuple(getattr(result, "ratchet_escalated", ()) or ()))
                 print("aramid: check: fresh ledger -- baseline written; legacy findings do "
                       "not block the first pre-push run", file=sys.stderr)
                 exit_code = 2 if result.degraded else 0

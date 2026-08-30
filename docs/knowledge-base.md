@@ -482,7 +482,7 @@ Register/remove/query a recurring `<interpreter> -m aramid drain --all`. Cross-p
    - `pre-push` shim: `2 → 0`; `1` and `3` pass through and block (fail-closed).
    - `post-commit` shim: always exits `0` regardless of the underlying `triage` exit (fully fail-open).
 3. **CLI argv failures** (`cli.py main`): any argparse `SystemExit` other than `0` is remapped to `3`.
-4. **`check` fresh-ledger downgrade**: at `--gate pre-push` with no existing baseline, if the only reason `exit_code==1` was the ratchet's own WARN→BLOCK escalation (no genuine BLOCK finding, no degraded BLOCK-tier tool), downgrades to `0` (or `2` if something degraded).
+4. **`check` fresh-ledger downgrade**: at `--gate pre-push` with no existing baseline, if the only reason `exit_code==1` was the ratchet's own WARN→BLOCK escalation (no genuine BLOCK finding, no degraded BLOCK-tier tool), downgrades to `0` (or `2` if something degraded). In CI every checkout is a fresh ledger (`.aramid/` is gitignored), so this applies to EVERY CI run and the ratchet cannot fail a step by rc alone; the `--json` report carries `fresh_ledger_baseline: true` and `grandfathered: [ids]` when it applied (both keys always present, `false`/`[]` otherwise) — read them, or persist `.aramid/` between runs (interop rounds 149 s3 / 150).
 
 ### Per-command exit codes
 

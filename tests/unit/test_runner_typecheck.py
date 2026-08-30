@@ -240,3 +240,22 @@ def test_run_mypy_with_no_python_in_range_is_a_clean_no_op(tmp_path, monkeypatch
     assert result.tool == typecheck.NAME_MYPY and result.state is ToolState.OK
     assert result.examined == frozenset()
     assert typecheck.parse(result, RunContext(root=tmp_path, files=[])) == []
+
+
+def test_run_mypy_vouches_only_for_the_files_it_was_handed(tmp_path, monkeypatch):
+    """Interop round 149 s1: two `mypy:syntax` rows recorded against `ci.yml`
+    and `README.md` were written `fixed` by pushes that carried `.py` files
+    beside them. `_examined_by_tool` is keyed by the result's tool, and a
+    real mypy run came back from `run_subprocess` with `examined=None` -- so
+    resolution fell back to the gate's whole file scope and credited mypy
+    for files it never opened. 8650958 stamped the empty set on the no-op
+    branch only. The real run must vouch for exactly the paths in its argv,
+    as ruff does: a non-Python row can then never resolve off a mypy run."""
+    def fake_run_subprocess(argv, cwd, timeout_s, env=None):
+        return RunnerResult(tool="mypy", state=ToolState.OK, raw="")
+    monkeypatch.setattr(typecheck, "run_subprocess", fake_run_subprocess)
+
+    result = typecheck.run_mypy(RunContext(root=tmp_path, files=[
+        "a.py", ".github/workflows/ci.yml", "pkg/b.pyi", "README.md"]))
+
+    assert result.examined == frozenset({"a.py", "pkg/b.pyi"})
