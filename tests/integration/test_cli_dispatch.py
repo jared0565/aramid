@@ -545,3 +545,16 @@ def test_check_dispatch_gate_all_still_honours_an_explicit_mode(monkeypatch):
 
     assert captured["gate"] is Gate.ALL
     assert captured["mode"] == "range"
+
+
+def test_check_dispatch_passes_no_record_only_when_asked(monkeypatch):
+    captured = {}
+    monkeypatch.setattr(cli, "cmd_check",
+                         lambda root, gate, mode, **kw: captured.update(kw) or 0)
+
+    cli.main(["check", "--gate", "pre-push", "--all", "--no-record"])
+    assert captured.get("record") is False
+
+    captured.clear()
+    cli.main(["check", "--gate", "pre-push"])
+    assert "record" not in captured, "the default path passes nothing, so older fakes and callers keep working"

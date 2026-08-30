@@ -211,6 +211,14 @@ aramid check --all
 
 These three are mutually exclusive. If none is given, the mode defaults per gate: `staged` for `--gate pre-commit`, `range` for `--gate pre-push`, `all` for `--gate all`. `--all` widens the FILE set to the whole tracked tree (and takes the pre-push time budget); it does not change which runners run -- that is `--gate`'s job, so `--gate pre-commit --all` is still a gitleaks+ruff scan. For both tiers at once, use `--gate all`.
 
+### Looking without recording
+
+```powershell
+aramid check --gate all --no-record --json
+```
+
+`--no-record` runs the gate against a snapshot of the ledger and writes nothing to `.aramid/ledger.db` (the runner logs under `.aramid/logs/` are still written). The report is the real report -- the ratchet, `new_ids` and the fresh-ledger rule read the snapshot's history exactly as a recording run would -- so it is the way to take a whole-tree measurement without leaving it behind: one consumer's `--all` look wrote 683 rows into their ledger before this existed.
+
 ### CI / automation flags
 
 ```powershell

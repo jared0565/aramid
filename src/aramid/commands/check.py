@@ -130,13 +130,49 @@ def _has_genuine_block(result, cfg) -> bool:
     return genuine_finding or result.degraded_block_tier
 
 
+def _ledger_snapshot(root: Path) -> Ledger:
+    """A throwaway copy of the repo's ledger, so a `--no-record` run answers
+    exactly as a recording run would -- the ratchet, `new_ids` and the
+    fresh-ledger rule all read history -- while nothing it appends reaches
+    `.aramid/ledger.db`. Copied through sqlite's backup API rather than the
+    file: the ledger runs in WAL mode, and a plain file copy can miss the
+    write-ahead log. A repo with no ledger yet gets an empty snapshot and
+    still ends the run with no ledger."""
+    import shutil
+    import sqlite3
+    import tempfile
+    tmp_dir = Path(tempfile.mkdtemp(prefix="aramid-no-record-"))
+    dst = tmp_dir / "ledger.db"
+    src_path = root / ".aramid" / "ledger.db"
+    if src_path.exists():
+        src = sqlite3.connect(str(src_path))
+        try:
+            dst_conn = sqlite3.connect(str(dst))
+            try:
+                src.backup(dst_conn)
+            finally:
+                dst_conn.close()
+        finally:
+            src.close()
+    ledger = Ledger(dst)
+    ledger._no_record_dir = tmp_dir           # reaped in cmd_check's finally
+    ledger._no_record_rmtree = shutil.rmtree
+    return ledger
+
+
 def cmd_check(root, gate: Gate, mode: str, strict: bool = False, as_json: bool = False,
-              accept_degraded: str | None = None) -> int:
+              accept_degraded: str | None = None, record: bool = True) -> int:
     root = Path(root)
 
     try:
         cfg = config_mod.load_config(root)
-        ledger = Ledger(root / ".aramid" / "ledger.db")
+        # `record=False` (interop round 149 c): a whole-tree measurement used
+        # to write every finding it saw into the ledger -- 683 rows for one
+        # consumer's look. The gate now runs against a snapshot instead.
+        ledger = Ledger(root / ".aramid" / "ledger.db") if record else _ledger_snapshot(root)
+        if not record:
+            print("aramid: check: no-record -- running against a snapshot of the ledger; "
+                  "nothing from this run is written to .aramid/ledger.db", file=sys.stderr)
     except Exception as exc:  # engine/config error -> exit 3, never a silent 0.
         print(f"aramid: check: engine error: {exc}", file=sys.stderr)
         return 3
@@ -192,3 +228,6 @@ def cmd_check(root, gate: Gate, mode: str, strict: bool = False, as_json: bool =
         return 3
     finally:
         ledger.close()
+        tmp_dir = getattr(ledger, "_no_record_dir", None)
+        if tmp_dir is not None:
+            ledger._no_record_rmtree(tmp_dir, ignore_errors=True)

@@ -531,3 +531,74 @@ def test_a_run_with_a_baseline_reports_no_grandfathering(tmp_path, monkeypatch, 
 
     assert report["fresh_ledger_baseline"] is False
     assert report["grandfathered"] == []
+
+
+# ---------------------------- (f) --no-record: measure without recording ---
+# Interop round 149 (c): a consumer ran a whole-tree `--all` to MEASURE a
+# claim and it wrote 683 rows into their ledger (139 -> 821 open). Every
+# `check` recorded; there was no way to look without leaving a mark. With
+# `record=False` the gate runs against a SNAPSHOT of the ledger -- so the
+# ratchet, `new_ids` and the fresh-ledger rule answer exactly as a real run
+# would -- and nothing reaches `.aramid/ledger.db`.
+
+def _event_count(root) -> int:
+    led = Ledger(root / ".aramid" / "ledger.db")
+    try:
+        return len(led.events())
+    finally:
+        led.close()
+
+
+def test_no_record_leaves_the_ledger_exactly_as_it_was(tmp_path, monkeypatch, capsys):
+    root = _repo(tmp_path)
+    _no_user_config(tmp_path, monkeypatch)
+    raw = RawFinding(tool="eslint", rule="no-unused-vars", severity_raw="1",
+                      file="a.py", line=1, message="unused var")
+    monkeypatch.setitem(pipeline.RUNNERS, "fake",
+                         _fake(RunnerResult("fake", ToolState.OK), raws=[raw]))
+    monkeypatch.setitem(pipeline.GATE_RUNNER_KEYS, Gate.PRE_PUSH, ["fake"])
+    cmd_check(root, Gate.PRE_PUSH, "range", as_json=True)          # a real run, so history exists
+    capsys.readouterr()
+    before = _event_count(root)
+
+    rc = cmd_check(root, Gate.PRE_PUSH, "range", as_json=True, record=False)
+    out = capsys.readouterr()
+    report = json.loads(out.out)
+
+    assert rc in (0, 2)
+    assert any(f["tool"] == "eslint" for f in report["findings"]), "the report is the real report"
+    assert _event_count(root) == before, "nothing may reach the ledger"
+    assert "no-record" in out.err
+
+
+def test_no_record_answers_like_a_real_run_would(tmp_path, monkeypatch, capsys):
+    """Against a SNAPSHOT, not an empty ledger: a finding seen before is
+    not `new`, and the fresh-ledger rule applies only if it would have."""
+    root = _repo(tmp_path)
+    _no_user_config(tmp_path, monkeypatch)
+    raw = RawFinding(tool="eslint", rule="no-unused-vars", severity_raw="1",
+                      file="a.py", line=1, message="unused var")
+    monkeypatch.setitem(pipeline.RUNNERS, "fake",
+                         _fake(RunnerResult("fake", ToolState.OK), raws=[raw]))
+    monkeypatch.setitem(pipeline.GATE_RUNNER_KEYS, Gate.PRE_PUSH, ["fake"])
+    cmd_check(root, Gate.PRE_PUSH, "range", as_json=True)
+    capsys.readouterr()
+
+    cmd_check(root, Gate.PRE_PUSH, "range", as_json=True, record=False)
+    report = json.loads(capsys.readouterr().out)
+
+    assert report["new_ids"] == [], "seen on the first run, so not new on the snapshot"
+    assert report["fresh_ledger_baseline"] is False
+
+
+def test_no_record_on_a_repo_with_no_ledger_yet_creates_none(tmp_path, monkeypatch, capsys):
+    root = _repo(tmp_path)
+    _no_user_config(tmp_path, monkeypatch)
+    monkeypatch.setitem(pipeline.RUNNERS, "fake", _fake(RunnerResult("fake", ToolState.OK)))
+    monkeypatch.setitem(pipeline.GATE_RUNNER_KEYS, Gate.PRE_PUSH, ["fake"])
+
+    rc = cmd_check(root, Gate.PRE_PUSH, "range", as_json=True, record=False)
+    capsys.readouterr()
+
+    assert rc == 0
+    assert not (root / ".aramid" / "ledger.db").exists()

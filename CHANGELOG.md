@@ -35,6 +35,13 @@ to publish a tag that disagrees with it.
 
 ### Added
 
+- **`aramid check --no-record`** runs the gate against a snapshot of the
+  ledger and writes nothing to `.aramid/ledger.db`. A consumer took a
+  whole-tree `--all` measurement and it wrote 683 rows into their ledger
+  (interop round 149 c); every `check` recorded, and there was no way to
+  look without leaving a mark. The report is the real report: the
+  snapshot carries the history the ratchet, `new_ids` and the fresh-ledger
+  rule read. Runner logs are still written.
 - **The `--json` report says when the fresh-ledger rule downgraded the
   exit.** `fresh_ledger_baseline: true` and `grandfathered: [ids]` (both
   keys always present; `false`/`[]` otherwise). A consumer's CI read

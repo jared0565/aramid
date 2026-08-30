@@ -66,6 +66,8 @@ def build_parser() -> argparse.ArgumentParser:
     p_check.add_argument("--strict", action="store_true", help="CI mode: treat 2/3 as failure")
     p_check.add_argument("--json", action="store_true")
     p_check.add_argument("--accept-degraded", action="store_true")
+    p_check.add_argument("--no-record", action="store_true", dest="no_record",
+                         help="run against a snapshot of the ledger; write nothing to .aramid/ledger.db")
     p_check.add_argument("--reason", default=None)
 
     p_doctor = sub.add_parser("doctor", help="probe/repair the toolchain")
@@ -239,8 +241,11 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "check":
         gate = Gate(args.gate)
         accept_degraded = (args.reason or "no reason given") if args.accept_degraded else None
+        # Passed only when asked, so every existing caller and test double of
+        # `cmd_check` keeps its signature.
+        extra = {"record": False} if getattr(args, "no_record", False) else {}
         return cmd_check(root, gate, _check_mode(args), strict=args.strict,
-                          as_json=args.json, accept_degraded=accept_degraded)
+                          as_json=args.json, accept_degraded=accept_degraded, **extra)
 
     if args.command == "doctor":
         return cmd_doctor(root, fix=args.fix)
