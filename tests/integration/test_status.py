@@ -1152,3 +1152,18 @@ def test_status_counts_pending_retest_findings_in_their_own_bucket(tmp_path, mon
     assert rc == 0
     assert "open findings: 0" in out
     assert "pending-retest: 1" in out
+
+
+def test_open_counts_line_on_an_empty_state_reads_zero_in_every_bucket():
+    """Every bucket's default is asserted, not just the ones a fixture
+    happens to populate: the post-commit drain of 2026-08-30 found the
+    `historical`/`not-a-secret` defaults mutable 0 -> 1 with nothing
+    noticing."""
+    from aramid.commands import status as status_mod
+    from aramid.models import Status
+    line = status_mod._open_counts_line({})
+    assert line.startswith("open findings: 0 (")
+    for member in Status:
+        if member is Status.OPEN:
+            continue
+        assert f"{member.value.replace('_', '-')}: 0" in line, line

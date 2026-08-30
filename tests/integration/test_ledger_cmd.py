@@ -1029,3 +1029,24 @@ def test_an_out_of_scope_finding_reopens_if_its_runner_reports_it_again(tmp_path
         assert ledger.open_findings()["f1"]["status"] == "open"
     finally:
         ledger.close()
+
+
+def test_mark_unreachable_reports_an_unreadable_config_as_an_engine_error(tmp_path, capsys, monkeypatch):
+    """The `return 3` on the config-load path had no test; the drain found
+    it mutable 3 -> 4 (0074afbe). An unreadable config is exit 3 with the
+    error named, never a silent 0 or a traceback."""
+    from aramid import config as config_mod
+    root: Path = tmp_path
+    ledger = _ledger(root)
+    ledger.record_run("r1", "t1", "pre-push", {"ruff"}, {"a.py"}, [_f("f1", tool="ruff")])
+    ledger.close()
+
+    def boom(_root):
+        raise RuntimeError("aramid.toml: unreadable")
+    monkeypatch.setattr(config_mod, "load_config", boom)
+
+    rc = cmd_ledger_mark_unreachable(root, "f1", "a reason")
+    err = capsys.readouterr().err
+
+    assert rc == 3
+    assert "engine error" in err and "unreadable" in err
