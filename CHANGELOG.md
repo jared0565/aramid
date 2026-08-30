@@ -10,6 +10,27 @@ to publish a tag that disagrees with it.
 
 ## [Unreleased]
 
+### Changed
+
+- **The mutation gate's optimistic resolve records `pending_retest`, not
+  `fixed`.** `gap_addressed` resolves an open survivor when the push touches
+  its module or a test named for it, so a dev who added a test is not
+  blocked -- and promised that "the async re-drain is the authoritative
+  backstop". Measured on aramid's own ledger: 21 such resolves, 20 never
+  re-examined. The backstop was structurally void: range-mode mutation
+  regenerates only mutants on changed lines and the id is content-keyed, so
+  an old id can only return through the survivor re-test, which read `open`
+  rows only; and the test-only push carrying the evidence scored 20 against
+  a `min_score` of 40 and was never queued. Now: the resolve carries
+  `pending_retest` (a new status that does not gate; older events keep
+  reading `fixed`), the re-test considers pending rows and a confirmed kill
+  closes them, a re-detect re-opens them, `status` counts the bucket, and
+  triage's new `survivor-retest` signal (+40) queues a push whose changed
+  test maps to a recorded survivor's module or whose changed source holds
+  one. The gate also skips survivors bound by the tracked suppressions file
+  -- an adjudicated equivalent mutant has no gap to address (one was written
+  `fixed` twice).
+
 ## [0.7.0] — 2026-08-29
 
 ### Added

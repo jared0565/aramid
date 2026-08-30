@@ -1132,3 +1132,23 @@ def test_status_counts_out_of_scope_findings_in_their_own_bucket(tmp_path, monke
     assert rc == 0
     assert "open findings: 0" in out
     assert "out-of-scope: 1" in out
+
+
+def test_status_counts_pending_retest_findings_in_their_own_bucket(tmp_path, monkeypatch, capsys):
+    root = _repo(tmp_path)
+    _no_user_config(tmp_path, monkeypatch)
+    _write_toml(root, armed=True, bake_started=None)
+
+    ledger = Ledger(root / ".aramid" / "ledger.db")
+    ledger.record_run("run1", "2026-01-01T00:00:00+00:00", "drain", {"mutation"},
+                      {"a.py"}, [_f("m1", tool="mutation", rule="int-bound")])
+    ledger.append(Event(EventType.FINDING_RESOLVED, "r2", "2026-01-02T00:00:00+00:00",
+                        finding_id="m1", payload={"auto_resolved": "gap_addressed", "pending_retest": True}))
+    ledger.close()
+
+    rc = cmd_status(root)
+    out = capsys.readouterr().out
+
+    assert rc == 0
+    assert "open findings: 0" in out
+    assert "pending-retest: 1" in out

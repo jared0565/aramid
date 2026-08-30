@@ -123,16 +123,35 @@ def _has_mapped_test(module_path: str, test_stems) -> bool:
     return any(_maps_to_module(s, module_path) for s in test_stems)
 
 
-def auto_resolve_mutation(ledger, run_id: str, at: str, changed_files) -> list[str]:
+def auto_resolve_mutation(ledger, run_id: str, at: str, changed_files, *,
+                          suppressed=frozenset()) -> list[str]:
     """Optimistically resolve open mutation findings the push addresses, BEFORE
     the block check (mirrors review.auto_resolve_llm's call site), so a dev who
     added a test is not blocked by a stale finding. Module-mapped (spec 1b §4):
     resolve a finding on x.py iff the push changed x.py OR added/modified a test
     whose basename stem is test_<x>/<x>_test. Liberal by design -- a wrong
-    resolve only lets a test-gap slip until the re-drain re-reports it (never a
-    security hole); the async re-drain is the authoritative backstop. Two source
+    resolve only lets a test-gap slip (never a security hole). Two source
     files sharing a module stem are resolved together by one mapped test -- an
-    accepted, low-stakes consequence of module-mapping."""
+    accepted, low-stakes consequence of module-mapping.
+
+    WHAT THE RESOLVE RECORDS, corrected 2026-08-30. It used to write a bare
+    FINDING_RESOLVED, which materializes as `fixed`, on the docstring's
+    promise that "the async re-drain is the authoritative backstop". Measured
+    on aramid's own ledger: 21 such resolves, 20 never re-examined. The
+    backstop was structurally void -- range-mode mutation regenerates only
+    mutants on CHANGED lines and the id is content-keyed, so an old id can
+    only return through the survivor re-test (consumers/mutation.py,
+    `_retest_candidates`), which read `open` rows only. The resolve now
+    carries `pending_retest`, which materializes as that status: it does not
+    gate (only `open` does), the re-test considers it, a confirmed kill
+    closes it as `fixed`, and a re-detect re-opens it. The unblock is kept;
+    the false `fixed` is not.
+
+    `suppressed` -- ids bound by the tracked suppressions file. An
+    `equivalent mutant` entry says "unkillable, adjudicated": there is no gap
+    to address and any resolve for it is a false claim (c5326a9c, written
+    `fixed` twice by this function on pushes that touched cli.py). The
+    re-test already skips these; the gate now agrees."""
     changed_norm = {normalize_path(c) for c in changed_files}
     changed_test_stems = {Path(c).stem for c in changed_files
                           if gitutil.is_test_file(c)}
@@ -141,6 +160,8 @@ def auto_resolve_mutation(ledger, run_id: str, at: str, changed_files) -> list[s
     considered = 0
     for fid, rec in ledger.open_findings().items():
         if rec.get("tool") != TOOL or rec.get("status") != "open":
+            continue
+        if fid in suppressed:
             continue
         considered += 1
         try:
@@ -152,7 +173,8 @@ def auto_resolve_mutation(ledger, run_id: str, at: str, changed_files) -> list[s
             if source_touched or test_added:
                 ledger.append(Event(EventType.FINDING_RESOLVED, run_id, at,
                                     finding_id=fid,
-                                    payload={"auto_resolved": "gap_addressed"}))
+                                    payload={"auto_resolved": "gap_addressed",
+                                             "pending_retest": True}))
                 resolved.append(fid)
         except Exception:
             skipped += 1

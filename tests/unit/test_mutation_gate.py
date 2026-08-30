@@ -117,7 +117,7 @@ def test_resolve_when_source_touched(tmp_path):
     finally:
         led.close()
     assert resolved == ["m" * 64]
-    assert state["m" * 64]["status"] == "fixed"
+    assert state["m" * 64]["status"] == "pending_retest"
 
 
 def test_resolve_when_mapped_test_added(tmp_path):
@@ -406,3 +406,74 @@ def test_resolve_reports_exactly_one_malformed_record(tmp_path, capsys):
     err = capsys.readouterr().err
     assert "skipped 1 malformed record" in err, (
         f"expected exactly one skip to be reported, got: {err!r}")
+
+
+# ------------------------- gap_addressed is a PENDING state, not a repair ---
+# Measured on aramid's own ledger, 2026-08-30: 21 `gap_addressed` resolves in
+# the repo's history, 20 never re-examined. The docstring's "re-drain
+# backstop" is structurally void for them -- range-mode mutation regenerates
+# only mutants on CHANGED lines and the id is content-keyed, so an old id can
+# only return through the survivor re-test (b2), which reads OPEN rows. An
+# optimistic resolve therefore made `fixed` permanent and vacuous. The
+# resolve stays (a dev who added a test must not be blocked), but it now
+# records a state the re-test can find and a reader can trust.
+
+def test_gap_addressed_leaves_the_finding_pending_retest_not_fixed(tmp_path):
+    led = Ledger(tmp_path / "l.db")
+    try:
+        _seed(led, _mut_finding())
+        resolved = mutation_gate.auto_resolve_mutation(led, "r1", NOW, {"tests/test_x.py"})
+        rec = led.open_findings()["m" * 64]
+        ev = [e for e in led.events() if e.type is EventType.FINDING_RESOLVED][-1]
+    finally:
+        led.close()
+    assert resolved == ["m" * 64]
+    assert rec["status"] == "pending_retest"
+    assert "re-test" in rec["reason"]
+    assert ev.payload["auto_resolved"] == "gap_addressed" and ev.payload["pending_retest"] is True
+
+
+def test_a_pending_retest_finding_does_not_block_the_gate(tmp_path):
+    """The unblock is the reason the optimistic resolve exists; the new
+    state must keep it. Only `open` rows gate."""
+    led = Ledger(tmp_path / "l.db")
+    try:
+        _seed(led, _mut_finding())
+        mutation_gate.auto_resolve_mutation(led, "r1", NOW, {"src/pkg/x.py"})
+        out = mutation_gate.mutation_gate_findings(_cfg(True), led, Gate.PRE_PUSH)
+    finally:
+        led.close()
+    assert out == []
+
+
+def test_gap_addressed_skips_a_suppressed_survivor(tmp_path):
+    """An `equivalent mutant` entry in the tracked suppressions file says
+    "unkillable, adjudicated" -- there is no gap to address, and writing any
+    resolve for it is a false claim (c5326a9c, twice). The re-test already
+    skips these; the gate now agrees."""
+    led = Ledger(tmp_path / "l.db")
+    try:
+        _seed(led, _mut_finding())
+        resolved = mutation_gate.auto_resolve_mutation(
+            led, "r1", NOW, {"src/pkg/x.py"}, suppressed={"m" * 64})
+        rec = led.open_findings()["m" * 64]
+    finally:
+        led.close()
+    assert resolved == []
+    assert rec["status"] == "open"
+
+
+def test_a_legacy_gap_addressed_event_still_reads_fixed(tmp_path):
+    """Migration: events written before the `pending_retest` key existed keep
+    materializing as they always did. The ledger is append-only and those
+    rows were never re-examined; rewriting their history is not this
+    change's job."""
+    led = Ledger(tmp_path / "l.db")
+    try:
+        _seed(led, _mut_finding())
+        led.append(Event(EventType.FINDING_RESOLVED, "r1", NOW, finding_id="m" * 64,
+                         payload={"auto_resolved": "gap_addressed"}))
+        rec = led.open_findings()["m" * 64]
+    finally:
+        led.close()
+    assert rec["status"] == "fixed"

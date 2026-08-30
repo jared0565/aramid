@@ -263,3 +263,15 @@ def test_a_superseded_finding_reopens_if_its_content_returns(tmp_path):
     assert led.open_findings()["old"]["status"] == "superseded"
     led.record_run("r3", "t", "pre-push", {"ruff"}, {"a.py"}, [_f("old", line=10)])
     assert led.open_findings()["old"]["status"] == "open"
+
+
+def test_a_pending_retest_finding_reopens_when_re_detected(tmp_path):
+    """Like `fixed` and `unreachable`: if a mutation run regenerates the
+    same mutant and it survives again, the row is open again."""
+    led = Ledger(tmp_path / "l.db")
+    led.record_run("r1", "t", "drain", {"mutation"}, {"a.py"}, [_f("mut1", tool="mutation")])
+    led.append(Event(EventType.FINDING_RESOLVED, "r2", "t2", finding_id="mut1",
+                     payload={"auto_resolved": "gap_addressed", "pending_retest": True}))
+    assert led.open_findings()["mut1"]["status"] == "pending_retest"
+    led.record_run("r3", "t3", "drain", {"mutation"}, {"a.py"}, [_f("mut1", tool="mutation")])
+    assert led.open_findings()["mut1"]["status"] == "open"

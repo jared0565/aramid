@@ -57,6 +57,7 @@ def _open_counts_line(state: dict) -> str:
             f"fixed: {counts.get('fixed', 0)}, "
             f"superseded: {counts.get('superseded', 0)}, "
             f"out-of-scope: {counts.get('out_of_scope', 0)}, "
+            f"pending-retest: {counts.get('pending_retest', 0)}, "
             f"rotated: {counts.get('rotated', 0)})")
 
 

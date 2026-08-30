@@ -180,3 +180,19 @@ def test_only_the_listed_id_resolves_when_several_are_open(led):
     state = led.open_findings()
     assert state[FID]["status"] == "fixed"
     assert state[OTHER]["status"] == "open"
+
+
+def test_a_pending_retest_finding_resolves_when_the_producer_proves_the_kill(led):
+    """`gap_addressed` now leaves a survivor `pending_retest` rather than
+    `fixed`; the verified re-test is what closes it. The claim path must
+    accept that state, or the pending row could never become `fixed`."""
+    _seed(led)
+    led.append(Event(EventType.FINDING_RESOLVED, "r1", NOW, finding_id=FID,
+                     payload={"auto_resolved": "gap_addressed", "pending_retest": True}))
+    assert led.open_findings()[FID]["status"] == "pending_retest"
+
+    got = ledger_mod.resolve_repaired(led, "r2", NOW, tool="mutation",
+                                      reason="mutant_killed", ids=[FID], present_ids=set())
+
+    assert got == [FID]
+    assert led.open_findings()[FID]["status"] == "fixed"

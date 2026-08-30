@@ -240,8 +240,9 @@ def _survivor_mutant(rel: str, line: int, fid: str, original: str):
 
 
 def _retest_candidates(ledger, root: Path) -> list[tuple[str, str, int]]:
-    """(id, file, line) of every OPEN mutation survivor worth re-testing,
-    oldest first.
+    """(id, file, line) of every mutation survivor worth re-testing -- open,
+    or `pending_retest` (the gate's optimistic resolve, waiting for exactly
+    this proof) -- oldest first.
 
     WHY RE-TEST AT ALL. `consume` mutates the python SOURCE in an item's
     range, so a survivor recorded at head N is re-tested only when its own
@@ -271,7 +272,7 @@ def _retest_candidates(ledger, root: Path) -> list[tuple[str, str, int]]:
         suppressed = set()
     out: list[tuple[str, str, int]] = []
     for fid, rec in state.items():
-        if rec.get("tool") != "mutation" or rec.get("status") != "open":
+        if rec.get("tool") != "mutation" or rec.get("status") not in ("open", "pending_retest"):
             continue
         if fid in suppressed or not rec.get("file") or not rec.get("line"):
             continue

@@ -260,3 +260,73 @@ def test_run_triage_filters_graphite_artifacts_from_triaged_paths(tmp_path, monk
     assert any("novelty: 1 unseen" in r for r in result.reasons)
     assert not any("graph-out" in r for r in result.reasons)
     led.close()
+
+
+# ------------------------------------- survivor signal: the re-test's ticket ---
+# The verified re-test (mutation consumer, `retest_open_survivors`) runs only
+# inside a drain, and a drain runs only for a push triage scored at/above
+# `min_score`. A test-only push scores nothing on path, content or blast
+# radius, so the one push that carries the evidence a survivor needs was the
+# one push that never reached the consumer. Measured on aramid's own ledger:
+# 21 gate-time `gap_addressed` resolves, 20 never re-examined.
+
+def _survivor_ledger(tmp_path, file="src/pkg/x.py", status="open"):
+    from aramid.models import Event, EventType, Finding, Gate, Severity, Verdict
+    led = Ledger(tmp_path / "l.db")
+    f = Finding(id="s" * 64, tool="mutation", rule="int-bound", severity_raw="medium",
+                severity=Severity.MEDIUM, verdict=Verdict.WARN, file=file, line=4,
+                message="mutant survived", evidence="", gate=Gate.ALL)
+    led.record_run("r1", "2026-08-30T00:00:00+00:00", "drain", {"mutation"}, {file}, [f])
+    if status == "pending_retest":
+        led.append(Event(EventType.FINDING_RESOLVED, "r2", "2026-08-30T00:01:00+00:00",
+                         finding_id="s" * 64,
+                         payload={"auto_resolved": "gap_addressed", "pending_retest": True}))
+    return led
+
+
+def test_survivor_signal_fires_when_a_changed_test_maps_to_a_survivors_module(tmp_path):
+    led = _survivor_ledger(tmp_path)
+    try:
+        pts, why = triage.survivor_signal(led, ["tests/test_x.py"])
+    finally:
+        led.close()
+    assert pts == triage.SURVIVOR_WEIGHT
+    assert any("survivor-retest" in r and "src/pkg/x.py" in r for r in why)
+
+
+def test_survivor_signal_fires_for_a_pending_retest_survivor_too(tmp_path):
+    led = _survivor_ledger(tmp_path, status="pending_retest")
+    try:
+        pts, _ = triage.survivor_signal(led, ["tests/test_x.py"])
+    finally:
+        led.close()
+    assert pts == triage.SURVIVOR_WEIGHT
+
+
+def test_survivor_signal_is_zero_for_an_unrelated_test_or_no_survivors(tmp_path):
+    led = _survivor_ledger(tmp_path)
+    try:
+        assert triage.survivor_signal(led, ["tests/test_other.py"]) == (0, [])
+        assert triage.survivor_signal(led, ["README.md"]) == (0, [])
+    finally:
+        led.close()
+    empty = Ledger(tmp_path / "empty.db")
+    try:
+        assert triage.survivor_signal(empty, ["tests/test_x.py"]) == (0, [])
+    finally:
+        empty.close()
+
+
+def test_a_test_only_push_that_maps_to_a_survivor_reaches_min_score(tmp_path, monkeypatch):
+    """The whole point: without this signal the push scored 20 (novelty
+    only) against a default `min_score` of 40 and was never queued."""
+    led = _survivor_ledger(tmp_path)
+    _fake_git(monkeypatch, ["tests/test_x.py"], "+def test_kills_it(): ...\n")
+    cfg = type("C", (), {"triage": {"min_score": 40, "extra_security_paths": []},
+                         "ignore_paths": []})()
+    try:
+        result = triage.score(tmp_path, "a", "b", cfg, led)
+    finally:
+        led.close()
+    assert result.score >= 40, result
+    assert any("survivor-retest" in r for r in result.reasons)

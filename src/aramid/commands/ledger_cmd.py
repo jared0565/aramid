@@ -346,6 +346,8 @@ def cmd_ledger_mark_unreachable(root, finding_id: str, reason: str) -> int:
                 # row that now needs a decision. `reason` carries its id.
                 "superseded": f"{rec.get('reason') or 'rewritten'} -- decide on that finding instead.",
                 "out_of_scope": "already resolved as out of scope.",
+                "pending_retest": "awaiting a verified re-test -- the mutation consumer "
+                                  "closes or re-opens it.",
             }
             tail = tails.get(status, "mark-unreachable only applies to an open finding.")
             print(f"aramid: ledger mark-unreachable: {finding_id} is not open "

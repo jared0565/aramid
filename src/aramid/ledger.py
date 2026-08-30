@@ -383,7 +383,9 @@ def resolve_repaired(ledger, run_id: str, at: str, *, tool: str, reason: str,
             continue
         try:
             rec = state.get(fid)
-            if rec is None or rec.get("tool") != tool or rec.get("status") != "open":
+            # `pending_retest` is the gate's optimistic resolve waiting for
+            # exactly this proof; refusing it would make that state a dead end.
+            if rec is None or rec.get("tool") != tool or rec.get("status") not in ("open", "pending_retest"):
                 continue
             ledger.append(Event(EventType.FINDING_RESOLVED, run_id, at,
                                 finding_id=fid,
@@ -471,6 +473,15 @@ def _materialize(events):
                 if successor:
                     state[e.finding_id]["status"] = "superseded"
                     state[e.finding_id]["reason"] = f"rewritten -- superseded by {successor}"
+                elif e.payload.get("pending_retest"):
+                    # Written by the gate's optimistic resolve since the key
+                    # existed; older `gap_addressed` events carry no key and
+                    # keep reading `fixed` -- the log is append-only and those
+                    # rows were never re-examined, which is exactly the fact
+                    # this state exists to stop repeating.
+                    state[e.finding_id]["status"] = "pending_retest"
+                    state[e.finding_id]["reason"] = ("gap addressed by a push -- awaiting a "
+                                                     "verified re-test")
                 else:
                     state[e.finding_id]["status"] = "fixed"
         elif e.type.value == "finding_overridden":
@@ -568,7 +579,7 @@ class Ledger:
         self.append(Event(EventType.RUN_STARTED, run_id, at, payload=payload))
         new_ids = []
         for f in findings:
-            if f.id not in state or state[f.id]["status"] in ("fixed", "unreachable", "superseded", "out_of_scope"):
+            if f.id not in state or state[f.id]["status"] in ("fixed", "unreachable", "superseded", "out_of_scope", "pending_retest"):
                 self.append(Event(EventType.FINDING_DETECTED, run_id, at,
                                   finding_id=f.id, payload=_detect_payload(f)))
             elif state[f.id].get("line") != f.line:

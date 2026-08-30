@@ -1443,3 +1443,27 @@ def test_a_survivor_whose_line_changed_is_left_to_the_gate_resolvers():
     assert found is not None and found.line == m.line + 1, "same mutant, one line down"
     rewritten = ADULT.replace("age >= 18", "age >= 21")
     assert mut_consumer._survivor_mutant("calc.py", m.line, fid, rewritten) is None
+
+
+def test_retest_candidates_include_a_pending_retest_survivor(tmp_path):
+    """`gap_addressed` at the gate now leaves a survivor `pending_retest`
+    instead of `fixed`, precisely so the verified re-test can find it. A
+    candidate predicate that reads only `open` would make that state a dead
+    end -- the exact hole the state exists to close."""
+    from aramid.ledger import Ledger
+    from aramid.models import Event, EventType, Finding, Gate, Severity, Verdict
+    root = tmp_path
+    (root / ".aramid").mkdir()
+    led = Ledger(root / ".aramid" / "ledger.db")
+    try:
+        f = Finding(id="p" * 64, tool="mutation", rule="int-bound", severity_raw="medium",
+                    severity=Severity.MEDIUM, verdict=Verdict.WARN, file="calc.py",
+                    line=3, message="mutant survived", evidence="", gate=Gate.ALL)
+        led.record_run("r1", "2026-08-30T00:00:00+00:00", "drain", {"mutation"}, {"calc.py"}, [f])
+        led.append(Event(EventType.FINDING_RESOLVED, "r2", "2026-08-30T00:01:00+00:00",
+                         finding_id="p" * 64,
+                         payload={"auto_resolved": "gap_addressed", "pending_retest": True}))
+        got = mut_consumer._retest_candidates(led, root)
+    finally:
+        led.close()
+    assert got == [("p" * 64, "calc.py", 3)]

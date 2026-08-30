@@ -33,6 +33,13 @@ class Status(StrEnum):
     # only by `ledger resolve --out-of-scope`, which records WHY as its own
     # event kind and refuses while the runner can still examine the path.
     OUT_OF_SCOPE = "out_of_scope"
+    # A mutation survivor the gate resolved on INTENT (the push touched its
+    # module or a mapped test) and nothing has yet re-tested. Not `fixed`:
+    # measured on aramid's own ledger, 21 such resolves and 20 never
+    # re-examined, because range-mode mutation only regenerates changed
+    # lines and the re-test read `open` rows only. Does not gate; the
+    # verified re-test (`mutant_killed`) closes it, a re-detect re-opens it.
+    PENDING_RETEST = "pending_retest"
 class Gate(StrEnum):
     PRE_COMMIT = "pre-commit"
     PRE_PUSH = "pre-push"

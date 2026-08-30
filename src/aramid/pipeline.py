@@ -1110,7 +1110,10 @@ def run_gate(root: Path, gate: Gate, mode: str, cfg: config_mod.Config, ledger: 
         # evidence quote still exists at HEAD, deriving no range at all.
         resolve_scope = _resolution_scope(root, mode, rng, scope_files)
         if resolve_scope:
-            mutation_gate.auto_resolve_mutation(ledger, run_id, at, resolve_scope)
+            mutation_gate.auto_resolve_mutation(
+                ledger, run_id, at, resolve_scope,
+                # An adjudicated equivalent mutant has no gap to address.
+                suppressed={r.id for r in suppress_records})
             # 1a-F2: the two synchronous producers resolve too. present_ids
             # skips anything re-fired THIS run (these producers, unlike the
             # drain's, fire in the run being resolved).

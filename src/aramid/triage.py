@@ -23,6 +23,10 @@ PATH_WEIGHT = 30
 CONTENT_WEIGHT = 25
 NOVELTY_WEIGHT = 20
 BLAST_MAX = 25
+# Enough on its own to reach the default `min_score` of 40: a test-only push
+# that maps to a recorded survivor is the one push carrying the evidence the
+# survivor needs, and it scored nothing on path, content or blast radius.
+SURVIVOR_WEIGHT = 40
 
 _SECURITY_TOKENS = ("auth", "session", "login", "crypto", "token", "secret",
                     "permission", "middleware", "config")
@@ -146,6 +150,35 @@ def blast_radius_signal(root: Path, paths: list[str]) -> tuple[int, list[str]]:
     return 0, []
 
 
+def survivor_signal(ledger, paths: list[str]) -> tuple[int, list[str]]:
+    """Does this push carry evidence for a recorded mutation survivor? Fires
+    when a changed TEST maps (by the mutation gate's own stem rule) to the
+    module of an open or `pending_retest` survivor, or when a changed source
+    file holds one. The verified re-test runs only inside a drain, and a drain
+    runs only for a push that scores -- without this, the push that could
+    close a survivor was the push that never reached the consumer (measured:
+    21 gate-time resolves, 20 never re-examined). Never raises."""
+    try:
+        from aramid import mutation_gate
+        state = ledger.open_findings()
+        survivors = {rec.get("file") for rec in state.values()
+                     if rec.get("tool") == "mutation"
+                     and rec.get("status") in ("open", "pending_retest") and rec.get("file")}
+        if not survivors:
+            return 0, []
+        changed_norm = {normalize_path(p) for p in paths}
+        test_stems = [Path(p).stem for p in paths if gitutil.is_test_file(p)]
+        hit = sorted(f for f in survivors
+                     if normalize_path(f) in changed_norm
+                     or any(mutation_gate._maps_to_module(s, f) for s in test_stems))
+        if not hit:
+            return 0, []
+        return SURVIVOR_WEIGHT, [f"survivor-retest: {len(hit)} module(s) with a recorded "
+                                 f"survivor incl. {hit[0]}"]
+    except Exception:
+        return 0, []
+
+
 def score(root: Path, base: str | None, head: str, cfg, ledger, *,
           budget_s: float = 2.0,
           monotonic: Callable[[], float] = time.monotonic) -> TriageResult:
@@ -171,6 +204,7 @@ def score(root: Path, base: str | None, head: str, cfg, ledger, *,
         lambda: content_signal(diff, paths),
         lambda: novelty_signal(queue.triaged_paths(ledger), paths),
         lambda: blast_radius_signal(root, paths),
+        lambda: survivor_signal(ledger, paths),
     )
     for sig in signals:
         if monotonic() - start > budget_s:
