@@ -102,7 +102,10 @@ def test_all_mode_resolves_when_the_mapped_test_is_in_the_pushes_delta(
 
     cmd_check(r, Gate.PRE_PUSH, "all")
 
-    assert _status(r) == "fixed", (
+    # `pending_retest` since 2026-08-30: the gate resolves on intent and the
+    # verified re-test closes it; what this test guards is that the resolve
+    # HAPPENED under --all at all, not the word it records.
+    assert _status(r) == "pending_retest", (
         "the mapped test is in @{u}..HEAD, but --all skipped resolution")
 
 
