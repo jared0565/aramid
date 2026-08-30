@@ -1167,3 +1167,67 @@ def test_open_counts_line_on_an_empty_state_reads_zero_in_every_bucket():
         if member is Status.OPEN:
             continue
         assert f"{member.value.replace('_', '-')}: 0" in line, line
+
+
+# ------------- round 155 s1: the streak came back through the KEY -----------
+# The R80-1 tests above seed `expected` by hand, so they could not see what
+# `expected_tool_names` actually records. This one records what it computes.
+
+def test_two_real_runs_with_a_configured_tests_command_show_no_streak_at_all(
+        tmp_path, monkeypatch, capsys):
+    """Interop round 155 s1: `tests: skipped last 210 pre-push run(s)` on a
+    repo whose suite ran on all 210. `expected` as recorded by the gate carried
+    the registry key `tests` beside the label `python.exe`; the runs' `tools`
+    never carry the key. Two real runs, `expected` computed the way run_gate
+    computes it: the streak section must be empty."""
+    from aramid import toolset
+
+    root = _repo(tmp_path)
+    _no_user_config(tmp_path, monkeypatch)
+    (root / "aramid.toml").write_text(
+        "schema_version = 1\nsemgrep_block_armed = true\n"
+        '[tests]\ncommand = ["C:/venv/Scripts/python.exe", "-m", "pytest"]\n',
+        encoding="utf-8")
+    cfg = config_mod.load_config(root)
+    expected = sorted(toolset.expected_tool_names(root, cfg, Gate.PRE_PUSH))
+
+    lg = Ledger(root / ".aramid" / "ledger.db")
+    _run_started(lg, "pre-push", ["gitleaks", "python.exe", "semgrep"], expected=expected,
+                 at="2026-01-01T00:00:00+00:00")
+    _run_started(lg, "pre-push", ["gitleaks", "python.exe", "semgrep"], expected=expected,
+                 at="2026-01-02T00:00:00+00:00")
+    lg.close()
+
+    assert cmd_status(root) == 0
+    out = capsys.readouterr().out
+
+    assert "tests" not in expected, expected
+    assert "skipped last" not in out, out
+
+
+# ------------- round 155 s2: a fuzz driver that keeps timing out -------------
+
+def test_status_surfaces_a_fuzz_driver_that_keeps_timing_out_with_nothing_run(
+        tmp_path, monkeypatch, capsys):
+    """Interop round 155 s2: five drains, each `state=ok`, `cases_run=0`,
+    `timeouts=1`, ~125 s -- and `status` had no fuzz line at all. The same
+    shape mutation's no-work line exists for: finished cleanly, certified
+    nothing, will burn the same budget next drain."""
+    root = _repo(tmp_path)
+    _no_user_config(tmp_path, monkeypatch)
+    _write_toml(root, armed=True, bake_started=None)
+    lg = Ledger(root / ".aramid" / "ledger.db")
+    for _ in range(5):
+        _consumer_run(lg, "fuzz", "ok",
+                      "driver timed out in src/graphite/daemon.py:serve (function 1 of 15); "
+                      "no cases run to completion (budget did its job) -- exclude it with "
+                      "[fuzz].skip_name_patterns", duration_s=125.0)
+    lg.close()
+
+    assert cmd_status(root) == 0
+
+    out = capsys.readouterr().out
+    assert "consumers doing no work:" in out
+    assert "fuzz: 5 run(s) certified nothing" in out
+    assert "625s spent" in out
+    assert "daemon.py:serve" in out, "the line names what to act on"

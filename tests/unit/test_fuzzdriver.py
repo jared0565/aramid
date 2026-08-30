@@ -125,3 +125,25 @@ def test_subprocess_entrypoint_emits_json(tmp_path):
     assert cp.returncode == 0, cp.stderr
     out = json.loads(cp.stdout)
     assert out["crashes"] >= 1
+
+
+
+def test_run_spec_records_where_it_is_before_each_call(tmp_path):
+    """Interop round 155 s2: the driver prints once, at the end, so a kill at
+    the budget discards everything and the consumer cannot say which function
+    it was in. With a `progress` path in the spec it writes its position before
+    every call; a timeout leaves the last one behind."""
+    _module(tmp_path, "m", """
+        def f(x: int) -> int:
+            return x
+
+        def g(y: str) -> str:
+            return y
+    """)
+    spec = _spec(tmp_path, "m.py", ["f", "g"], cases=3)
+    spec["progress"] = str(tmp_path / "progress.json")
+
+    run_spec(spec)
+
+    progress = json.loads((tmp_path / "progress.json").read_text(encoding="utf-8"))
+    assert progress == {"file": "m.py", "function": "g", "functions_started": 2}

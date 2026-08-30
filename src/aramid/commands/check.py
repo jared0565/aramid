@@ -195,6 +195,7 @@ def cmd_check(root, gate: Gate, mode: str, strict: bool = False, as_json: bool =
             print(override_cmd.render_invalidations(invalidated), file=sys.stderr)
 
         result = pipeline.run_gate(root, gate, mode, cfg, ledger, accept_degraded=accept_degraded)
+        result = dataclasses.replace(result, recorded=record)
 
         exit_code = result.exit_code
         if fresh:

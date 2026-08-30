@@ -52,6 +52,8 @@ def run_spec(spec: dict) -> dict:
     # Anything reading "no crash" as proof of a fix therefore needs this list,
     # not the requested targets.
     fuzzed: list = []
+    progress = spec.get("progress")
+    functions_started = 0
 
     for target in spec.get("targets", []):
         rel = target["file"]
@@ -71,6 +73,8 @@ def run_spec(spec: dict) -> dict:
                 unfuzzable += 1
                 continue
             hints = typing.get_type_hints(fn)
+            functions_started += 1
+            _note_progress(progress, rel, func_name, functions_started)
             fuzzed.append([rel, func_name])
             for i in range(cases):
                 # S311 justification: as in autolearn.decision_rng, determinism
@@ -103,6 +107,22 @@ def run_spec(spec: dict) -> dict:
     return {"records": records, "cases_run": cases_run, "crashes": crashes,
             "contract_exceptions": contract, "unfuzzable": unfuzzable,
             "import_failures": import_failures, "fuzzed": fuzzed}
+
+
+def _note_progress(path, rel: str, func_name: str, n: int) -> None:
+    """Where the driver is, written BEFORE each call. The verdict is printed
+    once at the end, so a target that never returns takes everything with it
+    when the consumer's budget kills the process; this file is what survives,
+    and it is how the consumer names the function (interop round 155 s2).
+    Never raises: a progress file that cannot be written must not cost a
+    fuzz run."""
+    if not path:
+        return
+    try:
+        Path(path).write_text(json.dumps({"file": rel, "function": func_name,
+                                         "functions_started": n}), encoding="utf-8")
+    except OSError:
+        pass
 
 
 def _crash_line(exc, abs_path: str, fn) -> int:

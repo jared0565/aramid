@@ -429,6 +429,14 @@ _GIVE_UP_MARK = "giving up"
 # the queue item and stall the drain (measured downstream at 61 hours), so
 # these runs are legitimately `ok` and would otherwise be invisible.
 _NO_WORK_MARK = "no mutants tested"
+# fuzz's equivalent (interop round 155 s2): the driver timed out before it
+# reported anything, `ok`, `cases_run=0`, same budget again next drain --
+# five drains and no line anywhere.
+_NO_WORK_MARKS = (_NO_WORK_MARK, "no cases run")
+
+
+def _certified_nothing(note: str) -> bool:
+    return any(mark in note for mark in _NO_WORK_MARKS)
 
 
 def _stood_down_lines(ledger: Ledger) -> list[str]:
@@ -512,11 +520,11 @@ def _no_work_lines(ledger: Ledger) -> list[str]:
     faults = []
     for name in sorted(runs):
         seq = runs[name]
-        if not seq or _NO_WORK_MARK not in seq[-1][0]:
+        if not seq or not _certified_nothing(seq[-1][0]):
             continue
         count, spent = 0, 0.0
         for note, duration in reversed(seq):
-            if _NO_WORK_MARK not in note:
+            if not _certified_nothing(note):
                 break
             count += 1
             spent += duration

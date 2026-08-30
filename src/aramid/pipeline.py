@@ -167,6 +167,10 @@ class GateResult:
     # a stderr line to explain it (interop rounds 149 s3 / 150).
     fresh_ledger_baseline: bool = False
     grandfathered: tuple = ()
+    # False when `check --no-record` ran this gate against a snapshot: the
+    # report is real, the ledger has no run to match it against, and a saved
+    # copy must be able to say so (interop round 155 s3).
+    recorded: bool = True
 
 
 def _tool_provenance(selected) -> dict:

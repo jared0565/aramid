@@ -602,3 +602,24 @@ def test_no_record_on_a_repo_with_no_ledger_yet_creates_none(tmp_path, monkeypat
 
     assert rc == 0
     assert not (root / ".aramid" / "ledger.db").exists()
+
+
+def test_the_no_record_report_says_so_and_names_its_run(tmp_path, monkeypatch, capsys):
+    """Interop round 155 s3: the `--no-record` JSON had no `run_id` and nothing
+    saying it was a snapshot run; its only trace was a stderr line, so a saved
+    report was indistinguishable from a recorded one and the ledger had no run
+    to match it against. Both keys always present, like the fresh-ledger pair."""
+    root = _repo(tmp_path)
+    _no_user_config(tmp_path, monkeypatch)
+    monkeypatch.setitem(pipeline.RUNNERS, "fake", _fake(RunnerResult("fake", ToolState.OK)))
+    monkeypatch.setitem(pipeline.GATE_RUNNER_KEYS, Gate.PRE_PUSH, ["fake"])
+
+    cmd_check(root, Gate.PRE_PUSH, "range", as_json=True)
+    recorded = json.loads(capsys.readouterr().out)
+    cmd_check(root, Gate.PRE_PUSH, "range", as_json=True, record=False)
+    snapshot = json.loads(capsys.readouterr().out)
+
+    assert recorded["recorded"] is True
+    assert snapshot["recorded"] is False
+    assert isinstance(snapshot["run_id"], str) and len(snapshot["run_id"]) >= 8
+    assert snapshot["run_id"] != recorded["run_id"], "a run of its own, even unrecorded"

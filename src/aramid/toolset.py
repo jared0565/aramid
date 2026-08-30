@@ -124,7 +124,16 @@ def expected_tool_names(root: Path, cfg, gate) -> set[str]:
     """
     ctx = _build_ctx(root, cfg)
     keys = set(GATE_RUNNER_KEYS.get(gate, ()))
-    return _expand_keys(keys, root, ctx)
+    # `_expand_keys` adds the literal key "tests" beside the suite's label
+    # (T-8 GC5: `selected_tool_names` must keep a still-configured test
+    # setup selected so mark-unreachable refuses). That key is never a
+    # recorded label -- `RUN_STARTED.tools` carries `python.exe`/`pytest`/
+    # `npm`/`cargo` -- so here, where the answer is compared against
+    # recorded labels, it read a suite that ran on every push as skipped
+    # on every push (interop round 155 s1: 210 of 210 on the consumer,
+    # 191 on aramid's own ledger). Removed at this decision point, not in
+    # the shared expansion, so `selected` keeps it.
+    return _expand_keys(keys, root, ctx) - {"tests"}
 
 
 def _expand_keys(keys, root: Path, ctx) -> set[str]:

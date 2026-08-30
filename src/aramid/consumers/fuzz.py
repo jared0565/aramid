@@ -148,6 +148,18 @@ def _any_candidates_remain(wt: Path, rels, changed: dict, skip_patterns) -> bool
     return False
 
 
+def _read_progress(path: Path) -> dict | None:
+    """The driver's last recorded position, or None when it never got as far
+    as its first call (or the file is unreadable -- never a reason to fail)."""
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    if not isinstance(data, dict) or "file" not in data or "function" not in data:
+        return None
+    return data
+
+
 def consume(item, ctx: DrainContext) -> ConsumerResult:
     fcfg = getattr(ctx.cfg, "fuzz", None) or {}
     if not fcfg.get("enabled", True):
@@ -225,7 +237,8 @@ def consume(item, ctx: DrainContext) -> ConsumerResult:
                                   duration_s=time.monotonic() - started,
                                   extra=dict(stats))
 
-        spec = {"root": str(wt), "targets": targets}
+        progress_path = tmp / "progress.json"
+        spec = {"root": str(wt), "targets": targets, "progress": str(progress_path)}
         spec_path = tmp / "spec.json"
         spec_path.write_text(json.dumps(spec), encoding="utf-8")
         remaining = max(1.0, min(batch_timeout, wall_budget - (time.monotonic() - started)))
@@ -237,10 +250,29 @@ def consume(item, ctx: DrainContext) -> ConsumerResult:
             wt, remaining, env={"PYTHONHASHSEED": "0"})
         if result.state is ToolState.TIMEOUT:
             stats["timeouts"] += 1
-            return ConsumerResult(consumer=NAME, state="ok",
-                                  note="driver timed out (budget did its job)",
-                                  duration_s=time.monotonic() - started,
-                                  extra=dict(stats))
+            # What the driver waits on is the call into a target function
+            # that never returns -- there is no per-call timeout; this budget
+            # is the guard -- and it prints its verdict once, at the end, so
+            # the kill discarded everything it did. It leaves its position
+            # behind before every call (fuzzdriver `progress`), so the note
+            # names the function instead of just "timed out" (interop round
+            # 155 s2: five drains, ~10 minutes, nothing said which). `no
+            # cases run` is the marker `status` reads for its no-work line;
+            # `ok` is kept because `degraded` would pin the queue item.
+            where = _read_progress(progress_path)
+            total = sum(len(t["functions"]) for t in targets)
+            if where is not None:
+                stats["hung_in"] = f"{where['file']}:{where['function']}"
+                position = (f"in {stats['hung_in']} (function "
+                            f"{where.get('functions_started', '?')} of {total})")
+            else:
+                position = "before its first call"
+            return ConsumerResult(
+                consumer=NAME, state="ok",
+                note=(f"driver timed out {position}; no cases run to completion "
+                      f"(budget did its job) -- a target that blocks forfeits the "
+                      f"batch; exclude it with [fuzz].skip_name_patterns"),
+                duration_s=time.monotonic() - started, extra=dict(stats))
         if result.state is not ToolState.OK or result.returncode != 0:
             return ConsumerResult(
                 consumer=NAME, state="degraded",

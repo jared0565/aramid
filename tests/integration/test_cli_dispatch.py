@@ -558,3 +558,19 @@ def test_check_dispatch_passes_no_record_only_when_asked(monkeypatch):
     captured.clear()
     cli.main(["check", "--gate", "pre-push"])
     assert "record" not in captured, "the default path passes nothing, so older fakes and callers keep working"
+
+
+def test_ledger_resolve_accepts_several_ids_and_returns_the_worst_rc(monkeypatch):
+    """Interop round 155 s4: 683 retirements at one id per launch took ~11
+    minutes. Several ids per call; a refusal on one (rc 3) must not stop the
+    rest, and the exit is the worst of them so a script still sees it."""
+    calls = []
+    rcs = {"aaa": 0, "bbb": 3, "ccc": 0}
+    monkeypatch.setattr(cli, "cmd_ledger_resolve",
+                         lambda root, id, out_of_scope, reason: calls.append(id) or rcs[id])
+
+    rc = cli.main(["ledger", "resolve", "aaa", "bbb", "ccc",
+                   "--out-of-scope", "--reason", "outside [tool.mypy] files"])
+
+    assert calls == ["aaa", "bbb", "ccc"]
+    assert rc == 3

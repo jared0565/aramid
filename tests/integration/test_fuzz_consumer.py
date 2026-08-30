@@ -612,3 +612,53 @@ def test_a_timed_out_driver_stays_ok_because_the_budget_is_the_design(
 
     assert res.state == "ok"
     assert "timed out" in res.note
+
+
+
+# ------------- round 155 s2: a timeout names the function it was in ----------
+# Five drains of `driver timed out (budget did its job)`, `cases_run=0`, and
+# nothing in the payload said what the driver was waiting on. It waits on the
+# call into a target function that never returns (there is no per-call
+# timeout; the consumer's budget is the only guard), and it prints its verdict
+# once, at the end, so the kill discarded everything. The driver now leaves
+# its position behind before every call, and the consumer reads it.
+
+_SERVER = "def serve(port: int) -> int:\n    return port\n"
+
+
+def _hanging_driver(monkeypatch, progress):
+    """A driver that got as far as `progress` and was then killed at the budget."""
+    import json
+    from pathlib import Path
+
+    def fake(argv, cwd, timeout_s, env=None):
+        spec = json.loads(Path(argv[-1]).read_text(encoding="utf-8"))
+        Path(spec["progress"]).write_text(json.dumps(progress), encoding="utf-8")
+        return RunnerResult("fuzzdriver", ToolState.TIMEOUT)
+    monkeypatch.setattr(fuzz_consumer, "run_subprocess", fake)
+
+
+def test_a_timed_out_driver_names_the_function_it_was_in(tmp_path, monkeypatch):
+    r, base, head = _repo(tmp_path, _SERVER)
+    _hanging_driver(monkeypatch, {"file": "lib.py", "function": "serve", "functions_started": 1})
+
+    res = _consume(r, base, head, monkeypatch, tmp_path)
+
+    assert res.state == "ok", "the budget doing its job is still not a fault"
+    assert "lib.py:serve" in res.note
+    assert "no cases run" in res.note, "the no-work marker status reads"
+    assert "skip_name_patterns" in res.note, "the remedy that exists today"
+    assert res.extra["hung_in"] == "lib.py:serve"
+    assert res.extra["timeouts"] == 1
+
+
+def test_a_timed_out_driver_that_left_no_position_says_so(tmp_path, monkeypatch):
+    r, base, head = _repo(tmp_path, _SERVER)
+    _broken_driver(monkeypatch, state=ToolState.TIMEOUT)      # wrote nothing
+
+    res = _consume(r, base, head, monkeypatch, tmp_path)
+
+    assert res.state == "ok"
+    assert "before its first call" in res.note
+    assert "no cases run" in res.note
+    assert "hung_in" not in res.extra

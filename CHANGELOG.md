@@ -10,6 +10,41 @@ to publish a tag that disagrees with it.
 
 ## [Unreleased]
 
+### Fixed
+
+- **`status` no longer reports the tests slot as skipped on every push.**
+  `expected_tool_names` shared `_expand_keys` with `selected_tool_names`,
+  which adds the literal registry key `tests` beside the suite's label (so
+  mark-unreachable refuses while a test setup is still configured); the key
+  therefore sat in `expected`, no run ever records it in `tools`, and the
+  skip streak counted every pre-push run -- `tests: skipped last 210
+  pre-push run(s)` on a consumer, 191 on aramid's own ledger, since the
+  `expected` set was first recorded (interop round 155 s1). Dropped at that
+  decision point; `selected` keeps it. The streak reads the newest run that
+  recorded `expected`, so one pre-push run under this version clears it.
+- **A fuzz driver that times out says which function it was in, and
+  `status` reports the streak.** The driver printed its verdict once, at
+  the end, so a target that never returns took the whole batch with it when
+  the budget killed the process, and the consumer recorded `ok` with
+  `cases_run=0` -- five drains, ~10 minutes, and no line anywhere (round
+  155 s2). The driver now writes its position before every call; the
+  consumer's note names the function (`driver timed out in src/x.py:serve
+  (function 1 of 15)`), carries `hung_in` in the payload and names the
+  remedy (`[fuzz].skip_name_patterns`); `status` lists the run under
+  `consumers doing no work`, as it does mutation's. Still `ok`: `degraded`
+  would pin the queue item.
+
+### Added
+
+- **`check --json` carries `run_id` and `recorded`** (both always present).
+  `recorded: false` is a `--no-record` run -- a real report against a
+  snapshot with no ledger row to match, which a saved copy could not
+  previously say (round 155 s3).
+- **`aramid ledger resolve` takes several ids per launch.** Every id is
+  attempted (a refusal on one does not stop the rest) and the exit is the
+  worst of them; 683 one-at-a-time retirements took ~11 minutes (round 155
+  s4).
+
 ## [0.7.1] — 2026-08-30
 
 ### Fixed

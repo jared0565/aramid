@@ -197,5 +197,11 @@ def render_json(result: GateResult) -> str:
         # too old to record it.
         "fresh_ledger_baseline": bool(getattr(result, "fresh_ledger_baseline", False)),
         "grandfathered": sorted(getattr(result, "grandfathered", ()) or ()),
+        # Both always present (interop round 155 s3). `run_id` matches the
+        # ledger's `run_started` when `recorded` is true; when false the run
+        # was `check --no-record` -- a real report against a snapshot, with
+        # no ledger row, and this is the only place a saved copy can say so.
+        "run_id": str(getattr(result, "run_id", "") or ""),
+        "recorded": bool(getattr(result, "recorded", True)),
     }
     return json.dumps(payload, indent=2)

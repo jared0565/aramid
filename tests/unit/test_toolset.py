@@ -346,3 +346,32 @@ def test_out_of_scope_candidates_use_the_mypy_scope_when_given_a_root(tmp_path):
     }
     assert set(toolset.out_of_scope_candidates(state, {"mypy"}, root=tmp_path)) == {"out"}
     assert set(toolset.out_of_scope_candidates(state, {"mypy"})) == set()
+
+
+def test_expected_tool_names_never_carries_the_tests_registry_key(tmp_path, monkeypatch):
+    """Interop round 155 s1: `status` printed `tests: skipped last 210 pre-push
+    run(s)` -- every pre-push run in the consumer's history -- and aramid's own
+    ledger read 191. `_expand_keys` adds the literal key `tests` for
+    `selected_tool_names` (T-8 GC5: mark-unreachable must refuse while a test
+    setup is still configured), and `expected_tool_names` reused the expansion
+    "so they cannot drift" -- so the key sat in `expected` beside the label.
+    `RUN_STARTED.tools` carries labels only; the streak asked for `tests`,
+    never found it, and counted every run. The round-82 test above asserts a
+    label is PRESENT and never that the key is ABSENT, which is how it stayed
+    green through this. The shape is the configuration aramid recommends."""
+    from aramid.models import Gate
+
+    root = tmp_path
+    (root / "aramid.toml").write_text(
+        'schema_version = 1\n[tests]\ncommand = ["C:/venv/Scripts/python.exe", "-m", "pytest"]\n',
+        encoding="utf-8")
+    cfg = _cfg(tmp_path, monkeypatch, root)
+
+    expected = toolset.expected_tool_names(root, cfg, Gate.PRE_PUSH)
+
+    assert "python.exe" in expected, "the label the run records"
+    assert "tests" not in expected, (
+        "the registry key is never a recorded label; expecting it reads a suite "
+        "that ran on every push as skipped on every push")
+    # The key stays where it belongs: mark-unreachable's universe.
+    assert "tests" in toolset.selected_tool_names(root, cfg)

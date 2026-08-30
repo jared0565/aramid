@@ -119,7 +119,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_unreachable.add_argument("id")
     p_unreachable.add_argument("--reason", required=True)
     p_resolve = ledger_sub.add_parser("resolve")
-    p_resolve.add_argument("id")
+    p_resolve.add_argument("id", nargs="+", help="one or more finding ids")
     p_resolve.add_argument("--out-of-scope", action="store_true", dest="out_of_scope",
                            help="the finding's runner still runs here but no longer "
                                 "examines this path (its file scope narrowed)")
@@ -282,7 +282,11 @@ def main(argv: list[str] | None = None) -> int:
         if args.ledger_command == "mark-unreachable":
             return cmd_ledger_mark_unreachable(root, args.id, args.reason)
         if args.ledger_command == "resolve":
-            return cmd_ledger_resolve(root, args.id, args.out_of_scope, args.reason)
+            # Several ids per launch (interop round 155 s4: 683 one-at-a-time
+            # took ~11 min). Every id is attempted -- a refusal on one must
+            # not stop the rest -- and the exit is the worst of them.
+            return max(cmd_ledger_resolve(root, fid, args.out_of_scope, args.reason)
+                       for fid in args.id)
         print("aramid: ledger: a subcommand is required "
               "(list|show|filter|mark-rotated|mark-not-a-secret|mark-unreachable|resolve)",
               file=sys.stderr)
