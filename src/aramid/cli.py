@@ -16,6 +16,7 @@ import sys
 from pathlib import Path
 
 from aramid import __version__
+from aramid.commands.agent_hook import cmd_agent_hook
 from aramid.commands.autolearn_cmd import cmd_autolearn
 from aramid.commands.arm import cmd_arm
 from aramid.commands.check import cmd_check
@@ -168,6 +169,15 @@ def build_parser() -> argparse.ArgumentParser:
     p_rebaseline.add_argument("--yes", action="store_true",
                               help="required: confirms discarding current ratchet grandfathering")
 
+    p_agent_hook = sub.add_parser(
+        "agent-hook",
+        help="agent-harness hook endpoint (Claude Code): session-start "
+             "prints live gate posture for the session's context; any "
+             "other event is a silent no-op")
+    # Deliberately NOT choices=[...]: an event name from a newer template
+    # must no-op (exit 0), never die in argparse -- fail-open.
+    p_agent_hook.add_argument("event")
+
     return p
 
 
@@ -252,6 +262,9 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.command == "status":
         return cmd_status(root)
+
+    if args.command == "agent-hook":
+        return cmd_agent_hook(args.event, root)
 
     if args.command == "resolvers":
         return cmd_resolvers(root, as_json=args.json)
