@@ -164,6 +164,9 @@ aramid = ["data/*.toml", "data/*.tmpl", "rules/*.yml"]
 # path that parsed.
 [tool.pytest.ini_options]
 pythonpath = ["src"]
+markers = [
+    "real_interpreter_probe: opt out of the autouse agent_interpreter_lines stub (the probe's own tests)",
+]
 
 # PIN THE RULE SET EXPLICITLY -- DO NOT DELETE AS "the default anyway".
 #

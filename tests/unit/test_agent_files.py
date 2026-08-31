@@ -216,26 +216,27 @@ def test_doctor_lines_render_every_state(tmp_path):
     (tmp_path / "AGENTS.md").write_text(stale, encoding="utf-8")
 
     assert doctor_cmd.agent_files_lines(tmp_path) == [
-        "  OK   CLAUDE.md  managed aramid block present",
-        "  WARN AGENTS.md  aramid block differs from the current template"
-        " -- re-run `aramid init`",
+        "  OK   CLAUDE.md  ok: managed aramid block present",
+        "  WARN AGENTS.md  stale: aramid block differs from the current"
+        " template -- re-run `aramid init`",
     ]
 
     (tmp_path / "CLAUDE.md").unlink()
     (tmp_path / "AGENTS.md").write_text(
         "<!-- aramid:begin -- x -->\nno end\n", encoding="utf-8")
     assert doctor_cmd.agent_files_lines(tmp_path) == [
-        "  WARN CLAUDE.md  no managed aramid block -- run `aramid init`",
-        "  WARN AGENTS.md  aramid fence is damaged (unterminated or"
-        " duplicated begin marker) -- repair or delete the fence, then"
+        "  WARN CLAUDE.md  absent: no managed aramid block -- run"
+        " `aramid init`",
+        "  WARN AGENTS.md  damaged: aramid fence is damaged (unterminated"
+        " or duplicated begin marker) -- repair or delete the fence, then"
         " re-run `aramid init`",
     ]
 
     (tmp_path / "AGENTS.md").write_bytes(b"\xff\xfe garbage")
     lines = doctor_cmd.agent_files_lines(tmp_path)
     assert lines[1] == (
-        "  WARN AGENTS.md  file could not be read (not valid UTF-8, or an"
-        " I/O error) -- fix the file, then run `aramid init`")
+        "  WARN AGENTS.md  unreadable: file could not be read (not valid"
+        " UTF-8, or an I/O error) -- fix the file, then run `aramid init`")
 
 
 def test_every_block_state_has_a_doctor_detail():
@@ -245,3 +246,14 @@ def test_every_block_state_has_a_doctor_detail():
     assert set(doctor_cmd._AGENT_FILE_DETAIL) == set(agent_files.AGENT_BLOCK_STATES)
     assert set(agent_files.AGENT_BLOCK_STATES) == {
         "ok", "stale", "absent", "damaged", "unreadable"}
+
+
+def test_detail_prose_echoes_state_words():
+    # Each detail string is now grep-able against doctor output: it starts
+    # with the literal state word, the same word every other surface calls
+    # the state -- covers both _AGENT_FILE_DETAIL and _AGENT_SETTINGS_DETAIL.
+    from aramid.commands import doctor
+    for state, detail in doctor._AGENT_FILE_DETAIL.items():
+        assert detail.startswith(f"{state}:")
+    for state, detail in doctor._AGENT_SETTINGS_DETAIL.items():
+        assert detail.startswith(f"{state}:")

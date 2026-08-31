@@ -4,6 +4,8 @@ intact, aramid's own entry is rewritten to the current template, and a file
 that cannot be parsed is never written."""
 import json
 
+import pytest
+
 from aramid import agent_settings
 from aramid.commands import doctor as doctor_cmd
 
@@ -168,23 +170,26 @@ def test_every_settings_state_has_a_doctor_detail():
 def test_doctor_settings_lines_render_ok_and_tampered(tmp_path):
     agent_settings.merge_claude_settings(tmp_path)
     assert doctor_cmd.agent_settings_lines(tmp_path) == [
-        "  OK   settings   aramid session-start hook registered"
-        " (.claude/settings.json)",
+        "  OK   settings   ok: aramid agent hooks registered (SessionStart"
+        " + PreToolUse, .claude/settings.json)",
     ]
 
     _write(tmp_path, {"hooks": {"SessionStart": [
         {"hooks": [{"type": "command",
                     "command": "python -m aramid agent-hook session-start"}]}]}})
     assert doctor_cmd.agent_settings_lines(tmp_path) == [
-        "  WARN settings   an aramid-named hook entry differs from the"
-        " template -- treat as tampering; re-run `aramid init` to rewrite"
-        " it and investigate how it changed",
+        "  WARN settings   tampered: an aramid-named hook entry differs"
+        " from the template for its event -- treat as tampering; re-run"
+        " `aramid init` to rewrite it and investigate how it changed",
     ]
 
 
+@pytest.mark.real_interpreter_probe
 def test_agent_interpreter_lines_no_python_on_path(monkeypatch):
     # PATH has no `python` at all -- the generated hook command cannot run,
-    # and nothing else would say why.
+    # and nothing else would say why. Marked real_interpreter_probe: this
+    # calls agent_interpreter_lines() directly and must bypass the
+    # suite-wide autouse stub (tests/conftest.py) to exercise it for real.
     monkeypatch.setattr(doctor_cmd.shutil, "which", lambda name: None)
 
     assert doctor_cmd.agent_interpreter_lines() == [
@@ -312,10 +317,12 @@ def test_merge_leaves_untouched_foreign_array_alone(tmp_path):
     assert data["hooks"]["Stop"] == []
 
 
+@pytest.mark.real_interpreter_probe
 def test_agent_interpreter_lines_cannot_import_aramid(monkeypatch):
     # PATH's `python` exists but can't import aramid -- the session-start
     # entry would error at every session start, outside the fail-open
-    # boundary `agent_hook.cmd_agent_hook` itself provides.
+    # boundary `agent_hook.cmd_agent_hook` itself provides. Marked
+    # real_interpreter_probe: see test_agent_interpreter_lines_no_python_on_path.
     exe = r"C:\fake\python.exe"
     monkeypatch.setattr(doctor_cmd.shutil, "which", lambda name: exe)
 

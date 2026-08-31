@@ -646,15 +646,15 @@ def _report_line(status: ToolStatus) -> str:
 
 
 _AGENT_FILE_DETAIL = {
-    "ok": "managed aramid block present",
-    "stale": "aramid block differs from the current template"
+    "ok": "ok: managed aramid block present",
+    "stale": "stale: aramid block differs from the current template"
              " -- re-run `aramid init`",
-    "absent": "no managed aramid block -- run `aramid init`",
-    "damaged": "aramid fence is damaged (unterminated or duplicated begin"
-               " marker) -- repair or delete the fence, then re-run"
-               " `aramid init`",
-    "unreadable": "file could not be read (not valid UTF-8, or an I/O"
-                  " error) -- fix the file, then run `aramid init`",
+    "absent": "absent: no managed aramid block -- run `aramid init`",
+    "damaged": "damaged: aramid fence is damaged (unterminated or"
+               " duplicated begin marker) -- repair or delete the fence,"
+               " then re-run `aramid init`",
+    "unreadable": "unreadable: file could not be read (not valid UTF-8, or"
+                  " an I/O error) -- fix the file, then run `aramid init`",
 }
 
 
@@ -672,16 +672,19 @@ def agent_files_lines(root: Path) -> list[str]:
 
 
 _AGENT_SETTINGS_DETAIL = {
-    "ok": "aramid session-start hook registered (.claude/settings.json)",
-    "absent": "no aramid hook entry in .claude/settings.json -- run"
-              " `aramid init`",
-    "stale": "aramid hook entry matches an older template -- re-run"
-             " `aramid init`",
-    "tampered": "an aramid-named hook entry differs from the template --"
-                " treat as tampering; re-run `aramid init` to rewrite it"
-                " and investigate how it changed",
-    "unparseable": ".claude/settings.json could not be parsed -- fix the"
-                   " JSON, then run `aramid init`",
+    "ok": "ok: aramid agent hooks registered (SessionStart + PreToolUse,"
+          " .claude/settings.json)",
+    "absent": "absent: no aramid hook entry in .claude/settings.json --"
+              " run `aramid init`",
+    "stale": "stale: aramid's hook entries are known but not current (an"
+             " older template, or a missing event) -- re-run `aramid"
+             " init`",
+    "tampered": "tampered: an aramid-named hook entry differs from the"
+                " template for its event -- treat as tampering; re-run"
+                " `aramid init` to rewrite it and investigate how it"
+                " changed",
+    "unparseable": "unparseable: .claude/settings.json could not be parsed"
+                   " -- fix the JSON, then run `aramid init`",
 }
 
 
@@ -699,8 +702,6 @@ def agent_interpreter_lines() -> list[str]:
     python cannot import aramid, the session-start entry errors OUTSIDE
     aramid's fail-open boundary (interpreter-level, at every session start)
     and nothing else would say why. Reports; never changes the exit code."""
-    import shutil
-    import subprocess
     exe = shutil.which("python")
     if exe is None:
         return ["  WARN interpreter no `python` on PATH -- the generated"
@@ -715,7 +716,9 @@ def agent_interpreter_lines() -> list[str]:
                                capture_output=True, timeout=15)
     except (OSError, subprocess.TimeoutExpired):
         return [f"  WARN interpreter `python` on PATH ({exe}) could not be"
-                f" probed -- the generated agent-hook command may not run"]
+                f" probed -- run `{exe} -P -c \"import aramid\"` yourself; if"
+                f" it fails, `pip install aramid` into that interpreter or"
+                f" fix PATH"]
     if probe.returncode == 0:
         return []
     return [f"  WARN interpreter `python` on PATH ({exe}) cannot import"

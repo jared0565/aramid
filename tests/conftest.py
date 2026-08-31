@@ -135,6 +135,20 @@ def _isolated_user_config(tmp_path, monkeypatch):
                         lambda: tmp_path / "no-such-user-config.toml")
 
 
+@pytest.fixture(autouse=True)
+def _stub_agent_interpreter_probe(request, monkeypatch):
+    """doctor.agent_interpreter_lines spawns a real subprocess against
+    PATH's python -- machine state, not repo state. Stubbed suite-wide so
+    doctor-reaching tests are hermetic; the probe's own tests opt out with
+    @pytest.mark.real_interpreter_probe and stub the subprocess instead."""
+    if "real_interpreter_probe" in request.keywords:
+        yield
+        return
+    from aramid.commands import doctor
+    monkeypatch.setattr(doctor, "agent_interpreter_lines", lambda: [])
+    yield
+
+
 @pytest.fixture
 def checkout_env() -> dict[str, str]:
     """`os.environ` with the aramid THIS process imported first on PYTHONPATH.

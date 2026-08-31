@@ -769,14 +769,14 @@ def test_doctor_reports_agent_file_states_without_changing_exit(tmp_path, monkey
     rc_ok = doctor.cmd_doctor(r)
     out_ok = capsys.readouterr().out
     assert "agent files:" in out_ok
-    assert "  OK   CLAUDE.md  managed aramid block present" in out_ok
-    assert "  OK   AGENTS.md  managed aramid block present" in out_ok
+    assert "  OK   CLAUDE.md  ok: managed aramid block present" in out_ok
+    assert "  OK   AGENTS.md  ok: managed aramid block present" in out_ok
 
     (r / "AGENTS.md").unlink()
     rc_absent = doctor.cmd_doctor(r)
     out_absent = capsys.readouterr().out
-    assert ("  WARN AGENTS.md  no managed aramid block -- run `aramid init`"
-            in out_absent)
+    assert ("  WARN AGENTS.md  absent: no managed aramid block -- run"
+            " `aramid init`" in out_absent)
     # advisory only: block state must never move doctor's exit code.
     assert rc_absent == rc_ok
 
@@ -797,8 +797,9 @@ def test_init_suppresses_doctors_agent_sections(tmp_path, monkeypatch, capsys):
     out = capsys.readouterr().out
     assert "agent files:" in out
     assert "agent hooks:" in out
-    # healthy-quiet path: on this dev machine PATH's python imports aramid,
-    # so the interpreter probe prints nothing.
+    # healthy-quiet path: the suite-wide autouse fixture (tests/conftest.py)
+    # stubs agent_interpreter_lines to [] here, so this no longer depends on
+    # this machine's PATH python actually importing aramid.
     assert "cannot import aramid" not in out
 
 
