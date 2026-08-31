@@ -4,7 +4,7 @@ Spec: docs/superpowers/specs/2026-08-31-aramid-agent-enforcement-design.md §4.
 
 Own-entry-by-marker discipline, same as the git-hook installer's
 chain-never-clobber and graphite's .mcp.json handling: an entry whose hook
-command contains `-m aramid agent-hook` is aramid's and is rewritten to the
+command contains `aramid agent-hook` is aramid's and is rewritten to the
 current template on every merge (a generator fix reaches every consumer on
 their next `init`); every other entry is preserved structurally intact. A
 file that cannot be parsed -- or whose relevant shapes are not the expected
@@ -23,7 +23,11 @@ from pathlib import Path
 
 SETTINGS_REL = Path(".claude") / "settings.json"
 
-_OWNED_MARK = "-m aramid agent-hook"
+# Deliberately WITHOUT the "-m " prefix: the bare token pair discriminates
+# identically, and an "-m aramid" literal is indistinguishable from an
+# unguarded launch to tests/unit/test_launch_shadowing.py (see its module
+# docstring).
+_OWNED_MARK = "aramid agent-hook"
 
 SESSION_START_COMMAND = "python -P -m aramid agent-hook session-start"
 
