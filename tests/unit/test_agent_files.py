@@ -1,7 +1,10 @@
 """unit: agent_files -- the managed block aramid owns inside CLAUDE.md and
 AGENTS.md. Fence-scoped writes: content outside the markers is untouchable,
 and a damaged fence (begin without end) refuses the write entirely."""
+import subprocess
+
 from aramid import agent_files
+from aramid.commands.init import render_agent_blocks_notice
 
 
 def test_created_when_absent(tmp_path):
@@ -115,3 +118,36 @@ def test_states_ok_stale_absent_damaged(tmp_path):
         "<!-- aramid:begin -- x -->\nno end\n", encoding="utf-8")
     states = dict(agent_files.agent_block_states(tmp_path))
     assert states == {"CLAUDE.md": "absent", "AGENTS.md": "damaged"}
+
+
+# --- notice renderer (for init) -----------------------------------------------
+
+def _git_repo(tmp_path):
+    subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True,
+                   capture_output=True)
+    return tmp_path
+
+
+def test_notice_names_changed_files_and_gives_the_command(tmp_path):
+    root = _git_repo(tmp_path)
+    notice = render_agent_blocks_notice(
+        root, [("CLAUDE.md", "created"), ("AGENTS.md", "appended")])
+    assert notice == (
+        "aramid: init: wrote the managed agent block into CLAUDE.md, AGENTS.md"
+        " -- agent coders read these files from the repo:\n"
+        'aramid: init:       git add CLAUDE.md AGENTS.md && '
+        'git commit -m "chore: aramid agent block"')
+
+
+def test_notice_silent_when_unchanged(tmp_path):
+    root = _git_repo(tmp_path)
+    assert render_agent_blocks_notice(
+        root, [("CLAUDE.md", "unchanged"), ("AGENTS.md", "unchanged")]) == ""
+
+
+def test_notice_reports_damaged_even_outside_git(tmp_path):
+    notice = render_agent_blocks_notice(tmp_path, [("AGENTS.md", "damaged")])
+    assert notice == (
+        "aramid: init: AGENTS.md has an aramid fence with no closing marker"
+        " -- left untouched; restore the `<!-- aramid:end -->` line (or"
+        " delete the fence) and re-run `aramid init`")

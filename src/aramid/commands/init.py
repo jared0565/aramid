@@ -36,7 +36,7 @@ from importlib import resources
 from pathlib import Path
 from typing import Callable
 
-from aramid import config as config_mod
+from aramid import agent_files, config as config_mod
 from aramid import gitutil, hooks, policy, redact
 from aramid.commands import doctor as doctor_mod
 from aramid.commands.doctor import cmd_doctor
@@ -239,6 +239,35 @@ def render_gitignore_notice(root: Path, added: list[str], created: bool) -> str:
         f"({', '.join(added)}):",
         'aramid: init:       git add .gitignore && git commit -m "chore: ignore aramid state"',
     ])
+
+
+def render_agent_blocks_notice(root: Path,
+                               actions: list[tuple[str, str]]) -> str:
+    """Sibling of render_aramid_md_notice / render_gitignore_notice; same
+    three rules for the changed-files line. The damaged line is different in
+    kind: it reports a REFUSED write (an unterminated aramid fence), which
+    is worth saying even outside a git work tree -- it is a defect in the
+    file, not a housekeeping chore."""
+    lines: list[str] = []
+    for name, action in actions:
+        if action == "damaged":
+            lines.append(
+                f"aramid: init: {name} has an aramid fence with no closing"
+                f" marker -- left untouched; restore the"
+                f" `<!-- aramid:end -->` line (or delete the fence) and"
+                f" re-run `aramid init`")
+    changed = [n for n, a in actions
+               if a in ("created", "appended", "replaced")]
+    if changed and gitutil._run(
+            root, "rev-parse", "--is-inside-work-tree").returncode == 0:
+        names = ", ".join(changed)
+        lines.append(
+            f"aramid: init: wrote the managed agent block into {names}"
+            f" -- agent coders read these files from the repo:")
+        lines.append(
+            f'aramid: init:       git add {" ".join(changed)} && '
+            f'git commit -m "chore: aramid agent block"')
+    return "\n".join(lines)
 
 
 # ------------------------------------------------------- full-history scan ---
@@ -450,6 +479,7 @@ def _init_one(target: Path) -> int:
         print(f"aramid: init: wrote {toml_path}")
 
     _write_aramid_md(root, stack, pkg_mgr)
+    agent_actions = agent_files.write_agent_blocks(root)
     gi_added, gi_created = _update_gitignore(root)
 
     # step 5: install (idempotent, chain-never-clobber) hook shims.
@@ -485,7 +515,8 @@ def _init_one(target: Path) -> int:
     # Both artifacts aramid owns and wrote into someone else's tree,
     # reported together because they are one chore for the operator.
     for notice in (render_aramid_md_notice(root),
-                   render_gitignore_notice(root, gi_added, gi_created)):
+                   render_gitignore_notice(root, gi_added, gi_created),
+                   render_agent_blocks_notice(root, agent_actions)):
         if notice:
             print(notice, file=sys.stderr)
 

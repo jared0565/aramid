@@ -20,7 +20,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-from aramid import config as config_mod
+from aramid import agent_files, config as config_mod
 from aramid import hooks
 from aramid.commands import doctor, init
 from aramid.ledger import Ledger
@@ -706,3 +706,31 @@ def test_reinit_still_warns_when_a_stack_lives_below_the_root(tmp_path, monkeypa
     out = capsys.readouterr()
     assert "baseline already exists" in out.out      # sanity: run_gate really was skipped
     assert "backend/" in out.err
+
+
+# --- managed agent instruction blocks (agent-enforcement sub-project 1) -----
+
+def test_init_writes_agent_blocks_and_reinit_is_byte_stable(tmp_path, monkeypatch):
+    monkeypatch.setattr(doctor, "probe_toolchain", _fake_present)
+    r = _repo(tmp_path)
+
+    assert init.cmd_init(r) == 0
+
+    for name in ("CLAUDE.md", "AGENTS.md"):
+        assert (r / name).read_text(encoding="utf-8") == agent_files.render_block()
+    first = (r / "CLAUDE.md").read_bytes()
+
+    assert init.cmd_init(r) == 0
+    assert (r / "CLAUDE.md").read_bytes() == first
+
+
+def test_init_appends_to_user_authored_claude_md(tmp_path, monkeypatch):
+    monkeypatch.setattr(doctor, "probe_toolchain", _fake_present)
+    r = _repo(tmp_path)
+    user_text = "# House rules\n\nAlways run the linter.\n"
+    (r / "CLAUDE.md").write_text(user_text, encoding="utf-8")
+
+    assert init.cmd_init(r) == 0
+
+    text = (r / "CLAUDE.md").read_text(encoding="utf-8")
+    assert text == user_text + "\n" + agent_files.render_block()
