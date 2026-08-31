@@ -11,9 +11,10 @@ file that cannot be parsed -- or whose relevant shapes are not the expected
 dict/list -- is NEVER written: a merge that cannot read what it merges into
 must not guess.
 
-The template carries ONLY the SessionStart entry today. The PreToolUse
-entry ships in sub-project 3 together with the subcommand that serves it --
-init must never register a hook nothing can answer.
+The template carries the SessionStart and PreToolUse entries. Ownership and
+grading are EVENT-BOUND: commands are compared against the template of the
+event array they sit in, so an entry moved to a foreign event can never
+grade ok, and the merge repairs every event it manages.
 
 Hook commands never grow flags -- new behavior gets a new event name;
 older binaries must no-op on newer commands.
@@ -30,19 +31,45 @@ SETTINGS_REL = Path(".claude") / "settings.json"
 _OWNED_MARK = "aramid agent-hook"
 
 SESSION_START_COMMAND = "python -P -m aramid agent-hook session-start"
+PRE_TOOL_USE_COMMAND = "python -P -m aramid agent-hook pre-tool-use"
 
-# Every command the CURRENT template writes.
-TEMPLATE_COMMANDS: tuple[str, ...] = (SESSION_START_COMMAND,)
+# Matcher for PreToolUse entries (SessionStart entries carry none). Pinned
+# against Claude Code 2.1.252: PowerShell is a distinct tool on Windows.
+PRE_TOOL_USE_MATCHER = "Bash|PowerShell"
 
-# Commands an OLDER template wrote. An owned entry matching one of these
-# grades "stale" (advisory: re-run init); an owned entry matching neither
-# set grades "tampered" (a security signal). Empty until the template
-# first changes.
-KNOWN_PRIOR_COMMANDS: tuple[str, ...] = ()
+# event -> commands the CURRENT template writes under that event. Grading
+# is per event: a command is judged against the template of the array it
+# actually sits in, never against a flat union (an armed rejector must not
+# read "ok" because a DIFFERENT event's entry still matches).
+TEMPLATE_COMMANDS: dict[str, tuple[str, ...]] = {
+    "SessionStart": (SESSION_START_COMMAND,),
+    "PreToolUse": (PRE_TOOL_USE_COMMAND,),
+}
+
+# event -> commands an OLDER template wrote under that event. An owned
+# command matching only these grades "stale" (advisory: re-run init); one
+# matching neither set grades "tampered". Empty: both current commands
+# have never changed, and the session-start command deliberately stays
+# current when new events ship (sub-2 "After the last task").
+KNOWN_PRIOR_COMMANDS: dict[str, tuple[str, ...]] = {}
 
 
-def _session_start_entry() -> dict:
-    return {"hooks": [{"type": "command", "command": SESSION_START_COMMAND}]}
+def _norm(cmd: str) -> str:
+    """Whitespace-normalized command text: ownership and template grading
+    both run on this, so a command respaced by another JSON tool is still
+    ours (raw-substring matching read it as foreign, and then BOTH entries
+    ran). Shell execution is whitespace-invariant for these commands, so
+    normalizing cannot mistake a semantically different launch for ours."""
+    return " ".join(cmd.split())
+
+
+def _template_entry(event: str) -> dict:
+    entry: dict = {}
+    if event == "PreToolUse":
+        entry["matcher"] = PRE_TOOL_USE_MATCHER
+    entry["hooks"] = [{"type": "command", "command": c}
+                      for c in TEMPLATE_COMMANDS[event]]
+    return entry
 
 
 def _owned(entry) -> bool:
@@ -51,25 +78,28 @@ def _owned(entry) -> bool:
     hooks = entry.get("hooks")
     if not isinstance(hooks, list):
         return False
-    return any(isinstance(h, dict) and _OWNED_MARK in str(h.get("command", ""))
+    return any(isinstance(h, dict)
+               and _OWNED_MARK in _norm(str(h.get("command", "")))
                for h in hooks)
 
 
-def _owned_commands(data: dict) -> list[str]:
-    """Every hook command in aramid-owned entries, across ALL hook events."""
-    cmds: list[str] = []
+def _owned_commands_by_event(data: dict) -> dict[str, list[str]]:
+    """Normalized hook commands in aramid-owned entries, keyed by the hook
+    event array they sit in."""
+    by_event: dict[str, list[str]] = {}
     hooks = data.get("hooks")
     if not isinstance(hooks, dict):
-        return cmds
-    for arr in hooks.values():
+        return by_event
+    for event, arr in hooks.items():
         if not isinstance(arr, list):
             continue
         for entry in arr:
             if _owned(entry):
                 for h in entry["hooks"]:
                     if isinstance(h, dict):
-                        cmds.append(str(h.get("command", "")))
-    return cmds
+                        by_event.setdefault(event, []).append(
+                            _norm(str(h.get("command", ""))))
+    return by_event
 
 
 def _load(path: Path):
@@ -83,7 +113,10 @@ def _load(path: Path):
 
 def merge_claude_settings(root: Path) -> str:
     """Register aramid's hook entries; returns "created" (file was absent),
-    "updated", "unchanged", or "unparseable" (refused, file untouched)."""
+    "updated", "unchanged", or "unparseable" (refused, file untouched).
+    Writes every template event; sweeps aramid-owned entries out of every
+    OTHER event first, so a hand-moved entry cannot keep firing beside the
+    fresh ones."""
     path = root / SETTINGS_REL
     if path.is_file():
         original = path.read_bytes()
@@ -99,11 +132,24 @@ def merge_claude_settings(root: Path) -> str:
     hooks = data.setdefault("hooks", {})
     if not isinstance(hooks, dict):
         return "unparseable"
-    arr = hooks.setdefault("SessionStart", [])
-    if not isinstance(arr, list):
-        return "unparseable"
+    for event in TEMPLATE_COMMANDS:
+        if event in hooks and not isinstance(hooks[event], list):
+            return "unparseable"
 
-    hooks["SessionStart"] = [e for e in arr if not _owned(e)] + [_session_start_entry()]
+    for event in list(hooks):
+        arr = hooks[event]
+        if not isinstance(arr, list):
+            continue                      # foreign shape, preserved as-is
+        kept = [e for e in arr if not _owned(e)]
+        if kept:
+            hooks[event] = kept
+        elif event in TEMPLATE_COMMANDS:
+            hooks[event] = []
+        else:
+            del hooks[event]
+    for event in TEMPLATE_COMMANDS:
+        hooks.setdefault(event, []).append(_template_entry(event))
+
     rendered = (json.dumps(data, indent=2) + "\n").encode("utf-8")
     if existed and rendered == original:
         return "unchanged"
@@ -161,11 +207,14 @@ def remove_claude_settings(root: Path) -> str:
 def settings_state(root: Path) -> str:
     """Read-only grade of aramid's presence in .claude/settings.json.
 
-    "ok" (owned commands are exactly the current template), "stale" (owned
-    commands are all known -- current or prior template -- but not the
-    current set), "tampered" (an owned command matches NO known template:
-    the -P-stripping class of edit; doctor exits 2 on it), "absent",
-    "unparseable". Never writes.
+    "ok" (every template event's owned commands are exactly that event's
+    current template), "stale" (every owned command is known FOR ITS EVENT
+    -- current or prior template -- but the per-event sets differ from the
+    current template, e.g. a sub-2 consumer missing the PreToolUse entry),
+    "tampered" (an owned command matches no known template for the event it
+    sits in: the -P-stripping class of edit, and equally an entry moved to
+    a foreign event), "absent", "unparseable". Comparison is
+    whitespace-normalized on both sides. Never writes.
     """
     path = root / SETTINGS_REL
     if not path.is_file():
@@ -173,12 +222,15 @@ def settings_state(root: Path) -> str:
     data = _load(path)
     if data is None:
         return "unparseable"
-    cmds = _owned_commands(data)
-    if not cmds:
+    by_event = _owned_commands_by_event(data)
+    if not by_event:
         return "absent"
-    known = set(TEMPLATE_COMMANDS) | set(KNOWN_PRIOR_COMMANDS)
-    if any(c not in known for c in cmds):
-        return "tampered"
-    if set(cmds) == set(TEMPLATE_COMMANDS):
+    for event, cmds in by_event.items():
+        known = ({_norm(c) for c in TEMPLATE_COMMANDS.get(event, ())}
+                 | {_norm(c) for c in KNOWN_PRIOR_COMMANDS.get(event, ())})
+        if any(c not in known for c in cmds):
+            return "tampered"
+    if all(set(by_event.get(event, ())) == {_norm(c) for c in cmds}
+           for event, cmds in TEMPLATE_COMMANDS.items()):
         return "ok"
     return "stale"

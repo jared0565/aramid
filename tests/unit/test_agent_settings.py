@@ -31,9 +31,15 @@ GRAPHITE_SESSION = {"hooks": [
 def test_created_when_absent(tmp_path):
     assert agent_settings.merge_claude_settings(tmp_path) == "created"
     data = _read(tmp_path)
-    assert data == {"hooks": {"SessionStart": [
-        {"hooks": [{"type": "command",
-                    "command": agent_settings.SESSION_START_COMMAND}]}]}}
+    assert data == {"hooks": {
+        "SessionStart": [
+            {"hooks": [{"type": "command",
+                        "command": agent_settings.SESSION_START_COMMAND}]}],
+        "PreToolUse": [
+            {"matcher": "Bash|PowerShell",
+             "hooks": [{"type": "command",
+                        "command": agent_settings.PRE_TOOL_USE_COMMAND}]}],
+    }}
 
 
 def test_merge_preserves_foreign_entries(tmp_path):
@@ -43,7 +49,10 @@ def test_merge_preserves_foreign_entries(tmp_path):
     assert agent_settings.merge_claude_settings(tmp_path) == "updated"
 
     data = _read(tmp_path)
-    assert data["hooks"]["PreToolUse"] == [GRAPHITE_PRE]
+    assert data["hooks"]["PreToolUse"] == [GRAPHITE_PRE,
+        {"matcher": "Bash|PowerShell",
+         "hooks": [{"type": "command",
+                    "command": agent_settings.PRE_TOOL_USE_COMMAND}]}]
     assert data["hooks"]["SessionStart"][0] == GRAPHITE_SESSION
     assert data["hooks"]["SessionStart"][1]["hooks"][0]["command"] == (
         agent_settings.SESSION_START_COMMAND)
@@ -139,7 +148,8 @@ def test_settings_state_stale_via_known_prior(tmp_path, monkeypatch):
     # Simulate a future template change: the old command joins
     # KNOWN_PRIOR_COMMANDS and grades "stale", not "tampered".
     old = "python -P -m aramid agent-hook session-start --old-flag"
-    monkeypatch.setattr(agent_settings, "KNOWN_PRIOR_COMMANDS", (old,))
+    monkeypatch.setattr(agent_settings, "KNOWN_PRIOR_COMMANDS",
+                        {"SessionStart": (old,)})
     _write(tmp_path, {"hooks": {"SessionStart": [
         {"hooks": [{"type": "command", "command": old}]}]}})
 
@@ -181,6 +191,86 @@ def test_agent_interpreter_lines_no_python_on_path(monkeypatch):
         "  WARN interpreter no `python` on PATH -- the generated"
         " agent-hook command cannot run; install one or adjust PATH",
     ]
+
+
+def test_template_covers_both_events():
+    assert set(agent_settings.TEMPLATE_COMMANDS) == {"SessionStart", "PreToolUse"}
+    assert agent_settings.TEMPLATE_COMMANDS["SessionStart"] == (
+        agent_settings.SESSION_START_COMMAND,)
+    assert agent_settings.TEMPLATE_COMMANDS["PreToolUse"] == (
+        agent_settings.PRE_TOOL_USE_COMMAND,)
+    assert (agent_settings.PRE_TOOL_USE_COMMAND
+            == "python -P -m aramid agent-hook pre-tool-use")
+    # Nothing joins the prior set for session-start: it stays current.
+    assert agent_settings.KNOWN_PRIOR_COMMANDS == {}
+
+
+def test_merge_writes_both_events(tmp_path):
+    assert agent_settings.merge_claude_settings(tmp_path) == "created"
+    data = json.loads((tmp_path / ".claude" / "settings.json")
+                      .read_text(encoding="utf-8"))
+    assert data["hooks"]["SessionStart"] == [
+        {"hooks": [{"type": "command",
+                    "command": agent_settings.SESSION_START_COMMAND}]}]
+    assert data["hooks"]["PreToolUse"] == [
+        {"matcher": "Bash|PowerShell",
+         "hooks": [{"type": "command",
+                    "command": agent_settings.PRE_TOOL_USE_COMMAND}]}]
+
+
+def test_merge_repairs_entry_moved_to_wrong_event(tmp_path):
+    """An owned entry hand-moved under a foreign event is swept, and the
+    template entries land under their own events -- init repairs the move."""
+    _write(tmp_path, {"hooks": {"Stop": [
+        {"hooks": [{"type": "command",
+                    "command": agent_settings.SESSION_START_COMMAND}]}]}})
+    assert agent_settings.merge_claude_settings(tmp_path) == "updated"
+    data = json.loads((tmp_path / ".claude" / "settings.json")
+                      .read_text(encoding="utf-8"))
+    assert "Stop" not in data["hooks"]          # emptied foreign array dropped
+    assert set(data["hooks"]) == {"SessionStart", "PreToolUse"}
+
+
+def test_sub2_consumer_grades_stale_not_ok_not_tampered(tmp_path):
+    """The designed rollout: a repo that ran the sub-2 init has only the
+    SessionStart entry -- every owned command is known for its event, the
+    per-event sets differ -> stale (re-run init), never tampered."""
+    _write(tmp_path, {"hooks": {"SessionStart": [
+        {"hooks": [{"type": "command",
+                    "command": agent_settings.SESSION_START_COMMAND}]}]}})
+    assert agent_settings.settings_state(tmp_path) == "stale"
+
+
+def test_moved_entry_grades_tampered(tmp_path):
+    """Event-bound grading: the session-start command sitting under
+    PreToolUse matches no known template FOR THAT EVENT -> tampered."""
+    _write(tmp_path, {"hooks": {"PreToolUse": [
+        {"matcher": "Bash|PowerShell",
+         "hooks": [{"type": "command",
+                    "command": agent_settings.SESSION_START_COMMAND}]}]}})
+    assert agent_settings.settings_state(tmp_path) == "tampered"
+
+
+def test_respaced_owned_command_still_owned_and_ok(tmp_path):
+    """Whitespace-variant ownership gap (carried hard requirement): a
+    command respaced by another tool still carries the marker after
+    normalization and grades against the template on normalized text."""
+    _write(tmp_path, {"hooks": {
+        "SessionStart": [{"hooks": [{
+            "type": "command",
+            "command": "python  -P  -m aramid   agent-hook session-start"}]}],
+        "PreToolUse": [{"matcher": "Bash|PowerShell",
+                        "hooks": [{
+            "type": "command",
+            "command": "python -P -m  aramid agent-hook  pre-tool-use"}]}],
+    }})
+    assert agent_settings.settings_state(tmp_path) == "ok"
+
+
+def test_uninstall_sweeps_pre_tool_use_entry_too(tmp_path):
+    agent_settings.merge_claude_settings(tmp_path)
+    assert agent_settings.remove_claude_settings(tmp_path) == "removed"
+    assert not (tmp_path / ".claude" / "settings.json").exists()
 
 
 def test_agent_interpreter_lines_cannot_import_aramid(monkeypatch):

@@ -828,7 +828,10 @@ def test_init_preserves_foreign_settings_and_uninstall_reverses(tmp_path, monkey
 
     assert init.cmd_init(r) == 0
     data = json.loads(p.read_text(encoding="utf-8"))
-    assert data["hooks"]["PreToolUse"] == foreign["hooks"]["PreToolUse"]
+    assert data["hooks"]["PreToolUse"] == foreign["hooks"]["PreToolUse"] + [
+        {"matcher": "Bash|PowerShell",
+         "hooks": [{"type": "command",
+                    "command": agent_settings.PRE_TOOL_USE_COMMAND}]}]
     assert agent_settings.settings_state(r) == "ok"
 
     assert uninstall.cmd_uninstall(r) == 0
