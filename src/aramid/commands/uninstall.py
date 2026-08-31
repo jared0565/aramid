@@ -1,13 +1,14 @@
 """uninstall -- reverse exactly what `init` installed: git hook shims,
-ARAMID.md, and the gitignore entries it appended. The ledger (`.aramid/`)
-is KEPT by default (CLI surface table, design doc section 2) -- security/
-audit history should survive an accidental or exploratory uninstall;
-delete `.aramid/` by hand if that history is genuinely unwanted.
+ARAMID.md, the managed agent blocks (CLAUDE.md/AGENTS.md), and the gitignore
+entries it appended. The ledger (`.aramid/`) is KEPT by default (CLI surface
+table, design doc section 2) -- security/audit history should survive an
+accidental or exploratory uninstall; delete `.aramid/` by hand if that history
+is genuinely unwanted.
 """
 import sys
 from pathlib import Path
 
-from aramid import gitutil, hooks
+from aramid import agent_files, gitutil, hooks
 from aramid.commands.init import GITIGNORE_ENTRIES
 
 
@@ -43,9 +44,17 @@ def cmd_uninstall(path) -> int:
     if md_path.exists():
         md_path.unlink()
 
+    agent_actions = agent_files.remove_agent_blocks(root)
+    for name, action in agent_actions:
+        if action == "damaged":
+            print(f"aramid: uninstall: {name} has an aramid fence with no"
+                  f" closing marker -- left untouched; remove the fence by"
+                  f" hand.", file=sys.stderr)
+
     _remove_gitignore_entries(root)
 
-    print(f"aramid: uninstall: {root} -- hooks removed, ARAMID.md removed, gitignore "
-          f"entries removed. The ledger (.aramid/) is KEPT -- delete it by hand if you "
-          f"also want to discard finding/security history.")
+    print(f"aramid: uninstall: {root} -- hooks removed, ARAMID.md removed, agent "
+          f"blocks removed, gitignore entries removed. The ledger (.aramid/) is "
+          f"KEPT -- delete it by hand if you also want to discard finding/security "
+          f"history.")
     return 0

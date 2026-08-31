@@ -22,7 +22,7 @@ from pathlib import Path
 
 from aramid import agent_files, config as config_mod
 from aramid import hooks
-from aramid.commands import doctor, init
+from aramid.commands import doctor, init, uninstall
 from aramid.ledger import Ledger
 from aramid.normalizer import RawFinding
 from aramid.runners.base import RunnerResult, ToolState
@@ -734,3 +734,18 @@ def test_init_appends_to_user_authored_claude_md(tmp_path, monkeypatch):
 
     text = (r / "CLAUDE.md").read_text(encoding="utf-8")
     assert text == user_text + "\n" + agent_files.render_block()
+
+
+def test_uninstall_reverses_agent_blocks(tmp_path, monkeypatch):
+    monkeypatch.setattr(doctor, "probe_toolchain", _fake_present)
+    r = _repo(tmp_path)
+    user_text = "# House rules\n\nAlways run the linter.\n"
+    (r / "CLAUDE.md").write_text(user_text, encoding="utf-8")
+    assert init.cmd_init(r) == 0
+
+    assert uninstall.cmd_uninstall(r) == 0
+
+    # user-authored file: block stripped, user content intact.
+    assert (r / "CLAUDE.md").read_text(encoding="utf-8") == user_text + "\n"
+    # init-created file: nothing but the block, so deleted outright.
+    assert not (r / "AGENTS.md").exists()
