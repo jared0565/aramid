@@ -22,6 +22,16 @@ to publish a tag that disagrees with it.
   fence-scoped way, and `aramid doctor` reports each file's block state
   (`ok`/`stale`/`absent`/`damaged`/`unreadable`) advisory-only -- it never
   changes doctor's exit code.
+- **`aramid init` registers a session-start agent hook, and `aramid
+  agent-hook session-start` renders live gate posture.** The hook entry in
+  `.claude/settings.json` is merged own-entry-by-marker (foreign tools'
+  entries preserved; an unparseable file refused and reported), and the
+  subcommand prints open findings, skip streaks, and bake posture for the
+  agent session's context -- fail-open in every path, so a session can
+  never be broken by it. `aramid doctor` grades the entry
+  (`ok`/`absent`/`stale`/`tampered`/`unparseable`); a tampered entry --
+  an aramid-named hook whose command differs from the template -- exits
+  doctor `2`. `aramid status` gains an `agent surfaces:` line.
 
 ## [0.7.2] — 2026-08-30
 
