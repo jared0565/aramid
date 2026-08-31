@@ -65,3 +65,53 @@ def test_block_content_names_the_commands():
                    "aramid ledger filter --status open", "--no-verify",
                    "aramid override"):
         assert needle in block
+
+
+def test_remove_strips_fence_and_keeps_user_content(tmp_path):
+    user_text = "# My project\n\nDo the thing.\n"
+    (tmp_path / "CLAUDE.md").write_text(user_text, encoding="utf-8")
+    agent_files.write_agent_blocks(tmp_path)
+
+    actions = agent_files.remove_agent_blocks(tmp_path)
+
+    assert ("CLAUDE.md", "removed") in actions
+    # append inserted one "\n" separator; removal strips only fence lines.
+    assert (tmp_path / "CLAUDE.md").read_text(encoding="utf-8") == user_text + "\n"
+
+
+def test_remove_deletes_file_that_was_only_the_block(tmp_path):
+    agent_files.write_agent_blocks(tmp_path)
+
+    actions = agent_files.remove_agent_blocks(tmp_path)
+
+    assert actions == [("CLAUDE.md", "deleted"), ("AGENTS.md", "deleted")]
+    assert not (tmp_path / "CLAUDE.md").exists()
+    assert not (tmp_path / "AGENTS.md").exists()
+
+
+def test_remove_reports_absent_and_damaged(tmp_path):
+    (tmp_path / "CLAUDE.md").write_text("no fence here\n", encoding="utf-8")
+    (tmp_path / "AGENTS.md").write_text(
+        "<!-- aramid:begin -- x -->\nno end\n", encoding="utf-8")
+
+    actions = agent_files.remove_agent_blocks(tmp_path)
+
+    assert actions == [("CLAUDE.md", "absent"), ("AGENTS.md", "damaged")]
+    assert (tmp_path / "AGENTS.md").read_text(encoding="utf-8") == (
+        "<!-- aramid:begin -- x -->\nno end\n")
+
+
+def test_states_ok_stale_absent_damaged(tmp_path):
+    agent_files.write_agent_blocks(tmp_path)                       # CLAUDE ok
+    stale = agent_files.render_block().replace(
+        "security & quality gate", "old title")
+    (tmp_path / "AGENTS.md").write_text(stale, encoding="utf-8")   # stale
+
+    states = dict(agent_files.agent_block_states(tmp_path))
+    assert states == {"CLAUDE.md": "ok", "AGENTS.md": "stale"}
+
+    (tmp_path / "CLAUDE.md").unlink()
+    (tmp_path / "AGENTS.md").write_text(
+        "<!-- aramid:begin -- x -->\nno end\n", encoding="utf-8")
+    states = dict(agent_files.agent_block_states(tmp_path))
+    assert states == {"CLAUDE.md": "absent", "AGENTS.md": "damaged"}

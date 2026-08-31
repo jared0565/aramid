@@ -87,3 +87,67 @@ def write_agent_blocks(root: Path) -> list[tuple[str, str]]:
             path.write_text(new, encoding="utf-8")
             actions.append((name, "replaced"))
     return actions
+
+
+def remove_agent_blocks(root: Path) -> list[tuple[str, str]]:
+    """Reverse of write_agent_blocks, for `aramid uninstall`.
+
+    Returns [(filename, action)]; "removed" strips the fence, "deleted"
+    unlinks a file that held nothing but the block, "absent" means no file
+    or no fence, "damaged" means an unterminated fence -- untouched, same
+    refusal as the writer and for the same reason.
+    """
+    actions: list[tuple[str, str]] = []
+    for name in AGENT_FILES:
+        path = root / name
+        if not path.is_file():
+            actions.append((name, "absent"))
+            continue
+        text = path.read_text(encoding="utf-8")
+        lines = text.splitlines(keepends=True)
+        begin, end = _find_fence(lines)
+        if begin is None:
+            actions.append((name, "absent"))
+            continue
+        if end is None:
+            actions.append((name, "damaged"))
+            continue
+        rest = "".join(lines[:begin]) + "".join(lines[end + 1:])
+        if rest.strip():
+            path.write_text(rest, encoding="utf-8")
+            actions.append((name, "removed"))
+        else:
+            path.unlink()
+            actions.append((name, "deleted"))
+    return actions
+
+
+def agent_block_states(root: Path) -> list[tuple[str, str]]:
+    """Read-only state per agent file, for `aramid doctor`.
+
+    States: "ok" (fence matches the current template), "stale" (fence
+    present but differs), "absent" (no file or no fence), "damaged"
+    (unterminated fence). Doctor reports; it never rewrites.
+    """
+    block_lines = _BLOCK.splitlines(keepends=True)
+    states: list[tuple[str, str]] = []
+    for name in AGENT_FILES:
+        path = root / name
+        if not path.is_file():
+            states.append((name, "absent"))
+            continue
+        try:
+            lines = path.read_text(encoding="utf-8").splitlines(keepends=True)
+        except OSError:
+            states.append((name, "absent"))
+            continue
+        begin, end = _find_fence(lines)
+        if begin is None:
+            states.append((name, "absent"))
+        elif end is None:
+            states.append((name, "damaged"))
+        elif lines[begin:end + 1] == block_lines:
+            states.append((name, "ok"))
+        else:
+            states.append((name, "stale"))
+    return states
