@@ -40,7 +40,7 @@ from importlib import resources
 from pathlib import Path
 from typing import Callable
 
-from aramid import agent_files, config as config_mod
+from aramid import agent_files, agent_settings, config as config_mod
 from aramid import gitutil, hooks, policy, redact
 from aramid.commands import doctor as doctor_mod
 from aramid.commands.doctor import cmd_doctor
@@ -280,6 +280,25 @@ def render_agent_blocks_notice(root: Path,
     return "\n".join(lines)
 
 
+def render_agent_settings_notice(root: Path, action: str) -> str:
+    """Sibling of the other init notices; same three rules. The unparseable
+    line prints even outside a git work tree -- it reports a refused write,
+    not a chore."""
+    if action == "unparseable":
+        return ("aramid: init: .claude/settings.json could not be parsed --"
+                " left untouched; fix the JSON and re-run `aramid init` to"
+                " register aramid's session-start hook")
+    if action not in ("created", "updated"):
+        return ""
+    if gitutil._run(root, "rev-parse", "--is-inside-work-tree").returncode != 0:
+        return ""
+    return ("aramid: init: registered aramid's session-start hook in"
+            " .claude/settings.json -- agent sessions start with live gate"
+            " posture:\n"
+            'aramid: init:       git add .claude/settings.json && git commit'
+            ' -m "chore: aramid agent hooks"')
+
+
 # ------------------------------------------------------- full-history scan ---
 
 def _historical_ref_for(raws: list) -> Callable[[str], str]:
@@ -491,6 +510,7 @@ def _init_one(target: Path) -> int:
 
     _write_aramid_md(root, stack, pkg_mgr)
     agent_actions = agent_files.write_agent_blocks(root)
+    settings_action = agent_settings.merge_claude_settings(root)
     gi_added, gi_created = _update_gitignore(root)
 
     # step 5: install (idempotent, chain-never-clobber) hook shims.
@@ -531,7 +551,8 @@ def _init_one(target: Path) -> int:
     # write being reported, not a chore to commit.
     for notice in (render_aramid_md_notice(root),
                    render_gitignore_notice(root, gi_added, gi_created),
-                   render_agent_blocks_notice(root, agent_actions)):
+                   render_agent_blocks_notice(root, agent_actions),
+                   render_agent_settings_notice(root, settings_action)):
         if notice:
             print(notice, file=sys.stderr)
 

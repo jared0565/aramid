@@ -16,11 +16,12 @@ get past step 3 at all; everything downstream tolerates real tools being
 absent by design (graceful MISSING degradation, proven elsewhere by the
 pipeline/runner test suites).
 """
+import json
 import subprocess
 import sys
 from pathlib import Path
 
-from aramid import agent_files, config as config_mod
+from aramid import agent_files, agent_settings, config as config_mod
 from aramid import hooks
 from aramid.commands import doctor, init, uninstall
 from aramid.ledger import Ledger
@@ -793,3 +794,73 @@ def test_init_suppresses_doctors_agent_sections(tmp_path, monkeypatch, capsys):
     capsys.readouterr()
     doctor.cmd_doctor(r)
     assert "agent files:" in capsys.readouterr().out
+
+
+def test_init_registers_session_start_hook_idempotently(tmp_path, monkeypatch):
+    monkeypatch.setattr(doctor, "probe_toolchain", _fake_present)
+    r = _repo(tmp_path)
+
+    assert init.cmd_init(r) == 0
+    p = r / ".claude" / "settings.json"
+    data = json.loads(p.read_text(encoding="utf-8"))
+    cmds = [h["command"] for e in data["hooks"]["SessionStart"] for h in e["hooks"]]
+    assert cmds == [agent_settings.SESSION_START_COMMAND]
+    first = p.read_bytes()
+
+    assert init.cmd_init(r) == 0
+    assert p.read_bytes() == first
+
+
+def test_init_preserves_foreign_settings_and_uninstall_reverses(tmp_path, monkeypatch):
+    monkeypatch.setattr(doctor, "probe_toolchain", _fake_present)
+    r = _repo(tmp_path)
+    foreign = {"hooks": {"PreToolUse": [{"matcher": "Bash", "hooks": [
+        {"type": "command", "command": "python -P -m graphite agent-hook pre-tool-use"}]}]}}
+    p = r / ".claude" / "settings.json"
+    p.parent.mkdir()
+    p.write_text(json.dumps(foreign, indent=2) + "\n", encoding="utf-8")
+
+    assert init.cmd_init(r) == 0
+    data = json.loads(p.read_text(encoding="utf-8"))
+    assert data["hooks"]["PreToolUse"] == foreign["hooks"]["PreToolUse"]
+    assert agent_settings.settings_state(r) == "ok"
+
+    assert uninstall.cmd_uninstall(r) == 0
+    data = json.loads(p.read_text(encoding="utf-8"))
+    assert data == foreign
+    assert agent_settings.settings_state(r) == "absent"
+
+
+def test_doctor_exits_2_on_tampered_settings(tmp_path, monkeypatch, capsys):
+    monkeypatch.setattr(doctor, "probe_toolchain", _fake_present)
+    r = _repo(tmp_path)
+    assert init.cmd_init(r) == 0
+    capsys.readouterr()
+    rc_ok = doctor.cmd_doctor(r)
+
+    p = r / ".claude" / "settings.json"
+    text = p.read_text(encoding="utf-8")
+    p.write_text(text.replace("python -P -m aramid", "python -m aramid"),
+                 encoding="utf-8")
+    capsys.readouterr()
+    rc_tampered = doctor.cmd_doctor(r)
+    err = capsys.readouterr().err
+
+    assert rc_tampered == 2
+    assert rc_tampered != rc_ok
+    assert ("aramid: doctor: .claude/settings.json carries an aramid-named"
+            " hook whose command differs from the template -- treat as"
+            " tampering; re-run `aramid init` to rewrite it and investigate"
+            " how it changed" in err)
+
+
+def test_status_reports_agent_surfaces(tmp_path, monkeypatch, capsys):
+    from aramid.commands.status import cmd_status
+    monkeypatch.setattr(doctor, "probe_toolchain", _fake_present)
+    r = _repo(tmp_path)
+    assert init.cmd_init(r) == 0
+    capsys.readouterr()
+
+    assert cmd_status(r) == 0
+    assert ("agent surfaces: blocks 2/2, session hook ok"
+            in capsys.readouterr().out)

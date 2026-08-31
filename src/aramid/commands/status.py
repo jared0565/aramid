@@ -265,6 +265,14 @@ def _autolearn_line(cfg: config_mod.Config) -> str:
         return "autolearn: shadow (state unreadable)"
 
 
+def _agent_surfaces_line(root: Path) -> str:
+    from aramid import agent_files, agent_settings
+    states = agent_files.agent_block_states(root)
+    ok = sum(1 for _, s in states if s == "ok")
+    return (f"agent surfaces: blocks {ok}/{len(states)}, "
+            f"session hook {agent_settings.settings_state(root)}")
+
+
 def _llm_lines(cfg: config_mod.Config, state: dict) -> list[str]:
     """LLM review status: open count, confirmed critical count, armed state,
     and monthly OpenRouter spend (spec section 7, Phase 2b)."""
@@ -606,6 +614,7 @@ def cmd_status(root) -> int:
             lines.extend(out_of_scope_candidates)
 
         lines.extend(_bake_lines(cfg, state))
+        lines.append(_agent_surfaces_line(root))
 
         # --- Phase 2b: LLM review status (spec section 7) ---
         lines.extend(_llm_lines(cfg, state))

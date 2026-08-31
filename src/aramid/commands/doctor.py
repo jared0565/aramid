@@ -671,6 +671,29 @@ def agent_files_lines(root: Path) -> list[str]:
     return lines
 
 
+_AGENT_SETTINGS_DETAIL = {
+    "ok": "aramid session-start hook registered (.claude/settings.json)",
+    "absent": "no aramid hook entry in .claude/settings.json -- run"
+              " `aramid init`",
+    "stale": "aramid hook entry matches an older template -- re-run"
+             " `aramid init`",
+    "tampered": "an aramid-named hook entry differs from the template --"
+                " treat as tampering; re-run `aramid init` to rewrite it"
+                " and investigate how it changed",
+    "unparseable": ".claude/settings.json could not be parsed -- fix the"
+                   " JSON, then run `aramid init`",
+}
+
+
+def agent_settings_lines(root: Path) -> list[str]:
+    """One line; tampered is the only state that moves doctor's exit code
+    (handled in cmd_doctor -- this renderer stays pure)."""
+    from aramid import agent_settings
+    state = agent_settings.settings_state(root)
+    tag = "OK  " if state == "ok" else "WARN"
+    return [f"  {tag} {'settings':<10} {_AGENT_SETTINGS_DETAIL[state]}"]
+
+
 def _fix_pip_toolchain() -> None:
     """`pip install` the owned pip toolchain into the CURRENT interpreter
     (never a different one -- doctor repairs the interpreter it is itself
@@ -1011,6 +1034,9 @@ def cmd_doctor(root: Path, fix: bool = False, during_init: bool = False) -> int:
         print("agent files:")
         for line in agent_files_lines(root):
             print(line)
+        print("agent hooks:")
+        for line in agent_settings_lines(root):
+            print(line)
 
     unenforced = probe_enforcement(root)
     if unenforced:
@@ -1023,6 +1049,15 @@ def cmd_doctor(root: Path, fix: bool = False, during_init: bool = False) -> int:
     editable_gate = editable_consumers_lines(direct_url, registry_mod.load_registry())
     for line in editable_gate:
         print(line, file=sys.stderr)
+
+    from aramid import agent_settings as agent_settings_mod
+    settings_tampered = (not during_init
+                         and agent_settings_mod.settings_state(root) == "tampered")
+    if settings_tampered:
+        print("aramid: doctor: .claude/settings.json carries an aramid-named"
+              " hook whose command differs from the template -- treat as"
+              " tampering; re-run `aramid init` to rewrite it and"
+              " investigate how it changed", file=sys.stderr)
 
     if config_error is not None:
         print(f"aramid: doctor: aramid.toml is unparseable -- {config_error} "
@@ -1050,6 +1085,8 @@ def cmd_doctor(root: Path, fix: bool = False, during_init: bool = False) -> int:
         return 2                        # tools fine, but the relocated shim is not what init installs
     if editable_gate:
         return 2                        # tools fine, but the gate is a working tree
+    if settings_tampered:
+        return 2                        # an edited aramid hook command is the -P-stripping class
 
     warn_tests = [s for s in test_statuses if s.warn]
     for s in warn_tests:

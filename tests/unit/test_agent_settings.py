@@ -5,6 +5,7 @@ that cannot be parsed is never written."""
 import json
 
 from aramid import agent_settings
+from aramid.commands import doctor as doctor_cmd
 
 
 def _read(tmp_path):
@@ -148,3 +149,24 @@ def test_settings_state_stale_via_known_prior(tmp_path, monkeypatch):
 def test_settings_states_constant_is_exhaustive():
     assert set(agent_settings.SETTINGS_STATES) == {
         "ok", "absent", "stale", "tampered", "unparseable"}
+
+
+def test_every_settings_state_has_a_doctor_detail():
+    assert set(doctor_cmd._AGENT_SETTINGS_DETAIL) == set(agent_settings.SETTINGS_STATES)
+
+
+def test_doctor_settings_lines_render_ok_and_tampered(tmp_path):
+    agent_settings.merge_claude_settings(tmp_path)
+    assert doctor_cmd.agent_settings_lines(tmp_path) == [
+        "  OK   settings   aramid session-start hook registered"
+        " (.claude/settings.json)",
+    ]
+
+    _write(tmp_path, {"hooks": {"SessionStart": [
+        {"hooks": [{"type": "command",
+                    "command": "python -m aramid agent-hook session-start"}]}]}})
+    assert doctor_cmd.agent_settings_lines(tmp_path) == [
+        "  WARN settings   an aramid-named hook entry differs from the"
+        " template -- treat as tampering; re-run `aramid init` to rewrite"
+        " it and investigate how it changed",
+    ]
