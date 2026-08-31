@@ -81,13 +81,14 @@ aramid init path\to\workspace --discover
 1. Gates on `aramid doctor` — refuses (exit `3`, no partial state written) if gitleaks or semgrep is missing.
 2. Writes `aramid.toml` **only if it doesn't already exist** — an existing config is never touched. The fresh stub sets `semgrep_block_armed = false` and `bake_started = <today's date>`.
 3. Always regenerates `ARAMID.md`.
-4. Appends any missing `.gitignore` entries: `.aramid/`, `graph-out/`, `.graphite*`, `.cache/`.
-5. Installs idempotent git hook shims for `pre-commit`, `pre-push`, and `post-commit`. If a foreign hook already exists at one of those paths, it's chained to `<hook>.aramid-chained` rather than clobbered.
-6. Registers the repo in the machine-global registry (this is what makes it a candidate for `aramid drain --all` later).
-7. Runs a one-time full-history gitleaks scan (`git log --all`), recording any hits as **historical, non-blocking** findings — a secret that's already in history doesn't suddenly block your next commit, but it is now tracked until retired — `ledger mark-rotated` for a real leak, `ledger mark-not-a-secret` for a false positive (see [section 5](#5-understanding--handling-findings)).
-8. Writes the ratchet baseline once, guarded so a re-run of `init` never resets it.
-9. Validates that the installed hook shim files exist and carry aramid's marker.
-10. Prints a summary: repo root, scan scope, any nested-repo exclusions, detected stack, whether hooks are armed, baseline finding count, and historical secret count.
+4. Writes a marker-fenced, aramid-managed instruction block into `CLAUDE.md` and `AGENTS.md` (creating them when absent) so agent coders meet the gate before their first commit, not at their first blocked push. Content outside the `<!-- aramid:begin -->`/`<!-- aramid:end -->` fence is never touched; a damaged fence (no closing marker) refuses the write with a notice. Both files are tracked, so teammates' agents inherit the block on pull.
+5. Appends any missing `.gitignore` entries: `.aramid/`, `graph-out/`, `.graphite*`, `.cache/`.
+6. Installs idempotent git hook shims for `pre-commit`, `pre-push`, and `post-commit`. If a foreign hook already exists at one of those paths, it's chained to `<hook>.aramid-chained` rather than clobbered.
+7. Registers the repo in the machine-global registry (this is what makes it a candidate for `aramid drain --all` later).
+8. Runs a one-time full-history gitleaks scan (`git log --all`), recording any hits as **historical, non-blocking** findings — a secret that's already in history doesn't suddenly block your next commit, but it is now tracked until retired — `ledger mark-rotated` for a real leak, `ledger mark-not-a-secret` for a false positive (see [section 5](#5-understanding--handling-findings)).
+9. Writes the ratchet baseline once, guarded so a re-run of `init` never resets it.
+10. Validates that the installed hook shim files exist and carry aramid's marker.
+11. Prints a summary: repo root, scan scope, any nested-repo exclusions, detected stack, whether hooks are armed, baseline finding count, and historical secret count.
 
 ### The hooks it installs
 
@@ -97,7 +98,7 @@ aramid init path\to\workspace --discover
 | `pre-push` | `"$INTERP" -m aramid check --gate pre-push` | Remaps `2 → 0`; `1` and `3` pass through and block — **fail-closed** (an engine that couldn't run didn't run gitleaks, so it must not silently let the push through) |
 | `post-commit` | `"$INTERP" -m aramid triage HEAD --budget 15 >/dev/null 2>&1 \|\| true` | Always exits `0` from the shim's perspective — fully fail-open, a commit is never blocked or made noisy by triage |
 
-To reverse onboarding later, `aramid uninstall [path]` removes the installed hook shims, deletes `ARAMID.md`, removes the `.gitignore` entries `init` added, and deregisters the repo — but **deliberately keeps the ledger** (`.aramid/`) so security/audit history survives; delete that by hand if you genuinely don't want it.
+To reverse onboarding later, `aramid uninstall [path]` removes the installed hook shims, deletes `ARAMID.md`, removes the `.gitignore` entries `init` added, removes the managed agent blocks from `CLAUDE.md`/`AGENTS.md` (deleting a file that held nothing but the block), and deregisters the repo — but **deliberately keeps the ledger** (`.aramid/`) so security/audit history survives; delete that by hand if you genuinely don't want it.
 
 ---
 
