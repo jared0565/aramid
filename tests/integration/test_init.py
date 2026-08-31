@@ -839,6 +839,12 @@ def test_init_preserves_foreign_settings_and_uninstall_reverses(tmp_path, monkey
 
 def test_doctor_exits_2_on_tampered_settings(tmp_path, monkeypatch, capsys):
     monkeypatch.setattr(doctor, "probe_toolchain", _fake_present)
+    # CI installs aramid editable (pip install -e .), and doctor exits 2 for
+    # editable-install-with-registered-repos regardless of this test's
+    # subject. That seam is machine-install-shaped -- pin it out so the
+    # healthy run is genuinely healthy in every environment.
+    monkeypatch.setattr(doctor, "editable_consumers_lines",
+                        lambda direct_url, registered: [])
     r = _repo(tmp_path)
     assert init.cmd_init(r) == 0
     capsys.readouterr()
@@ -852,8 +858,8 @@ def test_doctor_exits_2_on_tampered_settings(tmp_path, monkeypatch, capsys):
     rc_tampered = doctor.cmd_doctor(r)
     err = capsys.readouterr().err
 
+    assert rc_ok == 0
     assert rc_tampered == 2
-    assert rc_tampered != rc_ok
     assert ("aramid: doctor: .claude/settings.json carries an aramid-named"
             " hook whose command differs from the template -- treat as"
             " tampering; re-run `aramid init` to rewrite it and investigate"
