@@ -17,8 +17,9 @@ a single print so a mid-build exception can never emit a half-rendered
 context. The git-hook gate beneath still enforces; this layer only informs.
 
 Budget: < 2 s. Reads only the local ledger and config -- no scans, no
-network, no subprocesses. Heavy imports stay inside functions so the
-non-matching paths stay cheap.
+network, no subprocesses beyond a single `git rev-parse` for repo
+detection. Heavy imports stay inside functions so the non-matching paths
+stay cheap.
 """
 from pathlib import Path
 

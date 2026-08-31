@@ -170,3 +170,34 @@ def test_doctor_settings_lines_render_ok_and_tampered(tmp_path):
         " template -- treat as tampering; re-run `aramid init` to rewrite"
         " it and investigate how it changed",
     ]
+
+
+def test_agent_interpreter_lines_no_python_on_path(monkeypatch):
+    # PATH has no `python` at all -- the generated hook command cannot run,
+    # and nothing else would say why.
+    monkeypatch.setattr(doctor_cmd.shutil, "which", lambda name: None)
+
+    assert doctor_cmd.agent_interpreter_lines() == [
+        "  WARN interpreter no `python` on PATH -- the generated"
+        " agent-hook command cannot run; install one or adjust PATH",
+    ]
+
+
+def test_agent_interpreter_lines_cannot_import_aramid(monkeypatch):
+    # PATH's `python` exists but can't import aramid -- the session-start
+    # entry would error at every session start, outside the fail-open
+    # boundary `agent_hook.cmd_agent_hook` itself provides.
+    exe = r"C:\fake\python.exe"
+    monkeypatch.setattr(doctor_cmd.shutil, "which", lambda name: exe)
+
+    class _Stub:
+        returncode = 1
+
+    monkeypatch.setattr(doctor_cmd.subprocess, "run", lambda *a, **k: _Stub())
+
+    assert doctor_cmd.agent_interpreter_lines() == [
+        f"  WARN interpreter `python` on PATH ({exe}) cannot import"
+        f" aramid -- the agent-hook entry in .claude/settings.json will"
+        f" error at every session start; `pip install aramid` into that"
+        f" interpreter or fix PATH",
+    ]

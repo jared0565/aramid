@@ -694,6 +694,36 @@ def agent_settings_lines(root: Path) -> list[str]:
     return [f"  {tag} {'settings':<10} {_AGENT_SETTINGS_DETAIL[state]}"]
 
 
+def agent_interpreter_lines() -> list[str]:
+    """Advisory: the generated hook command says plain `python` -- if PATH's
+    python cannot import aramid, the session-start entry errors OUTSIDE
+    aramid's fail-open boundary (interpreter-level, at every session start)
+    and nothing else would say why. Reports; never changes the exit code."""
+    import shutil
+    import subprocess
+    exe = shutil.which("python")
+    if exe is None:
+        return ["  WARN interpreter no `python` on PATH -- the generated"
+                " agent-hook command cannot run; install one or adjust PATH"]
+    try:
+        # S603 justification: `exe` is resolved a few lines above via
+        # `shutil.which("python")` (a PATH lookup, never external input),
+        # and the `-c` payload is the fixed literal "import aramid" --
+        # never attacker-controlled. Probing whether PATH's python can
+        # import aramid is this function's whole job.
+        probe = subprocess.run([exe, "-P", "-c", "import aramid"],  # noqa: S603
+                               capture_output=True, timeout=15)
+    except (OSError, subprocess.TimeoutExpired):
+        return [f"  WARN interpreter `python` on PATH ({exe}) could not be"
+                f" probed -- the generated agent-hook command may not run"]
+    if probe.returncode == 0:
+        return []
+    return [f"  WARN interpreter `python` on PATH ({exe}) cannot import"
+            f" aramid -- the agent-hook entry in .claude/settings.json will"
+            f" error at every session start; `pip install aramid` into that"
+            f" interpreter or fix PATH"]
+
+
 def _fix_pip_toolchain() -> None:
     """`pip install` the owned pip toolchain into the CURRENT interpreter
     (never a different one -- doctor repairs the interpreter it is itself
@@ -1036,6 +1066,8 @@ def cmd_doctor(root: Path, fix: bool = False, during_init: bool = False) -> int:
             print(line)
         print("agent hooks:")
         for line in agent_settings_lines(root):
+            print(line)
+        for line in agent_interpreter_lines():
             print(line)
 
     unenforced = probe_enforcement(root)

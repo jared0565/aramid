@@ -94,3 +94,12 @@ def test_cli_wires_agent_hook(tmp_path, monkeypatch, capsys):
     monkeypatch.chdir(tmp_path)
     assert cli.main(["agent-hook", "session-start"]) == 0
     assert capsys.readouterr().out == ""
+
+
+def test_cli_agent_hook_tolerates_future_flags(tmp_path, monkeypatch, capsys):
+    # A future template may append flags to the hook command line; an
+    # OLDER deployed aramid must no-op cleanly rather than die in argparse.
+    from aramid import cli
+    monkeypatch.chdir(tmp_path)
+    assert cli.main(["agent-hook", "session-start", "--future-flag", "x"]) == 0
+    assert capsys.readouterr().out == ""

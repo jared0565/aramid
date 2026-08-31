@@ -797,6 +797,9 @@ def test_init_suppresses_doctors_agent_sections(tmp_path, monkeypatch, capsys):
     out = capsys.readouterr().out
     assert "agent files:" in out
     assert "agent hooks:" in out
+    # healthy-quiet path: on this dev machine PATH's python imports aramid,
+    # so the interpreter probe prints nothing.
+    assert "cannot import aramid" not in out
 
 
 def test_init_registers_session_start_hook_idempotently(tmp_path, monkeypatch):

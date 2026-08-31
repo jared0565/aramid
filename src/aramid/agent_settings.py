@@ -14,6 +14,9 @@ must not guess.
 The template carries ONLY the SessionStart entry today. The PreToolUse
 entry ships in sub-project 3 together with the subcommand that serves it --
 init must never register a hook nothing can answer.
+
+Hook commands never grow flags -- new behavior gets a new event name;
+older binaries must no-op on newer commands.
 """
 import json
 from pathlib import Path

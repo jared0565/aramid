@@ -177,6 +177,13 @@ def build_parser() -> argparse.ArgumentParser:
     # Deliberately NOT choices=[...]: an event name from a newer template
     # must no-op (exit 0), never die in argparse -- fail-open.
     p_agent_hook.add_argument("event")
+    # Tolerate (and ignore) trailing args: an OLDER deployed aramid must
+    # no-op on a NEWER template's command line, never die in argparse --
+    # fail-open one token past the event name too. nargs="*" only absorbs
+    # trailing positionals -- argparse still rejects an unrecognized
+    # OPTION string (e.g. `--future-flag`) regardless, so REMAINDER is
+    # used instead: it swallows every token after `event`, flags included.
+    p_agent_hook.add_argument("rest", nargs=argparse.REMAINDER)
 
     return p
 
