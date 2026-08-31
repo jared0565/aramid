@@ -16,6 +16,15 @@ ANY internal error, exit 0 with no output. The block is built fully before
 a single print so a mid-build exception can never emit a half-rendered
 context. The git-hook gate beneath still enforces; this layer only informs.
 
+pre-tool-use screens each Bash/PowerShell tool call's command string for
+git hook-bypass invocations (aramid.agent_bypass, token-level). While
+baking it allows and surfaces an advisory through
+hookSpecificOutput.additionalContext; armed (agent_block_armed = true) it
+denies via permissionDecision: "deny". Contract pinned against Claude Code
+2.1.252; both shapes ride stdout with exit 0, and a harness that ignores
+the JSON fails open. The non-matching path never imports aramid's heavy
+modules.
+
 Budget: < 2 s. Reads only the local ledger and config -- no scans, no
 network, no subprocesses beyond a single `git rev-parse` for repo
 detection. Heavy imports stay inside functions so the non-matching paths
@@ -26,20 +35,90 @@ from pathlib import Path
 
 def cmd_agent_hook(event: str, root: Path | None = None) -> int:
     try:
-        if event != "session-start":
-            return 0
-        base = Path(root) if root is not None else Path.cwd()
-        from aramid import gitutil
-        try:
-            repo = gitutil.repo_root(base)
-        except Exception:
-            return 0
-        if not (repo / "aramid.toml").is_file():
-            return 0
-        print(_session_context(repo), end="")
+        if event == "session-start":
+            return _session_start(root)
+        if event == "pre-tool-use":
+            return _pre_tool_use(root)
         return 0
     except Exception:
         return 0
+
+
+def _repo_with_aramid(root: Path | None) -> Path | None:
+    base = Path(root) if root is not None else Path.cwd()
+    from aramid import gitutil
+    try:
+        repo = gitutil.repo_root(base)
+    except Exception:
+        return None
+    if not (repo / "aramid.toml").is_file():
+        return None
+    return repo
+
+
+def _session_start(root: Path | None) -> int:
+    repo = _repo_with_aramid(root)
+    if repo is None:
+        return 0
+    print(_session_context(repo), end="")
+    return 0
+
+
+def _pre_tool_use(root: Path | None) -> int:
+    import json
+    import sys
+    try:
+        payload = json.loads(sys.stdin.read())
+    except (json.JSONDecodeError, OSError, UnicodeDecodeError):
+        return 0
+    tool_input = payload.get("tool_input") if isinstance(payload, dict) else None
+    command = tool_input.get("command") if isinstance(tool_input, dict) else None
+    if not isinstance(command, str):
+        return 0
+    from aramid.agent_bypass import find_bypass
+    bypass = find_bypass(command)
+    if bypass is None:
+        return 0
+    repo = _repo_with_aramid(root)
+    if repo is None:
+        return 0
+    from aramid import config as config_mod
+    cfg = config_mod.load_config(repo)
+    print(_decision_json(bypass, armed=cfg.agent_block_armed))
+    return 0
+
+
+def _describe(bypass) -> str:
+    if bypass.kind == "hooks-path":
+        return f"`git {bypass.subcommand}` under `-c {bypass.token}`"
+    return f"`git {bypass.subcommand}` carrying `{bypass.token}`"
+
+
+def _decision_json(bypass, *, armed: bool) -> str:
+    import json
+    what = _describe(bypass)
+    if armed:
+        body = {
+            "hookEventName": "PreToolUse",
+            "permissionDecision": "deny",
+            "permissionDecisionReason": (
+                f"aramid: {what} bypasses the gate and is REJECTED in this"
+                f" repo (agent surface armed). Re-run without the bypass;"
+                f" to suppress a specific blocking finding use `aramid"
+                f" override <id> --reason \"...\"` after `aramid ledger"
+                f" filter --status open`."),
+        }
+    else:
+        body = {
+            "hookEventName": "PreToolUse",
+            "additionalContext": (
+                f"aramid: {what} bypasses this repo's gate. The bypass is"
+                f" ledger-visible, and the armed version of this hook"
+                f" rejects the call outright -- re-run without it; suppress"
+                f" a specific finding with `aramid override <id> --reason"
+                f" \"...\"` instead."),
+        }
+    return json.dumps({"hookSpecificOutput": body})
 
 
 def _session_context(repo: Path) -> str:

@@ -173,8 +173,10 @@ def build_parser() -> argparse.ArgumentParser:
     p_agent_hook = sub.add_parser(
         "agent-hook",
         help="agent-harness hook endpoint (Claude Code): session-start "
-             "prints live gate posture for the session's context; any "
-             "other event is a silent no-op")
+             "prints live gate posture for the session's context; "
+             "pre-tool-use screens git commands for hook-bypass flags "
+             "(advisory while baking, deny when armed); any other event "
+             "is a silent no-op")
     # Deliberately NOT choices=[...]: an event name from a newer template
     # must no-op (exit 0), never die in argparse -- fail-open.
     p_agent_hook.add_argument("event")
