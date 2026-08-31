@@ -790,10 +790,13 @@ def test_init_suppresses_doctors_agent_sections(tmp_path, monkeypatch, capsys):
     assert init.cmd_init(r) == 0
     out = capsys.readouterr().out
     assert "agent files:" not in out
+    assert "agent hooks:" not in out
 
     capsys.readouterr()
     doctor.cmd_doctor(r)
-    assert "agent files:" in capsys.readouterr().out
+    out = capsys.readouterr().out
+    assert "agent files:" in out
+    assert "agent hooks:" in out
 
 
 def test_init_registers_session_start_hook_idempotently(tmp_path, monkeypatch):

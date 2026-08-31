@@ -1053,6 +1053,9 @@ def cmd_doctor(root: Path, fix: bool = False, during_init: bool = False) -> int:
     from aramid import agent_settings as agent_settings_mod
     settings_tampered = (not during_init
                          and agent_settings_mod.settings_state(root) == "tampered")
+    # during_init skips this check on purpose: the merge init runs moments later
+    # rewrites the entry -- gating onboarding on the thing onboarding fixes would
+    # deadlock it.
     if settings_tampered:
         print("aramid: doctor: .claude/settings.json carries an aramid-named"
               " hook whose command differs from the template -- treat as"

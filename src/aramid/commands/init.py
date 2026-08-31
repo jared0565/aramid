@@ -543,10 +543,10 @@ def _init_one(target: Path) -> int:
         ledger.close()
 
     # step 9: summary.
-    # Three renderers report here now, covering four artifacts aramid owns
+    # Four renderers report here now, covering five artifacts aramid owns
     # and wrote into someone else's tree (ARAMID.md, .gitignore, CLAUDE.md,
-    # AGENTS.md). Most of what they print is one shared "here's the commit
-    # chore" housekeeping notice -- but render_agent_blocks_notice's
+    # AGENTS.md, .claude/settings.json). Most of what they print is one shared
+    # "here's the commit chore" housekeeping notice -- but render_agent_blocks_notice's
     # damaged/unreadable lines are a different kind of thing: a REFUSED
     # write being reported, not a chore to commit.
     for notice in (render_aramid_md_notice(root),
