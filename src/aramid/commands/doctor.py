@@ -645,6 +645,29 @@ def _report_line(status: ToolStatus) -> str:
     return f"  MISSING  {status.name:<12} {status.detail}".rstrip()
 
 
+_AGENT_FILE_DETAIL = {
+    "ok": "managed aramid block present",
+    "stale": "aramid block differs from the current template"
+             " -- re-run `aramid init`",
+    "absent": "no managed aramid block -- run `aramid init`",
+    "damaged": "aramid fence has no closing marker -- restore"
+               " `<!-- aramid:end -->` and re-run `aramid init`",
+}
+
+
+def agent_files_lines(root: Path) -> list[str]:
+    """Advisory only, by design (spec section 8): a missing or stale block
+    means agents are under-informed, not that the gate is off -- the git
+    hooks still run. Doctor reports; `aramid init` is the fix. Never
+    contributes to doctor's exit code."""
+    from aramid import agent_files
+    lines = []
+    for name, state in agent_files.agent_block_states(root):
+        tag = "OK  " if state == "ok" else "WARN"
+        lines.append(f"  {tag} {name:<10} {_AGENT_FILE_DETAIL[state]}")
+    return lines
+
+
 def _fix_pip_toolchain() -> None:
     """`pip install` the owned pip toolchain into the CURRENT interpreter
     (never a different one -- doctor repairs the interpreter it is itself
@@ -976,6 +999,10 @@ def cmd_doctor(root: Path, fix: bool = False) -> int:
 
     print("autolearn:")
     print(_autolearn_probe_line())
+
+    print("agent files:")
+    for line in agent_files_lines(root):
+        print(line)
 
     unenforced = probe_enforcement(root)
     if unenforced:

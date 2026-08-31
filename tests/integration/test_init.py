@@ -749,3 +749,24 @@ def test_uninstall_reverses_agent_blocks(tmp_path, monkeypatch):
     assert (r / "CLAUDE.md").read_text(encoding="utf-8") == user_text + "\n"
     # init-created file: nothing but the block, so deleted outright.
     assert not (r / "AGENTS.md").exists()
+
+
+def test_doctor_reports_agent_file_states_without_changing_exit(tmp_path, monkeypatch, capsys):
+    monkeypatch.setattr(doctor, "probe_toolchain", _fake_present)
+    r = _repo(tmp_path)
+    assert init.cmd_init(r) == 0
+    capsys.readouterr()
+
+    rc_ok = doctor.cmd_doctor(r)
+    out_ok = capsys.readouterr().out
+    assert "agent files:" in out_ok
+    assert "  OK   CLAUDE.md  managed aramid block present" in out_ok
+    assert "  OK   AGENTS.md  managed aramid block present" in out_ok
+
+    (r / "AGENTS.md").unlink()
+    rc_absent = doctor.cmd_doctor(r)
+    out_absent = capsys.readouterr().out
+    assert ("  WARN AGENTS.md  no managed aramid block -- run `aramid init`"
+            in out_absent)
+    # advisory only: block state must never move doctor's exit code.
+    assert rc_absent == rc_ok

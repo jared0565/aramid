@@ -4,6 +4,7 @@ and a damaged fence (begin without end) refuses the write entirely."""
 import subprocess
 
 from aramid import agent_files
+from aramid.commands import doctor as doctor_cmd
 from aramid.commands.init import render_agent_blocks_notice
 
 
@@ -151,3 +152,25 @@ def test_notice_reports_damaged_even_outside_git(tmp_path):
         "aramid: init: AGENTS.md has an aramid fence with no closing marker"
         " -- left untouched; restore the `<!-- aramid:end -->` line (or"
         " delete the fence) and re-run `aramid init`")
+
+
+def test_doctor_lines_render_all_four_states(tmp_path):
+    agent_files.write_agent_blocks(tmp_path)
+    stale = agent_files.render_block().replace(
+        "security & quality gate", "old title")
+    (tmp_path / "AGENTS.md").write_text(stale, encoding="utf-8")
+
+    assert doctor_cmd.agent_files_lines(tmp_path) == [
+        "  OK   CLAUDE.md  managed aramid block present",
+        "  WARN AGENTS.md  aramid block differs from the current template"
+        " -- re-run `aramid init`",
+    ]
+
+    (tmp_path / "CLAUDE.md").unlink()
+    (tmp_path / "AGENTS.md").write_text(
+        "<!-- aramid:begin -- x -->\nno end\n", encoding="utf-8")
+    assert doctor_cmd.agent_files_lines(tmp_path) == [
+        "  WARN CLAUDE.md  no managed aramid block -- run `aramid init`",
+        "  WARN AGENTS.md  aramid fence has no closing marker -- restore"
+        " `<!-- aramid:end -->` and re-run `aramid init`",
+    ]
