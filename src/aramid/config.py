@@ -46,6 +46,7 @@ class Config:
     js_mutation: dict = field(default_factory=dict)
     dast: dict = field(default_factory=dict)
     tdd_block_armed: bool = False
+    agent_block_armed: bool = False
     tdd: dict = field(default_factory=dict)
     red_proof: dict = field(default_factory=dict)
     tests: dict = field(default_factory=dict)
@@ -69,6 +70,7 @@ def arming_state(cfg: "Config") -> dict:
     its key does not match, and it changes reviewer SELECTION (escalate-only,
     the ladder tier stays the floor) rather than any finding's tier, so it
     cannot invalidate a suppression.
+    agent_block_armed IS captured although it arms the agent pre-tool-use rejector rather than moving any finding's tier: recording it costs nothing as an override premise, and it cannot invalidate overrides -- invalidate_stale_overrides asks policy.classify, which never reads it.
 
     Recurses, because four of the six live in sub-tables (`llm`, `mutation`,
     `red_proof`) rather than on the dataclass itself.
@@ -210,6 +212,7 @@ def load_config(root: Path) -> Config:
         js_mutation=merged.get("js_mutation", {}),
         dast=merged.get("dast", {}),
         tdd_block_armed=merged.get("tdd_block_armed", False),
+        agent_block_armed=merged.get("agent_block_armed", False),
         tdd=merged.get("tdd", {}),
         red_proof=merged.get("red_proof", {}),
         tests=merged.get("tests", {}),
@@ -300,6 +303,7 @@ def render_repo_stub(stack, pkg_mgr, *, today: str | None = None,
     body_dict = {
         "schema_version": CURRENT_SCHEMA_VERSION,
         "semgrep_block_armed": False,
+        "agent_block_armed": False,
         "bake_started": day,
     }
     if scope_subpath:

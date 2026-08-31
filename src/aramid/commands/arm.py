@@ -78,6 +78,7 @@ def _section_re(table: str) -> re.Pattern:
 
 
 _KEY_RE = _key_re("semgrep_block_armed")
+_AGENT_KEY_RE = _key_re("agent_block_armed")
 _TDD_KEY_RE = _key_re("tdd_block_armed")
 _LLM_KEY_RE = _key_re("llm_block_armed")
 _LLM_SECTION_RE = _section_re("llm")
@@ -267,7 +268,7 @@ def _arm_shadow_text(text: str) -> str:
 
 def cmd_arm(root, llm: bool = False, autolearn: bool = False, tdd: bool = False,
             mutation: bool = False, mutation_score: bool = False,
-            red_proof: bool = False, shadow: bool = False) -> int:
+            red_proof: bool = False, shadow: bool = False, agent: bool = False) -> int:
     root = Path(root)
     toml_path = root / "aramid.toml"
     if not toml_path.exists():
@@ -350,6 +351,21 @@ def cmd_arm(root, llm: bool = False, autolearn: bool = False, tdd: bool = False,
         # An operator told "pre-push" would not expect the next commit refused.
         print("aramid: arm: shadow bake ended -- a repo-root file that hijacks "
               "`python -m aramid` now BLOCKS at every gate, pre-commit included.")
+        return 0
+
+    if agent:
+        new_text = _arm_root_key(text, _AGENT_KEY_RE, "agent_block_armed = true")
+        if not _write_armed(toml_path, text, new_text, (), "agent_block_armed"):
+            return 3
+        _report_misplaced(text, _AGENT_KEY_RE, _root_span(text),
+                          "agent_block_armed", "the root table")
+        print(f"aramid: arm: agent_block_armed=true written to {toml_path}")
+        # NOT "findings now BLOCK" like its siblings: this flag never moves
+        # a finding's tier -- it changes what the agent pre-tool-use hook
+        # does with a bypass-carrying tool call.
+        print("aramid: arm: agent bake ended -- the pre-tool-use hook now "
+              "REJECTS git hook-bypass flags (--no-verify / core.hooksPath) "
+              "in agent sessions; humans at a terminal are unaffected.")
         return 0
 
     if tdd:

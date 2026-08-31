@@ -295,7 +295,7 @@ def test_pack_no_subcommand_returns_3(capsys):
 def test_arm_dispatch(monkeypatch):
     calls = []
     monkeypatch.setattr(cli, "cmd_arm",
-                        lambda root, llm=False, autolearn=False, tdd=False, mutation=False, mutation_score=False, red_proof=False, shadow=False: calls.append((root, llm, autolearn, tdd)) or 0)
+                        lambda root, llm=False, autolearn=False, tdd=False, mutation=False, mutation_score=False, red_proof=False, shadow=False, agent=False: calls.append((root, llm, autolearn, tdd)) or 0)
 
     assert cli.main(["arm"]) == 0
     assert len(calls) == 1
@@ -305,7 +305,7 @@ def test_arm_dispatch(monkeypatch):
 def test_arm_dispatch_with_llm_flag(monkeypatch):
     calls = []
     monkeypatch.setattr(cli, "cmd_arm",
-                        lambda root, llm=False, autolearn=False, tdd=False, mutation=False, mutation_score=False, red_proof=False, shadow=False: calls.append((root, llm, autolearn, tdd)) or 0)
+                        lambda root, llm=False, autolearn=False, tdd=False, mutation=False, mutation_score=False, red_proof=False, shadow=False, agent=False: calls.append((root, llm, autolearn, tdd)) or 0)
 
     assert cli.main(["arm", "--llm"]) == 0
     assert len(calls) == 1
@@ -315,7 +315,7 @@ def test_arm_dispatch_with_llm_flag(monkeypatch):
 def test_arm_dispatch_with_autolearn_flag(monkeypatch):
     captured = {}
     monkeypatch.setattr(cli, "cmd_arm",
-                        lambda root, llm=False, autolearn=False, tdd=False, mutation=False, mutation_score=False, red_proof=False, shadow=False: captured.update(llm=llm, autolearn=autolearn, tdd=tdd) or 0)
+                        lambda root, llm=False, autolearn=False, tdd=False, mutation=False, mutation_score=False, red_proof=False, shadow=False, agent=False: captured.update(llm=llm, autolearn=autolearn, tdd=tdd) or 0)
 
     assert cli.main(["arm", "--autolearn"]) == 0
     assert captured["autolearn"] is True
@@ -326,7 +326,7 @@ def test_arm_dispatch_with_autolearn_flag(monkeypatch):
 def test_arm_dispatch_with_tdd_flag(monkeypatch):
     captured = {}
     monkeypatch.setattr(cli, "cmd_arm",
-                        lambda root, llm=False, autolearn=False, tdd=False, mutation=False, mutation_score=False, red_proof=False, shadow=False: captured.update(llm=llm, autolearn=autolearn, tdd=tdd) or 0)
+                        lambda root, llm=False, autolearn=False, tdd=False, mutation=False, mutation_score=False, red_proof=False, shadow=False, agent=False: captured.update(llm=llm, autolearn=autolearn, tdd=tdd) or 0)
 
     assert cli.main(["arm", "--tdd"]) == 0
     assert captured["tdd"] is True
@@ -346,12 +346,23 @@ def test_arm_dispatch_with_shadow_flag(monkeypatch):
     """
     captured = {}
     monkeypatch.setattr(cli, "cmd_arm",
-                        lambda root, llm=False, autolearn=False, tdd=False, mutation=False, mutation_score=False, red_proof=False, shadow=False: captured.update(shadow=shadow, llm=llm, red_proof=red_proof) or 0)
+                        lambda root, llm=False, autolearn=False, tdd=False, mutation=False, mutation_score=False, red_proof=False, shadow=False, agent=False: captured.update(shadow=shadow, llm=llm, red_proof=red_proof) or 0)
 
     assert cli.main(["arm", "--shadow"]) == 0
     assert captured["shadow"] is True
     assert captured["llm"] is False
     assert captured["red_proof"] is False
+
+
+def test_arm_dispatch_with_agent_flag(monkeypatch):
+    captured = {}
+    monkeypatch.setattr(cli, "cmd_arm",
+                        lambda root, llm=False, autolearn=False, tdd=False, mutation=False, mutation_score=False, red_proof=False, shadow=False, agent=False: captured.update(agent=agent, llm=llm, shadow=shadow) or 0)
+
+    assert cli.main(["arm", "--agent"]) == 0
+    assert captured["agent"] is True
+    assert captured["llm"] is False
+    assert captured["shadow"] is False
 
 
 def test_arm_shadow_is_offered_by_the_parser():
@@ -368,6 +379,7 @@ def test_arm_shadow_is_offered_by_the_parser():
     flags = {opt for act in arm._actions for opt in act.option_strings}
 
     assert "--shadow" in flags, f"arm offers no --shadow; it offers {sorted(flags)}"
+    assert "--agent" in flags, f"arm offers no --agent; it offers {sorted(flags)}"
     # Non-vacuity: if the navigation above ever returned the wrong parser, an
     # empty or foreign flag set would satisfy the assertion by accident.
     assert {"--llm", "--mutation", "--red-proof"} <= flags, sorted(flags)
@@ -380,6 +392,13 @@ def test_arm_shadow_is_offered_by_the_real_cli(run_cli):
     out = run_cli("arm", "--help")
     assert out.returncode == 0, out.stderr
     assert "--shadow" in out.stdout, out.stdout
+
+
+def test_arm_agent_is_offered_by_the_real_cli(run_cli):
+    """The agent flag is listed in the help text."""
+    out = run_cli("arm", "--help")
+    assert out.returncode == 0, out.stderr
+    assert "--agent" in out.stdout, out.stdout
 
 
 def test_arm_dispatch_llm_and_autolearn_mutually_exclusive(run_cli):
@@ -395,7 +414,7 @@ def test_arm_dispatch_tdd_and_llm_mutually_exclusive(run_cli):
 def test_arm_dispatch_with_mutation_flag(monkeypatch):
     captured = {}
     monkeypatch.setattr(cli, "cmd_arm",
-                        lambda root, llm=False, autolearn=False, tdd=False, mutation=False, mutation_score=False, red_proof=False, shadow=False:
+                        lambda root, llm=False, autolearn=False, tdd=False, mutation=False, mutation_score=False, red_proof=False, shadow=False, agent=False:
                         captured.update(llm=llm, autolearn=autolearn, tdd=tdd,
                                         mutation=mutation) or 0)
 
@@ -415,7 +434,7 @@ def test_arm_dispatch_with_mutation_score_flag(monkeypatch):
     captured = {}
     monkeypatch.setattr(cli, "cmd_arm",
                         lambda root, llm=False, autolearn=False, tdd=False,
-                        mutation=False, mutation_score=False, red_proof=False, shadow=False:
+                        mutation=False, mutation_score=False, red_proof=False, shadow=False, agent=False:
                         captured.update(llm=llm, autolearn=autolearn,
                                         tdd=tdd, mutation=mutation,
                                         mutation_score=mutation_score) or 0)
@@ -437,7 +456,7 @@ def test_arm_dispatch_with_red_proof_flag(monkeypatch):
     captured = {}
     monkeypatch.setattr(cli, "cmd_arm",
                         lambda root, llm=False, autolearn=False, tdd=False,
-                        mutation=False, mutation_score=False, red_proof=False, shadow=False:
+                        mutation=False, mutation_score=False, red_proof=False, shadow=False, agent=False:
                         captured.update(llm=llm, autolearn=autolearn,
                                         tdd=tdd, mutation=mutation,
                                         mutation_score=mutation_score,
@@ -466,6 +485,11 @@ def test_arm_dispatch_shadow_and_llm_mutually_exclusive(run_cli):
     assert rc.returncode == 3
     assert "not allowed with" in rc.stderr, rc.stderr
     assert "unrecognized" not in rc.stderr, rc.stderr
+
+
+def test_arm_dispatch_agent_and_llm_mutually_exclusive(run_cli):
+    rc = run_cli("arm", "--agent", "--llm")
+    assert rc.returncode == 3
 
 
 def test_update_rules_dispatch(monkeypatch):

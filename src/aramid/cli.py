@@ -141,7 +141,7 @@ def build_parser() -> argparse.ArgumentParser:
                                  help="learned model-selection report (--rebuild: replay registry ledgers)")
     p_autolearn.add_argument("--rebuild", action="store_true")
 
-    p_arm = sub.add_parser("arm", help="end a WARN-only bake (semgrep default, --llm for the LLM reviewer, --autolearn for learned uplift, --tdd for code-without-test findings, --mutation for surviving-mutant findings, --mutation-score for score-regression transitions, --red-proof for never-red test findings, --shadow for a repo-root file that hijacks `python -m aramid`)")
+    p_arm = sub.add_parser("arm", help="end a WARN-only bake (semgrep default, --llm for the LLM reviewer, --autolearn for learned uplift, --tdd for code-without-test findings, --mutation for surviving-mutant findings, --mutation-score for score-regression transitions, --red-proof for never-red test findings, --shadow for a repo-root file that hijacks `python -m aramid`, --agent for the agent pre-tool-use bypass rejector)")
     arm_which = p_arm.add_mutually_exclusive_group()
     arm_which.add_argument("--llm", action="store_true")
     arm_which.add_argument("--autolearn", action="store_true")
@@ -150,6 +150,7 @@ def build_parser() -> argparse.ArgumentParser:
     arm_which.add_argument("--mutation-score", action="store_true")
     arm_which.add_argument("--red-proof", action="store_true")
     arm_which.add_argument("--shadow", action="store_true")
+    arm_which.add_argument("--agent", action="store_true")
     sub.add_parser("update-rules", help="refresh the vendored semgrep ruleset")
 
     p_uninstall = sub.add_parser("uninstall", help="reverse init")
@@ -333,7 +334,7 @@ def main(argv: list[str] | None = None) -> int:
         return cmd_arm(root, llm=args.llm, autolearn=args.autolearn,
                        tdd=args.tdd, mutation=args.mutation,
                        mutation_score=args.mutation_score,
-                       red_proof=args.red_proof, shadow=args.shadow)
+                       red_proof=args.red_proof, shadow=args.shadow, agent=args.agent)
 
     if args.command == "update-rules":
         return cmd_update_rules(root)

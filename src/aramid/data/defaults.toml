@@ -5,6 +5,10 @@
 # for any key missing after the full merge.
 schema_version = 1
 semgrep_block_armed = false
+# `aramid arm --agent` flips this. Arms the agent pre-tool-use hook: a git
+# commit/push carrying a hook bypass is REJECTED in agent sessions instead
+# of advised against. Never affects finding tiers or humans at a terminal.
+agent_block_armed = false
 tdd_block_armed = false
 
 # Prefix/fnmatch entries dropped before any runner sees a file (spec section 8b).
