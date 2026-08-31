@@ -257,15 +257,15 @@ def render_agent_blocks_notice(root: Path,
     for name, action in actions:
         if action == "damaged":
             lines.append(
-                f"aramid: init: {name} has an aramid fence with no closing"
-                f" marker -- left untouched; restore the"
-                f" `<!-- aramid:end -->` line (or delete the fence) and"
-                f" re-run `aramid init`")
+                f"aramid: init: {name} has a damaged aramid fence"
+                f" (unterminated or duplicated begin marker) -- left"
+                f" untouched; repair or delete the fence and re-run"
+                f" `aramid init`")
         elif action == "unreadable":
             lines.append(
-                f"aramid: init: {name} could not be read as UTF-8 -- left"
-                f" untouched; fix the file's encoding and re-run"
-                f" `aramid init`")
+                f"aramid: init: {name} could not be read (not valid UTF-8,"
+                f" or an I/O error) -- left untouched; fix the file and"
+                f" re-run `aramid init`")
     changed = [n for n, a in actions
                if a in ("created", "appended", "replaced")]
     if changed and gitutil._run(
@@ -464,7 +464,7 @@ def _init_one(target: Path) -> int:
     # and doctor's own remedy line for that state says "run `aramid init .`".
     # Reached through the module, not a from-import: the suite monkeypatches
     # `doctor.probe_toolchain`, and a direct import would bind past the patch.
-    cmd_doctor(root)                       # print the report for the operator
+    cmd_doctor(root, during_init=True)     # print the report for the operator
     statuses = doctor_mod.probe_toolchain(root)
     missing_block = [n for n in doctor_mod.BLOCK_TIER if not statuses[n].present]
     if missing_block:

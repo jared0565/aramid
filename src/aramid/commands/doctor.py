@@ -650,10 +650,11 @@ _AGENT_FILE_DETAIL = {
     "stale": "aramid block differs from the current template"
              " -- re-run `aramid init`",
     "absent": "no managed aramid block -- run `aramid init`",
-    "damaged": "aramid fence has no closing marker -- restore"
-               " `<!-- aramid:end -->` and re-run `aramid init`",
-    "unreadable": "file is not valid UTF-8 -- fix the encoding, then run"
-                  " `aramid init`",
+    "damaged": "aramid fence is damaged (unterminated or duplicated begin"
+               " marker) -- repair or delete the fence, then re-run"
+               " `aramid init`",
+    "unreadable": "file could not be read (not valid UTF-8, or an I/O"
+                  " error) -- fix the file, then run `aramid init`",
 }
 
 
@@ -902,11 +903,12 @@ def probe_relocated_shims(root: Path) -> list[str]:
         return []                   # fail open: never break doctor
 
 
-def cmd_doctor(root: Path, fix: bool = False) -> int:
+def cmd_doctor(root: Path, fix: bool = False, during_init: bool = False) -> int:
     """Probe the toolchain (and shim interpreter); when `fix`, repair
     what's missing/owned and re-probe. Returns 0 if both BLOCK-tier tools
     (gitleaks, semgrep) are present, else 2 -- WARN-tier tool absence
     (ruff, pip-audit) is reported but never changes the exit code.
+    during_init suppresses the agent-surface sections whose remedy is the very init run that is printing this report.
 
     Also returns 2 for "configured but NOT enforced" (see
     `probe_enforcement`), and for a RELOCATED shim that is stale or missing
@@ -1002,9 +1004,13 @@ def cmd_doctor(root: Path, fix: bool = False) -> int:
     print("autolearn:")
     print(_autolearn_probe_line())
 
-    print("agent files:")
-    for line in agent_files_lines(root):
-        print(line)
+    if not during_init:
+        # Suppressed during `aramid init`: this section's remedy is "run
+        # `aramid init`", and init writes the blocks moments after this
+        # report prints -- describing their pre-state mid-run misdirects.
+        print("agent files:")
+        for line in agent_files_lines(root):
+            print(line)
 
     unenforced = probe_enforcement(root)
     if unenforced:

@@ -24,6 +24,10 @@ AGENT_FILES = ("CLAUDE.md", "AGENTS.md")
 _BEGIN_PREFIX = "<!-- aramid:begin"
 _END_MARKER = "<!-- aramid:end -->"
 
+# The full range agent_block_states can return. Doctor's detail map is
+# pinned against this in tests, so a new state cannot ship unrendered.
+AGENT_BLOCK_STATES = ("ok", "stale", "absent", "damaged", "unreadable")
+
 _BLOCK = """\
 <!-- aramid:begin -- managed by `aramid init`; hand-edits inside the fence are overwritten -->
 ## Aramid (security & quality gate)

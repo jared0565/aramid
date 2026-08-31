@@ -47,12 +47,13 @@ def cmd_uninstall(path) -> int:
     agent_actions = agent_files.remove_agent_blocks(root)
     for name, action in agent_actions:
         if action == "damaged":
-            print(f"aramid: uninstall: {name} has an aramid fence with no"
-                  f" closing marker -- left untouched; remove the fence by"
-                  f" hand.", file=sys.stderr)
+            print(f"aramid: uninstall: {name} has a damaged aramid fence"
+                  f" (unterminated or duplicated begin marker) -- left"
+                  f" untouched; remove the fence by hand.", file=sys.stderr)
         elif action == "unreadable":
-            print(f"aramid: uninstall: {name} could not be read as UTF-8 --"
-                  f" left untouched; remove the fence by hand.", file=sys.stderr)
+            print(f"aramid: uninstall: {name} could not be read (not valid"
+                  f" UTF-8, or an I/O error) -- left untouched; remove the"
+                  f" fence by hand.", file=sys.stderr)
 
     _remove_gitignore_entries(root)
 

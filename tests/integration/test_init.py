@@ -778,3 +778,18 @@ def test_doctor_reports_agent_file_states_without_changing_exit(tmp_path, monkey
             in out_absent)
     # advisory only: block state must never move doctor's exit code.
     assert rc_absent == rc_ok
+
+
+def test_init_suppresses_doctors_agent_sections(tmp_path, monkeypatch, capsys):
+    # The step-3 doctor report inside `aramid init` must not tell the
+    # operator to "run `aramid init`" about blocks init is about to write.
+    monkeypatch.setattr(doctor, "probe_toolchain", _fake_present)
+    r = _repo(tmp_path)
+
+    assert init.cmd_init(r) == 0
+    out = capsys.readouterr().out
+    assert "agent files:" not in out
+
+    capsys.readouterr()
+    doctor.cmd_doctor(r)
+    assert "agent files:" in capsys.readouterr().out

@@ -197,19 +197,19 @@ def test_notice_silent_when_unchanged(tmp_path):
 def test_notice_reports_damaged_even_outside_git(tmp_path):
     notice = render_agent_blocks_notice(tmp_path, [("AGENTS.md", "damaged")])
     assert notice == (
-        "aramid: init: AGENTS.md has an aramid fence with no closing marker"
-        " -- left untouched; restore the `<!-- aramid:end -->` line (or"
-        " delete the fence) and re-run `aramid init`")
+        "aramid: init: AGENTS.md has a damaged aramid fence (unterminated or"
+        " duplicated begin marker) -- left untouched; repair or delete the"
+        " fence and re-run `aramid init`")
 
 
 def test_notice_reports_unreadable_even_outside_git(tmp_path):
     notice = render_agent_blocks_notice(tmp_path, [("CLAUDE.md", "unreadable")])
     assert notice == (
-        "aramid: init: CLAUDE.md could not be read as UTF-8 -- left"
-        " untouched; fix the file's encoding and re-run `aramid init`")
+        "aramid: init: CLAUDE.md could not be read (not valid UTF-8, or an"
+        " I/O error) -- left untouched; fix the file and re-run `aramid init`")
 
 
-def test_doctor_lines_render_all_four_states(tmp_path):
+def test_doctor_lines_render_every_state(tmp_path):
     agent_files.write_agent_blocks(tmp_path)
     stale = agent_files.render_block().replace(
         "security & quality gate", "old title")
@@ -226,6 +226,22 @@ def test_doctor_lines_render_all_four_states(tmp_path):
         "<!-- aramid:begin -- x -->\nno end\n", encoding="utf-8")
     assert doctor_cmd.agent_files_lines(tmp_path) == [
         "  WARN CLAUDE.md  no managed aramid block -- run `aramid init`",
-        "  WARN AGENTS.md  aramid fence has no closing marker -- restore"
-        " `<!-- aramid:end -->` and re-run `aramid init`",
+        "  WARN AGENTS.md  aramid fence is damaged (unterminated or"
+        " duplicated begin marker) -- repair or delete the fence, then"
+        " re-run `aramid init`",
     ]
+
+    (tmp_path / "AGENTS.md").write_bytes(b"\xff\xfe garbage")
+    lines = doctor_cmd.agent_files_lines(tmp_path)
+    assert lines[1] == (
+        "  WARN AGENTS.md  file could not be read (not valid UTF-8, or an"
+        " I/O error) -- fix the file, then run `aramid init`")
+
+
+def test_every_block_state_has_a_doctor_detail():
+    # Exhaustiveness pin (sub-1 final review): a new state added to
+    # agent_block_states without a detail entry must fail HERE, not as a
+    # live KeyError inside `aramid doctor`.
+    assert set(doctor_cmd._AGENT_FILE_DETAIL) == set(agent_files.AGENT_BLOCK_STATES)
+    assert set(agent_files.AGENT_BLOCK_STATES) == {
+        "ok", "stale", "absent", "damaged", "unreadable"}
