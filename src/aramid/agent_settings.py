@@ -83,10 +83,10 @@ def _owned(entry) -> bool:
                for h in hooks)
 
 
-def _owned_commands_by_event(data: dict) -> dict[str, list[str]]:
-    """Normalized hook commands in aramid-owned entries, keyed by the hook
-    event array they sit in."""
-    by_event: dict[str, list[str]] = {}
+def _owned_entries_by_event(data: dict) -> dict[str, list[dict]]:
+    """Aramid-owned hook entries (the raw dicts, matcher included), keyed
+    by the hook event array they sit in."""
+    by_event: dict[str, list[dict]] = {}
     hooks = data.get("hooks")
     if not isinstance(hooks, dict):
         return by_event
@@ -95,11 +95,33 @@ def _owned_commands_by_event(data: dict) -> dict[str, list[str]]:
             continue
         for entry in arr:
             if _owned(entry):
-                for h in entry["hooks"]:
-                    if isinstance(h, dict):
-                        by_event.setdefault(event, []).append(
-                            _norm(str(h.get("command", ""))))
+                by_event.setdefault(event, []).append(entry)
     return by_event
+
+
+def _owned_commands_by_event(data: dict) -> dict[str, list[str]]:
+    """Normalized hook commands in aramid-owned entries, keyed by the hook
+    event array they sit in."""
+    by_event: dict[str, list[str]] = {}
+    for event, entries in _owned_entries_by_event(data).items():
+        for entry in entries:
+            for h in entry["hooks"]:
+                if isinstance(h, dict):
+                    by_event.setdefault(event, []).append(
+                        _norm(str(h.get("command", ""))))
+    return by_event
+
+
+def _matcher_ok(entry: dict, event: str) -> bool:
+    """Whether an owned entry's `matcher` matches what the CURRENT template
+    writes for its event: PreToolUse entries must carry exactly
+    PRE_TOOL_USE_MATCHER; every other event's entries must carry no
+    `matcher` key at all. A narrowed, removed, or added matcher is the same
+    defeat class as stripping -P from the command -- the entry keeps
+    aramid's name but fires on fewer or different tool calls -- so it is
+    graded independently of whether the command text matches."""
+    want = PRE_TOOL_USE_MATCHER if event == "PreToolUse" else None
+    return entry.get("matcher") == want
 
 
 def _load(path: Path):
@@ -116,7 +138,9 @@ def merge_claude_settings(root: Path) -> str:
     "updated", "unchanged", or "unparseable" (refused, file untouched).
     Writes every template event; sweeps aramid-owned entries out of every
     OTHER event first, so a hand-moved entry cannot keep firing beside the
-    fresh ones."""
+    fresh ones. An array holding nothing of ours -- foreign, or a
+    pre-existing empty array -- is left untouched, not rewritten just
+    because the sweep looked at it."""
     path = root / SETTINGS_REL
     if path.is_file():
         original = path.read_bytes()
@@ -141,6 +165,8 @@ def merge_claude_settings(root: Path) -> str:
         if not isinstance(arr, list):
             continue                      # foreign shape, preserved as-is
         kept = [e for e in arr if not _owned(e)]
+        if kept == arr:
+            continue                      # nothing of ours here -- untouched
         if kept:
             hooks[event] = kept
         elif event in TEMPLATE_COMMANDS:
@@ -208,13 +234,21 @@ def settings_state(root: Path) -> str:
     """Read-only grade of aramid's presence in .claude/settings.json.
 
     "ok" (every template event's owned commands are exactly that event's
-    current template), "stale" (every owned command is known FOR ITS EVENT
-    -- current or prior template -- but the per-event sets differ from the
-    current template, e.g. a sub-2 consumer missing the PreToolUse entry),
+    current template, and every owned entry's matcher matches the current
+    template's matcher for its event), "stale" (every owned command is
+    known FOR ITS EVENT -- current or prior template -- and every matcher
+    is current, but the per-event command sets differ from the current
+    template, e.g. a sub-2 consumer missing the PreToolUse entry),
     "tampered" (an owned command matches no known template for the event it
     sits in: the -P-stripping class of edit, and equally an entry moved to
-    a foreign event), "absent", "unparseable". Comparison is
-    whitespace-normalized on both sides. Never writes.
+    a foreign event -- OR an owned entry's `matcher` diverges from the
+    current template's matcher for its event: narrowed, removed, or added
+    is the same defeat class as stripping -P), "absent", "unparseable".
+    Comparison is whitespace-normalized on both sides. Matcher grading
+    checks against the CURRENT template's matcher only: if
+    KNOWN_PRIOR_COMMANDS ever gains an event whose earlier template used a
+    different matcher, an entry carrying that older matcher still grades
+    tampered here, not stale. Never writes.
     """
     path = root / SETTINGS_REL
     if not path.is_file():
@@ -222,14 +256,19 @@ def settings_state(root: Path) -> str:
     data = _load(path)
     if data is None:
         return "unparseable"
-    by_event = _owned_commands_by_event(data)
-    if not by_event:
+    owned_entries = _owned_entries_by_event(data)
+    if not owned_entries:
         return "absent"
+    by_event = _owned_commands_by_event(data)
     for event, cmds in by_event.items():
         known = ({_norm(c) for c in TEMPLATE_COMMANDS.get(event, ())}
                  | {_norm(c) for c in KNOWN_PRIOR_COMMANDS.get(event, ())})
         if any(c not in known for c in cmds):
             return "tampered"
+    if any(not _matcher_ok(entry, event)
+           for event, entries in owned_entries.items()
+           for entry in entries):
+        return "tampered"
     if all(set(by_event.get(event, ())) == {_norm(c) for c in cmds}
            for event, cmds in TEMPLATE_COMMANDS.items()):
         return "ok"

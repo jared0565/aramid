@@ -273,6 +273,45 @@ def test_uninstall_sweeps_pre_tool_use_entry_too(tmp_path):
     assert not (tmp_path / ".claude" / "settings.json").exists()
 
 
+def test_pre_tool_use_narrowed_matcher_grades_tampered(tmp_path):
+    """Matcher divergence is the same defeat class as stripping -P: the
+    command text is untouched, but the entry now fires on fewer tool
+    calls (PowerShell drops off Windows)."""
+    _write(tmp_path, {"hooks": {"PreToolUse": [
+        {"matcher": "Bash",
+         "hooks": [{"type": "command",
+                    "command": agent_settings.PRE_TOOL_USE_COMMAND}]}]}})
+    assert agent_settings.settings_state(tmp_path) == "tampered"
+
+
+def test_pre_tool_use_missing_matcher_grades_tampered(tmp_path):
+    """A PreToolUse entry with no matcher key at all fires on every tool
+    call, not just Bash|PowerShell -- also tampered, not merely stale."""
+    _write(tmp_path, {"hooks": {"PreToolUse": [
+        {"hooks": [{"type": "command",
+                    "command": agent_settings.PRE_TOOL_USE_COMMAND}]}]}})
+    assert agent_settings.settings_state(tmp_path) == "tampered"
+
+
+def test_session_start_added_matcher_grades_tampered(tmp_path):
+    """SessionStart entries carry no matcher in the template; one added by
+    hand grades tampered even though the command is exactly current."""
+    _write(tmp_path, {"hooks": {"SessionStart": [
+        {"matcher": "startup",
+         "hooks": [{"type": "command",
+                    "command": agent_settings.SESSION_START_COMMAND}]}]}})
+    assert agent_settings.settings_state(tmp_path) == "tampered"
+
+
+def test_merge_leaves_untouched_foreign_array_alone(tmp_path):
+    """An empty foreign event array holding nothing of ours is preserved,
+    not swept and rewritten just because the merge looked at it."""
+    _write(tmp_path, {"hooks": {"Stop": []}})
+    assert agent_settings.merge_claude_settings(tmp_path) == "updated"
+    data = _read(tmp_path)
+    assert data["hooks"]["Stop"] == []
+
+
 def test_agent_interpreter_lines_cannot_import_aramid(monkeypatch):
     # PATH's `python` exists but can't import aramid -- the session-start
     # entry would error at every session start, outside the fail-open
