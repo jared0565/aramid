@@ -85,3 +85,66 @@ def test_wrong_shape_is_never_written(tmp_path):
 
     assert agent_settings.merge_claude_settings(tmp_path) == "unparseable"
     assert p.read_bytes() == before
+
+
+def test_remove_strips_only_aramid_entries(tmp_path):
+    _write(tmp_path, {"hooks": {"PreToolUse": [GRAPHITE_PRE],
+                                "SessionStart": [GRAPHITE_SESSION]}})
+    agent_settings.merge_claude_settings(tmp_path)
+
+    assert agent_settings.remove_claude_settings(tmp_path) == "removed"
+
+    data = _read(tmp_path)
+    assert data == {"hooks": {"PreToolUse": [GRAPHITE_PRE],
+                              "SessionStart": [GRAPHITE_SESSION]}}
+
+
+def test_remove_deletes_file_that_was_only_aramid(tmp_path):
+    agent_settings.merge_claude_settings(tmp_path)
+
+    assert agent_settings.remove_claude_settings(tmp_path) == "removed"
+    assert not (tmp_path / ".claude" / "settings.json").exists()
+    assert (tmp_path / ".claude").is_dir()  # the directory is not ours to delete
+
+
+def test_remove_absent_and_unparseable(tmp_path):
+    assert agent_settings.remove_claude_settings(tmp_path) == "absent"
+
+    p = tmp_path / ".claude" / "settings.json"
+    p.parent.mkdir()
+    p.write_text("{not json", encoding="utf-8")
+    assert agent_settings.remove_claude_settings(tmp_path) == "unparseable"
+    assert p.read_text(encoding="utf-8") == "{not json"
+
+
+def test_settings_state_grades_every_shape(tmp_path):
+    assert agent_settings.settings_state(tmp_path) == "absent"
+
+    agent_settings.merge_claude_settings(tmp_path)
+    assert agent_settings.settings_state(tmp_path) == "ok"
+
+    # tampered: aramid-named entry, command differs from every known template
+    _write(tmp_path, {"hooks": {"SessionStart": [
+        {"hooks": [{"type": "command",
+                    "command": "python -m aramid agent-hook session-start"}]}]}})
+    assert agent_settings.settings_state(tmp_path) == "tampered"
+
+    p = tmp_path / ".claude" / "settings.json"
+    p.write_text("{not json", encoding="utf-8")
+    assert agent_settings.settings_state(tmp_path) == "unparseable"
+
+
+def test_settings_state_stale_via_known_prior(tmp_path, monkeypatch):
+    # Simulate a future template change: the old command joins
+    # KNOWN_PRIOR_COMMANDS and grades "stale", not "tampered".
+    old = "python -P -m aramid agent-hook session-start --old-flag"
+    monkeypatch.setattr(agent_settings, "KNOWN_PRIOR_COMMANDS", (old,))
+    _write(tmp_path, {"hooks": {"SessionStart": [
+        {"hooks": [{"type": "command", "command": old}]}]}})
+
+    assert agent_settings.settings_state(tmp_path) == "stale"
+
+
+def test_settings_states_constant_is_exhaustive():
+    assert set(agent_settings.SETTINGS_STATES) == {
+        "ok", "absent", "stale", "tampered", "unparseable"}

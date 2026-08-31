@@ -103,3 +103,75 @@ def merge_claude_settings(root: Path) -> str:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_bytes(rendered)
     return "updated" if existed else "created"
+
+
+# The full range settings_state can return; doctor's detail map is pinned
+# against this in tests (same pattern as agent_files.AGENT_BLOCK_STATES).
+SETTINGS_STATES = ("ok", "absent", "stale", "tampered", "unparseable")
+
+
+def remove_claude_settings(root: Path) -> str:
+    """Reverse of merge_claude_settings, for `aramid uninstall`.
+
+    Sweeps EVERY hook-event array for aramid-owned entries (forward-compat:
+    later sub-projects add more events), drops emptied structures, deletes a
+    file left holding nothing -- and leaves `.claude/` itself in place,
+    because other tools own files there. Returns "removed", "absent" (no
+    file, or nothing of ours in it), or "unparseable" (refused, untouched).
+    """
+    path = root / SETTINGS_REL
+    if not path.is_file():
+        return "absent"
+    data = _load(path)
+    if data is None:
+        return "unparseable"
+
+    changed = False
+    hooks = data.get("hooks")
+    if isinstance(hooks, dict):
+        for event in list(hooks):
+            arr = hooks[event]
+            if not isinstance(arr, list):
+                continue
+            kept = [e for e in arr if not _owned(e)]
+            if kept != arr:
+                changed = True
+                if kept:
+                    hooks[event] = kept
+                else:
+                    del hooks[event]
+        if not hooks:
+            del data["hooks"]
+    if not changed:
+        return "absent"
+    if not data:
+        path.unlink()
+        return "removed"
+    path.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
+    return "removed"
+
+
+def settings_state(root: Path) -> str:
+    """Read-only grade of aramid's presence in .claude/settings.json.
+
+    "ok" (owned commands are exactly the current template), "stale" (owned
+    commands are all known -- current or prior template -- but not the
+    current set), "tampered" (an owned command matches NO known template:
+    the -P-stripping class of edit; doctor exits 2 on it), "absent",
+    "unparseable". Never writes.
+    """
+    path = root / SETTINGS_REL
+    if not path.is_file():
+        return "absent"
+    data = _load(path)
+    if data is None:
+        return "unparseable"
+    cmds = _owned_commands(data)
+    if not cmds:
+        return "absent"
+    known = set(TEMPLATE_COMMANDS) | set(KNOWN_PRIOR_COMMANDS)
+    if any(c not in known for c in cmds):
+        return "tampered"
+    if set(cmds) == set(TEMPLATE_COMMANDS):
+        return "ok"
+    return "stale"
