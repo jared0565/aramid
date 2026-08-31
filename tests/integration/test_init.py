@@ -710,7 +710,7 @@ def test_reinit_still_warns_when_a_stack_lives_below_the_root(tmp_path, monkeypa
 
 # --- managed agent instruction blocks (agent-enforcement sub-project 1) -----
 
-def test_init_writes_agent_blocks_and_reinit_is_byte_stable(tmp_path, monkeypatch):
+def test_init_writes_agent_blocks_and_reinit_is_byte_stable(tmp_path, monkeypatch, capsys):
     monkeypatch.setattr(doctor, "probe_toolchain", _fake_present)
     r = _repo(tmp_path)
 
@@ -719,9 +719,17 @@ def test_init_writes_agent_blocks_and_reinit_is_byte_stable(tmp_path, monkeypatc
     for name in ("CLAUDE.md", "AGENTS.md"):
         assert (r / name).read_text(encoding="utf-8") == agent_files.render_block()
     first = (r / "CLAUDE.md").read_bytes()
+    # F4: pins the step-9 notice-loop wiring -- deleting the
+    # render_agent_blocks_notice call from that loop leaves every
+    # mechanics assertion above still green.
+    err = capsys.readouterr().err
+    assert ("aramid: init: wrote the managed agent block into CLAUDE.md, "
+            "AGENTS.md -- agent coders read these files from the repo:") in err
 
     assert init.cmd_init(r) == 0
     assert (r / "CLAUDE.md").read_bytes() == first
+    err2 = capsys.readouterr().err
+    assert "wrote the managed agent block" not in err2
 
 
 def test_init_appends_to_user_authored_claude_md(tmp_path, monkeypatch):

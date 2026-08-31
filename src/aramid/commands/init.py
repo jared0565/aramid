@@ -10,6 +10,10 @@ Idempotency contract (design doc section 7, brief global constraints):
     tracks the current template, never accumulates hand-edits.
   - `.gitignore` entries: appended only if missing -- no duplicate lines on
     re-init.
+  - CLAUDE.md/AGENTS.md managed block: fence-scoped -- refreshed in place
+    when stale, left untouched when it already matches the current
+    template, and content outside the fence (or the whole file, when the
+    fence is damaged or unreadable) is never touched.
   - baseline: written ONCE, guarded by `Ledger.has_baseline()` -- a second
     `init` must never re-snapshot (that would silently accept anything
     introduced between the two `init` runs as "pre-existing").
@@ -244,10 +248,11 @@ def render_gitignore_notice(root: Path, added: list[str], created: bool) -> str:
 def render_agent_blocks_notice(root: Path,
                                actions: list[tuple[str, str]]) -> str:
     """Sibling of render_aramid_md_notice / render_gitignore_notice; same
-    three rules for the changed-files line. The damaged line is different in
-    kind: it reports a REFUSED write (an unterminated aramid fence), which
-    is worth saying even outside a git work tree -- it is a defect in the
-    file, not a housekeeping chore."""
+    three rules for the changed-files line. The damaged/unreadable lines are
+    different in kind: each reports a REFUSED write (an untrustworthy aramid
+    fence, or a file that isn't valid UTF-8), which is worth saying even
+    outside a git work tree -- it is a defect in the file, not a
+    housekeeping chore."""
     lines: list[str] = []
     for name, action in actions:
         if action == "damaged":
@@ -256,6 +261,11 @@ def render_agent_blocks_notice(root: Path,
                 f" marker -- left untouched; restore the"
                 f" `<!-- aramid:end -->` line (or delete the fence) and"
                 f" re-run `aramid init`")
+        elif action == "unreadable":
+            lines.append(
+                f"aramid: init: {name} could not be read as UTF-8 -- left"
+                f" untouched; fix the file's encoding and re-run"
+                f" `aramid init`")
     changed = [n for n, a in actions
                if a in ("created", "appended", "replaced")]
     if changed and gitutil._run(
@@ -463,7 +473,8 @@ def _init_one(target: Path) -> int:
               f"`aramid doctor --fix`) and re-run init.", file=sys.stderr)
         return 3
 
-    # step 4: aramid.toml (only if absent) + ARAMID.md (always) + gitignore.
+    # step 4: aramid.toml (only if absent) + ARAMID.md (always) + agent
+    # blocks (CLAUDE.md/AGENTS.md, fence-scoped refresh) + gitignore.
     scope_root = target if target != root else root
     stack = detect_stacks(root, scope_root)
     pkg_mgr = detect_package_manager(root)
@@ -512,8 +523,12 @@ def _init_one(target: Path) -> int:
         ledger.close()
 
     # step 9: summary.
-    # Both artifacts aramid owns and wrote into someone else's tree,
-    # reported together because they are one chore for the operator.
+    # Three renderers report here now, covering four artifacts aramid owns
+    # and wrote into someone else's tree (ARAMID.md, .gitignore, CLAUDE.md,
+    # AGENTS.md). Most of what they print is one shared "here's the commit
+    # chore" housekeeping notice -- but render_agent_blocks_notice's
+    # damaged/unreadable lines are a different kind of thing: a REFUSED
+    # write being reported, not a chore to commit.
     for notice in (render_aramid_md_notice(root),
                    render_gitignore_notice(root, gi_added, gi_created),
                    render_agent_blocks_notice(root, agent_actions)):

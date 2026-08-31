@@ -50,6 +50,9 @@ def cmd_uninstall(path) -> int:
             print(f"aramid: uninstall: {name} has an aramid fence with no"
                   f" closing marker -- left untouched; remove the fence by"
                   f" hand.", file=sys.stderr)
+        elif action == "unreadable":
+            print(f"aramid: uninstall: {name} could not be read as UTF-8 --"
+                  f" left untouched; remove the fence by hand.", file=sys.stderr)
 
     _remove_gitignore_entries(root)
 

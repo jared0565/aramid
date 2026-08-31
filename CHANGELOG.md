@@ -10,6 +10,19 @@ to publish a tag that disagrees with it.
 
 ## [Unreleased]
 
+### Added
+
+- **`aramid init` writes a managed instruction block into CLAUDE.md and
+  AGENTS.md.** The block is fence-scoped (`<!-- aramid:begin -->` /
+  `<!-- aramid:end -->`) so a re-run refreshes only what it owns and
+  leaves the rest of the file untouched; a file whose fence structure
+  isn't trustworthy (an unterminated or doubled begin marker) or that
+  can't be decoded as UTF-8 is left alone entirely and reported rather
+  than written. `aramid uninstall` removes the block the same
+  fence-scoped way, and `aramid doctor` reports each file's block state
+  (`ok`/`stale`/`absent`/`damaged`/`unreadable`) advisory-only -- it never
+  changes doctor's exit code.
+
 ## [0.7.2] — 2026-08-30
 
 ### Fixed

@@ -652,6 +652,8 @@ _AGENT_FILE_DETAIL = {
     "absent": "no managed aramid block -- run `aramid init`",
     "damaged": "aramid fence has no closing marker -- restore"
                " `<!-- aramid:end -->` and re-run `aramid init`",
+    "unreadable": "file is not valid UTF-8 -- fix the encoding, then run"
+                  " `aramid init`",
 }
 
 

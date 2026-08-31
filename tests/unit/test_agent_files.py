@@ -61,6 +61,28 @@ def test_damaged_fence_is_never_written(tmp_path):
     assert (tmp_path / "AGENTS.md").read_text(encoding="utf-8") == damaged
 
 
+def test_double_begin_before_end_is_damaged_not_spliced(tmp_path):
+    """F1 regression: a file shaped begin(no end) ... user content ...
+    begin ... end must not splice from the first begin to the SECOND
+    fence's end -- that would silently destroy the user content sitting
+    between the two begins. The fence structure is untrustworthy, so the
+    file is classified damaged (same refusal as an unterminated fence) and
+    left byte-for-byte untouched."""
+    text = ("# Mine\n"
+            "<!-- aramid:begin -- managed by `aramid init`; hand-edits inside the fence are overwritten -->\n"
+            "STALE, NO END MARKER HERE\n"
+            "IMPORTANT USER CONTENT THAT MUST SURVIVE\n"
+            "<!-- aramid:begin -- managed by `aramid init`; hand-edits inside the fence are overwritten -->\n"
+            "NEW\n"
+            "<!-- aramid:end -->\n")
+    (tmp_path / "CLAUDE.md").write_text(text, encoding="utf-8")
+
+    actions = agent_files.write_agent_blocks(tmp_path)
+
+    assert ("CLAUDE.md", "damaged") in actions
+    assert (tmp_path / "CLAUDE.md").read_text(encoding="utf-8") == text
+
+
 def test_block_content_names_the_commands():
     block = agent_files.render_block()
     assert block.startswith("<!-- aramid:begin")
@@ -121,6 +143,32 @@ def test_states_ok_stale_absent_damaged(tmp_path):
     assert states == {"CLAUDE.md": "absent", "AGENTS.md": "damaged"}
 
 
+def test_unreadable_file_refused_by_all_three_functions(tmp_path):
+    """F2 regression: invalid UTF-8 bytes used to raise UnicodeDecodeError
+    out of write_agent_blocks/remove_agent_blocks (agent_block_states
+    guarded OSError only, not this), aborting `aramid init` partway through
+    with hooks/registry/baseline never written. All three functions now
+    catch it and report "unreadable" instead -- never writing, never
+    raising. Asserted with `in`/dict-lookup rather than a full-list `==`
+    because write_agent_blocks and remove_agent_blocks would also act on
+    the untouched AGENTS.md sibling; the bytes-untouched re-check after
+    each call is the actual claim under test."""
+    raw = b"\xff\xfe garbage"
+    (tmp_path / "CLAUDE.md").write_bytes(raw)
+
+    write_actions = agent_files.write_agent_blocks(tmp_path)
+    assert ("CLAUDE.md", "unreadable") in write_actions
+    assert (tmp_path / "CLAUDE.md").read_bytes() == raw
+
+    remove_actions = agent_files.remove_agent_blocks(tmp_path)
+    assert ("CLAUDE.md", "unreadable") in remove_actions
+    assert (tmp_path / "CLAUDE.md").read_bytes() == raw
+
+    states = dict(agent_files.agent_block_states(tmp_path))
+    assert states["CLAUDE.md"] == "unreadable"
+    assert (tmp_path / "CLAUDE.md").read_bytes() == raw
+
+
 # --- notice renderer (for init) -----------------------------------------------
 
 def _git_repo(tmp_path):
@@ -152,6 +200,13 @@ def test_notice_reports_damaged_even_outside_git(tmp_path):
         "aramid: init: AGENTS.md has an aramid fence with no closing marker"
         " -- left untouched; restore the `<!-- aramid:end -->` line (or"
         " delete the fence) and re-run `aramid init`")
+
+
+def test_notice_reports_unreadable_even_outside_git(tmp_path):
+    notice = render_agent_blocks_notice(tmp_path, [("CLAUDE.md", "unreadable")])
+    assert notice == (
+        "aramid: init: CLAUDE.md could not be read as UTF-8 -- left"
+        " untouched; fix the file's encoding and re-run `aramid init`")
 
 
 def test_doctor_lines_render_all_four_states(tmp_path):
