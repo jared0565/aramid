@@ -23,7 +23,7 @@ import contextlib
 import io
 from pathlib import Path
 
-from aramid.mcp import _InvalidParams
+from aramid.mcp_errors import InvalidParams as _InvalidParams
 
 
 def _repo() -> Path | None:

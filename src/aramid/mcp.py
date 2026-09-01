@@ -24,6 +24,14 @@ stdout lands on stderr instead of corrupting the stream. Tool handlers
 additionally run under redirect_stdout/redirect_stderr capture
 (Task 3). Handler exceptions become -32603 with a generic message --
 internals never reach the wire.
+
+`InvalidParams` (imported here as `_InvalidParams`) lives in
+`aramid.mcp_errors`, not in this file -- see that module's docstring:
+running this file as `__main__` (the real launch command above) and then
+having `aramid.mcp_tools` import from `aramid.mcp` by its dotted name
+loads this module TWICE as two independent objects, so a class defined
+in this file would not `except`-match an instance raised through the
+other copy.
 """
 import io
 import json
@@ -31,6 +39,7 @@ import os
 import sys
 
 from aramid import __version__
+from aramid.mcp_errors import InvalidParams as _InvalidParams
 
 SUPPORTED_PROTOCOL_VERSIONS = (
     "2025-11-25", "2025-06-18", "2025-03-26", "2024-11-05")
@@ -92,10 +101,6 @@ def handle_message(msg: dict, tools: dict) -> dict | None:
             return _error(id_, -32603,
                           "Internal error while executing the tool")
     return _error(id_, -32601, f"Method not found: {method}")
-
-
-class _InvalidParams(Exception):
-    """Raised by tool handlers for missing/invalid arguments -> -32602."""
 
 
 def _protect_stdout() -> io.TextIOWrapper:
