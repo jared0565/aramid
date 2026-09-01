@@ -1,7 +1,5 @@
 """Token-level git bypass detection (spec §6). Matching is on parsed
 tokens, never substrings; false positives are the expensive direction."""
-import pytest
-
 from aramid.agent_bypass import Bypass, find_bypass
 
 
