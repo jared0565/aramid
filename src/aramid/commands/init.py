@@ -287,14 +287,14 @@ def render_agent_settings_notice(root: Path, action: str) -> str:
     if action == "unparseable":
         return ("aramid: init: .claude/settings.json could not be parsed --"
                 " left untouched; fix the JSON and re-run `aramid init` to"
-                " register aramid's session-start hook")
+                " register aramid's agent hooks")
     if action not in ("created", "updated"):
         return ""
     if gitutil._run(root, "rev-parse", "--is-inside-work-tree").returncode != 0:
         return ""
-    return ("aramid: init: registered aramid's session-start hook in"
-            " .claude/settings.json -- agent sessions start with live gate"
-            " posture:\n"
+    return ("aramid: init: registered aramid's agent hooks (SessionStart +"
+            " PreToolUse) in .claude/settings.json -- sessions start with"
+            " live gate posture and git bypass flags are screened:\n"
             'aramid: init:       git add .claude/settings.json && git commit'
             ' -m "chore: aramid agent hooks"')
 

@@ -32,6 +32,21 @@ to publish a tag that disagrees with it.
   (`ok`/`absent`/`stale`/`tampered`/`unparseable`); a tampered entry --
   an aramid-named hook whose command differs from the template -- exits
   doctor `2`. `aramid status` gains an `agent surfaces:` line.
+- `aramid agent-hook pre-tool-use`: token-level screening of agent tool
+  calls for git hook-bypass invocations (`--no-verify`/`-n`,
+  `-c core.hooksPath=...`) -- advisory while baking, denied once armed via
+  `aramid arm --agent` (new root config key `agent_block_armed`, default
+  false).
+
+### Changed
+
+- `.claude/settings.json` template now registers a PreToolUse entry beside
+  SessionStart, and grading is event-bound and whitespace-normalized: an
+  aramid entry moved to a foreign event or edited grades tampered (doctor
+  exit 2); a sub-2-era file with only the SessionStart entry grades stale
+  -- re-run `aramid init`. The managed CLAUDE.md/AGENTS.md block gained
+  "Armed repos reject the call outright." (existing blocks go stale until
+  re-init; by design).
 
 ## [0.7.2] — 2026-08-30
 

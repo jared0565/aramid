@@ -265,12 +265,13 @@ def _autolearn_line(cfg: config_mod.Config) -> str:
         return "autolearn: shadow (state unreadable)"
 
 
-def _agent_surfaces_line(root: Path) -> str:
+def _agent_surfaces_line(root: Path, cfg: config_mod.Config) -> str:
     from aramid import agent_files, agent_settings
     states = agent_files.agent_block_states(root)
     ok = sum(1 for _, s in states if s == "ok")
+    posture = "armed" if cfg.agent_block_armed else "baking"
     return (f"agent surfaces: blocks {ok}/{len(states)}, "
-            f"session hook {agent_settings.settings_state(root)}")
+            f"hooks {agent_settings.settings_state(root)} | {posture}")
 
 
 def _llm_lines(cfg: config_mod.Config, state: dict) -> list[str]:
@@ -614,7 +615,7 @@ def cmd_status(root) -> int:
             lines.extend(out_of_scope_candidates)
 
         lines.extend(_bake_lines(cfg, state))
-        lines.append(_agent_surfaces_line(root))
+        lines.append(_agent_surfaces_line(root, cfg))
 
         # --- Phase 2b: LLM review status (spec section 7) ---
         lines.extend(_llm_lines(cfg, state))

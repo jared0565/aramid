@@ -93,6 +93,28 @@ def test_block_content_names_the_commands():
         assert needle in block
 
 
+def test_block_full_text_is_pinned():
+    # Template-pinning, full-block: the sub-3 armed-consequence sentence
+    # ("Armed repos reject the call outright.") lands directly under the
+    # --no-verify bullet -- a substring needle can't tell it landed in the
+    # right place or was worded exactly right, so this pins the whole block.
+    assert agent_files.render_block() == """\
+<!-- aramid:begin -- managed by `aramid init`; hand-edits inside the fence are overwritten -->
+## Aramid (security & quality gate)
+
+This repo is gated by aramid. Read `ARAMID.md` before your first commit.
+
+- Before committing: run `aramid check --staged`. Read findings with
+  `aramid ledger filter --status open`.
+- NEVER pass `--no-verify` (or `-n`) to `git commit`, or `--no-verify` to
+  `git push` -- it disables secret scanning along with everything else.
+  Armed repos reject the call outright.
+- To suppress a WARN finding, use `aramid override <id> --reason "..."`
+  (ledger-logged); never edit findings away by hand.
+<!-- aramid:end -->
+"""
+
+
 def test_remove_strips_fence_and_keeps_user_content(tmp_path):
     user_text = "# My project\n\nDo the thing.\n"
     (tmp_path / "CLAUDE.md").write_text(user_text, encoding="utf-8")

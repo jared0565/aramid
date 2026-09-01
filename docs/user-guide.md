@@ -412,6 +412,8 @@ Exit is `0` if both BLOCK-tier tools (gitleaks, semgrep) are present, `2` if eit
 
 Two more sections print on every non-init `doctor` run (suppressed during `aramid init` itself, per [section 2, item 5](#2-onboarding-a-repo--aramid-init) — their remedy is the very init run that is printing the report): `agent files:` grades the managed instruction block in `CLAUDE.md`/`AGENTS.md` against `ok`/`stale`/`absent`/`damaged`/`unreadable`, and `agent hooks:` grades aramid's `SessionStart` entry in `.claude/settings.json` against `ok`/`absent`/`stale`/`tampered`/`unparseable`, plus an advisory line if PATH's `python` -- the interpreter the generated hook command names -- cannot import aramid. Both sections are advisory: WARN never fails doctor, with one exception. `tampered` is the one state in either vocabulary that moves the exit code, to `2` (see above); every other state -- `stale`, `absent`, `damaged`, `unreadable`, `unparseable`, and the PATH-python probe's own WARN -- means only "re-run `aramid init`" (or fix PATH) and leaves the exit code untouched.
 
+`agent hooks:` covers a second entry beyond `SessionStart`: a `PreToolUse` hook that screens every agent tool call for a `git commit`/`git push` carrying `--no-verify`/`-n` or a `-c core.hooksPath=...` wrapper. While the agent bake is in progress this is advisory only -- the call goes through, with a warning in the agent's own context; once the repo runs `aramid arm --agent` (see [section 9](#9-the-bake-then-arm-model)) the same call is rejected outright. Humans running `git` from a real terminal are never touched -- the hook only ever sees tool calls an agent issues.
+
 ```powershell
 aramid doctor --fix
 ```
@@ -659,11 +661,13 @@ Arming is always a manual, deliberate act — there is no timer or auto-promotio
 aramid arm
 aramid arm --llm
 aramid arm --autolearn
+aramid arm --agent
 ```
 
 - `aramid arm` (no flag) — sets `semgrep_block_armed = true`. "WARN-only bake ended -- semgrep BLOCK-tier findings now block."
 - `aramid arm --llm` — sets `[llm].llm_block_armed = true`. "LLM bake ended -- confirmed-CRITICAL llm-review findings now BLOCK at pre-push."
 - `aramid arm --autolearn` — sets `[llm.autolearn].armed = true`. "auto-learn armed -- uplift and cascade now change reviewer selection (escalate-only; the ladder tier stays the floor)." Also prints the current shadow record (would-uplift/decisions, audits, missed criticals).
+- `aramid arm --agent` — sets `agent_block_armed = true`. Ends the agent-surface bake; the `pre-tool-use` hook then rejects bypass-carrying tool calls instead of only warning about them.
 
 `--llm` and `--autolearn` are mutually exclusive. All three refuse (exit `3`) if `aramid.toml` doesn't exist yet — run `aramid init` first. Each is a targeted, comment-preserving edit of `aramid.toml`, never a full rewrite.
 

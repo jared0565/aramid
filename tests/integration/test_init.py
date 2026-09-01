@@ -878,5 +878,12 @@ def test_status_reports_agent_surfaces(tmp_path, monkeypatch, capsys):
     capsys.readouterr()
 
     assert cmd_status(r) == 0
-    assert ("agent surfaces: blocks 2/2, session hook ok"
+    assert ("agent surfaces: blocks 2/2, hooks ok | baking"
+            in capsys.readouterr().out)
+
+    from aramid.commands.arm import cmd_arm
+    assert cmd_arm(r, agent=True) == 0
+    capsys.readouterr()
+    assert cmd_status(r) == 0
+    assert ("agent surfaces: blocks 2/2, hooks ok | armed"
             in capsys.readouterr().out)
