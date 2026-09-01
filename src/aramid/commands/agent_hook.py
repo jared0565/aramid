@@ -22,8 +22,23 @@ baking it allows and surfaces an advisory through
 hookSpecificOutput.additionalContext; armed (agent_block_armed = true) it
 denies via permissionDecision: "deny". Contract pinned against Claude Code
 2.1.252; both shapes ride stdout with exit 0, and a harness that ignores
-the JSON fails open. The non-matching path never imports aramid's heavy
-modules.
+the JSON fails open. `aramid.__main__` keeps cli.py's whole command-tree
+imports off this hook's launch path with a fast path ahead of `import
+aramid.cli` -- that is what makes every Bash/PowerShell tool call cheap,
+not anything in this module. Within this module itself, heavy imports
+(json, sys, aramid.agent_bypass, aramid.config, aramid.gitutil) stay
+inside the matched branches, so the ones cmd_agent_hook doesn't take are
+still free.
+
+Two known residuals, both accepted (spec §6/§9): the armed screen is
+SESSION-scoped, not target-repo-scoped -- `git -C /other/repo commit -n`
+run from an armed session is denied even if `/other/repo` itself is not
+onboarded or not armed, because the decision reads the SESSION's own cwd
+repo, never the `-C`/`-c core.hooksPath` target; and unquoted flag text
+sitting in another command's arguments can match (`echo git commit
+--no-verify` tokenizes as a real `git` invocation) while the same text
+quoted never does (`echo "git commit --no-verify"` is one token, not a
+`git` invocation at all).
 
 Budget: < 2 s. Reads only the local ledger and config -- no scans, no
 network, no subprocesses beyond a single `git rev-parse` for repo
