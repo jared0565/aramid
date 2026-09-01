@@ -57,6 +57,9 @@ def handle_message(msg: dict, tools: dict) -> dict | None:
     id_ = msg.get("id")
     is_notification = "id" not in msg
 
+    if is_notification:
+        return None                       # tolerate every notification
+
     if method == "initialize":
         params = msg.get("params") or {}
         requested = params.get("protocolVersion")
@@ -88,8 +91,6 @@ def handle_message(msg: dict, tools: dict) -> dict | None:
         except Exception:
             return _error(id_, -32603,
                           "Internal error while executing the tool")
-    if is_notification:
-        return None                       # tolerate every notification
     return _error(id_, -32601, f"Method not found: {method}")
 
 
@@ -97,7 +98,7 @@ class _InvalidParams(Exception):
     """Raised by tool handlers for missing/invalid arguments -> -32602."""
 
 
-def _protect_stdout():
+def _protect_stdout() -> io.TextIOWrapper:
     """Reserve the protocol channel: dup fd 1 for our frames, repoint
     fd 1 at stderr so stray writes (subprocesses included) cannot
     corrupt the stream. Returns a UTF-8 text wrapper over the dup."""
@@ -108,21 +109,33 @@ def _protect_stdout():
                             newline="\n", write_through=True)
 
 
+def _write_frame(out, obj: dict) -> None:
+    """Write one JSON-RPC frame and flush it immediately.
+
+    `write_through=True` on the TextIOWrapper only bypasses ITS OWN text
+    buffer -- the underlying `os.fdopen(fd, "wb")` is still a BufferedWriter,
+    so without an explicit flush a written frame stays invisible to the
+    reader on the other end of the pipe until the buffer fills or the
+    process exits. A live client would hang on every request.
+    """
+    out.write(json.dumps(obj) + "\n")
+    out.flush()
+
+
 def serve(tools: dict) -> int:
     out = _protect_stdout()
     for line in sys.stdin.buffer:
         try:
             msg = json.loads(line.decode("utf-8"))
         except (UnicodeDecodeError, json.JSONDecodeError):
-            out.write(json.dumps(_error(None, -32700, "Parse error")) + "\n")
+            _write_frame(out, _error(None, -32700, "Parse error"))
             continue
         if not isinstance(msg, dict):
-            out.write(json.dumps(
-                _error(None, -32600, "Invalid request")) + "\n")
+            _write_frame(out, _error(None, -32600, "Invalid Request"))
             continue
         response = handle_message(msg, tools)
         if response is not None:
-            out.write(json.dumps(response) + "\n")
+            _write_frame(out, response)
     return 0
 
 

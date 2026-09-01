@@ -1,6 +1,8 @@
 """In-process contract tests for the JSON-RPC layer (the real-subprocess
 conformance run is tests/integration/test_mcp_server.py, Task 4)."""
+import io
 import json
+import os
 
 from aramid import mcp
 
@@ -68,6 +70,14 @@ def test_unknown_notification_is_silently_tolerated():
          "params": {"id": 3}}, {}) is None
 
 
+def test_known_method_without_id_is_never_answered():
+    """A message with no `id` is a notification by JSON-RPC's own definition,
+    even when its method name looks like a request (`ping`, `initialize`,
+    `tools/*`). Answering it would violate the module docstring's own claim
+    ("a method without an id must never be answered")."""
+    assert mcp.handle_message({"jsonrpc": "2.0", "method": "ping"}, {}) is None
+
+
 def test_handler_exception_becomes_internal_error_not_crash():
     def boom(root, args):
         raise RuntimeError("kaput")
@@ -78,3 +88,25 @@ def test_handler_exception_becomes_internal_error_not_crash():
                                   {"name": "t", "arguments": {}}), tools)
     assert out["error"]["code"] == -32603
     assert "kaput" not in json.dumps(out)   # no internals leak to the wire
+
+
+def test_write_frame_flushes_to_a_real_pipe():
+    """`write_through=True` on the TextIOWrapper only bypasses ITS OWN text
+    buffer -- the `os.fdopen(fd, "wb")` underneath is still a BufferedWriter,
+    so a write with no explicit flush stays invisible to a reader on the
+    other end of a real pipe. A live MCP client would hang on every request
+    if `_write_frame` did not flush. Proven against an actual `os.pipe()`,
+    not a mock, and read WITHOUT closing the writer -- closing would flush
+    on its own and hide exactly the bug this test exists to catch."""
+    r, w = os.pipe()
+    try:
+        wrapper = io.TextIOWrapper(os.fdopen(w, "wb"), encoding="utf-8",
+                                   newline="\n", write_through=True)
+        payload = {"jsonrpc": "2.0", "id": 1, "result": {}}
+        mcp._write_frame(wrapper, payload)
+        raw = os.read(r, 65536)
+        assert raw.endswith(b"\n")
+        assert json.loads(raw.decode("utf-8")) == payload
+    finally:
+        os.close(r)
+        wrapper.close()
