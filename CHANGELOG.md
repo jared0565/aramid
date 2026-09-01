@@ -10,6 +10,8 @@ to publish a tag that disagrees with it.
 
 ## [Unreleased]
 
+## [0.8.0] — 2026-09-01
+
 ### Added
 
 - **`aramid init` writes a managed instruction block into CLAUDE.md and
@@ -3383,7 +3385,8 @@ Stated plainly because each one changes how you should deploy this:
 - **PyPI publishing is not set up.** Install from a GitHub Release artifact or
   from git; `pip install aramid` does not work.
 
-[Unreleased]: https://github.com/jared0565/aramid/compare/v0.7.2...HEAD
+[Unreleased]: https://github.com/jared0565/aramid/compare/v0.8.0...HEAD
+[0.8.0]: https://github.com/jared0565/aramid/releases/tag/v0.8.0
 [0.7.2]: https://github.com/jared0565/aramid/releases/tag/v0.7.2
 [0.7.1]: https://github.com/jared0565/aramid/releases/tag/v0.7.1
 [0.7.0]: https://github.com/jared0565/aramid/releases/tag/v0.7.0
