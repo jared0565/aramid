@@ -152,3 +152,42 @@ def test_remove_absent_and_unparseable(tmp_path):
 def test_states_constant_is_exhaustive():
     assert set(agent_mcp.MCP_STATES) == {
         "ok", "absent", "stale", "tampered", "unparseable"}
+
+
+def test_non_string_command_grades_tampered(tmp_path):
+    # Non-string command (e.g., int) must grade tampered, never crash.
+    _write(tmp_path, {"mcpServers": {"aramid": {
+        "command": 123, "args": []}}})
+    assert agent_mcp.mcp_state(tmp_path) == "tampered"
+
+
+def test_none_command_grades_tampered(tmp_path):
+    # None as command must grade tampered.
+    _write(tmp_path, {"mcpServers": {"aramid": {
+        "command": None, "args": ["-P", "-m", "aramid.mcp"]}}})
+    assert agent_mcp.mcp_state(tmp_path) == "tampered"
+
+
+def test_string_args_grades_tampered(tmp_path):
+    # String args instead of list must grade tampered.
+    _write(tmp_path, {"mcpServers": {"aramid": {
+        "command": "python", "args": "-P -m aramid.mcp"}}})
+    assert agent_mcp.mcp_state(tmp_path) == "tampered"
+
+
+def test_merge_rewrites_non_string_command(tmp_path):
+    # merge_mcp_json rewrites tampered shapes to template ("updated").
+    _write(tmp_path, {"mcpServers": {"aramid": {
+        "command": 123, "args": []}}})
+    assert agent_mcp.merge_mcp_json(tmp_path) == "updated"
+    data = json.loads((tmp_path / ".mcp.json").read_text(encoding="utf-8"))
+    assert data["mcpServers"]["aramid"] == _template_entry()
+
+
+def test_merge_rewrites_string_args(tmp_path):
+    # merge_mcp_json rewrites string args to list ("updated").
+    _write(tmp_path, {"mcpServers": {"aramid": {
+        "command": "python", "args": "-P -m aramid.mcp"}}})
+    assert agent_mcp.merge_mcp_json(tmp_path) == "updated"
+    data = json.loads((tmp_path / ".mcp.json").read_text(encoding="utf-8"))
+    assert data["mcpServers"]["aramid"] == _template_entry()

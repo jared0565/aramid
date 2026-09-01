@@ -74,9 +74,15 @@ def _shape_ok(entry) -> bool:
     template to catch cases where command absorbs what should be args."""
     if not isinstance(entry, dict) or set(entry) != {"command", "args"}:
         return False
+    cmd = entry.get("command")
+    if not isinstance(cmd, str):
+        return False
+    args = entry.get("args")
+    if not isinstance(args, list):
+        return False
     known = {MCP_COMMAND, *KNOWN_PRIOR_MCP_COMMANDS}
-    entry_cmd = entry.get("command", "").strip()
-    entry_args = [str(a).strip() for a in entry.get("args", [])]
+    entry_cmd = cmd.strip()
+    entry_args = [str(a).strip() for a in args]
     for cmd_str in known:
         parts = cmd_str.split()
         if entry_cmd == parts[0] and entry_args == parts[1:]:
@@ -175,8 +181,14 @@ def mcp_state(root: Path) -> str:
     entry = owned[MCP_SERVER_KEY]
     if not _shape_ok(entry):
         return "tampered"
-    entry_cmd = entry.get("command", "").strip()
-    entry_args = [str(a).strip() for a in entry.get("args", [])]
+    cmd = entry.get("command")
+    if not isinstance(cmd, str):
+        return "tampered"
+    args = entry.get("args")
+    if not isinstance(args, list):
+        return "tampered"
+    entry_cmd = cmd.strip()
+    entry_args = [str(a).strip() for a in args]
     parts = MCP_COMMAND.split()
     if entry_cmd == parts[0] and entry_args == parts[1:]:
         return "ok"
