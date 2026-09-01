@@ -58,8 +58,19 @@ def _entry_command(entry) -> str | None:
 
 
 def _launches_aramid_mcp(entry) -> bool:
+    """True if `entry`'s launch reaches `aramid.mcp` -- as its own token
+    (the spaced `-m aramid.mcp` the template writes) OR as Python's other
+    accepted spelling, the ATTACHED short-option form `-maramid.mcp` (one
+    token, no space). Both launch the identical module; matching only the
+    spaced form let a foreign key plant `{"args": ["-maramid.mcp"]}` beside
+    an intact `aramid` entry and grade "ok" -- ownership, and therefore the
+    merge sweep, must catch the attached form too."""
     joined = _entry_command(entry)
-    return joined is not None and "aramid.mcp" in joined.split()
+    if joined is None:
+        return False
+    tokens = joined.split()
+    return "aramid.mcp" in tokens or any(
+        t.startswith("-m") and t[2:] == "aramid.mcp" for t in tokens)
 
 
 def _owned_key(name: str, entry) -> bool:

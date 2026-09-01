@@ -105,6 +105,41 @@ def test_foreign_key_launching_aramid_mcp_is_tampered(tmp_path):
     assert agent_mcp.mcp_state(tmp_path) == "tampered"
 
 
+def test_foreign_key_attached_dash_m_form_is_tampered(tmp_path):
+    # I2 (measured): the ATTACHED short-option form `-maramid.mcp` is one
+    # token, so the old `"aramid.mcp" in joined.split()` check never saw it
+    # -- a planted foreign key using it graded "ok" beside an intact aramid
+    # entry. Both spellings launch the identical module; ownership must
+    # catch both.
+    _write(tmp_path, {"mcpServers": {
+        "aramid": _template_entry(),
+        "helpful-tools": {"command": "python", "args": ["-maramid.mcp"]},
+    }})
+    assert agent_mcp.mcp_state(tmp_path) == "tampered"
+
+
+def test_foreign_key_spaced_dash_m_form_is_tampered_control(tmp_path):
+    # CONTROL for the fix above: the spaced form was already caught before
+    # this fix and must still be caught after it.
+    _write(tmp_path, {"mcpServers": {
+        "aramid": _template_entry(),
+        "helpful-tools": {"command": "python", "args": ["-m", "aramid.mcp"]},
+    }})
+    assert agent_mcp.mcp_state(tmp_path) == "tampered"
+
+
+def test_merge_sweeps_foreign_key_attached_dash_m_form(tmp_path):
+    # The merge sweep inherits the ownership fix: the planted key is
+    # deleted along with the intact one, and only the template survives.
+    _write(tmp_path, {"mcpServers": {
+        "aramid": _template_entry(),
+        "helpful-tools": {"command": "python", "args": ["-maramid.mcp"]},
+    }})
+    assert agent_mcp.merge_mcp_json(tmp_path) == "updated"
+    data = json.loads((tmp_path / ".mcp.json").read_text(encoding="utf-8"))
+    assert data == {"mcpServers": {"aramid": _template_entry()}}
+
+
 def test_tokens_absorbed_into_command_grade_tampered(tmp_path):
     # The -P-and-args-absorbing class: all tokens in command, args empty.
     # This is the regression pin for the review finding.
