@@ -25,6 +25,20 @@ additionally run under redirect_stdout/redirect_stderr capture
 (Task 3). Handler exceptions become -32603 with a generic message --
 internals never reach the wire.
 
+INPUT SHAPES ARE NEVER TRUSTED, only the JSON-RPC envelope is (serve()
+already rejects a non-dict message). `initialize`'s params default to
+{} for any non-dict value (a lenient handshake -- an odd client that
+sends garbage params still gets a version back). `tools/call` is
+stricter, because its params are load-bearing (name/arguments dispatch
+a handler): non-dict params, a non-string tool name, or truthy non-dict
+arguments each answer -32602 rather than reaching `.get`/dict-dispatch
+on a value that cannot support it -- a `"params": [1]` frame used to
+raise AttributeError OUTSIDE the handler try/except and kill the
+process (measured: the next request was never answered). serve() also
+wraps the handle_message call itself in try/except as a last resort --
+belt-and-braces for any future defect this file's own guards miss --
+answering -32603 and continuing the loop rather than propagating.
+
 `InvalidParams` (imported here as `_InvalidParams`) lives in
 `aramid.mcp_errors`, not in this file -- see that module's docstring:
 running this file as `__main__` (the real launch command above) and then
@@ -70,7 +84,9 @@ def handle_message(msg: dict, tools: dict) -> dict | None:
         return None                       # tolerate every notification
 
     if method == "initialize":
-        params = msg.get("params") or {}
+        params = msg.get("params")
+        if not isinstance(params, dict):
+            params = {}
         requested = params.get("protocolVersion")
         version = (requested if requested in SUPPORTED_PROTOCOL_VERSIONS
                    else SUPPORTED_PROTOCOL_VERSIONS[0])
@@ -87,12 +103,20 @@ def handle_message(msg: dict, tools: dict) -> dict | None:
              "inputSchema": spec["inputSchema"]}
             for name, spec in tools.items()]})
     if method == "tools/call":
-        params = msg.get("params") or {}
+        params = msg.get("params")
+        if not isinstance(params, dict):
+            return _error(id_, -32602,
+                          "Invalid params: params must be an object")
         name = params.get("name")
+        if not isinstance(name, str):
+            return _error(id_, -32602, f"Unknown tool: {name!r}")
         spec = tools.get(name)
         if spec is None:
             return _error(id_, -32602, f"Unknown tool: {name}")
         arguments = params.get("arguments") or {}
+        if not isinstance(arguments, dict):
+            return _error(id_, -32602,
+                          "Invalid params: arguments must be an object")
         try:
             return _result(id_, spec["handler"](None, arguments))
         except _InvalidParams as exc:
@@ -138,7 +162,15 @@ def serve(tools: dict) -> int:
         if not isinstance(msg, dict):
             _write_frame(out, _error(None, -32600, "Invalid Request"))
             continue
-        response = handle_message(msg, tools)
+        try:
+            response = handle_message(msg, tools)
+        except Exception:
+            # Belt-and-braces: handle_message is guarded at every known
+            # crash site (C1), but this loop is the process's only chance
+            # to survive an UNKNOWN future defect too. `msg` is a dict here
+            # (checked above), so `.get("id")` is always safe.
+            _write_frame(out, _error(msg.get("id"), -32603, "Internal error"))
+            continue
         if response is not None:
             _write_frame(out, response)
     return 0

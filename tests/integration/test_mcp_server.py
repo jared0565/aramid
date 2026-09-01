@@ -128,6 +128,24 @@ def test_missing_reason_is_invalid_params(client):
     assert out["error"]["code"] == -32602
 
 
+def test_malformed_params_survives_and_keeps_answering(client):
+    """C1 conformance (measured): before the fix, a `tools/call` with
+    `"params": [1]` raised AttributeError OUTSIDE handle_message's own
+    try/except with no catch in serve() either -- the real subprocess
+    exited (code 1) and the NEXT request (ping) was never answered. This
+    drives the real child end to end: the malformed frame must answer an
+    honest -32602-family error, the ping right after it must still get
+    {}, and the process must still exit cleanly (0) at EOF."""
+    _handshake(client)
+    bad = client.request("tools/call", [1])
+    assert bad["id"] == 2
+    assert bad["error"]["code"] in (-32600, -32602)
+    ping = client.request("ping")
+    assert ping == {"jsonrpc": "2.0", "id": 3, "result": {}}
+    client.close()
+    assert client.proc.returncode == 0
+
+
 def test_unknown_method_and_tool(client):
     _handshake(client)
     assert client.request("prompts/list")["error"]["code"] == -32601
