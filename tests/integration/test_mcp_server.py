@@ -18,9 +18,17 @@ through; this file follows that exact precedent instead of the brief's
 import json
 import subprocess
 import sys
+import threading
 from pathlib import Path
 
 import pytest
+
+# W3: a wedged-but-alive child (a bug in the server, or a fix that
+# regresses to a hang) must not stall the whole suite/CI leg forever --
+# there is no pytest-timeout in this suite. Armed around every blocking
+# readline; a killed child then fails fast via json.loads(b"") rather
+# than hanging.
+_READLINE_TIMEOUT = 60
 
 
 def _repo(tmp_path: Path) -> Path:
@@ -49,7 +57,12 @@ class _Client:
             msg["params"] = params
         self.proc.stdin.write((json.dumps(msg) + "\n").encode("utf-8"))
         self.proc.stdin.flush()
-        line = self.proc.stdout.readline()
+        watchdog = threading.Timer(_READLINE_TIMEOUT, self.proc.kill)
+        watchdog.start()
+        try:
+            line = self.proc.stdout.readline()
+        finally:
+            watchdog.cancel()
         out = json.loads(line.decode("utf-8"))
         assert out["id"] == self._id
         return out
