@@ -33,10 +33,10 @@ to publish a tag that disagrees with it.
   an aramid-named hook whose command differs from the template -- exits
   doctor `2`. `aramid status` gains an `agent surfaces:` line.
 - `aramid agent-hook pre-tool-use`: token-level screening of agent tool
-  calls for git hook-bypass invocations (`--no-verify`/`-n`,
-  `-c core.hooksPath=...`) -- advisory while baking, denied once armed via
-  `aramid arm --agent` (new root config key `agent_block_armed`, default
-  false).
+  calls for git hook-bypass invocations (`--no-verify` or `-n` on commit,
+  `--no-verify` on push, `-c core.hooksPath=...` on either) -- advisory
+  while baking, denied once armed via `aramid arm --agent` (new root
+  config key `agent_block_armed`, default false).
 
 ### Changed
 

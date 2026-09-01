@@ -82,7 +82,7 @@ aramid init path\to\workspace --discover
 2. Writes `aramid.toml` **only if it doesn't already exist** — an existing config is never touched. The fresh stub sets `semgrep_block_armed = false` and `bake_started = <today's date>`.
 3. Always regenerates `ARAMID.md`.
 4. Writes a marker-fenced, aramid-managed instruction block into `CLAUDE.md` and `AGENTS.md` (creating them when absent) so agent coders meet the gate before their first commit, not at their first blocked push. Content outside the `<!-- aramid:begin -->`/`<!-- aramid:end -->` fence is never touched; a damaged fence (no closing marker) refuses the write with a notice. Both files are tracked, so teammates' agents inherit the block on pull.
-5. Registers aramid's `SessionStart` hook in `.claude/settings.json` (merging: entries belonging to other tools are preserved intact; aramid's own entry -- identified by `aramid agent-hook` in its command -- is rewritten to the current template; an unparseable file is reported and never written). Claude Code adds the hook's stdout to each session's context, so agent sessions in the repo open with live gate posture: open findings, skip streaks, bake states, and the commands to use. The hook is fail-open everywhere -- outside an onboarded repo, or on any internal error, it prints nothing and exits 0.
+5. Registers aramid's `SessionStart` and `PreToolUse` hooks in `.claude/settings.json` (merging, per event: entries belonging to other tools are preserved intact; aramid's own entries -- identified by `aramid agent-hook` in their command -- are rewritten to the current template; an unparseable file is reported and never written). Claude Code adds the `SessionStart` hook's stdout to each session's context, so agent sessions in the repo open with live gate posture: open findings, skip streaks, bake states, and the commands to use. `PreToolUse` screens every Bash/PowerShell tool call for a git hook-bypass invocation (`--no-verify`/`-n` on commit, `--no-verify` on push, or a `-c core.hooksPath=...` wrapper) -- advisory while baking, rejected once `aramid arm --agent` runs (see [section 9](#9-the-bake-then-arm-model)). Both hooks are fail-open everywhere -- outside an onboarded repo, or on any internal error, they print nothing and exit 0.
 6. Appends any missing `.gitignore` entries: `.aramid/`, `graph-out/`, `.graphite*`, `.cache/`.
 7. Installs idempotent git hook shims for `pre-commit`, `pre-push`, and `post-commit`. If a foreign hook already exists at one of those paths, it's chained to `<hook>.aramid-chained` rather than clobbered.
 8. Registers the repo in the machine-global registry (this is what makes it a candidate for `aramid drain --all` later).
@@ -99,7 +99,7 @@ aramid init path\to\workspace --discover
 | `pre-push` | `"$INTERP" -m aramid check --gate pre-push` | Remaps `2 → 0`; `1` and `3` pass through and block — **fail-closed** (an engine that couldn't run didn't run gitleaks, so it must not silently let the push through) |
 | `post-commit` | `"$INTERP" -m aramid triage HEAD --budget 15 >/dev/null 2>&1 \|\| true` | Always exits `0` from the shim's perspective — fully fail-open, a commit is never blocked or made noisy by triage |
 
-These three are git hooks -- they run outside of, and are invisible to, an agent coding session. `init` separately registers a second, unrelated kind of hook: a Claude Code `SessionStart` hook (`aramid agent-hook session-start`) in `.claude/settings.json`, so an agent opening a session in the repo sees live gate posture -- open findings, skip streaks, bake states -- in its own context, before it ever touches a commit. `aramid doctor` grades that entry (`ok`/`absent`/`stale`/`tampered`/`unparseable`) and `aramid status` reports it on an `agent surfaces:` line; see [section 6](#6-diagnostics--aramid-doctor-and-aramid-update-rules).
+These three are git hooks -- they run outside of, and are invisible to, an agent coding session. `init` separately registers a second, unrelated kind of hook: Claude Code `SessionStart` and `PreToolUse` hooks (`aramid agent-hook session-start` / `pre-tool-use`) in `.claude/settings.json`. `SessionStart` gives an agent opening a session in the repo live gate posture -- open findings, skip streaks, bake states -- in its own context, before it ever touches a commit; `PreToolUse` screens each Bash/PowerShell tool call for a git hook-bypass invocation. `aramid doctor` grades both entries (`ok`/`absent`/`stale`/`tampered`/`unparseable`) and `aramid status` reports them on an `agent surfaces:` line; see [section 6](#6-diagnostics--aramid-doctor-and-aramid-update-rules).
 
 To reverse onboarding later, `aramid uninstall [path]` removes the installed hook shims, deletes `ARAMID.md`, removes the `.gitignore` entries `init` added, removes the managed agent blocks from `CLAUDE.md`/`AGENTS.md` (deleting a file that held nothing but the block), removes aramid's hook entries from `.claude/settings.json` (deleting the file if nothing else remains in it), and deregisters the repo — but **deliberately keeps the ledger** (`.aramid/`) so security/audit history survives; delete that by hand if you genuinely don't want it.
 
@@ -412,7 +412,7 @@ Exit is `0` if both BLOCK-tier tools (gitleaks, semgrep) are present, `2` if eit
 
 Two more sections print on every non-init `doctor` run (suppressed during `aramid init` itself, per [section 2, item 5](#2-onboarding-a-repo--aramid-init) — their remedy is the very init run that is printing the report): `agent files:` grades the managed instruction block in `CLAUDE.md`/`AGENTS.md` against `ok`/`stale`/`absent`/`damaged`/`unreadable`, and `agent hooks:` grades aramid's `SessionStart` entry in `.claude/settings.json` against `ok`/`absent`/`stale`/`tampered`/`unparseable`, plus an advisory line if PATH's `python` -- the interpreter the generated hook command names -- cannot import aramid. Both sections are advisory: WARN never fails doctor, with one exception. `tampered` is the one state in either vocabulary that moves the exit code, to `2` (see above); every other state -- `stale`, `absent`, `damaged`, `unreadable`, `unparseable`, and the PATH-python probe's own WARN -- means only "re-run `aramid init`" (or fix PATH) and leaves the exit code untouched.
 
-`agent hooks:` covers a second entry beyond `SessionStart`: a `PreToolUse` hook that screens every agent tool call for a `git commit`/`git push` carrying `--no-verify`/`-n` or a `-c core.hooksPath=...` wrapper. While the agent bake is in progress this is advisory only -- the call goes through, with a warning in the agent's own context; once the repo runs `aramid arm --agent` (see [section 9](#9-the-bake-then-arm-model)) the same call is rejected outright. Humans running `git` from a real terminal are never touched -- the hook only ever sees tool calls an agent issues.
+`agent hooks:` covers a second entry beyond `SessionStart`: a `PreToolUse` hook that screens every agent tool call for a `git commit` carrying `--no-verify` or `-n`, a `git push` carrying `--no-verify` (`git push -n` is `--dry-run`, a harmless read-only flag, and is deliberately exempt), or either subcommand carrying a `-c core.hooksPath=...` wrapper. While the agent bake is in progress this is advisory only -- the call goes through, with a warning in the agent's own context; once the repo runs `aramid arm --agent` (see [section 9](#9-the-bake-then-arm-model)) the same call is rejected outright. Humans running `git` from a real terminal are never touched -- the hook only ever sees tool calls an agent issues.
 
 ```powershell
 aramid doctor --fix
@@ -644,7 +644,7 @@ An empty `base_url` (the default, `""`) means this consumer OK-skips — it neve
 
 ## 9. The Bake-Then-Arm Model
 
-New rule classes and the LLM reviewer start in a WARN-only "bake" period so you can see what they find before they can block a push. There are exactly four independent arming flags — none gates any other:
+New rule classes and the LLM reviewer start in a WARN-only "bake" period so you can see what they find before they can block a push. There are several independent arming flags — none gates any other; a representative subset (run `aramid arm --help` for the full list):
 
 | Flag | Location | Default | What it BLOCKs once armed |
 |---|---|---|---|
@@ -652,6 +652,7 @@ New rule classes and the LLM reviewer start in a WARN-only "bake" period so you 
 | `[pack].pack_block_armed` | `aramid.toml` | `true` | regression-pack compiled block rules |
 | `[llm].llm_block_armed` | `aramid.toml` | `false` | confirmed-and-CRITICAL `llm-review` findings |
 | `[llm.autolearn].armed` | `aramid.toml` | `false` | not a BLOCK gate — controls whether learned uplift/cascade actually change reviewer *selection* (vs. shadow-only telemetry) |
+| `agent_block_armed` | root of `aramid.toml` | `false` | not a BLOCK gate — controls whether the `pre-tool-use` hook REJECTS a bypass-carrying agent tool call outright rather than only warning about it |
 
 While a bake is in progress, `aramid status` surfaces the bake day-count (from `bake_started`) and per-rule semgrep hit counts, so you can spot and demote a noisy rule before arming rather than after it starts blocking pushes.
 
@@ -669,7 +670,7 @@ aramid arm --agent
 - `aramid arm --autolearn` — sets `[llm.autolearn].armed = true`. "auto-learn armed -- uplift and cascade now change reviewer selection (escalate-only; the ladder tier stays the floor)." Also prints the current shadow record (would-uplift/decisions, audits, missed criticals).
 - `aramid arm --agent` — sets `agent_block_armed = true`. Ends the agent-surface bake; the `pre-tool-use` hook then rejects bypass-carrying tool calls instead of only warning about them.
 
-`--llm` and `--autolearn` are mutually exclusive. All three refuse (exit `3`) if `aramid.toml` doesn't exist yet — run `aramid init` first. Each is a targeted, comment-preserving edit of `aramid.toml`, never a full rewrite.
+`--llm` and `--autolearn` are mutually exclusive. Every `arm` variant refuses (exit `3`) if `aramid.toml` doesn't exist yet — run `aramid init` first. Each is a targeted, comment-preserving edit of `aramid.toml`, never a full rewrite.
 
 There's no `aramid arm` variant for `[pack].pack_block_armed` — it defaults to `true` (armed immediately) and is meant to be hand-edited down to `false` if a regression-pack rule turns out to be noisy, not bake-then-armed like the others.
 

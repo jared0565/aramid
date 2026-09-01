@@ -887,3 +887,36 @@ def test_status_reports_agent_surfaces(tmp_path, monkeypatch, capsys):
     assert cmd_status(r) == 0
     assert ("agent surfaces: blocks 2/2, hooks ok | armed"
             in capsys.readouterr().out)
+
+
+def test_render_agent_settings_notice_success_and_unparseable_text(tmp_path):
+    """Full-line pins for both previously-un-pinned texts: the success
+    notice (both-hooks wording -- SessionStart + PreToolUse) and the
+    unparseable refusal notice."""
+    r = _repo(tmp_path)
+
+    assert init.render_agent_settings_notice(r, "created") == (
+        "aramid: init: registered aramid's agent hooks (SessionStart +"
+        " PreToolUse) in .claude/settings.json -- sessions start with"
+        " live gate posture and git bypass flags are screened:\n"
+        'aramid: init:       git add .claude/settings.json && git commit'
+        ' -m "chore: aramid agent hooks"')
+    assert init.render_agent_settings_notice(r, "updated") == (
+        "aramid: init: registered aramid's agent hooks (SessionStart +"
+        " PreToolUse) in .claude/settings.json -- sessions start with"
+        " live gate posture and git bypass flags are screened:\n"
+        'aramid: init:       git add .claude/settings.json && git commit'
+        ' -m "chore: aramid agent hooks"')
+
+    assert init.render_agent_settings_notice(r, "unparseable") == (
+        "aramid: init: .claude/settings.json could not be parsed --"
+        " left untouched; fix the JSON and re-run `aramid init` to"
+        " register aramid's agent hooks")
+    # The unparseable line reports a refused write, not a chore -- it must
+    # print even outside a git work tree.
+    assert init.render_agent_settings_notice(tmp_path, "unparseable") == (
+        "aramid: init: .claude/settings.json could not be parsed --"
+        " left untouched; fix the JSON and re-run `aramid init` to"
+        " register aramid's agent hooks")
+
+    assert init.render_agent_settings_notice(r, "unchanged") == ""
