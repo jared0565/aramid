@@ -105,11 +105,18 @@ def test_foreign_key_launching_aramid_mcp_is_tampered(tmp_path):
     assert agent_mcp.mcp_state(tmp_path) == "tampered"
 
 
-def test_whitespace_respaced_args_still_ok(tmp_path):
-    # args come as a list; normalization joins tokens -- a respaced but
-    # token-identical entry grades ok.
+def test_tokens_absorbed_into_command_grade_tampered(tmp_path):
+    # The -P-and-args-absorbing class: all tokens in command, args empty.
+    # This is the regression pin for the review finding.
     _write(tmp_path, {"mcpServers": {"aramid": {
-        "command": "python", "args": ["-P", "-m", "aramid.mcp"]}}})
+        "command": "python -P -m aramid.mcp", "args": []}}})
+    assert agent_mcp.mcp_state(tmp_path) == "tampered"
+
+
+def test_per_token_whitespace_is_normalized(tmp_path):
+    # Per-token whitespace is stripped; token-identical entry grades ok.
+    _write(tmp_path, {"mcpServers": {"aramid": {
+        "command": "  python ", "args": [" -P ", "-m", " aramid.mcp "]}}})
     assert agent_mcp.mcp_state(tmp_path) == "ok"
 
 

@@ -68,12 +68,20 @@ def _owned_key(name: str, entry) -> bool:
 
 def _shape_ok(entry) -> bool:
     """Full-shape grade: the entry must BE the template -- same keys, same
-    command, token-identical args. An extra key (env, cwd, type, ...) is a
-    behavior change wearing aramid's name."""
+    command, token-identical args (compared separately, not concatenated).
+    An extra key (env, cwd, type, ...) is a behavior change wearing aramid's
+    name. Command and args each match independently against each known
+    template to catch cases where command absorbs what should be args."""
     if not isinstance(entry, dict) or set(entry) != {"command", "args"}:
         return False
     known = {MCP_COMMAND, *KNOWN_PRIOR_MCP_COMMANDS}
-    return _entry_command(entry) in {" ".join(c.split()) for c in known}
+    entry_cmd = entry.get("command", "").strip()
+    entry_args = [str(a).strip() for a in entry.get("args", [])]
+    for cmd_str in known:
+        parts = cmd_str.split()
+        if entry_cmd == parts[0] and entry_args == parts[1:]:
+            return True
+    return False
 
 
 def _load(path: Path):
@@ -167,6 +175,10 @@ def mcp_state(root: Path) -> str:
     entry = owned[MCP_SERVER_KEY]
     if not _shape_ok(entry):
         return "tampered"
-    if _entry_command(entry) == " ".join(MCP_COMMAND.split()):
+    entry_cmd = entry.get("command", "").strip()
+    entry_args = [str(a).strip() for a in entry.get("args", [])]
+    parts = MCP_COMMAND.split()
+    if entry_cmd == parts[0] and entry_args == parts[1:]:
         return "ok"
+    # Unreachable until KNOWN_PRIOR_MCP_COMMANDS gains a member
     return "stale"
