@@ -1,0 +1,135 @@
+"""aramid.mcp -- minimal stdio MCP server (spec §7), stdlib only.
+
+`python -P -m aramid.mcp`, spoken by the .mcp.json entry agent_mcp.py
+writes. In-house rather than an SDK dependency, per aramid's offline
+discipline and the spec's explicit call ("a minimal in-house stdio
+server ... rather than a new SDK dependency"); the tool surface is the
+contract, this file is plumbing.
+
+WIRE CONTRACT (measured against the working graphite precedent on this
+machine -- mcp SDK 1.29.0, LATEST_PROTOCOL_VERSION 2025-11-25 -- and the
+MCP spec): newline-delimited JSON-RPC 2.0 over stdio, UTF-8, one message
+per line; `initialize` handshake (echo a supported requested version,
+else answer our latest), `notifications/initialized` expected but not
+required, `ping` -> {}, `tools/list` -> the registry in one page (cursor
+ignored), `tools/call` -> {content: [{type: "text", ...}], isError}.
+Unknown REQUESTS get -32601 (or -32602 for an unknown tool); unknown
+NOTIFICATIONS are silently tolerated -- a method without an id must
+never be answered.
+
+STDOUT IS THE PROTOCOL CHANNEL. _protect_stdout() dups fd 1 for the
+protocol and repoints fd 1 at stderr, so a subprocess spawned by a tool
+(semgrep under cmd_check, git under status) that writes to its inherited
+stdout lands on stderr instead of corrupting the stream. Tool handlers
+additionally run under redirect_stdout/redirect_stderr capture
+(Task 3). Handler exceptions become -32603 with a generic message --
+internals never reach the wire.
+"""
+import io
+import json
+import os
+import sys
+
+from aramid import __version__
+
+SUPPORTED_PROTOCOL_VERSIONS = (
+    "2025-11-25", "2025-06-18", "2025-03-26", "2024-11-05")
+
+SERVER_INFO = {"name": "aramid", "version": __version__}
+
+
+def _result(id_, result: dict) -> dict:
+    return {"jsonrpc": "2.0", "id": id_, "result": result}
+
+
+def _error(id_, code: int, message: str) -> dict:
+    return {"jsonrpc": "2.0", "id": id_, "error": {
+        "code": code, "message": message}}
+
+
+def handle_message(msg: dict, tools: dict) -> dict | None:
+    """One JSON-RPC message in, one response out (None for notifications).
+
+    Pure protocol logic -- no I/O -- so the whole surface is testable
+    in-process; serve() owns the pipes.
+    """
+    method = msg.get("method")
+    id_ = msg.get("id")
+    is_notification = "id" not in msg
+
+    if method == "initialize":
+        params = msg.get("params") or {}
+        requested = params.get("protocolVersion")
+        version = (requested if requested in SUPPORTED_PROTOCOL_VERSIONS
+                   else SUPPORTED_PROTOCOL_VERSIONS[0])
+        return _result(id_, {
+            "protocolVersion": version,
+            "capabilities": {"tools": {}},
+            "serverInfo": SERVER_INFO,
+        })
+    if method == "ping":
+        return _result(id_, {})
+    if method == "tools/list":
+        return _result(id_, {"tools": [
+            {"name": name, "description": spec["description"],
+             "inputSchema": spec["inputSchema"]}
+            for name, spec in tools.items()]})
+    if method == "tools/call":
+        params = msg.get("params") or {}
+        name = params.get("name")
+        spec = tools.get(name)
+        if spec is None:
+            return _error(id_, -32602, f"Unknown tool: {name}")
+        arguments = params.get("arguments") or {}
+        try:
+            return _result(id_, spec["handler"](None, arguments))
+        except _InvalidParams as exc:
+            return _error(id_, -32602, str(exc))
+        except Exception:
+            return _error(id_, -32603,
+                          "Internal error while executing the tool")
+    if is_notification:
+        return None                       # tolerate every notification
+    return _error(id_, -32601, f"Method not found: {method}")
+
+
+class _InvalidParams(Exception):
+    """Raised by tool handlers for missing/invalid arguments -> -32602."""
+
+
+def _protect_stdout():
+    """Reserve the protocol channel: dup fd 1 for our frames, repoint
+    fd 1 at stderr so stray writes (subprocesses included) cannot
+    corrupt the stream. Returns a UTF-8 text wrapper over the dup."""
+    proto_fd = os.dup(1)
+    os.dup2(2, 1)
+    sys.stdout = sys.stderr
+    return io.TextIOWrapper(os.fdopen(proto_fd, "wb"), encoding="utf-8",
+                            newline="\n", write_through=True)
+
+
+def serve(tools: dict) -> int:
+    out = _protect_stdout()
+    for line in sys.stdin.buffer:
+        try:
+            msg = json.loads(line.decode("utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError):
+            out.write(json.dumps(_error(None, -32700, "Parse error")) + "\n")
+            continue
+        if not isinstance(msg, dict):
+            out.write(json.dumps(
+                _error(None, -32600, "Invalid request")) + "\n")
+            continue
+        response = handle_message(msg, tools)
+        if response is not None:
+            out.write(json.dumps(response) + "\n")
+    return 0
+
+
+def main() -> int:
+    from aramid.mcp_tools import TOOLS
+    return serve(TOOLS)
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
