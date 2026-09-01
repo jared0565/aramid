@@ -37,6 +37,12 @@ to publish a tag that disagrees with it.
   `--no-verify` on push, `-c core.hooksPath=...` on either) -- advisory
   while baking, denied once armed via `aramid arm --agent` (new root
   config key `agent_block_armed`, default false).
+- `python -P -m aramid.mcp`: a dependency-free stdio MCP server exposing
+  the full loop (`aramid_check` as a read-only snapshot, `aramid_status`,
+  `aramid_ledger_filter`, `aramid_resolvers`, and reason-required
+  suppression tools with the CLI's authority and audit trail); `aramid
+  init` registers it in `.mcp.json` (foreign servers preserved; doctor
+  grades the entry, tampered exits 2).
 
 ### Changed
 
