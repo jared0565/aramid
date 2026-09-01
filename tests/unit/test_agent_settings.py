@@ -308,6 +308,66 @@ def test_session_start_added_matcher_grades_tampered(tmp_path):
     assert agent_settings.settings_state(tmp_path) == "tampered"
 
 
+def test_pre_tool_use_hook_timeout_grades_tampered(tmp_path):
+    """A hand-added `timeout` starves the deny path (config load + git
+    subprocess) until the harness's own hook timeout fails it open -- same
+    command text, same matcher, defeated anyway. Full-object style: the
+    whole owned entry is written exactly as an operator's hand-edit would
+    leave it, not just the one key under test."""
+    _write(tmp_path, {"hooks": {"PreToolUse": [
+        {"matcher": "Bash|PowerShell",
+         "hooks": [{"type": "command",
+                    "command": agent_settings.PRE_TOOL_USE_COMMAND,
+                    "timeout": 1}]}]}})
+    assert agent_settings.settings_state(tmp_path) == "tampered"
+
+
+def test_pre_tool_use_disabled_type_grades_tampered(tmp_path):
+    """A hook `type` other than "command" never fires at all -- command
+    text and matcher are both untouched."""
+    _write(tmp_path, {"hooks": {"PreToolUse": [
+        {"matcher": "Bash|PowerShell",
+         "hooks": [{"type": "disabled",
+                    "command": agent_settings.PRE_TOOL_USE_COMMAND}]}]}})
+    assert agent_settings.settings_state(tmp_path) == "tampered"
+
+
+def test_pre_tool_use_hook_extra_key_grades_tampered(tmp_path):
+    """An extra hook-level key (e.g. `env`) is the same defeat class as
+    `timeout`: this repo's own template never writes one."""
+    _write(tmp_path, {"hooks": {"PreToolUse": [
+        {"matcher": "Bash|PowerShell",
+         "hooks": [{"type": "command",
+                    "command": agent_settings.PRE_TOOL_USE_COMMAND,
+                    "env": {}}]}]}})
+    assert agent_settings.settings_state(tmp_path) == "tampered"
+
+
+def test_pre_tool_use_entry_level_extra_key_grades_tampered(tmp_path):
+    """An extra ENTRY-level key (sitting beside `matcher`/`hooks`, not
+    inside a hook dict) grades tampered too."""
+    _write(tmp_path, {"hooks": {"PreToolUse": [
+        {"matcher": "Bash|PowerShell", "timeout": 5,
+         "hooks": [{"type": "command",
+                    "command": agent_settings.PRE_TOOL_USE_COMMAND}]}]}})
+    assert agent_settings.settings_state(tmp_path) == "tampered"
+
+
+def test_session_start_entry_level_extra_key_grades_tampered(tmp_path):
+    _write(tmp_path, {"hooks": {"SessionStart": [
+        {"hooks": [{"type": "command",
+                    "command": agent_settings.SESSION_START_COMMAND}],
+         "env": {}}]}})
+    assert agent_settings.settings_state(tmp_path) == "tampered"
+
+
+def test_exact_template_shape_still_grades_ok(tmp_path):
+    """The shape check must not false-positive on the shape init itself
+    writes -- the merge's own template is the ground truth."""
+    agent_settings.merge_claude_settings(tmp_path)
+    assert agent_settings.settings_state(tmp_path) == "ok"
+
+
 def test_merge_leaves_untouched_foreign_array_alone(tmp_path):
     """An empty foreign event array holding nothing of ours is preserved,
     not swept and rewritten just because the merge looked at it."""

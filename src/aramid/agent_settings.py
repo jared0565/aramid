@@ -118,10 +118,49 @@ def _matcher_ok(entry: dict, event: str) -> bool:
     PRE_TOOL_USE_MATCHER; every other event's entries must carry no
     `matcher` key at all. A narrowed, removed, or added matcher is the same
     defeat class as stripping -P from the command -- the entry keeps
-    aramid's name but fires on fewer or different tool calls -- so it is
-    graded independently of whether the command text matches."""
+    aramid's name but fires on fewer or different tool calls.
+
+    This is reached only for an entry whose OWN command already matched a
+    known template for its event: settings_state runs the command check
+    first and returns "tampered" immediately for anything else, so an
+    owned entry sitting under a foreign event (or carrying a stale/unknown
+    command) never reaches this function at all. It is not, by itself, an
+    escape hatch for a foreign-event entry -- the command check already
+    caught that case.
+    """
     want = PRE_TOOL_USE_MATCHER if event == "PreToolUse" else None
     return entry.get("matcher") == want
+
+
+# An owned entry's shape, beyond matcher and command text: no extra
+# entry-level key, no extra hook-level key, and every hook's `type` still
+# "command". A hand-added `"timeout": 1` starves the deny path (config load
+# + git subprocess) until the harness's own hook timeout fails it open, and
+# a `"type": "disabled"` hook never fires at all -- both keep aramid's
+# marker and its exact command text while defeating the rejector, so they
+# must grade independently of command/matcher comparison, not fall through
+# it.
+_ALLOWED_ENTRY_KEYS = {"matcher", "hooks"}
+_ALLOWED_HOOK_KEYS = {"type", "command"}
+
+
+def _shape_ok(entry: dict) -> bool:
+    """Whether an owned entry's own shape -- entry-level keys, hook-level
+    keys, and each hook's `type` -- is exactly what the template writes.
+    Command text and matcher are graded elsewhere; this catches the class
+    of edit that leaves both alone and changes how the entry behaves
+    instead (an added `timeout`, an added `env`, a `type` that isn't
+    "command")."""
+    if not set(entry.keys()) <= _ALLOWED_ENTRY_KEYS:
+        return False
+    for h in entry.get("hooks", []):
+        if not isinstance(h, dict):
+            return False
+        if set(h.keys()) != _ALLOWED_HOOK_KEYS:
+            return False
+        if h.get("type") != "command":
+            return False
+    return True
 
 
 def _load(path: Path):
@@ -243,12 +282,16 @@ def settings_state(root: Path) -> str:
     sits in: the -P-stripping class of edit, and equally an entry moved to
     a foreign event -- OR an owned entry's `matcher` diverges from the
     current template's matcher for its event: narrowed, removed, or added
-    is the same defeat class as stripping -P), "absent", "unparseable".
-    Comparison is whitespace-normalized on both sides. Matcher grading
-    checks against the CURRENT template's matcher only: if
-    KNOWN_PRIOR_COMMANDS ever gains an event whose earlier template used a
-    different matcher, an entry carrying that older matcher still grades
-    tampered here, not stale. Never writes.
+    is the same defeat class as stripping -P -- OR an owned entry's own
+    SHAPE diverges: an extra entry-level key, an extra hook-level key, or a
+    hook `type` other than "command" -- an added `timeout` starves the deny
+    path until the harness's hook timeout fails it open, and a non-command
+    `type` never fires at all, both while leaving command text and matcher
+    untouched), "absent", "unparseable". Comparison is whitespace-normalized
+    on both sides. Matcher grading checks against the CURRENT template's
+    matcher only: if KNOWN_PRIOR_COMMANDS ever gains an event whose earlier
+    template used a different matcher, an entry carrying that older matcher
+    still grades tampered here, not stale. Never writes.
     """
     path = root / SETTINGS_REL
     if not path.is_file():
@@ -259,6 +302,10 @@ def settings_state(root: Path) -> str:
     owned_entries = _owned_entries_by_event(data)
     if not owned_entries:
         return "absent"
+    if any(not _shape_ok(entry)
+           for entries in owned_entries.values()
+           for entry in entries):
+        return "tampered"
     by_event = _owned_commands_by_event(data)
     for event, cmds in by_event.items():
         known = ({_norm(c) for c in TEMPLATE_COMMANDS.get(event, ())}
