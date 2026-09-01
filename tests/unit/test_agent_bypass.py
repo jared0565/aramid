@@ -113,6 +113,34 @@ def test_bundled_short_flags_are_a_documented_false_negative():
     assert find_bypass("git commit -an") is None
 
 
+# ---- mutation-ledger kills, _scan_one_git ----
+
+def test_scan_one_git_loop_bound_is_strict():
+    # ledger 1d3924d1: `while i < len(seg)` mutated to `<=` walks one index
+    # past the segment's end and raises IndexError instead of returning
+    # None. `git` alone hits i == len(seg) on the very first check; `git -c
+    # x=y` reaches i == len(seg) after consuming the -c/value pair. Both
+    # must return None cleanly under the real `<`.
+    assert find_bypass("git") is None
+    assert find_bypass("git -c x=y") is None
+
+
+def test_scan_one_git_dash_c_requires_both_the_flag_and_a_next_token():
+    # ledger 4ce40a5b: `tok == "-c" and i + 1 < len(seg)` mutated to `or`.
+    # `git -c` (the flag with no following token): the real `and` short-
+    # circuits to False and returns None; the mutant's `or` is True from
+    # `tok == "-c"` alone and indexes past the segment -> IndexError.
+    assert find_bypass("git -c") is None
+    # Behavioral arm, pinning the FALSE-POSITIVE direction: under the
+    # mutant, `tok == "-C" or i + 1 < len(seg)` is True purely from the
+    # second clause, so -C's directory argument gets appended to `configs`
+    # as if it were a `-c key=value` pair. When that directory string
+    # happens to look like `core.hookspath=...`, the mutant manufactures a
+    # bogus hooks-path Bypass for a plain `git -C <dir> commit`. The real
+    # `and` never treats -C's argument as a config value, so this is None.
+    assert find_bypass("git -C core.hookspath=x commit") is None
+
+
 # ---- fail-open ----
 
 def test_unbalanced_quote_fails_open():
