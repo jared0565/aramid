@@ -61,8 +61,47 @@ def test_check_rejects_unknown_gate(tmp_path, monkeypatch):
     r = _repo(tmp_path)
     monkeypatch.chdir(r)
     from aramid.mcp import _InvalidParams
-    with pytest.raises(_InvalidParams):
-        mcp_tools.TOOLS["aramid_check"]["handler"](None, {"gate": "sneaky"})
+    for bad_gate in ("sneaky", ["pre-commit"]):
+        # A string that isn't a known gate raises ValueError out of
+        # Gate(); a non-string JSON value (a list, here) must not slip
+        # past that except clause and surface as a generic -32603.
+        with pytest.raises(_InvalidParams):
+            mcp_tools.TOOLS["aramid_check"]["handler"](
+                None, {"gate": bad_gate})
+
+
+def test_check_gate_mode_mapping_matches_the_cli(tmp_path, monkeypatch):
+    """Pins the gate->mode branches `_check` derives, against a recorder
+    standing in for cmd_check -- the same mapping `cli.py`'s own
+    `_check_mode()` uses. `record=False` must be present every time."""
+    r = _repo(tmp_path)
+    monkeypatch.chdir(r)
+    import aramid.commands.check as check_mod
+    from aramid.models import Gate
+
+    calls = []
+
+    def _recorder(repo, gate, mode, **kwargs):
+        calls.append((gate, mode, kwargs))
+        return 0
+
+    monkeypatch.setattr(check_mod, "cmd_check", _recorder)
+
+    cases = [
+        ({}, Gate.PRE_COMMIT, "staged"),
+        ({"gate": "pre-push"}, Gate.PRE_PUSH, "range"),
+        ({"gate": "all"}, Gate.ALL, "all"),
+        ({"gate": "pre-push", "staged": True}, Gate.PRE_PUSH, "staged"),
+    ]
+    for args, expected_gate, expected_mode in cases:
+        calls.clear()
+        out = mcp_tools.TOOLS["aramid_check"]["handler"](None, args)
+        assert out["isError"] is False
+        assert len(calls) == 1, args
+        gate, mode, kwargs = calls[0]
+        assert gate is expected_gate, args
+        assert mode == expected_mode, args
+        assert kwargs.get("record") is False, args
 
 
 def test_check_iserror_follows_check_exit_vocabulary(tmp_path, monkeypatch):
@@ -79,12 +118,16 @@ def test_check_iserror_follows_check_exit_vocabulary(tmp_path, monkeypatch):
         assert out["isError"] is expected, f"rc={rc}"
 
 
-def test_override_requires_nonempty_reason(tmp_path, monkeypatch):
+def test_override_requires_nonempty_id_and_reason(tmp_path, monkeypatch):
     r = _repo(tmp_path)
     monkeypatch.chdir(r)
     from aramid.mcp import _InvalidParams
     for bad in ({}, {"id": "abc"}, {"id": "abc", "reason": ""},
-                {"id": "abc", "reason": "   "}):
+                {"id": "abc", "reason": "   "},
+                # A whitespace-only id must not fall through to the
+                # ledger's unknown-id path (wrong mechanism, wrong error
+                # shape) -- it is invalid params, same as an empty one.
+                {"id": "   ", "reason": "test reason"}):
         with pytest.raises(_InvalidParams):
             mcp_tools.TOOLS["aramid_override"]["handler"](None, bad)
 

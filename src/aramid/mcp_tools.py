@@ -66,7 +66,7 @@ def _run(fn, *args, ok_codes=(0,), report_codes=(), **kwargs) -> dict:
 def _require_id_and_reason(args: dict) -> tuple[str, str]:
     fid = args.get("id")
     reason = args.get("reason")
-    if not isinstance(fid, str) or not fid:
+    if not isinstance(fid, str) or not fid.strip():
         raise _InvalidParams("`id` is required (a finding id string)")
     if not isinstance(reason, str) or not reason.strip():
         raise _InvalidParams(
@@ -91,7 +91,7 @@ def _check(repo, args):
     gate_raw = args.get("gate", "pre-commit")
     try:
         gate = Gate(gate_raw)
-    except ValueError:
+    except (ValueError, TypeError):
         raise _InvalidParams(
             f"`gate` must be one of pre-commit, pre-push, all"
             f" (got {gate_raw!r})") from None
