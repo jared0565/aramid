@@ -79,7 +79,16 @@ def _is_git(token: str) -> bool:
 
 
 def _scan_one_git(seg: list[str], start: int) -> Bypass | None:
-    """Scan the git invocation whose `git` token is seg[start]."""
+    """Scan the git invocation whose `git` token is seg[start].
+
+    `start` must index into `seg` -- find_bypass only passes enumerate()
+    indices, so this holds for every real caller. Guarded anyway (fuzz
+    ledger a7bee49a: a negative `start` on an empty seg walked backwards
+    into an IndexError): out-of-contract input fails OPEN, the module's
+    one failure direction.
+    """
+    if not 0 <= start < len(seg):
+        return None
     configs: list[str] = []
     i = start + 1
     subcommand = None

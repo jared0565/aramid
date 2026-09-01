@@ -122,3 +122,14 @@ def test_unbalanced_quote_fails_open():
 def test_non_string_fails_open():
     assert find_bypass(None) is None
     assert find_bypass(42) is None
+
+
+def test_scan_one_git_out_of_contract_start_fails_open():
+    # Fuzz ledger a7bee49a: seg=[] with a huge negative start walked
+    # backwards into seg[i] and raised IndexError. Out-of-contract input
+    # fails open, like every other malformed input in this module.
+    from aramid.agent_bypass import _scan_one_git
+    assert _scan_one_git([], -9223372036854775808) is None
+    assert _scan_one_git([], 0) is None
+    assert _scan_one_git(["git"], 5) is None
+    assert _scan_one_git(["git", "commit", "-n"], -1) is None
