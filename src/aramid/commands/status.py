@@ -266,12 +266,13 @@ def _autolearn_line(cfg: config_mod.Config) -> str:
 
 
 def _agent_surfaces_line(root: Path, cfg: config_mod.Config) -> str:
-    from aramid import agent_files, agent_settings
+    from aramid import agent_files, agent_mcp, agent_settings
     states = agent_files.agent_block_states(root)
     ok = sum(1 for _, s in states if s == "ok")
     posture = "armed" if cfg.agent_block_armed else "baking"
     return (f"agent surfaces: blocks {ok}/{len(states)}, "
-            f"hooks {agent_settings.settings_state(root)} | {posture}")
+            f"hooks {agent_settings.settings_state(root)}, "
+            f"mcp {agent_mcp.mcp_state(root)} | {posture}")
 
 
 def _llm_lines(cfg: config_mod.Config, state: dict) -> list[str]:

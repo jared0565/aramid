@@ -8,7 +8,7 @@ is genuinely unwanted.
 import sys
 from pathlib import Path
 
-from aramid import agent_files, agent_settings, gitutil, hooks
+from aramid import agent_files, agent_mcp, agent_settings, gitutil, hooks
 from aramid.commands.init import GITIGNORE_ENTRIES
 
 
@@ -61,10 +61,16 @@ def cmd_uninstall(path) -> int:
               " -- left untouched; remove aramid's hook entry by hand.",
               file=sys.stderr)
 
+    mcp_action = agent_mcp.remove_mcp_json(root)
+    if mcp_action == "unparseable":
+        print("aramid: uninstall: .mcp.json could not be parsed -- left"
+              " untouched; remove aramid's server entry by hand.",
+              file=sys.stderr)
+
     _remove_gitignore_entries(root)
 
     print(f"aramid: uninstall: {root} -- hooks removed, ARAMID.md removed, agent "
-          f"blocks removed, agent hooks removed, gitignore entries removed. The ledger (.aramid/) is "
-          f"KEPT -- delete it by hand if you also want to discard finding/security "
-          f"history.")
+          f"blocks removed, agent hooks removed, mcp server removed, gitignore "
+          f"entries removed. The ledger (.aramid/) is KEPT -- delete it by hand "
+          f"if you also want to discard finding/security history.")
     return 0

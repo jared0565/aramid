@@ -697,6 +697,31 @@ def agent_settings_lines(root: Path) -> list[str]:
     return [f"  {tag} {'settings':<10} {_AGENT_SETTINGS_DETAIL[state]}"]
 
 
+_AGENT_MCP_DETAIL = {
+    "ok": "ok: aramid MCP server registered (.mcp.json,"
+          " `python -P -m aramid.mcp`)",
+    "absent": "absent: no aramid server entry in .mcp.json -- run"
+              " `aramid init`",
+    "stale": "stale: aramid's server entry matches an older template --"
+             " re-run `aramid init`",
+    "tampered": "tampered: an aramid-owned server entry differs from the"
+                " template in shape -- treat as tampering; re-run"
+                " `aramid init` to rewrite it and investigate how it"
+                " changed",
+    "unparseable": "unparseable: .mcp.json could not be parsed -- fix the"
+                   " JSON, then run `aramid init`",
+}
+
+
+def agent_mcp_lines(root: Path) -> list[str]:
+    """One line; tampered moves the exit code (handled in cmd_doctor --
+    this renderer stays pure), same contract as agent_settings_lines."""
+    from aramid import agent_mcp
+    state = agent_mcp.mcp_state(root)
+    tag = "OK  " if state == "ok" else "WARN"
+    return [f"  {tag} {'mcp':<10} {_AGENT_MCP_DETAIL[state]}"]
+
+
 def agent_interpreter_lines() -> list[str]:
     """Advisory: the generated hook command says plain `python` -- if PATH's
     python cannot import aramid, the session-start entry errors OUTSIDE
@@ -1070,6 +1095,8 @@ def cmd_doctor(root: Path, fix: bool = False, during_init: bool = False) -> int:
         print("agent hooks:")
         for line in agent_settings_lines(root):
             print(line)
+        for line in agent_mcp_lines(root):
+            print(line)
         for line in agent_interpreter_lines():
             print(line)
 
@@ -1094,6 +1121,18 @@ def cmd_doctor(root: Path, fix: bool = False, during_init: bool = False) -> int:
     if settings_tampered:
         print("aramid: doctor: .claude/settings.json carries an aramid-named"
               " hook whose command differs from the template -- treat as"
+              " tampering; re-run `aramid init` to rewrite it and"
+              " investigate how it changed", file=sys.stderr)
+
+    from aramid import agent_mcp as agent_mcp_mod
+    mcp_tampered = (not during_init
+                    and agent_mcp_mod.mcp_state(root) == "tampered")
+    # during_init skips this check on purpose: the merge init runs moments later
+    # rewrites the entry -- gating onboarding on the thing onboarding fixes would
+    # deadlock it.
+    if mcp_tampered:
+        print("aramid: doctor: .mcp.json carries an aramid-owned server"
+              " entry whose shape differs from the template -- treat as"
               " tampering; re-run `aramid init` to rewrite it and"
               " investigate how it changed", file=sys.stderr)
 
@@ -1125,6 +1164,8 @@ def cmd_doctor(root: Path, fix: bool = False, during_init: bool = False) -> int:
         return 2                        # tools fine, but the gate is a working tree
     if settings_tampered:
         return 2                        # an edited aramid hook command is the -P-stripping class
+    if mcp_tampered:
+        return 2                        # a hijacked .mcp.json entry is the -P-stripping class too
 
     warn_tests = [s for s in test_statuses if s.warn]
     for s in warn_tests:

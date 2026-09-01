@@ -21,7 +21,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-from aramid import agent_files, agent_settings, config as config_mod
+from aramid import agent_files, agent_mcp, agent_settings, config as config_mod
 from aramid import hooks
 from aramid.commands import doctor, init, uninstall
 from aramid.ledger import Ledger
@@ -818,6 +818,41 @@ def test_init_registers_session_start_hook_idempotently(tmp_path, monkeypatch):
     assert p.read_bytes() == first
 
 
+def test_init_registers_mcp_server_idempotently(tmp_path, monkeypatch):
+    monkeypatch.setattr(doctor, "probe_toolchain", _fake_present)
+    r = _repo(tmp_path)
+
+    assert init.cmd_init(r) == 0
+    p = r / ".mcp.json"
+    assert p.exists()
+    data = json.loads(p.read_text(encoding="utf-8"))
+    assert data == {"mcpServers": {"aramid": {
+        "command": "python", "args": ["-P", "-m", "aramid.mcp"]}}}
+    first = p.read_bytes()
+
+    assert init.cmd_init(r) == 0
+    assert p.read_bytes() == first
+
+
+def test_init_preserves_foreign_mcp_servers_and_uninstall_reverses(tmp_path, monkeypatch):
+    monkeypatch.setattr(doctor, "probe_toolchain", _fake_present)
+    r = _repo(tmp_path)
+    foreign = {"mcpServers": {"graphite": {
+        "command": "python", "args": ["-P", "-m", "graphite.mcp"]}}}
+    p = r / ".mcp.json"
+    p.write_text(json.dumps(foreign, indent=2) + "\n", encoding="utf-8")
+
+    assert init.cmd_init(r) == 0
+    data = json.loads(p.read_text(encoding="utf-8"))
+    assert data["mcpServers"]["graphite"] == foreign["mcpServers"]["graphite"]
+    assert agent_mcp.mcp_state(r) == "ok"
+
+    assert uninstall.cmd_uninstall(r) == 0
+    data = json.loads(p.read_text(encoding="utf-8"))
+    assert data == foreign
+    assert agent_mcp.mcp_state(r) == "absent"
+
+
 def test_init_preserves_foreign_settings_and_uninstall_reverses(tmp_path, monkeypatch):
     monkeypatch.setattr(doctor, "probe_toolchain", _fake_present)
     r = _repo(tmp_path)
@@ -870,6 +905,35 @@ def test_doctor_exits_2_on_tampered_settings(tmp_path, monkeypatch, capsys):
             " how it changed" in err)
 
 
+def test_doctor_exits_2_on_tampered_mcp_json(tmp_path, monkeypatch, capsys):
+    monkeypatch.setattr(doctor, "probe_toolchain", _fake_present)
+    # CI installs aramid editable (pip install -e .), and doctor exits 2 for
+    # editable-install-with-registered-repos regardless of this test's
+    # subject. That seam is machine-install-shaped -- pin it out so the
+    # healthy run is genuinely healthy in every environment.
+    monkeypatch.setattr(doctor, "editable_consumers_lines",
+                        lambda direct_url, registered: [])
+    r = _repo(tmp_path)
+    assert init.cmd_init(r) == 0
+    capsys.readouterr()
+    rc_ok = doctor.cmd_doctor(r)
+
+    p = r / ".mcp.json"
+    data = json.loads(p.read_text(encoding="utf-8"))
+    data["mcpServers"]["aramid"]["args"] = ["-m", "aramid.mcp"]  # drop -P
+    p.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
+    capsys.readouterr()
+    rc_tampered = doctor.cmd_doctor(r)
+    err = capsys.readouterr().err
+
+    assert rc_ok == 0
+    assert rc_tampered == 2
+    assert ("aramid: doctor: .mcp.json carries an aramid-owned server entry"
+            " whose shape differs from the template -- treat as tampering;"
+            " re-run `aramid init` to rewrite it and investigate how it"
+            " changed" in err)
+
+
 def test_status_reports_agent_surfaces(tmp_path, monkeypatch, capsys):
     from aramid.commands.status import cmd_status
     monkeypatch.setattr(doctor, "probe_toolchain", _fake_present)
@@ -878,14 +942,14 @@ def test_status_reports_agent_surfaces(tmp_path, monkeypatch, capsys):
     capsys.readouterr()
 
     assert cmd_status(r) == 0
-    assert ("agent surfaces: blocks 2/2, hooks ok | baking"
+    assert ("agent surfaces: blocks 2/2, hooks ok, mcp ok | baking"
             in capsys.readouterr().out)
 
     from aramid.commands.arm import cmd_arm
     assert cmd_arm(r, agent=True) == 0
     capsys.readouterr()
     assert cmd_status(r) == 0
-    assert ("agent surfaces: blocks 2/2, hooks ok | armed"
+    assert ("agent surfaces: blocks 2/2, hooks ok, mcp ok | armed"
             in capsys.readouterr().out)
 
 
@@ -920,3 +984,34 @@ def test_render_agent_settings_notice_success_and_unparseable_text(tmp_path):
         " register aramid's agent hooks")
 
     assert init.render_agent_settings_notice(r, "unchanged") == ""
+
+
+def test_render_agent_mcp_notice_success_and_unparseable_text(tmp_path):
+    """Full-line pins, mirroring render_agent_settings_notice's test above."""
+    r = _repo(tmp_path)
+
+    assert init.render_agent_mcp_notice(r, "created") == (
+        "aramid: init: registered aramid's MCP server in .mcp.json --"
+        " MCP-capable agents get aramid_check/aramid_status/ledger"
+        " tools:\n"
+        'aramid: init:       git add .mcp.json && git commit -m'
+        ' "chore: aramid mcp server"')
+    assert init.render_agent_mcp_notice(r, "updated") == (
+        "aramid: init: registered aramid's MCP server in .mcp.json --"
+        " MCP-capable agents get aramid_check/aramid_status/ledger"
+        " tools:\n"
+        'aramid: init:       git add .mcp.json && git commit -m'
+        ' "chore: aramid mcp server"')
+
+    assert init.render_agent_mcp_notice(r, "unparseable") == (
+        "aramid: init: .mcp.json could not be parsed -- left untouched;"
+        " fix the JSON and re-run `aramid init` to register aramid's"
+        " MCP server")
+    # The unparseable line reports a refused write, not a chore -- it must
+    # print even outside a git work tree.
+    assert init.render_agent_mcp_notice(tmp_path, "unparseable") == (
+        "aramid: init: .mcp.json could not be parsed -- left untouched;"
+        " fix the JSON and re-run `aramid init` to register aramid's"
+        " MCP server")
+
+    assert init.render_agent_mcp_notice(r, "unchanged") == ""

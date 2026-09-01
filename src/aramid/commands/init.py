@@ -40,7 +40,7 @@ from importlib import resources
 from pathlib import Path
 from typing import Callable
 
-from aramid import agent_files, agent_settings, config as config_mod
+from aramid import agent_files, agent_mcp, agent_settings, config as config_mod
 from aramid import gitutil, hooks, policy, redact
 from aramid.commands import doctor as doctor_mod
 from aramid.commands.doctor import cmd_doctor
@@ -299,6 +299,25 @@ def render_agent_settings_notice(root: Path, action: str) -> str:
             ' -m "chore: aramid agent hooks"')
 
 
+def render_agent_mcp_notice(root: Path, action: str) -> str:
+    """Sibling of render_agent_settings_notice; same three rules. The
+    unparseable line prints even outside a git work tree -- it reports a
+    refused write, not a chore."""
+    if action == "unparseable":
+        return ("aramid: init: .mcp.json could not be parsed -- left"
+                " untouched; fix the JSON and re-run `aramid init` to"
+                " register aramid's MCP server")
+    if action not in ("created", "updated"):
+        return ""
+    if gitutil._run(root, "rev-parse", "--is-inside-work-tree").returncode != 0:
+        return ""
+    return ("aramid: init: registered aramid's MCP server in .mcp.json --"
+            " MCP-capable agents get aramid_check/aramid_status/ledger"
+            " tools:\n"
+            'aramid: init:       git add .mcp.json && git commit -m'
+            ' "chore: aramid mcp server"')
+
+
 # ------------------------------------------------------- full-history scan ---
 
 def _historical_ref_for(raws: list) -> Callable[[str], str]:
@@ -511,6 +530,7 @@ def _init_one(target: Path) -> int:
     _write_aramid_md(root, stack, pkg_mgr)
     agent_actions = agent_files.write_agent_blocks(root)
     settings_action = agent_settings.merge_claude_settings(root)
+    mcp_action = agent_mcp.merge_mcp_json(root)
     gi_added, gi_created = _update_gitignore(root)
 
     # step 5: install (idempotent, chain-never-clobber) hook shims.
@@ -543,16 +563,17 @@ def _init_one(target: Path) -> int:
         ledger.close()
 
     # step 9: summary.
-    # Four renderers report here now, covering five artifacts aramid owns
+    # Five renderers report here now, covering six artifacts aramid owns
     # and wrote into someone else's tree (ARAMID.md, .gitignore, CLAUDE.md,
-    # AGENTS.md, .claude/settings.json). Most of what they print is one shared
-    # "here's the commit chore" housekeeping notice -- but render_agent_blocks_notice's
-    # damaged/unreadable lines are a different kind of thing: a REFUSED
-    # write being reported, not a chore to commit.
+    # AGENTS.md, .claude/settings.json, .mcp.json). Most of what they print is
+    # one shared "here's the commit chore" housekeeping notice -- but
+    # render_agent_blocks_notice's damaged/unreadable lines are a different
+    # kind of thing: a REFUSED write being reported, not a chore to commit.
     for notice in (render_aramid_md_notice(root),
                    render_gitignore_notice(root, gi_added, gi_created),
                    render_agent_blocks_notice(root, agent_actions),
-                   render_agent_settings_notice(root, settings_action)):
+                   render_agent_settings_notice(root, settings_action),
+                   render_agent_mcp_notice(root, mcp_action)):
         if notice:
             print(notice, file=sys.stderr)
 

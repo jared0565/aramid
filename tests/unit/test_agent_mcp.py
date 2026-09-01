@@ -191,3 +191,26 @@ def test_merge_rewrites_string_args(tmp_path):
     assert agent_mcp.merge_mcp_json(tmp_path) == "updated"
     data = json.loads((tmp_path / ".mcp.json").read_text(encoding="utf-8"))
     assert data["mcpServers"]["aramid"] == _template_entry()
+
+
+def test_every_mcp_state_has_a_doctor_detail():
+    from aramid.commands import doctor
+    assert set(doctor._AGENT_MCP_DETAIL) == set(agent_mcp.MCP_STATES)
+
+
+def test_mcp_detail_prose_echoes_state_words():
+    from aramid.commands import doctor
+    for state, detail in doctor._AGENT_MCP_DETAIL.items():
+        assert detail.startswith(f"{state}:")
+
+
+def test_doctor_mcp_lines_render_ok_and_tampered(tmp_path):
+    from aramid.commands import doctor
+    agent_mcp.merge_mcp_json(tmp_path)
+    assert doctor.agent_mcp_lines(tmp_path) == [
+        "  OK   mcp        ok: aramid MCP server registered (.mcp.json,"
+        " `python -P -m aramid.mcp`)"]
+    _write(tmp_path, {"mcpServers": {"aramid": {
+        "command": "python", "args": ["-m", "aramid.mcp"]}}})
+    lines = doctor.agent_mcp_lines(tmp_path)
+    assert lines[0].startswith("  WARN mcp        tampered:")
