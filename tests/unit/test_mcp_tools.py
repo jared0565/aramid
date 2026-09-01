@@ -65,6 +65,20 @@ def test_check_rejects_unknown_gate(tmp_path, monkeypatch):
         mcp_tools.TOOLS["aramid_check"]["handler"](None, {"gate": "sneaky"})
 
 
+def test_check_iserror_follows_check_exit_vocabulary(tmp_path, monkeypatch):
+    """check's real exit vocabulary (pipeline.py): 0 clean, 1 blocking
+    findings, 2 degraded tools, 3 engine/config error. A gate that found
+    blocking findings or ran degraded still DID its job -- isError False;
+    only an engine/config error is a failed operation -- isError True."""
+    r = _repo(tmp_path)
+    monkeypatch.chdir(r)
+    import aramid.commands.check as check_mod
+    for rc, expected in ((0, False), (1, False), (2, False), (3, True)):
+        monkeypatch.setattr(check_mod, "cmd_check", lambda *a, rc=rc, **k: rc)
+        out = mcp_tools.TOOLS["aramid_check"]["handler"](None, {})
+        assert out["isError"] is expected, f"rc={rc}"
+
+
 def test_override_requires_nonempty_reason(tmp_path, monkeypatch):
     r = _repo(tmp_path)
     monkeypatch.chdir(r)

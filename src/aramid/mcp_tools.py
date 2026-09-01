@@ -9,8 +9,10 @@ Handlers run the internals under redirect_stdout/redirect_stderr into
 buffers: the cmd_* functions speak through print(), and stdout belongs
 to the protocol. The captured text IS the tool result. isError marks a
 failed OPERATION -- not a gate honestly reporting findings: aramid_check
-exiting 3 (blocking findings) did its job and returns isError False
-with the report; an override the ledger REFUSED returns isError True.
+exiting 1 (blocking findings) or 2 (degraded tools) did its job and
+returns isError False with the report; an engine or config error
+(exit 3) is a failed operation. Likewise an override the ledger
+REFUSED returns isError True.
 
 aramid_check always runs record=False (a ledger SNAPSHOT): MCP is the
 consumer-measurement surface, exactly the shape that motivated
@@ -101,7 +103,7 @@ def _check(repo, args):
         mode = "staged" if gate is Gate.PRE_COMMIT else "range"
     return _run(cmd_check, repo, gate, mode,
                 strict=bool(args.get("strict", False)),
-                record=False, report_codes=(2, 3))
+                record=False, report_codes=(1, 2))
 
 
 @_onboarded
