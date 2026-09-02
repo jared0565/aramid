@@ -10,6 +10,8 @@ to publish a tag that disagrees with it.
 
 ## [Unreleased]
 
+## [0.8.1] — 2026-09-02
+
 ### Added
 
 - **The release workflow refuses to publish a commit CI has not passed.** A
@@ -32,6 +34,14 @@ to publish a tag that disagrees with it.
   now watches the SHA-pinned actions, the one dependency class here that never
   moves on its own. Private vulnerability reporting and dependency
   vulnerability alerts are enabled on the repository.
+
+### Changed
+
+- The release workflow's artifact actions moved to `upload-artifact` 7.0.1 and
+  `download-artifact` 8.0.1 (Dependabot, the first PRs it opened here). Both
+  are major bumps that CI never exercises, so the upload/download round-trip
+  was rehearsed on a throwaway branch before this release: same pinned SHAs,
+  name and globs, both files byte-identical at `dist/<file>`.
 
 ### Fixed
 
@@ -3419,7 +3429,8 @@ Stated plainly because each one changes how you should deploy this:
 - **PyPI publishing is not set up.** Install from a GitHub Release artifact or
   from git; `pip install aramid` does not work.
 
-[Unreleased]: https://github.com/jared0565/aramid/compare/v0.8.0...HEAD
+[Unreleased]: https://github.com/jared0565/aramid/compare/v0.8.1...HEAD
+[0.8.1]: https://github.com/jared0565/aramid/releases/tag/v0.8.1
 [0.8.0]: https://github.com/jared0565/aramid/releases/tag/v0.8.0
 [0.7.2]: https://github.com/jared0565/aramid/releases/tag/v0.7.2
 [0.7.1]: https://github.com/jared0565/aramid/releases/tag/v0.7.1
