@@ -174,3 +174,52 @@ def test_the_irreversible_publish_transitively_depends_on_verify_ci():
                 seen.add(dep)
                 frontier.append(dep)
     assert "verify-ci" in seen
+
+
+# ------------------------------------------------------- drain findings ---
+# The 4-hourly drain's mutation and fuzz consumers ran against this script
+# within hours of it landing (ledger rows 33e8ff82, c0edb4d1, 49430161,
+# 771657b5). Two were real gaps and are pinned here; the two `60 -> 61`
+# constants are equivalent under any test that does not wait a minute and are
+# overridden in the ledger with that reason.
+
+def _module():
+    """Import the script as a module for the one pure helper worth unit-testing
+    directly. Everything else stays a subprocess, as above."""
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("require_green_ci", SCRIPT)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def test_a_short_sha_is_refused_before_any_api_call(tmp_path):
+    """Mutant c0edb4d1 (`return 1` -> `return 2` on the sha-length refusal)
+    survived because nothing pinned the exit code of that branch. The
+    workflow hands over $GITHUB_SHA, always 40 characters; anything else is a
+    mis-wired caller and must fail with the same code every other refusal
+    uses, so a caller keying on it cannot tell the two apart wrongly."""
+    r = _run([_r()], tmp_path, sha="501ed1e")
+
+    assert r.returncode == 1
+    assert "::error::" in r.stdout + r.stderr
+    assert "40" in r.stdout + r.stderr
+
+
+def test_the_runs_url_percent_encodes_every_path_component():
+    """Fuzz finding 771657b5: fetch({'workflow': '<emoji>'}) raised
+    UnicodeEncodeError from inside urllib, because the URL was assembled by
+    f-string from raw arguments. The real inputs are ASCII, but a gate that
+    can crash on its own arguments has an unhandled path -- and urllib's
+    codec error is a ValueError, which main() would have retried as
+    'transient' until the budget ran out, reporting a network problem that
+    did not exist. Encode, so any argument yields a well-formed request."""
+    mod = _module()
+
+    url = mod.runs_url("https://api.github.com", "jared0565/aramid",
+                       chr(0x1F642) + ".yml", "a b")
+
+    assert url.startswith("https://api.github.com/repos/jared0565/aramid/actions/workflows/")
+    assert "%F0%9F%99%82.yml" in url
+    assert "head_sha=a%20b" in url
+    url.encode("ascii")                 # the property urllib actually needs

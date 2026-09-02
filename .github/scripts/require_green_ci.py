@@ -35,6 +35,7 @@ import sys
 import time
 import urllib.error
 import urllib.request
+from urllib.parse import quote
 
 
 def evaluate(runs: list, sha: str):
@@ -65,9 +66,23 @@ def describe(runs: list) -> str:
     return "; ".join(parts)
 
 
+def runs_url(api: str, repo: str, workflow: str, sha: str) -> str:
+    """Percent-encode every caller-supplied component.
+
+    Fuzz finding 771657b5: a non-ASCII workflow name made urllib raise
+    UnicodeEncodeError from inside the request, i.e. the gate crashed on its
+    own arguments. The real inputs are ASCII, but the failure class is
+    'unhandled path', and that error is a ValueError, which main() would have
+    retried as transient until the budget ran out -- a network problem that
+    did not exist. `repo` keeps its one slash (owner/name); nothing else does.
+    """
+    return (f"{api}/repos/{quote(repo, safe='/')}/actions/workflows/"
+            f"{quote(workflow, safe='')}/runs?head_sha={quote(sha, safe='')}&per_page=100")
+
+
 def fetch(repo: str, workflow: str, sha: str) -> list:
     api = os.environ.get("GITHUB_API_URL", "https://api.github.com")
-    url = f"{api}/repos/{repo}/actions/workflows/{workflow}/runs?head_sha={sha}&per_page=100"
+    url = runs_url(api, repo, workflow, sha)
     headers = {
         "Accept": "application/vnd.github+json",
         "X-GitHub-Api-Version": "2022-11-28",
