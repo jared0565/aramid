@@ -1,0 +1,28 @@
+# Dependabot: keep the SHA-pinned GitHub Actions current.
+#
+# Every `uses:` in .github/workflows is pinned to a full commit SHA on purpose
+# (tests/unit/test_workflow_pinning.py enforces it). A pin never moves on its
+# own, so without an updater the actions are the one dependency class in this
+# repository that silently ages -- and the maintainer would be the only one who
+# ever notices. Dependabot opens a PR per bump, updates the SHA AND the
+# trailing `# vX.Y.Z` comment the pinning test requires, and the PR runs the
+# full matrix like any other push.
+#
+# Python dependencies are deliberately NOT here. pyproject.toml bounds them
+# with ranges chosen where each analyzer signals breaking change (ruff minors,
+# semver majors elsewhere) and widening a bound is a decision the maintainers
+# make by reading the analyzer's changelog, not one a bot proposes on a
+# schedule -- the ruff 0.16 default-rule-set widening turned all seven CI legs
+# red with no change to this repo, which is exactly the class of change that
+# must be adopted deliberately. Vulnerability alerts for the Python
+# dependencies are enabled at the repository level instead.
+version: 2
+updates:
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    commit-message:
+      prefix: "chore(ci)"
+    labels:
+      - "dependencies"

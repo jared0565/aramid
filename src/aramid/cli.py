@@ -107,8 +107,11 @@ def build_parser() -> argparse.ArgumentParser:
     p_filter = ledger_sub.add_parser("filter")
     p_filter.add_argument("--tool")
     p_filter.add_argument("--rule")
-    p_filter.add_argument("--status")
-    p_filter.add_argument("--severity")
+    p_filter.add_argument("--status",
+                          help="ledger status; hyphens and case accepted (e.g. "
+                               "pending-retest); an unknown value is refused")
+    p_filter.add_argument("--severity",
+                          help="info, low, medium, high or critical; case accepted")
     p_filter.add_argument("--json", action="store_true")
     p_rotated = ledger_sub.add_parser("mark-rotated")
     p_rotated.add_argument("id")

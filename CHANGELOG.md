@@ -10,6 +10,40 @@ to publish a tag that disagrees with it.
 
 ## [Unreleased]
 
+### Added
+
+- **The release workflow refuses to publish a commit CI has not passed.** A
+  new first job, `verify-ci`, queries the Actions API for the `aramid`
+  workflow's runs on the exact tagged commit and exits non-zero unless one is
+  completed with conclusion `success`; `release`, `publish-testpypi` and
+  `publish-pypi` all depend on it. A matrix still running is waited for
+  (75-minute budget); every run finished and none green fails at once, naming
+  the runs and the remedy. RELEASING.md step 4 ("wait for CI to be green")
+  was a human step until now: the v0.8.0 tag's own CI run was red (a macOS
+  runner was never acquired) and the release proceeded, saved only by the
+  same commit having been green on main. Logic in
+  `.github/scripts/require_green_ci.py`, every branch pinned by
+  `tests/unit/test_require_green_ci.py`, wiring pinned too.
+- `SECURITY.md` (private vulnerability reporting through GitHub security
+  advisories, response targets, supported-versions policy, what is in and out
+  of scope, how to verify a release), `CONTRIBUTING.md` (setup, test tiers,
+  the gate rules, PR flow) and `MAINTAINERS.md` (the single-maintainer risk
+  stated, and exactly what a successor needs to keep releasing). Dependabot
+  now watches the SHA-pinned actions, the one dependency class here that never
+  moves on its own. Private vulnerability reporting and dependency
+  vulnerability alerts are enabled on the repository.
+
+### Fixed
+
+- **`ledger filter --status` accepts the spelling `status` prints and refuses
+  unknown values.** `aramid status` reports `pending-retest: 2`; `ledger
+  filter --status pending-retest` answered "no matching findings", because the
+  ledger stores `pending_retest` and the comparison was raw -- an empty answer
+  indistinguishable from a real absence, on the surface the release checklist
+  reads. Hyphens and case are now normalised for `--status` and `--severity`,
+  and a value outside the vocabulary exits 3 with the vocabulary listed
+  instead of an empty match (`--json` included, which printed `[]`).
+
 ## [0.8.0] — 2026-09-01
 
 ### Added

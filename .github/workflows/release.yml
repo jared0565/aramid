@@ -2,7 +2,9 @@
 # Release, so `pip install -e .` from a source checkout stops being aramid's
 # only install path.
 #
-# Two jobs, deliberately split. `release` uses the built-in GITHUB_TOKEN only
+# Four jobs, deliberately split. `verify-ci` refuses to let anything start
+# unless the `aramid` workflow -- the seven-leg test matrix -- has a completed,
+# green run on this exact commit. `release` uses the built-in GITHUB_TOKEN only
 # and produces a GitHub Release, which can be deleted if something is wrong.
 # `publish-pypi` is the IRREVERSIBLE half -- PyPI forbids re-uploading a
 # version, and the first upload claims the public name for good -- so it is
@@ -39,7 +41,55 @@ permissions:
   contents: write
 
 jobs:
+  # THE CODE MUST ALREADY BE GREEN, AND THE PIPELINE MUST KNOW IT.
+  #
+  # Every gate in `release` below is about the ARTIFACT. None of them asked
+  # whether the commit had passed CI; RELEASING.md step 4 ("wait for CI to be
+  # green") was a human step, and a convention is not a gate. On 2026-09-01 the
+  # v0.8.0 tag's own `aramid` run went red -- GitHub never acquired a macOS
+  # runner -- and this workflow published anyway. Harmless that time, because
+  # the same commit had been green on main two hours earlier. Nothing here knew
+  # that, and nothing would have stopped a tag on a commit that had never been
+  # green at all.
+  #
+  # `require_green_ci.py` asks the Actions API for the `aramid` workflow's runs
+  # on EXACTLY this sha and exits 0 only if one of them is completed + success.
+  # Any run on the sha counts (main push, tag push, re-run): the verdict is
+  # about the commit's content, not the ref. A matrix still running is waited
+  # for; all-finished-and-none-green fails at once with the remedy. The logic
+  # lives in a file so tests/unit/test_require_green_ci.py can pin every branch
+  # -- a gate that only ever runs on a release tag would otherwise have its
+  # first real exercise BE a release.
+  #
+  # `actions: read` is required to list runs and is granted here only; the
+  # workflow-level grant is `contents: write`, and a job without its own grant
+  # gets a 403 that the script reports by name rather than reading as "no
+  # runs". The tag push starts the `aramid` matrix in parallel with this job,
+  # so when RELEASING.md's step 4 was skipped the wait is one matrix (~30 min);
+  # the 75-minute budget covers a re-run of a lost leg on top of that.
+  verify-ci:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    permissions:
+      actions: read
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.12"
+
+      - name: Require a completed, green aramid run on this exact commit
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: >-
+          python .github/scripts/require_green_ci.py
+          --repo "$GITHUB_REPOSITORY" --sha "$GITHUB_SHA"
+          --workflow aramid.yml --timeout-minutes 75
+
   release:
+    needs: verify-ci
     runs-on: ubuntu-latest
     steps:
       # Pinned to commit SHAs -- see the rationale in aramid.yml. It binds

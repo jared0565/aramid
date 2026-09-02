@@ -61,6 +61,9 @@ The authoritative backstop is re-running `aramid check --all --strict --json` in
 - **[User Guide](https://github.com/jared0565/aramid/blob/main/docs/user-guide.md)** — task-oriented walkthrough: install, onboarding, the gate, running checks, the red-team drain, and each consumer.
 - **[Knowledge Base](https://github.com/jared0565/aramid/blob/main/docs/knowledge-base.md)** — reference: concepts glossary, full configuration reference, consumer reference, CLI commands, and exit codes.
 - **Design specs & implementation plans** — `docs/superpowers/specs/` and `docs/superpowers/plans/`.
+- **[Security policy](https://github.com/jared0565/aramid/blob/main/SECURITY.md)** — how to report a vulnerability privately, what is in and out of scope, supported versions, and how to verify a release.
+- **[Contributing](https://github.com/jared0565/aramid/blob/main/CONTRIBUTING.md)** — development setup, the test tiers, the gate rules every commit must clear, and the pull-request flow.
+- **[Maintainers](https://github.com/jared0565/aramid/blob/main/MAINTAINERS.md)** — who maintains aramid and what a successor needs to keep releasing it.
 
 ## Exit-code contract
 

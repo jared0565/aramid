@@ -36,7 +36,16 @@ normalised form into the wheel. Either spelling is fine in `__version__`.
    heading with today's date, and refresh the link definitions at the bottom.
 
 4. **Commit and push to `main`. Wait for CI to be green.** The tag should point
-   at a commit CI has already vetted, not one that is about to be.
+   at a commit CI has already vetted, not one that is about to be. This is
+   **enforced by the workflow, not just advised**: its first job, `verify-ci`,
+   asks the Actions API whether the `aramid` workflow has a completed, green
+   run on the tagged commit and refuses to start the build otherwise. Tag
+   early and it waits for the matrix (75-minute budget); tag a commit whose
+   every run finished red and it fails at once, naming the runs. Re-run the
+   red run to green, then re-run the release workflow from the Actions tab
+   (`gh run rerun <run-id>`). No re-tag is needed unless the code changes.
+   Any run on the exact commit counts, so a tag run that lost a runner does
+   not fail a commit that was green on `main`.
 
 5. **Tag and push the tag:**
 
@@ -106,6 +115,7 @@ artifact cannot be recalled, only superseded:
 
 | Gate | Catches |
 | --- | --- |
+| A completed, green `aramid` CI run on the tagged commit (`verify-ci`) | Publishing code the seven-leg matrix never passed. The v0.8.0 tag's own run was red (a macOS runner was never acquired) and until this gate nothing in the pipeline would have noticed |
 | Tag matches `__version__` | Publishing `aramid-0.2.0.whl` under a tag called `v0.3.0` |
 | Packaged data files present | A wheel missing the vendored OWASP ruleset, which makes semgrep crash on every pre-push in every consumer repo |
 | Clean-venv smoke test | A wheel that installs but does not work: it installs into a fresh virtualenv, leaves the source tree so an accidental import of it fails, runs the console script, and asserts the ruleset resolves from inside `site-packages` |

@@ -1071,3 +1071,101 @@ def test_resolve_out_of_scope_accepts_a_python_path_outside_mypys_own_files_scop
     capsys.readouterr()
     assert _resolve(root, "s1", out_of_scope=True, reason="please") == 3
     assert "still examines" in capsys.readouterr().err
+
+
+# ------------------------------------------------------ filter vocabulary ---
+# `aramid status` prints the status vocabulary with hyphens (`pending-retest`,
+# `not-a-secret`, `out-of-scope`); the ledger stores underscores; and
+# `filter --status` compared the raw string. So the spelling `status` itself
+# teaches returned "no matching findings" for rows that existed -- an empty
+# answer indistinguishable from a real absence, on the one surface the release
+# checklist reads. Same shape for `--severity`, whose vocabulary is also fixed.
+# A value outside the vocabulary is a usage error and is refused (exit 3, the
+# config/engine code), never answered with an empty match.
+
+def _not_a_secret_row(root):
+    ledger = _ledger(root)
+    ledger.record_run("r1", "t1", "historical-scan", {"gitleaks"}, set(),
+                      [_f("hist1", tool="gitleaks", rule="generic-api-key",
+                          verdict=Verdict.BLOCK, historical=True)])
+    ledger.close()
+    assert cmd_ledger_mark_not_a_secret(root, "hist1", "a public client id") == 0
+
+
+def test_filter_status_accepts_the_spelling_status_prints(tmp_path, capsys):
+    root: Path = tmp_path
+    _not_a_secret_row(root)
+    capsys.readouterr()
+
+    rc = cmd_ledger_filter(root, status="not-a-secret")
+    out = capsys.readouterr().out
+
+    assert rc == 0
+    assert "hist1" in out
+    assert "no matching" not in out.lower()
+
+
+def test_filter_status_is_case_insensitive(tmp_path, capsys):
+    root: Path = tmp_path
+    _not_a_secret_row(root)
+    capsys.readouterr()
+
+    rc = cmd_ledger_filter(root, status="NOT_A_SECRET")
+    out = capsys.readouterr().out
+
+    assert rc == 0
+    assert "hist1" in out
+
+
+def test_filter_refuses_an_unknown_status_rather_than_answering_empty(tmp_path, capsys):
+    root: Path = tmp_path
+    _not_a_secret_row(root)
+    capsys.readouterr()
+
+    rc = cmd_ledger_filter(root, status="pending-retset")
+    captured = capsys.readouterr()
+
+    assert rc == 3
+    assert "no matching" not in captured.out.lower()
+    assert "pending-retset" in captured.err          # echoes what it was given
+    assert "pending_retest" in captured.err          # and lists the vocabulary
+
+
+def test_filter_json_refuses_an_unknown_status_rather_than_printing_an_empty_list(
+        tmp_path, capsys):
+    root: Path = tmp_path
+    _not_a_secret_row(root)
+    capsys.readouterr()
+
+    rc = cmd_ledger_filter(root, status="nonsense", as_json=True)
+    captured = capsys.readouterr()
+
+    assert rc == 3
+    assert captured.out.strip() != "[]"
+
+
+def test_filter_severity_is_case_insensitive(tmp_path, capsys):
+    root: Path = tmp_path
+    ledger = _ledger(root)
+    ledger.record_run("r1", "t1", "pre-push", {"ruff"}, {"a.py"}, [_f("f1")])   # HIGH
+    ledger.close()
+
+    rc = cmd_ledger_filter(root, severity="HIGH")
+    out = capsys.readouterr().out
+
+    assert rc == 0
+    assert "f1" in out
+
+
+def test_filter_refuses_an_unknown_severity(tmp_path, capsys):
+    root: Path = tmp_path
+    ledger = _ledger(root)
+    ledger.record_run("r1", "t1", "pre-push", {"ruff"}, {"a.py"}, [_f("f1")])
+    ledger.close()
+
+    rc = cmd_ledger_filter(root, severity="urgent")
+    captured = capsys.readouterr()
+
+    assert rc == 3
+    assert "urgent" in captured.err
+    assert "critical" in captured.err

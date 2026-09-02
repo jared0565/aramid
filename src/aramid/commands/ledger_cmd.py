@@ -25,7 +25,7 @@ from pathlib import Path
 from aramid import config as config_mod
 from aramid import tier, toolset
 from aramid.ledger import Ledger
-from aramid.models import Event, EventType
+from aramid.models import Event, EventType, Severity, Status
 
 
 def _now() -> str:
@@ -55,6 +55,37 @@ def _config_or_error(root: Path, label: str):
               f"being unable to read it is being unable to answer. Fix aramid.toml "
               f"and retry.", file=sys.stderr)
         return None, 3
+
+
+def _vocab_or_error(value: str | None, vocab, flag: str):
+    """`(canonical, None)` or `(None, 3)`, having already explained itself.
+
+    `--status` and `--severity` draw from fixed vocabularies (`Status`,
+    `Severity`) and the ledger stores the underscore form -- but `aramid
+    status` PRINTS the hyphen form (`pending-retest: 2`), so the spelling one
+    surface teaches was the spelling this one rejected. The miss was silent:
+    the raw comparison matched nothing and the command answered "no matching
+    findings", which is exactly what a real absence says. Measured on this
+    repo's own ledger: `status` reported two pending-retest rows and `filter
+    --status pending-retest` reported none; the underscore spelling found both.
+
+    A filter that can answer "none" for a value no row can carry is not a
+    filter, it is a guess. So hyphens and case are normalised, and a value
+    outside the vocabulary is REFUSED with the vocabulary listed. Exit 3 is
+    the config/engine code, matching `_config_or_error`: a caller that could
+    not be answered, not one that was answered "nothing".
+    """
+    if value is None:
+        return None, None
+    canonical = value.strip().lower().replace("-", "_")
+    allowed = [m.value for m in vocab]
+    if canonical not in allowed:
+        valid = ", ".join(allowed)
+        print(f"aramid: ledger filter: unknown {flag} value {value!r} -- refusing rather "
+              f"than answering 'no matching findings' for a value no row can carry. "
+              f"Valid: {valid} (hyphens and case are accepted).", file=sys.stderr)
+        return None, 3
+    return canonical, None
 
 
 def _render_row(finding_id: str, rec: dict, verdict_now: str | None = None) -> str:
@@ -152,6 +183,12 @@ def cmd_ledger_filter(root, tool: str | None = None, rule: str | None = None,
                        as_json: bool = False) -> int:
     root = Path(root)
     cfg, err = _config_or_error(root, "filter")
+    if err is not None:
+        return err
+    status, err = _vocab_or_error(status, Status, "--status")
+    if err is not None:
+        return err
+    severity, err = _vocab_or_error(severity, Severity, "--severity")
     if err is not None:
         return err
     ledger = Ledger(root / ".aramid" / "ledger.db")
