@@ -73,7 +73,7 @@ def test_drain_judges_the_fleet_and_posts_transitions(tmp_path, seam):
     assert cmd_drain([], clock=lambda: LATER) == 0
     assert fleet.read_verdict()["verdict"] == "not-ready"
     kinds = sorted(n["notice_kind"] for n in notices.pending())
-    assert kinds == ["readiness-broken", "readiness-reached"]
+    assert kinds == ["readiness-broken"]           # the reached notice this contradicts clears
 
 
 def test_a_broken_store_never_fails_the_drain(tmp_path, seam, capsys):

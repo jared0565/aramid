@@ -89,17 +89,39 @@ def test_reaching_readiness_posts_one_notice_and_only_once():
 def test_losing_readiness_posts_readiness_broken_keyed_on_the_breaking_run():
     _seed(_entries_rows(_ready_rows()))
     _judge()
+    (reached,) = notices.pending()
+    assert reached["notice_kind"] == "readiness-reached"
     red = _row(R_A, 0.5, "0.9.0", red=("resolvers_ok",), armed=ARMED, run_id="red-run",
                defects=["file_departed/mutation BLIND"])
     _seed(_entries_rows([red]))
     v = _judge(LATER)
     assert v["verdict"] == "not-ready"
     kinds = sorted(n["notice_kind"] for n in notices.pending())
-    assert kinds == ["readiness-broken", "readiness-reached"]
+    assert kinds == ["readiness-broken"]
     broken = next(n for n in notices.pending() if n["notice_kind"] == "readiness-broken")
     assert broken["key"] == "run:red-run"
     assert broken["title"] == (f"a went red at {red['at']} "
                                "(resolvers_ok: file_departed/mutation BLIND)")
+    cleared = [e for e in notices.read_events() if e["kind"] == "cleared"]
+    assert any(e["id"] == reached["id"] and e["reason"] == "readiness lost" for e in cleared)
+
+
+def test_regaining_readiness_clears_the_pending_broken_notice():
+    """The counterpart transition, driven directly against `_post_transitions`
+    (rather than a full row-based recovery streak) so the test stays a
+    focused unit test of the clearing behaviour rather than a second
+    end-to-end readiness rebuild."""
+    broken_id = notices.post("readiness-broken", "run:x", title="t", body="b",
+                             evidence={}, now=NOW)
+    previous = {"verdict": "not-ready", "fleet": {"streak_started_at": None}}
+    verdict = {"verdict": "ready", "repos": {},
+              "fleet": {"streak_started_at": LATER, "days_held": 20.0,
+                        "versions_in_streak": ["0.8.0", "0.9.0"]}}
+    fleet._post_transitions(previous, verdict, LATER)
+    kinds = sorted(n["notice_kind"] for n in notices.pending())
+    assert kinds == ["readiness-reached"]
+    cleared = [e for e in notices.read_events() if e["kind"] == "cleared"]
+    assert any(e["id"] == broken_id and e["reason"] == "readiness regained" for e in cleared)
 
 
 def test_persistent_defect_posts_one_notice_and_clears_on_recovery():

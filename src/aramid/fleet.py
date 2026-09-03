@@ -453,6 +453,9 @@ def _post_transitions(previous: dict | None, verdict: dict, now: str) -> None:
                      evidence={"streak_started_at": start, "days_held": info["days_held"],
                                "versions": info["versions_in_streak"], "repos": names},
                      now=now)
+        for n in notices.pending():
+            if n.get("notice_kind") == "readiness-broken":
+                notices.clear(n["id"], reason="readiness regained", now=now)
     elif prev_v == READY and new_v != READY:
         br = info.get("breaking_row")
         if br:
@@ -476,6 +479,9 @@ def _post_transitions(previous: dict | None, verdict: dict, now: str) -> None:
                            + ". The streak restarts from the next row on which every "
                              "registered repo is green."),
                      evidence={"breaking_row": br, "reasons": verdict["reasons"]}, now=now)
+        for n in notices.pending():
+            if n.get("notice_kind") == "readiness-reached":
+                notices.clear(n["id"], reason="readiness lost", now=now)
 
 
 def _post_defects(rows: list[dict], registered: dict[str, str], policy: Policy,
