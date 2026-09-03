@@ -171,6 +171,15 @@ class GateResult:
     # report is real, the ledger has no run to match it against, and a saved
     # copy must be able to say so (interop round 155 s3).
     recorded: bool = True
+    # Which language stacks this run detected (`detectors.detect_stacks`),
+    # sorted. Carried for the fleet health row (aramid.health): "should
+    # pip-audit have run here" is a question about the repo's stack, not
+    # about which requirements files happen to exist -- a pyproject-only
+    # Python repo is exactly the case that criterion exists to catch -- and
+    # `ctx.stacks` is already computed, so re-walking the tree at push time
+    # would spend the row's own budget on a fact the run had in hand.
+    # Additive; the default keeps every construction site valid.
+    stacks: tuple = ()
 
 
 def _tool_provenance(selected) -> dict:
@@ -1254,4 +1263,5 @@ def run_gate(root: Path, gate: Gate, mode: str, cfg: config_mod.Config, ledger: 
                        # The SAME value record_run wrote to RUN_STARTED, not a
                        # re-derivation: the two surfaces disagreeing about what
                        # ran is the defect this closes.
-                       tools_ran=tuple(sorted(scope_tools)))
+                       tools_ran=tuple(sorted(scope_tools)),
+                       stacks=tuple(sorted(ctx.stacks)))
