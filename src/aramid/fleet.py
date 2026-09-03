@@ -110,6 +110,7 @@ def load_policy() -> Policy:
 
 
 PUSH_BUDGET_S = 2.0
+MAX_NOTICE_LINES = 3
 _monotonic = time.monotonic     # seam for the budget tests
 
 
@@ -601,9 +602,14 @@ def delivery_lines(root, *, surface: str, now: str, policy: Policy | None = None
         policy = policy or load_policy()
         lines = [readiness_line(read_verdict())]
         repo = repo_key(root)
-        for n in notices_mod.due(repo, now, policy.repeat_hours):
+        due = notices_mod.due(repo, now, policy.repeat_hours)
+        shown, remaining = due[:MAX_NOTICE_LINES], due[MAX_NOTICE_LINES:]
+        for n in shown:
             lines.append(notices_mod.render_line(n))
             notices_mod.mark_shown(n["id"], repo=repo, surface=surface, now=now)
+        if remaining:
+            lines.append(f"fleet: ... and {len(remaining)} more notice(s) pending "
+                         "-- see `aramid notices`")
         return lines
     except Exception:
         return []

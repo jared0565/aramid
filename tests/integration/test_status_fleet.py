@@ -88,3 +88,15 @@ def test_an_acked_notice_is_gone_from_status(tmp_path, capsys):
     nid = notices.post("fleet-defect", "k", title="t", body="b", evidence={}, now=NOW)
     notices.ack(nid, repo="elsewhere", now=NOW)
     assert not any("NOTICE" in ln for ln in _out(root, capsys))
+
+
+def test_status_caps_notice_lines_and_says_how_many_remain(tmp_path, capsys):
+    root = _repo(tmp_path)
+    for i in range(5):
+        notices.post("fleet-defect", f"k{i}", title=f"t{i}", body="b", evidence={}, now=NOW)
+    lines = _out(root, capsys)
+    notice_lines = [ln for ln in lines if ln.startswith("NOTICE ")]
+    assert len(notice_lines) == 3
+    assert "fleet: ... and 2 more notice(s) pending -- see `aramid notices`" in lines
+    shown = [e for e in notices.read_events() if e["kind"] == "shown"]
+    assert len(shown) == 3
