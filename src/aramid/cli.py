@@ -22,6 +22,7 @@ from aramid.commands.arm import cmd_arm
 from aramid.commands.check import cmd_check
 from aramid.commands.doctor import cmd_doctor
 from aramid.commands.drain import cmd_drain
+from aramid.commands.fleet_cmd import cmd_fleet, cmd_notices
 from aramid.commands.init import cmd_init
 from aramid.commands.ledger_cmd import (
     cmd_ledger_filter,
@@ -81,6 +82,21 @@ def build_parser() -> argparse.ArgumentParser:
                                 "only on what it cleared (finds resolvers that "
                                 "silently stopped firing)")
     p_res.add_argument("--json", action="store_true")
+
+    p_fleet = sub.add_parser("fleet",
+                             help="fleet health across every registered repo and the "
+                                  "1.0 readiness verdict (machine-level; read-only)")
+    p_fleet.add_argument("--json", action="store_true")
+
+    p_notices = sub.add_parser("notices",
+                               help="aramid's own notices: list (default), show <id>, "
+                                    "ack <id> (an ack anywhere silences it everywhere)")
+    notices_sub = p_notices.add_subparsers(dest="notices_command")
+    notices_sub.add_parser("list")
+    p_nshow = notices_sub.add_parser("show")
+    p_nshow.add_argument("id")
+    p_nack = notices_sub.add_parser("ack")
+    p_nack.add_argument("id")
 
     p_ms = sub.add_parser("mutation-score",
                           help="advisory per-function mutation-score + regression report")
@@ -281,6 +297,12 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.command == "resolvers":
         return cmd_resolvers(root, as_json=args.json)
+
+    if args.command == "fleet":
+        return cmd_fleet(as_json=args.json)
+
+    if args.command == "notices":
+        return cmd_notices(args.notices_command or "list", getattr(args, "id", None), root)
 
     if args.command == "mutation-score":
         return cmd_mutation_score(root, as_json=args.json)

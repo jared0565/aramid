@@ -598,3 +598,45 @@ def delivery_lines(root, *, surface: str, now: str, policy: Policy | None = None
         return lines
     except Exception:
         return []
+
+
+_COLUMNS = (("no_skip_streak", "skip"), ("consumers_healthy", "consumers"),
+            ("resolvers_ok", "resolvers"), ("no_self_inflicted_block", "self-block"),
+            ("dep_audit_ran", "dep-audit"))
+
+
+def render_report(verdict: dict | None, policy: Policy) -> str:
+    """`aramid fleet`: the repo x criteria matrix, the streak, the verdict
+    with its reasons. `ok` / `RED` / `-` (not applicable, or no rows)."""
+    out = [f"fleet health -- 1.0 readiness (policy: {policy.min_days} days, "
+           f"{policy.min_versions} versions)", ""]
+    if verdict is None:
+        out.append("  no verdict yet -- first drain after promotion computes it")
+        return "\n".join(out)
+    repos = list(verdict.get("repos", {}).values())
+    width = max([len(v["name"]) for v in repos] + [4])
+    cells_header = "  ".join(f"{label:<10}" for _k, label in _COLUMNS)
+    out.append(f"  {'repo':<{width}}  {'rows':>4}  {'latest':<25}  {cells_header}".rstrip())
+    for v in repos:
+        if not v.get("rows"):
+            latest, cells = "(no rows)", ["-"] * len(_COLUMNS)
+        else:
+            latest = str(v.get("latest_at"))
+            crit = v.get("criteria", {})
+            cells = ["-" if crit.get(k) is None else ("ok" if crit.get(k) is True else "RED")
+                     for k, _label in _COLUMNS]
+        out.append((f"  {v['name']:<{width}}  {v['rows']:>4}  {latest:<25}  "
+                    + "  ".join(f"{c:<10}" for c in cells)).rstrip())
+    info = verdict.get("fleet", {})
+    out.append("")
+    if info.get("streak_started_at"):
+        versions = ", ".join(info.get("versions_in_streak", [])) or "none"
+        out.append(f"  streak: since {info['streak_started_at']} "
+                   f"({float(info.get('days_held', 0.0)):.1f}d, versions: {versions})")
+    else:
+        out.append("  streak: none (fleet not green)")
+    out.append(f"  armed anywhere: {'yes' if info.get('armed_anywhere') else 'no'}")
+    out.append("")
+    out.append(f"verdict: {verdict.get('verdict')}")
+    out.extend(f"  - {r}" for r in verdict.get("reasons", []))
+    return "\n".join(out)
