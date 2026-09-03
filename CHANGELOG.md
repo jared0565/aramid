@@ -34,6 +34,21 @@ to publish a tag that disagrees with it.
   consumer must be armed", and a consumer took it that way (channel round
   165). RELEASING.md's 1.0 gate says the same in words now.
 
+### Fixed
+
+- **The semgrep floor is 1.137, up from 1.100.** semgrep 1.136.0 and below
+  pin `opentelemetry-instrumentation-requests ~=0.46b0`, whose
+  `dependencies.py` imports `pkg_resources`; Python 3.13 ships no
+  setuptools, so semgrep crashes on import and every semgrep-backed gate
+  fails with it -- BLOCK tier, on every push. opentelemetry-instrumentation
+  0.49b0 (2024-11-05) moved to `importlib.metadata`, and 1.137.0 is the
+  first semgrep pinning that generation. This was not hypothetical: on
+  2026-09-03 pip on one CI runner backtracked from 1.176.0 down to 1.136.0
+  during an opentelemetry conflict and 13 tests failed on
+  `ModuleNotFoundError: pkg_resources`, while the twin run on the same
+  commit resolved 1.176.0 and passed. With the floor, that backtrack fails
+  the install loudly instead of installing a gate that crashes.
+
 ## [0.9.0] — 2026-09-03
 
 ### Added
