@@ -126,3 +126,24 @@ def test_gate_trailer_policy_off_keeps_the_json_key(tmp_path, clean_gate, capsys
     assert "fleet notice" not in capsys.readouterr().out
     assert cmd_check(root, Gate.PRE_COMMIT, "staged", as_json=True) == 0
     assert json.loads(capsys.readouterr().out)["fleet_notices_pending"] == 1
+
+
+def test_a_policy_read_outside_load_policys_own_except_still_exits_0(tmp_path, clean_gate,
+                                                                      capsys, monkeypatch):
+    """`fleet.load_policy()` only catches TOMLDecodeError/OSError/
+    UnicodeDecodeError around its own parse -- but `policy_path()` ->
+    `store_dir()` -> `Path.home()` can raise RuntimeError, and `p.exists()`
+    can raise PermissionError, both outside that guard. Either would turn a
+    clean gate into exit 3 (cmd_check's outer `except Exception`) unless the
+    trailer-policy read in commands/check.py is its own fail-open seam,
+    matching constraint 6."""
+    root = _repo(tmp_path)
+
+    def boom():
+        raise RuntimeError("injected")
+    monkeypatch.setattr(fleet, "load_policy", boom)
+
+    rc = cmd_check(root, Gate.PRE_COMMIT, "staged", as_json=True)
+    payload = json.loads(capsys.readouterr().out)
+    assert rc == 0
+    assert "fleet_notices_pending" in payload

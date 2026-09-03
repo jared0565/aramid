@@ -226,8 +226,12 @@ def cmd_check(root, gate: Gate, mode: str, strict: bool = False, as_json: bool =
         # The notice COUNT rides the report (fleet-readiness spec section 8);
         # read here, not in the reporter, which touches no filesystem.
         from aramid import notices as notices_mod
+        try:
+            trailer = fleet.load_policy().gate_trailer
+        except Exception:  # fail-open: policy trouble never changes the gate's answer
+            trailer = fleet.Policy().gate_trailer
         result = dataclasses.replace(result, fleet_notices_pending=notices_mod.pending_count(),
-                                     fleet_trailer=fleet.load_policy().gate_trailer)
+                                     fleet_trailer=trailer)
 
         output = reporter.render_json(result) if as_json else reporter.render_console(result, ledger)
         print(output)
