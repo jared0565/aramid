@@ -7,14 +7,14 @@ rules in `aramid.toml` before `aramid arm`). Pure reporting: never mutates
 the ledger, never runs a gate.
 """
 import sys
-from collections import Counter, defaultdict
+from collections import Counter
 from datetime import date, datetime, timezone
 from pathlib import Path
 
 from aramid import config as config_mod
+from aramid import health
 from aramid import review
 from aramid import toolset
-from aramid import yield_report
 from aramid.ledger import Ledger
 from aramid.models import EventType
 
@@ -95,85 +95,9 @@ def _aging_line(ledger: Ledger, state: dict) -> str:
 
 
 def _skip_streak_lines(ledger: Ledger) -> list[str]:
-    """For every tool eligible for a gate, how many of that gate's most recent
-    consecutive runs it was ABSENT from -- design doc section 8's
-    skip-visibility requirement ('semgrep: skipped last N runs').
-
-    SCOPED PER GATE, and that is the whole subtlety. `GATE_RUNNER_KEYS` gives
-    each gate a different runner set: ruff is pre-commit only, semgrep and
-    tests are pre-push only. A global streak therefore counts ruff as
-    "skipped" on every pre-push run, which is not a skip -- it is the gate
-    working exactly as designed. Reported to us from a downstream repo as an
-    unexplained `ruff: skipped last 1 run(s)` whose `ruff check .` passed by
-    hand, and reproduced in aramid's own `status` at the same time.
-
-    One word cannot carry both "ran and failed" and "not part of this gate":
-    the first is a hole in the gate, the second is the gate being correct.
-
-    A gate's eligible set is therefore what the gate SHOULD have run, recorded
-    on the run itself as `expected` (see the comment at the loop below for how
-    it is read, and why an absent key is not an empty one).
-
-    It is deliberately NOT "the tools that have actually appeared at this
-    gate". That rule was tried first and it cannot see a scanner that never
-    started: misconfigure semgrep before its first run and it never enters the
-    universe, so it is never reported skipped, and an absent security control
-    reads as a healthy one. Do not reintroduce it -- its appeal is that it
-    needs no runner table to keep in sync, and that convenience is exactly the
-    blind spot. The tests-runner alias ("tests" the key, "python" the recorded
-    label) is handled because `expected` is recorded in the same vocabulary the
-    runs report.
-
-    The gate is named in the line for the same reason: it tells the reader
-    which set of runs the count is over.
-    """
-    runs = [e for e in ledger.events() if e.type is EventType.RUN_STARTED]
-    if not runs:
-        return []
-
-    by_gate: dict[str, list] = defaultdict(list)
-    for e in runs:
-        by_gate[str(e.payload.get("gate", "?"))].append(e)
-
-    lines = []
-    for gate in sorted(by_gate):
-        gate_runs = by_gate[gate]
-        # WHAT THE GATE SHOULD HAVE RUN, from the newest run that recorded it.
-        #
-        # Deriving eligibility from tools that have previously APPEARED cannot
-        # see a scanner that never started: misconfigure semgrep before its
-        # first run and it never enters the universe, so it is never reported
-        # skipped and an absent security control reads as a healthy one. That
-        # is the shape this whole report exists to prevent, and it survived the
-        # fix for the opposite bug.
-        #
-        # Newest-that-has-it rather than a union across runs, so the report
-        # follows config: a tool genuinely removed from a gate stops being
-        # expected on the next run instead of being demanded forever.
-        #
-        # `"expected" in payload` distinguishes ABSENT (a ledger written before
-        # this was recorded -- fall back to the old observed-universe rule, or
-        # every historical repo suddenly reports nothing) from EMPTY (a
-        # positive claim that this gate expects no tools).
-        expected: set[str] | None = None
-        for e in reversed(gate_runs):
-            if "expected" in e.payload:
-                expected = {str(t) for t in (e.payload.get("expected") or ())}
-                break
-        if expected is None:
-            expected = set()
-            for e in gate_runs:
-                expected.update(e.payload.get("tools", []))
-
-        for tool in sorted(expected):
-            streak = 0
-            for e in reversed(gate_runs):
-                if tool in e.payload.get("tools", []):
-                    break
-                streak += 1
-            if streak:
-                lines.append(f"  {tool}: skipped last {streak} {gate} run(s)")
-    return lines
+    """Rendered from `health.snapshot`; the streak rule and its history live
+    in aramid.health.skip_streaks."""
+    return health.skip_streak_lines(health.snapshot(None, ledger))
 
 
 def _unrotated_historical_lines(state: dict) -> list[str]:
@@ -385,190 +309,19 @@ def _scheduled_drain_line() -> str:
 
 
 def _consumer_health_lines(ledger: Ledger) -> list[str]:
-    """Consumers currently stuck in `degraded`, as a STREAK.
-
-    `degraded` is load-bearing: the drain marks a queue item drained only when
-    every consumer finished cleanly, so a degraded consumer keeps its item
-    queued and re-runs the whole set next drain. Until now it appeared in no
-    report at all -- `last drain:` prints one consumer's name and finding
-    count, and nothing printed state. Measured on this repo: 38 degraded
-    mutation runs, invisible from every surface.
-
-    A streak rather than a lifetime total, mirroring `_skip_streak_lines`
-    directly above. A lifetime count of a fault that has since been fixed is a
-    line that never goes away, and a line that never goes away is one nobody
-    reads -- the same reason `_resolver_defect_lines` stays silent when clean.
-
-    The note is carried because "fuzz is degraded" only sends the reader to
-    the ledger, while "driver broken @ abc123: no parseable output" tells them
-    what to fix without leaving `status`. Never raises.
-    """
-    try:
-        runs: dict[str, list[tuple[str, str]]] = defaultdict(list)
-        for e in ledger.events():
-            if e.type is EventType.CONSUMER_RUN_FINISHED:
-                runs[str(e.payload.get("consumer", "?"))].append(
-                    (str(e.payload.get("state", "")),
-                     str(e.payload.get("note", ""))))
-    except Exception:
-        return []
-
-    faults = []
-    for name in sorted(runs):
-        streak, note = 0, ""
-        for state, run_note in reversed(runs[name]):
-            if state not in ("degraded", "error"):
-                break
-            streak += 1
-            note = note or run_note
-        if streak:
-            faults.append(f"    {name}: degraded last {streak} run(s)"
-                          + (f" -- {note}" if note else ""))
-    return ["  degraded consumer runs:", *faults] if faults else []
-
-
-# A give-up note's shared marker. Every consumer that stands down says
-# "giving up" (mutation, js mutation, llm_review, fuzz, dast), so one marker
-# reaches all of them -- and a consumer that invents different wording simply
-# goes unreported here rather than breaking anything.
-_GIVE_UP_MARK = "giving up"
-
-# A run that finished cleanly and certified nothing. Distinct from a give-up:
-# the consumer has NOT stopped, it will run again next drain and burn the same
-# time again. Reported because `state` cannot carry it -- `degraded` would pin
-# the queue item and stall the drain (measured downstream at 61 hours), so
-# these runs are legitimately `ok` and would otherwise be invisible.
-_NO_WORK_MARK = "no mutants tested"
-# fuzz's equivalent (interop round 155 s2): the driver timed out before it
-# reported anything, `ok`, `cases_run=0`, same budget again next drain --
-# five drains and no line anywhere.
-_NO_WORK_MARKS = (_NO_WORK_MARK, "no cases run")
-
-
-def _certified_nothing(note: str) -> bool:
-    return any(mark in note for mark in _NO_WORK_MARKS)
+    return health.degraded_consumer_lines(health.snapshot(None, ledger))
 
 
 def _stood_down_lines(ledger: Ledger) -> list[str]:
-    """Consumers that have permanently STOPPED, which `degraded` cannot show.
-
-    A give-up deliberately returns `ok`: `degraded` prevents the drain marking
-    the item drained, so standing down as `degraded` would pin the queue item
-    and re-run every other consumer on it forever -- trading a wasteful loop
-    for a total stall. But `ok` also ends the degraded streak
-    `_consumer_health_lines` reports, so the moment a consumer gives up it
-    starts reporting exactly like a healthy one.
-
-    That was survivable while give-ups almost never latched. Making the
-    baseline-timeout latch actually hold makes standing down the STEADY STATE,
-    so this report is not an optional extra -- without it the fix converts a
-    loud waste into a silent absence of coverage, which is the failure this
-    whole tool exists to catch.
-
-    The cost is stated because it is what makes the line worth acting on: a
-    downstream repo spent ~8 minutes every 4 hours for three days here, and
-    nothing anywhere named that number. Self-clearing for the same reason the
-    degraded streak is: one real run after a give-up means somebody fixed it.
-
-    Never raises.
-    """
-    try:
-        runs: dict[str, list[tuple[str, str, float]]] = defaultdict(list)
-        for e in ledger.events():
-            if e.type is EventType.CONSUMER_RUN_FINISHED:
-                runs[str(e.payload.get("consumer", "?"))].append(
-                    (str(e.payload.get("state", "")),
-                     str(e.payload.get("note", "")),
-                     float(e.payload.get("duration_s") or 0.0)))
-    except Exception:
-        return []
-
-    faults = []
-    for name in sorted(runs):
-        seq = runs[name]
-        if not seq or _GIVE_UP_MARK not in seq[-1][1]:
-            continue        # not currently stood down (or never was)
-        # Walk back over everything that produced nothing -- the degraded
-        # attempts AND the give-ups -- and stop at the last run that actually
-        # worked. That span is the waste, and the give-up run is part of it.
-        count, spent = 0, 0.0
-        for state, run_note, duration in reversed(seq):
-            if state not in ("degraded", "error") and _GIVE_UP_MARK not in run_note:
-                break
-            count += 1
-            spent += duration
-        faults.append(f"    {name}: stood down after {count} run(s), "
-                      f"{spent:.0f}s spent -- {seq[-1][1]}")
-    return ["  consumers stood down:", *faults] if faults else []
+    return health.stood_down_lines(health.snapshot(None, ledger))
 
 
 def _no_work_lines(ledger: Ledger) -> list[str]:
-    """Consumers that keep finishing cleanly while certifying nothing.
-
-    The third instance of this round's defect class, and the one that only
-    appeared after the first two were fixed: raising `baseline_timeout_s` lets
-    the baseline succeed, the wall budget is then already spent, and mutation
-    reports `ok` having generated mutants and tested none. No degraded streak
-    (it is `ok`), no stand-down (it has not given up) -- healthy-looking, and
-    recurring every drain at full cost.
-
-    A streak, so it self-clears the moment a run does real work, and the cost
-    is stated because recurring-cost-for-no-result is the whole point.
-
-    Never raises.
-    """
-    try:
-        runs: dict[str, list[tuple[str, float]]] = defaultdict(list)
-        for e in ledger.events():
-            if e.type is EventType.CONSUMER_RUN_FINISHED:
-                runs[str(e.payload.get("consumer", "?"))].append(
-                    (str(e.payload.get("note", "")),
-                     float(e.payload.get("duration_s") or 0.0)))
-    except Exception:
-        return []
-
-    faults = []
-    for name in sorted(runs):
-        seq = runs[name]
-        if not seq or not _certified_nothing(seq[-1][0]):
-            continue
-        count, spent = 0, 0.0
-        for note, duration in reversed(seq):
-            if not _certified_nothing(note):
-                break
-            count += 1
-            spent += duration
-        faults.append(f"    {name}: {count} run(s) certified nothing, "
-                      f"{spent:.0f}s spent -- {seq[-1][0]}")
-    return ["  consumers doing no work:", *faults] if faults else []
+    return health.no_work_lines(health.snapshot(None, ledger))
 
 
 def _resolver_defect_lines(ledger: Ledger) -> list[str]:
-    """One line, only when something is wrong, pointing at the full report.
-
-    THE REPORT ITSELF IS NOT THE FIX. Every silent no-op `aramid resolvers`
-    grades went unnoticed for weeks with all its evidence sitting in the
-    ledger the whole time -- what was missing was anything that SURFACED it.
-    Shipping a command that has to be remembered repeats that failure one
-    level up, so the grade reaches a command people already type.
-
-    Deliberately not a finding and deliberately not blocking: this is a
-    diagnostic about the gate's own machinery, not a verdict on the code being
-    pushed, and a false flag that stops a push gets the whole check deleted
-    rather than fixed. Silent when healthy, because a line that is always
-    there is a line nobody reads.
-
-    Never raises: a broken diagnostic must not take down `status`.
-    """
-    try:
-        flagged = [r for r in yield_report.collect(ledger) if r.flagged]
-    except Exception:
-        return []
-    if not flagged:
-        return []
-    names = ", ".join(sorted({f"{r.resolver}/{r.tool}" for r in flagged}))
-    return [f"  resolver defects: {len(flagged)} (run `aramid resolvers`)",
-            f"    {names}"]
+    return health.resolver_defect_lines(health.snapshot(None, ledger))
 
 
 def cmd_status(root) -> int:
@@ -591,12 +344,13 @@ def cmd_status(root) -> int:
             f"  {_aging_line(ledger, state)}",
         ]
 
-        lines.extend(_resolver_defect_lines(ledger))
-        lines.extend(_consumer_health_lines(ledger))
-        lines.extend(_stood_down_lines(ledger))
-        lines.extend(_no_work_lines(ledger))
+        h = health.snapshot(cfg, ledger)
+        lines.extend(health.resolver_defect_lines(h))
+        lines.extend(health.degraded_consumer_lines(h))
+        lines.extend(health.stood_down_lines(h))
+        lines.extend(health.no_work_lines(h))
 
-        streaks = _skip_streak_lines(ledger)
+        streaks = health.skip_streak_lines(h)
         if streaks:
             lines.append("  per-tool skip streaks:")
             lines.extend(streaks)
