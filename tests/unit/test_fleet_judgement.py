@@ -1,0 +1,168 @@
+"""The drain-time orchestration: judge, write the verdict atomically, post
+exactly one notice per transition or persistent defect, clear what recovers,
+compact old rows once a day, and never raise."""
+import json
+from datetime import datetime, timedelta, timezone
+
+from aramid import fleet, health, notices
+
+NOW_DT = datetime(2026, 9, 20, 12, 0, 0, tzinfo=timezone.utc)
+NOW = NOW_DT.isoformat()
+LATER = (NOW_DT + timedelta(hours=1)).isoformat()
+# tests/unit is not a package, so the row helper is repeated here rather
+# than imported from test_fleet_judge.py. Keep the two copies identical.
+R_A, R_B = "f:/projects/a", "f:/projects/b"
+ARMED = {"semgrep_block_armed": True}
+
+
+def _at(days_ago: float) -> str:
+    return (NOW_DT - timedelta(days=days_ago)).isoformat()
+
+
+def _row(repo, days_ago, version="0.9.0", *, red=(), armed=None, run_id=None,
+         dep=None, defects=()):
+    crit = {k: True for k in health.CRITERIA}
+    crit["dep_audit_ran"] = dep
+    for k in red:
+        crit[k] = False
+    return {"schema_version": 1, "at": _at(days_ago), "repo": repo,
+            "name": repo.rsplit("/", 1)[-1], "aramid_version": version,
+            "gate": "pre-push", "run_id": run_id or f"{repo[-1]}-{days_ago}",
+            "exit_code": 0, "engine_error": False, "criteria": crit,
+            "evidence": {"skip_streaks": {}, "degraded_consumers": [], "stood_down": [],
+                         "no_work": [], "resolver_defects": list(defects),
+                         "bad_tools": [], "degraded_block_tier": False,
+                         "armed": dict(armed or {}), "open": 0, "blocking": 0}}
+ENTRIES = [{"path": "F:/projects/a", "registered_at": "t"},
+           {"path": "F:/projects/b", "registered_at": "t"}]
+
+
+def _seed(rows):
+    for r in rows:
+        fleet.append_row(r)
+
+
+def _ready_rows():
+    return [_row(R_A, 20, "0.8.0", armed=ARMED), _row(R_B, 20, "0.8.0"),
+            _row(R_A, 10, "0.9.0", armed=ARMED), _row(R_B, 10, "0.9.0")]
+
+
+def _registered():
+    return {fleet.repo_key(e["path"]): "a" if e["path"].endswith("a") else "b"
+            for e in ENTRIES}
+
+
+def _judge(now=NOW):
+    # `registered_repos` resolves paths; the fixture rows use the same keys
+    # `repo_key` produces for these entries on this machine.
+    return fleet.run_judgement(now, aramid_version="0.9.0", entries=ENTRIES)
+
+
+def _entries_rows(rows):
+    keys = list(_registered())
+    for r in rows:
+        r["repo"] = keys[0] if r["repo"] == R_A else keys[1]
+    return rows
+
+
+def test_first_judgement_writes_the_verdict_file_atomically():
+    _seed(_entries_rows(_ready_rows()))
+    v = _judge()
+    assert v["verdict"] == "ready"
+    on_disk = json.loads(fleet.verdict_path().read_text(encoding="utf-8"))
+    assert on_disk["verdict"] == "ready" and on_disk["compacted_at"] == NOW
+    assert not fleet.verdict_path().with_name("fleet_verdict.json.tmp").exists()
+    assert fleet.read_verdict() == on_disk
+
+
+def test_reaching_readiness_posts_one_notice_and_only_once():
+    _seed(_entries_rows(_ready_rows()))
+    _judge()
+    _judge(LATER)
+    (n,) = notices.pending()
+    assert n["notice_kind"] == "readiness-reached"
+    assert n["key"] == "streak:" + _ready_rows()[0]["at"]
+    assert n["title"] == ("1.0 readiness reached -- streak since " + _ready_rows()[0]["at"]
+                          + " (20d, versions 0.8.0, 0.9.0) across 2 repos")
+
+
+def test_losing_readiness_posts_readiness_broken_keyed_on_the_breaking_run():
+    _seed(_entries_rows(_ready_rows()))
+    _judge()
+    red = _row(R_A, 0.5, "0.9.0", red=("resolvers_ok",), armed=ARMED, run_id="red-run",
+               defects=["file_departed/mutation BLIND"])
+    _seed(_entries_rows([red]))
+    v = _judge(LATER)
+    assert v["verdict"] == "not-ready"
+    kinds = sorted(n["notice_kind"] for n in notices.pending())
+    assert kinds == ["readiness-broken", "readiness-reached"]
+    broken = next(n for n in notices.pending() if n["notice_kind"] == "readiness-broken")
+    assert broken["key"] == "run:red-run"
+    assert broken["title"] == (f"a went red at {red['at']} "
+                               "(resolvers_ok: file_departed/mutation BLIND)")
+
+
+def test_persistent_defect_posts_one_notice_and_clears_on_recovery():
+    rows = [_row(R_A, d, armed=ARMED, defects=["gap_addressed/mutation NEVER RAN"],
+                 red=("resolvers_ok",)) for d in (4, 3, 2)]
+    rows += [_row(R_B, 3)]
+    _seed(_entries_rows(rows))
+    _judge()
+    defects = [n for n in notices.pending() if n["notice_kind"] == "fleet-defect"]
+    assert len(defects) == 1
+    key_a = list(_registered())[0]
+    assert defects[0]["key"] == f"defect:{key_a}:resolver:gap_addressed/mutation"
+    assert defects[0]["title"] == "a: resolver gap_addressed/mutation on the last 3 gate runs"
+    _judge(LATER)                                    # still present: no second notice
+    assert len([n for n in notices.pending() if n["notice_kind"] == "fleet-defect"]) == 1
+    _seed(_entries_rows([_row(R_A, 0.1, armed=ARMED)]))   # recovered
+    _judge(LATER)
+    assert [n for n in notices.pending() if n["notice_kind"] == "fleet-defect"] == []
+    cleared = [e for e in notices.read_events() if e["kind"] == "cleared"]
+    assert cleared[0]["reason"] == "defect absent from latest row"
+
+
+def test_two_rows_of_a_defect_are_not_yet_a_notice():
+    rows = [_row(R_A, d, armed=ARMED, defects=["gap_addressed/mutation NEVER RAN"],
+                 red=("resolvers_ok",)) for d in (3, 2)] + [_row(R_B, 3)]
+    _seed(_entries_rows(rows))
+    _judge()
+    assert notices.pending() == []
+
+
+def test_compaction_drops_rows_older_than_180_days_once_a_day():
+    _seed(_entries_rows(_ready_rows() + [_row(R_A, 200, armed=ARMED)]))
+    assert len(fleet.read_rows()) == 5
+    _judge()
+    assert len(fleet.read_rows()) == 4
+    _seed(_entries_rows([_row(R_A, 199, armed=ARMED)]))
+    _judge(LATER)                                    # within 24h: not rewritten
+    assert len(fleet.read_rows()) == 5
+    assert fleet.read_verdict()["compacted_at"] == NOW
+
+
+def test_over_budget_reports_and_writes_no_verdict(monkeypatch, capsys):
+    _seed(_entries_rows(_ready_rows()))
+    ticks = iter([0.0, 31.0, 31.0, 31.0])
+    monkeypatch.setattr(fleet, "_monotonic", lambda: next(ticks))
+    assert _judge() is None
+    assert not fleet.verdict_path().exists()
+    assert notices.pending() == []
+    assert capsys.readouterr().err == \
+        "aramid: fleet: judgement over the 30s budget; verdict not written\n"
+
+
+def test_a_corrupt_verdict_file_reads_as_none_and_is_replaced():
+    fleet.verdict_path().parent.mkdir(parents=True)
+    fleet.verdict_path().write_text("{not json", encoding="utf-8")
+    assert fleet.read_verdict() is None
+    _seed(_entries_rows(_ready_rows()))
+    assert _judge()["verdict"] == "ready"
+    assert fleet.read_verdict()["verdict"] == "ready"
+
+
+def test_an_unwritable_verdict_path_fails_open(capsys):
+    fleet.verdict_path().mkdir(parents=True)         # a directory where the file goes
+    _seed(_entries_rows(_ready_rows()))
+    assert _judge() is None
+    assert capsys.readouterr().err.startswith("aramid: fleet: judgement skipped (")

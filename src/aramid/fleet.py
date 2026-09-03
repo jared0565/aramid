@@ -388,3 +388,157 @@ def judge(rows: list[dict], registered: dict[str, str], policy: Policy, now: str
                       "armed_anywhere": armed_anywhere, "disarm_in_streak": disarm is not None,
                       "blockers": blockers, "breaking_row": breaking},
             "verdict": verdict, "reasons": reasons}
+
+
+JUDGE_BUDGET_S = 30.0
+COMPACT_EVERY_H = 24
+
+
+def read_verdict(path: Path | None = None) -> dict | None:
+    p = path if path is not None else verdict_path()
+    try:
+        data = json.loads(p.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError, UnicodeDecodeError):
+        return None
+    if not isinstance(data, dict) or data.get("schema_version") != SCHEMA_VERSION:
+        return None
+    return data
+
+
+def write_verdict(verdict: dict, path: Path | None = None) -> None:
+    """tmp + os.replace, the autolearn precedent: a torn write can never
+    corrupt the previous verdict."""
+    p = path if path is not None else verdict_path()
+    p.parent.mkdir(parents=True, exist_ok=True)
+    tmp = p.with_name(p.name + ".tmp")
+    tmp.write_text(json.dumps(verdict, indent=1, sort_keys=True), encoding="utf-8")
+    os.replace(tmp, p)
+
+
+def _defects_of(row: dict) -> list[tuple[str, str]]:
+    """(kind, target) pairs a row carries -- the defects a fleet-defect notice
+    is about. `no_work` is deliberately not one: it is cost, not a broken
+    mechanism (spec section 6)."""
+    ev = row.get("evidence", {})
+    out = []
+    for gate, tools in sorted((ev.get("skip_streaks") or {}).items()):
+        for tool in sorted(tools):
+            out.append(("skip", f"{gate}/{tool}"))
+    for name in sorted(set((ev.get("degraded_consumers") or []) + (ev.get("stood_down") or []))):
+        out.append(("consumer", name))
+    for entry in ev.get("resolver_defects") or []:
+        out.append(("resolver", str(entry).split(" ")[0]))
+    return out
+
+
+def _post_transitions(previous: dict | None, verdict: dict, now: str) -> None:
+    from aramid import notices
+    prev_v = previous.get("verdict") if previous else None
+    new_v = verdict["verdict"]
+    info = verdict["fleet"]
+    if new_v == READY and prev_v != READY:
+        start = info["streak_started_at"]
+        names = sorted(v["name"] for v in verdict["repos"].values())
+        versions = ", ".join(info["versions_in_streak"])
+        notices.post("readiness-reached", f"streak:{start}",
+                     title=(f"1.0 readiness reached -- streak since {start} "
+                            f"({info['days_held']:.0f}d, versions {versions}) across "
+                            f"{len(names)} repos"),
+                     body=("Every registered repo has been green on every criterion since "
+                           f"{start}: {', '.join(names)}. `aramid fleet` prints the matrix. "
+                           "RELEASING.md's \"The 1.0 gate\" names the manual criterion "
+                           "(API freeze) still to check before tagging 1.0.0."),
+                     evidence={"streak_started_at": start, "days_held": info["days_held"],
+                               "versions": info["versions_in_streak"], "repos": names},
+                     now=now)
+    elif prev_v == READY and new_v != READY:
+        br = info.get("breaking_row")
+        if br:
+            key, title = f"run:{br['run_id']}", f"{br['name']} went red at {br['at']} ({br['detail']})"
+        else:
+            key, title = f"at:{now}", "fleet readiness lost -- " + "; ".join(verdict["reasons"])
+        notices.post("readiness-broken", key, title=title,
+                     body=(f"1.0 readiness was READY and is now {new_v.upper()}: "
+                           + "; ".join(verdict["reasons"])
+                           + ". The streak restarts from the next row on which every "
+                             "registered repo is green."),
+                     evidence={"breaking_row": br, "reasons": verdict["reasons"]}, now=now)
+
+
+def _post_defects(rows: list[dict], registered: dict[str, str], policy: Policy,
+                  now: str) -> None:
+    from aramid import notices
+    by_repo: dict[str, list[dict]] = defaultdict(list)
+    for r in sorted(rows, key=lambda r: str(r.get("at", ""))):
+        if r.get("repo") in registered:
+            by_repo[r["repo"]].append(r)
+    pending = {n["id"]: n for n in notices.pending() if n.get("notice_kind") == "fleet-defect"}
+    for repo, seq in by_repo.items():
+        name = seq[-1].get("name") or registered[repo]
+        latest = set(_defects_of(seq[-1]))
+        window = seq[-policy.defect_rows:]
+        persistent = (set.intersection(*(set(_defects_of(r)) for r in window))
+                      if len(window) >= policy.defect_rows else set())
+        for kind, target in sorted(persistent):
+            notices.post("fleet-defect", f"defect:{repo}:{kind}:{target}",
+                         title=f"{name}: {kind} {target} on the last {policy.defect_rows} gate runs",
+                         body=(f"{name} has carried the same {kind} defect ({target}) on its last "
+                               f"{policy.defect_rows} consecutive gate runs. Run `aramid status` "
+                               f"in that repo for the line and the remedy; this notice clears "
+                               "itself on the first row without it."),
+                         evidence={"repo": repo, "name": name, "kind": kind, "target": target,
+                                   "rows": policy.defect_rows}, now=now)
+        for n in pending.values():
+            ev = n.get("evidence", {})
+            if ev.get("repo") == repo and (ev.get("kind"), ev.get("target")) not in latest:
+                notices.clear(n["id"], reason="defect absent from latest row", now=now)
+
+
+def _maybe_compact(rows: list[dict], previous: dict | None, now: str) -> str | None:
+    """Rewrite the store without rows older than ROW_WINDOW_DAYS, at most
+    once per COMPACT_EVERY_H, tmp + replace, under the drain lock the caller
+    holds. A gate appending between the read and the replace loses its row;
+    accepted for a once-a-day rewrite. On Windows a concurrently open file
+    makes os.replace raise; that is reported and skipped, never fatal."""
+    last = (previous or {}).get("compacted_at")
+    now_dt, last_dt = _parse(now), _parse(last) if last else None
+    if last_dt is not None and now_dt is not None and now_dt - last_dt < timedelta(hours=COMPACT_EVERY_H):
+        return last
+    cutoff = now_dt - timedelta(days=ROW_WINDOW_DAYS)
+    keep = [r for r in rows if (_parse(r.get("at")) or now_dt) >= cutoff]
+    if len(keep) != len(rows) or not health_path().exists():
+        try:
+            p = health_path()
+            tmp = p.with_name(p.name + ".tmp")
+            tmp.write_text("".join(json.dumps(r, sort_keys=True) + "\n" for r in keep),
+                           encoding="utf-8")
+            os.replace(tmp, p)
+        except OSError as exc:
+            print(f"aramid: fleet: compaction skipped ({exc})", file=sys.stderr)
+            return last
+    return now
+
+
+def run_judgement(now: str, *, aramid_version: str, entries: list[dict] | None = None,
+                  policy: Policy | None = None) -> dict | None:
+    """The drain's seam (spec section 6). Reads ONLY the store; never a
+    ledger. Never raises; over budget it reports and writes nothing."""
+    started = _monotonic()
+    try:
+        policy = policy or load_policy()
+        registered = registered_repos(entries)
+        previous = read_verdict()
+        rows = read_rows()
+        verdict = judge(rows, registered, policy, now, aramid_version=aramid_version)
+        if _monotonic() - started > JUDGE_BUDGET_S:
+            print(f"aramid: fleet: judgement over the {JUDGE_BUDGET_S:.0f}s budget; "
+                  "verdict not written", file=sys.stderr)
+            return None
+        _post_transitions(previous, verdict, now)
+        _post_defects(rows, registered, policy, now)
+        verdict["compacted_at"] = _maybe_compact(rows, previous, now)
+        write_verdict(verdict)
+        return verdict
+    except Exception as exc:
+        print(f"aramid: fleet: judgement skipped ({exc})", file=sys.stderr)
+        return None
