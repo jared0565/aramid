@@ -358,6 +358,7 @@ def judge(rows: list[dict], registered: dict[str, str], policy: Policy, now: str
     reasons = [f"{v['name']}: {', '.join(v['red_criteria'])}"
                for v in repos_out.values() if v["red_criteria"]]
     blockers: list[str] = []
+    notes: list[str] = []
     if not registered:
         verdict = INSUFFICIENT
         reasons.append("no repos registered")
@@ -375,9 +376,10 @@ def judge(rows: list[dict], registered: dict[str, str], policy: Policy, now: str
             blockers.append("no repo has an armed consumer")
         verdict = READY if not blockers else NOT_READY
         if disarm is not None:
-            blockers.append(f"streak restarted by {disarm['name']} disarming "
-                            f"{disarm['flag']} at {disarm['at']}")
+            notes.append(f"streak restarted by {disarm['name']} disarming "
+                         f"{disarm['flag']} at {disarm['at']}")
     reasons.extend(blockers)
+    reasons.extend(notes)
 
     return {"schema_version": SCHEMA_VERSION, "computed_at": now,
             "aramid_version": aramid_version,
@@ -386,7 +388,7 @@ def judge(rows: list[dict], registered: dict[str, str], policy: Policy, now: str
             "fleet": {"all_green_now": all_green_now, "streak_started_at": streak_start,
                       "days_held": days_held, "versions_in_streak": sorted(versions),
                       "armed_anywhere": armed_anywhere, "disarm_in_streak": disarm is not None,
-                      "blockers": blockers, "breaking_row": breaking},
+                      "blockers": blockers, "notes": notes, "breaking_row": breaking},
             "verdict": verdict, "reasons": reasons}
 
 
@@ -579,6 +581,7 @@ def readiness_line(verdict: dict | None) -> str:
     if missing:
         tail.append("no rows: " + ", ".join(missing))
     tail.extend(info.get("blockers", []))
+    tail.extend(info.get("notes", []))
     return line + ("; " + "; ".join(tail) if tail else "")
 
 

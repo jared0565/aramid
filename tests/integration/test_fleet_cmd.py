@@ -23,7 +23,8 @@ def _verdict(**over):
             "fleet": {"all_green_now": False, "streak_started_at": None, "days_held": 0.0,
                       "versions_in_streak": [], "armed_anywhere": False,
                       "disarm_in_streak": False,
-                      "blockers": ["no repo has an armed consumer"], "breaking_row": None},
+                      "blockers": ["no repo has an armed consumer"], "notes": [],
+                      "breaking_row": None},
             "verdict": "not-ready",
             "reasons": ["aramid: dep_audit_ran", "no repo has an armed consumer"]}
     base.update(over)

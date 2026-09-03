@@ -125,8 +125,22 @@ def test_a_disarm_inside_the_streak_restarts_it_at_that_row():
     assert v["fleet"]["streak_started_at"] == _at(3)
     assert v["fleet"]["disarm_in_streak"] is True
     assert v["verdict"] == "not-ready"
+    assert v["fleet"]["blockers"] == ["streak 3.0d < 14d", "versions 1/2 in streak"]
+    assert v["fleet"]["notes"] == ["streak restarted by a disarming semgrep_block_armed at "
+                                   + _at(3)]
     assert v["reasons"] == ["streak 3.0d < 14d", "versions 1/2 in streak",
                             "streak restarted by a disarming semgrep_block_armed at " + _at(3)]
+
+
+def test_a_disarm_far_enough_back_can_still_reach_ready():
+    rows = _ready_rows() + [_row(R_A, 15, "0.8.5", armed={"semgrep_block_armed": False},
+                                 run_id="disarm-early")]
+    v = fleet.judge(rows, REG, POLICY, NOW)
+    assert v["verdict"] == "ready"
+    assert v["fleet"]["blockers"] == []
+    assert v["fleet"]["notes"] == ["streak restarted by a disarming semgrep_block_armed at "
+                                   + _at(15)]
+    assert v["fleet"]["disarm_in_streak"] is True
 
 
 def test_rows_older_than_180_days_and_deregistered_repos_are_ignored():

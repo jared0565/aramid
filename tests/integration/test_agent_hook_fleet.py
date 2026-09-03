@@ -46,7 +46,8 @@ def _verdict(**over):
             "fleet": {"all_green_now": False, "streak_started_at": None, "days_held": 0.0,
                       "versions_in_streak": [], "armed_anywhere": False,
                       "disarm_in_streak": False,
-                      "blockers": ["no repo has an armed consumer"], "breaking_row": None},
+                      "blockers": ["no repo has an armed consumer"], "notes": [],
+                      "breaking_row": None},
             "verdict": "not-ready",
             "reasons": ["aramid: dep_audit_ran", "no repo has an armed consumer"]}
     base.update(over)
@@ -69,7 +70,7 @@ def test_ready_line_full_shape():
                               "red_criteria": [], "criteria": {}} for i in range(1, 6)},
         fleet={"all_green_now": True, "streak_started_at": NOW, "days_held": 21.0,
               "versions_in_streak": ["0.8.0", "0.9.0"], "armed_anywhere": True,
-              "disarm_in_streak": False, "blockers": [], "breaking_row": None})
+              "disarm_in_streak": False, "blockers": [], "notes": [], "breaking_row": None})
     assert fleet.readiness_line(v) == (
         "fleet: 1.0 readiness READY -- 5/5 repos green, streak 21d, versions 2/2")
 
@@ -91,7 +92,7 @@ def test_insufficient_data_line_full_shape():
         },
         fleet={"all_green_now": False, "streak_started_at": None, "days_held": 0.0,
               "versions_in_streak": [], "armed_anywhere": False,
-              "disarm_in_streak": False, "blockers": [], "breaking_row": None})
+              "disarm_in_streak": False, "blockers": [], "notes": [], "breaking_row": None})
     assert fleet.readiness_line(v) == (
         "fleet: 1.0 readiness INSUFFICIENT DATA -- 3/5 repos green, streak 0d, "
         "versions 0/2; no rows: atlas_data, graphite")
