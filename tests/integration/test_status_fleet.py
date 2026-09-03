@@ -24,10 +24,10 @@ def _verdict(**over):
             "fleet": {"all_green_now": False, "streak_started_at": None, "days_held": 0.0,
                       "versions_in_streak": [], "armed_anywhere": False,
                       "disarm_in_streak": False,
-                      "blockers": ["no repo has an armed consumer"], "notes": [],
+                      "blockers": ["no repo is armed"], "notes": [],
                       "breaking_row": None},
             "verdict": "not-ready",
-            "reasons": ["aramid: dep_audit_ran", "no repo has an armed consumer"]}
+            "reasons": ["aramid: dep_audit_ran", "no repo is armed"]}
     base.update(over)
     return base
 
@@ -77,7 +77,7 @@ def test_status_prints_the_verdict_and_a_due_notice_bare(tmp_path, capsys):
                        body="b", evidence={}, now=NOW)
     lines = _out(root, capsys)
     assert ("fleet: 1.0 readiness NOT READY -- 1/2 repos green, streak 0d, versions 0/2; "
-            "red: aramid (dep_audit_ran); no repo has an armed consumer") in lines
+            "red: aramid (dep_audit_ran); no repo is armed") in lines
     assert (f"NOTICE {nid} fleet-defect: aramid: resolver gap_addressed/mutation on the "
             f"last 3 gate runs -- ack: aramid notices ack {nid}") in lines
     assert [e["surface"] for e in notices.read_events() if e["kind"] == "shown"] == ["status"]

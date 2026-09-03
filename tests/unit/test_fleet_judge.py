@@ -114,7 +114,7 @@ def test_no_armed_consumer_anywhere_blocks_readiness():
     v = fleet.judge(rows, REG, POLICY, NOW)
     assert v["fleet"]["armed_anywhere"] is False
     assert v["verdict"] == "not-ready"
-    assert v["reasons"] == ["no repo has an armed consumer"]
+    assert v["reasons"] == ["no repo is armed"]
 
 
 def test_a_disarm_inside_the_streak_restarts_it_at_that_row():

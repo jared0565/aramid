@@ -341,6 +341,9 @@ def judge(rows: list[dict], registered: dict[str, str], policy: Policy, now: str
                           "red_criteria": _red_criteria(crit), "criteria": crit}
     missing = sorted((v["name"] for v in repos_out.values() if v["rows"] == 0), key=str.casefold)
     all_green_now = bool(registered) and not missing and all(v["green"] for v in repos_out.values())
+    # Spec section 4 criterion 6: ANY `*_armed` flag true on some repo's latest
+    # row -- a semgrep or pack arm counts, not only a drain consumer's
+    # (channel round 165 read the old wording "armed consumer" as narrower).
     armed_anywhere = any(any((r.get("evidence", {}).get("armed") or {}).values())
                          for r in latest.values())
     days_held = 0.0
@@ -375,7 +378,7 @@ def judge(rows: list[dict], registered: dict[str, str], policy: Policy, now: str
         if len(versions) < policy.min_versions:
             blockers.append(f"versions {len(versions)}/{policy.min_versions} in streak")
         if not armed_anywhere:
-            blockers.append("no repo has an armed consumer")
+            blockers.append("no repo is armed")
         verdict = READY if not blockers else NOT_READY
         if disarm is not None:
             notes.append(f"streak restarted by {disarm['name']} disarming "

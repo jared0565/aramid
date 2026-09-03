@@ -27,6 +27,12 @@ to publish a tag that disagrees with it.
   the tool-only case. Fleet criterion 5 (`dep_audit_ran`) can read green on
   such repos once this is promoted; it was the standing red on aramid's
   own repo since 0.9.0.
+- The fleet verdict's arming blocker now reads `no repo is armed` instead of
+  `no repo has an armed consumer`. The criterion never changed -- spec
+  section 4, criterion 6: any `*_armed` flag true on some repo's latest row,
+  so a semgrep or pack arm counts -- but the old wording read as "a drain
+  consumer must be armed", and a consumer took it that way (channel round
+  165). RELEASING.md's 1.0 gate says the same in words now.
 
 ## [0.9.0] — 2026-09-03
 

@@ -126,7 +126,7 @@ artifact cannot be recalled, only superseded:
 
 A 1.0.0 tag needs two things the release workflow cannot check:
 
-1. **`aramid fleet` reads `ready`** on the maintainer's machine: every registered repo green on every criterion, held for at least 14 days across at least 2 releases, with an armed consumer somewhere; a disarm inside the streak restarts it at the disarming row (fleet-readiness spec, `docs/superpowers/specs/2026-09-02-aramid-fleet-readiness-design.md`). The verdict is recomputed by every scheduled drain; the session-start hook and `aramid status` show it, and `readiness-reached` arrives as a notice.
+1. **`aramid fleet` reads `ready`** on the maintainer's machine: every registered repo green on every criterion, held for at least 14 days across at least 2 releases, with something armed somewhere (any `*_armed` flag true on a latest row; a semgrep or pack arm counts); a disarm inside the streak restarts it at the disarming row (fleet-readiness spec, `docs/superpowers/specs/2026-09-02-aramid-fleet-readiness-design.md`). The verdict is recomputed by every scheduled drain; the session-start hook and `aramid status` show it, and `readiness-reached` arrives as a notice.
 2. **API freeze** (the manual criterion): the two most recent releases carry no `Changed` or `Removed` entry against the declared compatibility surface -- the CLI names and flags, the exit codes, `check --json` keys, the ledger statuses, and `aramid.toml` keys. Judged by reading `CHANGELOG.md` at release time; not automated.
 
 Until both hold, the next release is `0.x`. Cutting 1.0.0 on a `not-ready` verdict is a decision to make in the changelog, not silently.

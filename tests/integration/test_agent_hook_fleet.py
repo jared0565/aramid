@@ -47,10 +47,10 @@ def _verdict(**over):
             "fleet": {"all_green_now": False, "streak_started_at": None, "days_held": 0.0,
                       "versions_in_streak": [], "armed_anywhere": False,
                       "disarm_in_streak": False,
-                      "blockers": ["no repo has an armed consumer"], "notes": [],
+                      "blockers": ["no repo is armed"], "notes": [],
                       "breaking_row": None},
             "verdict": "not-ready",
-            "reasons": ["aramid: dep_audit_ran", "no repo has an armed consumer"]}
+            "reasons": ["aramid: dep_audit_ran", "no repo is armed"]}
     base.update(over)
     return base
 
@@ -110,7 +110,7 @@ def test_not_ready_line_full_shape(tmp_path, monkeypatch, capsys):
     r = _onboarded(tmp_path, monkeypatch)
     fleet.write_verdict(_verdict())
     assert ("aramid: fleet: 1.0 readiness NOT READY -- 1/2 repos green, streak 0d, "
-            "versions 0/2; red: aramid (dep_audit_ran); no repo has an armed consumer"
+            "versions 0/2; red: aramid (dep_audit_ran); no repo is armed"
             ) in _lines(r, capsys)
 
 

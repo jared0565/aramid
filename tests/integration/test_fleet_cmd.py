@@ -23,10 +23,10 @@ def _verdict(**over):
             "fleet": {"all_green_now": False, "streak_started_at": None, "days_held": 0.0,
                       "versions_in_streak": [], "armed_anywhere": False,
                       "disarm_in_streak": False,
-                      "blockers": ["no repo has an armed consumer"], "notes": [],
+                      "blockers": ["no repo is armed"], "notes": [],
                       "breaking_row": None},
             "verdict": "not-ready",
-            "reasons": ["aramid: dep_audit_ran", "no repo has an armed consumer"]}
+            "reasons": ["aramid: dep_audit_ran", "no repo is armed"]}
     base.update(over)
     return base
 
@@ -56,7 +56,7 @@ def test_fleet_report_full_lines(capsys):
     assert lines[6] == "  streak: none (fleet not green)"
     assert lines[7] == "  armed anywhere: no"
     assert lines[9] == "verdict: not-ready"
-    assert lines[10:] == ["  - aramid: dep_audit_ran", "  - no repo has an armed consumer"]
+    assert lines[10:] == ["  - aramid: dep_audit_ran", "  - no repo is armed"]
 
 
 def test_fleet_report_without_a_verdict(capsys):

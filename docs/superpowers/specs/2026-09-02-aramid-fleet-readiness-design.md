@@ -53,7 +53,7 @@ Everything this needs already has a seam:
                                   "red_criteria": ["dep_audit_ran"]}},
  "fleet": {"all_green_now": false, "streak_started_at": null, "days_held": 0.0,
            "versions_in_streak": [], "armed_anywhere": false, "disarm_in_streak": false},
- "verdict": "not-ready", "reasons": ["aramid: dep_audit_ran", "no repo has an armed consumer"]}
+ "verdict": "not-ready", "reasons": ["aramid: dep_audit_ran", "no repo is armed"]}
 ```
 
 `verdict` ∈ `ready` | `not-ready` | `insufficient-data`.
@@ -194,7 +194,7 @@ aramid: 2 fleet notice(s) pending -- see `aramid notices`
 - Ships in the next minor release. **No version floor for consumers:** every delivery surface lives in the wheel; no tracked file changes.
 - First rows appear on each registered repo's next gate run after promotion; the first verdict on the next scheduled drain; `insufficient-data` until every registered repo has rows.
 - `RELEASING.md` gains a "1.0 gate" section: `aramid fleet` must read `ready`, plus the manual criterion 7. `MAINTAINERS.md` links it.
-- Expected first reading on this machine: `not-ready`, with `aramid: dep_audit_ran` red and `no repo has an armed consumer` — both true today, both things 1.0 should wait for.
+- Expected first reading on this machine: `not-ready`, with `aramid: dep_audit_ran` red and `no repo is armed` — both true today, both things 1.0 should wait for.
 
 ## 12. Out of scope
 
