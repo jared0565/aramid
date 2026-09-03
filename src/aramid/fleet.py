@@ -553,3 +553,48 @@ def run_judgement(now: str, *, aramid_version: str, entries: list[dict] | None =
     except Exception as exc:
         print(f"aramid: fleet: judgement skipped ({exc})", file=sys.stderr)
         return None
+
+
+_LABELS = {READY: "READY", NOT_READY: "NOT READY", INSUFFICIENT: "INSUFFICIENT DATA"}
+
+
+def readiness_line(verdict: dict | None) -> str:
+    """Spec section 8's one-line verdict; the same string on every surface."""
+    if verdict is None:
+        return "fleet: no verdict yet -- first drain after promotion computes it"
+    repos = verdict.get("repos", {})
+    info = verdict.get("fleet", {})
+    green = sum(1 for v in repos.values() if v.get("green"))
+    label = _LABELS.get(verdict.get("verdict"), str(verdict.get("verdict")).upper())
+    line = (f"fleet: 1.0 readiness {label} -- {green}/{len(repos)} repos green, "
+            f"streak {float(info.get('days_held', 0.0)):.0f}d, "
+            f"versions {len(info.get('versions_in_streak', []))}/"
+            f"{verdict.get('policy', {}).get('min_versions', 2)}")
+    tail = []
+    red = [f"{v['name']} ({', '.join(v['red_criteria'])})"
+           for v in repos.values() if v.get("red_criteria")]
+    if red:
+        tail.append("red: " + ", ".join(red))
+    missing = sorted((v["name"] for v in repos.values() if not v.get("rows")), key=str.casefold)
+    if missing:
+        tail.append("no rows: " + ", ".join(missing))
+    tail.extend(info.get("blockers", []))
+    return line + ("; " + "; ".join(tail) if tail else "")
+
+
+def delivery_lines(root, *, surface: str, now: str, policy: Policy | None = None) -> list[str]:
+    """The readiness line plus every notice due in this repo (spec section
+    7): shown at most once per `repeat_hours` per repo, each display recorded
+    as a `shown` event. Fail-open: any error yields NO lines -- the hook's
+    own contract is a block built fully or not at all."""
+    try:
+        from aramid import notices as notices_mod
+        policy = policy or load_policy()
+        lines = [readiness_line(read_verdict())]
+        repo = repo_key(root)
+        for n in notices_mod.due(repo, now, policy.repeat_hours):
+            lines.append(notices_mod.render_line(n))
+            notices_mod.mark_shown(n["id"], repo=repo, surface=surface, now=now)
+        return lines
+    except Exception:
+        return []

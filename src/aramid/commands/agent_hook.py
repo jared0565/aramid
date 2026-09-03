@@ -157,6 +157,13 @@ def _session_context(repo: Path) -> str:
             lines.extend("aramid:   " + s.strip() for s in streaks)
         lines.extend("aramid: " + b.strip()
                      for b in status_mod._bake_lines(cfg, state))
+
+        from datetime import datetime, timezone
+
+        from aramid import fleet
+        lines.extend("aramid: " + line for line in fleet.delivery_lines(
+            repo, surface="session-start", now=datetime.now(timezone.utc).isoformat()))
+
         lines.append(
             'aramid: commands: aramid check --staged | aramid ledger filter'
             ' --status open | aramid override <id> --reason "..."')

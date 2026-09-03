@@ -381,6 +381,11 @@ def cmd_status(root) -> int:
         lines.append(_registry_line(root))
         lines.append(_scheduled_drain_line())
 
+        # --- fleet health (fleet-readiness spec section 8) ---
+        from aramid import fleet
+        lines.extend(fleet.delivery_lines(root, surface="status",
+                                          now=datetime.now(timezone.utc).isoformat()))
+
         print("\n".join(lines))
         return 0
     except Exception as exc:
