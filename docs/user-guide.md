@@ -239,7 +239,7 @@ aramid check --strict --json
 
 ### `aramid status`
 
-A read-only snapshot — never mutates anything:
+A read-only report of this repo; the only thing it writes is a machine-level `shown` marker for any fleet notice it displays:
 
 ```powershell
 aramid status
