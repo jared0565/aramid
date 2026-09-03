@@ -166,3 +166,25 @@ def test_an_unwritable_verdict_path_fails_open(capsys):
     _seed(_entries_rows(_ready_rows()))
     assert _judge() is None
     assert capsys.readouterr().err.startswith("aramid: fleet: judgement skipped (")
+
+
+def test_the_no_breaking_row_readiness_broken_key_is_stable_across_retries():
+    """A repeated failed write must not mint a new `at:<now>` id every
+    retry: key the no-breaking-row fallback on the PRIOR verdict's streak
+    start instead, which is stable across retries because the stale prior
+    is exactly what keeps re-triggering the READY -> non-READY transition."""
+    rows = _entries_rows(_ready_rows())
+    registered = fleet.registered_repos(ENTRIES)
+    prior = fleet.judge(rows, registered, fleet.load_policy(), NOW, aramid_version="0.9.0")
+    assert prior["verdict"] == "ready"
+    fleet.write_verdict(prior)
+    prev_start = prior["fleet"]["streak_started_at"]
+    a_key = next(k for k, n in registered.items() if n == "a")
+    _seed([r for r in rows if r["repo"] == a_key])   # b has zero rows: insufficient-data, no breaking row
+    tmp = fleet.verdict_path().with_name(fleet.verdict_path().name + ".tmp")
+    tmp.mkdir(parents=True)                          # write_verdict's tmp target is a directory: every write fails
+    assert fleet.run_judgement(NOW, aramid_version="0.9.0", entries=ENTRIES) is None
+    assert fleet.run_judgement(LATER, aramid_version="0.9.0", entries=ENTRIES) is None
+    broken = [n for n in notices.pending() if n["notice_kind"] == "readiness-broken"]
+    assert len(broken) == 1
+    assert broken[0]["key"] == f"streak:{prev_start}"

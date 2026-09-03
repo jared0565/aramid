@@ -456,7 +456,18 @@ def _post_transitions(previous: dict | None, verdict: dict, now: str) -> None:
         if br:
             key, title = f"run:{br['run_id']}", f"{br['name']} went red at {br['at']} ({br['detail']})"
         else:
-            key, title = f"at:{now}", "fleet readiness lost -- " + "; ".join(verdict["reasons"])
+            # No single row broke it (e.g. a registered repo lost its rows
+            # entirely). Key on the PRIOR verdict's streak start rather than
+            # `now`: a write failure leaves the stale READY prior in place,
+            # so every retry re-detects the SAME transition with a
+            # DIFFERENT `now` -- keying on `now` would mint a fresh notice
+            # id every retry. The prior is what re-triggers the transition,
+            # so it is what stays stable across retries. `at:<now>` remains
+            # only as the last resort when the prior carries no streak
+            # start, which a READY verdict never lacks.
+            prev_start = (previous or {}).get("fleet", {}).get("streak_started_at")
+            key = f"streak:{prev_start}" if prev_start else f"at:{now}"
+            title = "fleet readiness lost -- " + "; ".join(verdict["reasons"])
         notices.post("readiness-broken", key, title=title,
                      body=(f"1.0 readiness was READY and is now {new_v.upper()}: "
                            + "; ".join(verdict["reasons"])
