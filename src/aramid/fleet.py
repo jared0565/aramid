@@ -515,24 +515,54 @@ def _post_defects(rows: list[dict], registered: dict[str, str], policy: Policy,
                 notices.clear(n["id"], reason="defect absent from latest row", now=now)
 
 
-def _maybe_compact(rows: list[dict], previous: dict | None, now: str) -> str | None:
+def _maybe_compact(previous: dict | None, now: str) -> str | None:
     """Rewrite the store without rows older than ROW_WINDOW_DAYS, at most
     once per COMPACT_EVERY_H, tmp + replace, under the drain lock the caller
     holds. A gate appending between the read and the replace loses its row;
     accepted for a once-a-day rewrite. On Windows a concurrently open file
-    makes os.replace raise; that is reported and skipped, never fatal."""
+    makes os.replace raise; that is reported and skipped, never fatal.
+
+    Works from the store's RAW lines, not `read_rows()`'s parsed list:
+    `read_rows()` silently drops a row whose `schema_version` is newer than
+    this build's own, and rewriting from that list would delete such a row
+    outright rather than merely leave it unjudged. A line this build cannot
+    read -- it fails to parse, its schema is newer, or its `at` is missing
+    or unparsable -- is always kept verbatim; only a row this build CAN
+    read, and whose `at` is older than the window, is dropped."""
     last = (previous or {}).get("compacted_at")
     now_dt, last_dt = _parse(now), _parse(last) if last else None
     if last_dt is not None and now_dt is not None and now_dt - last_dt < timedelta(hours=COMPACT_EVERY_H):
         return last
+    p = health_path()
     cutoff = now_dt - timedelta(days=ROW_WINDOW_DAYS)
-    keep = [r for r in rows if (_parse(r.get("at")) or now_dt) >= cutoff]
-    if len(keep) != len(rows) or not health_path().exists():
+    try:
+        text = p.read_text(encoding="utf-8", errors="replace") if p.exists() else ""
+    except OSError as exc:
+        print(f"aramid: fleet: compaction skipped ({exc})", file=sys.stderr)
+        return last
+    keep_lines: list[str] = []
+    dropped = 0
+    for line in text.splitlines():
+        if not line.strip():
+            continue
         try:
-            p = health_path()
+            obj = json.loads(line)
+        except json.JSONDecodeError:
+            keep_lines.append(line)
+            continue
+        version = obj.get("schema_version") if isinstance(obj, dict) else None
+        if not isinstance(version, int) or isinstance(version, bool) or version > SCHEMA_VERSION:
+            keep_lines.append(line)          # unreadable shape: age cannot be judged
+            continue
+        at_dt = _parse(obj.get("at")) if isinstance(obj, dict) else None
+        if at_dt is None or at_dt >= cutoff:
+            keep_lines.append(line)
+            continue
+        dropped += 1
+    if dropped or not p.exists():
+        try:
             tmp = p.with_name(p.name + ".tmp")
-            tmp.write_text("".join(json.dumps(r, sort_keys=True) + "\n" for r in keep),
-                           encoding="utf-8")
+            tmp.write_text("".join(line + "\n" for line in keep_lines), encoding="utf-8")
             os.replace(tmp, p)
         except OSError as exc:
             print(f"aramid: fleet: compaction skipped ({exc})", file=sys.stderr)
@@ -557,7 +587,7 @@ def run_judgement(now: str, *, aramid_version: str, entries: list[dict] | None =
             return None
         _post_transitions(previous, verdict, now)
         _post_defects(rows, registered, policy, now)
-        verdict["compacted_at"] = _maybe_compact(rows, previous, now)
+        verdict["compacted_at"] = _maybe_compact(previous, now)
         write_verdict(verdict)
         return verdict
     except Exception as exc:

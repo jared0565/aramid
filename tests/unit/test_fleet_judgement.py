@@ -163,6 +163,27 @@ def test_compaction_drops_rows_older_than_180_days_once_a_day():
     assert fleet.read_verdict()["compacted_at"] == NOW
 
 
+def test_compaction_keeps_a_row_it_cannot_read():
+    """Today `_maybe_compact` rewrites the store from the PARSED list
+    `read_rows()` returns, and `read_rows()` (via `_read_jsonl`) silently
+    drops any row whose `schema_version` is newer than this build's own --
+    so the newer row is gone on the very first compaction an older aramid
+    performs, not merely unjudged. The aged row -- readable, and genuinely
+    past the retention window -- is the one meant to be dropped."""
+    newer_schema = _row(R_B, 200, armed=ARMED)
+    newer_schema["schema_version"] = 99
+    aged = _row(R_A, 200, armed=ARMED)
+    fresh = _row(R_A, 1, armed=ARMED)
+    _seed(_entries_rows([newer_schema, aged, fresh]))
+    _judge()
+    kept = [json.loads(ln) for ln in
+           fleet.health_path().read_text(encoding="utf-8").splitlines()]
+    assert any(r.get("run_id") == newer_schema["run_id"] and r.get("schema_version") == 99
+              for r in kept)
+    assert not any(r.get("run_id") == aged["run_id"] for r in kept)
+    assert any(r.get("run_id") == fresh["run_id"] for r in kept)
+
+
 def test_over_budget_reports_and_writes_no_verdict(monkeypatch, capsys):
     _seed(_entries_rows(_ready_rows()))
     ticks = iter([0.0, 31.0, 31.0, 31.0])
