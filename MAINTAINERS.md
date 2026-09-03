@@ -34,7 +34,7 @@ Publishing (OIDC), so there is no API token to hand over or rotate.
 5. **Read access to the release evidence.** `RELEASING.md` is the procedure;
    `CHANGELOG.md` is the record; `docs/superpowers/specs/` and
    `docs/superpowers/plans/` hold the design decisions that are not derivable
-   from the code.
+   from the code. `RELEASING.md`'s "The 1.0 gate" section says when a 1.0 may be cut; `aramid fleet` is the evidence.
 
 ## Adding a second maintainer
 

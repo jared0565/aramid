@@ -245,7 +245,7 @@ A read-only snapshot — never mutates anything:
 aramid status
 ```
 
-Reports: last run summary; open/historical/not-a-secret/overridden/unreachable/fixed/superseded/out-of-scope/pending-retest/rotated finding counts; count of findings new since the baseline; count of findings aging past 30 days open; per-tool skip streaks; **resolver defects** (see [`aramid resolvers`](#aramid-resolvers--is-auto-resolution-actually-working)); **consumers stuck in `degraded`**, as a streak of consecutive failed drain runs with the note explaining what broke — this matters because the drain re-queues an item while any consumer is degraded, so a stuck consumer means the same work is being retried every drain; unrotated historical secrets (with a hint naming both retirement exits: `ledger mark-rotated` for a real leak, `ledger mark-not-a-secret` for a false positive); unreachable candidates (open findings whose tool no longer runs in this repo, with the exact `ledger mark-unreachable` command to retire each); while `semgrep_block_armed` is still `false`, the bake day-count and per-rule semgrep hit counts (so you can spot noisy rules before arming); an LLM review status line (open/confirmed-critical counts, armed/baking state, OpenRouter monthly spend vs. cap, ladder tiers) plus an autolearn line; queue status (queued count/score/age, drained/expired counts); last drain timestamp; whether the repo is registered; whether scheduled drain is installed.
+Reports: last run summary; open/historical/not-a-secret/overridden/unreachable/fixed/superseded/out-of-scope/pending-retest/rotated finding counts; count of findings new since the baseline; count of findings aging past 30 days open; per-tool skip streaks; **resolver defects** (see [`aramid resolvers`](#aramid-resolvers--is-auto-resolution-actually-working)); **consumers stuck in `degraded`**, as a streak of consecutive failed drain runs with the note explaining what broke — this matters because the drain re-queues an item while any consumer is degraded, so a stuck consumer means the same work is being retried every drain; unrotated historical secrets (with a hint naming both retirement exits: `ledger mark-rotated` for a real leak, `ledger mark-not-a-secret` for a false positive); unreachable candidates (open findings whose tool no longer runs in this repo, with the exact `ledger mark-unreachable` command to retire each); while `semgrep_block_armed` is still `false`, the bake day-count and per-rule semgrep hit counts (so you can spot noisy rules before arming); an LLM review status line (open/confirmed-critical counts, armed/baking state, OpenRouter monthly spend vs. cap, ladder tiers) plus an autolearn line; queue status (queued count/score/age, drained/expired counts); last drain timestamp; whether the repo is registered; whether scheduled drain is installed; the fleet 1.0-readiness verdict and any fleet notice due in this repo (see [Fleet health](#fleet-health-10-readiness-and-notices)).
 
 ### The ledger
 
@@ -524,6 +524,37 @@ aramid schedule remove
 ```
 
 This is Windows-only (any other platform exits `3`). `install` reads `[drain].interval_hours` (default 4) and registers a Task Scheduler job named `aramid-drain` that runs `<interpreter> -m aramid drain --all` on that interval (`StartWhenAvailable=true` so a missed window self-heals, a 1-hour execution time limit, and `IgnoreNew` for overlapping runs). `status` queries it via `schtasks /Query` (prints "aramid-drain: not installed" if absent); `remove` deletes it. Both mirror the underlying `schtasks` exit code.
+
+### Fleet health, 1.0 readiness and notices
+
+aramid has no telemetry and never phones home, so the question "is aramid ready to be called 1.0?" is answered on your machine, from the repos it gates. Every recording gate run appends one row for its own repo to `~/.aramid/fleet_health.jsonl` -- which tools ran, whether a consumer is degraded or stood down, whether a resolver is graded `NEVER RAN`/`BLIND`, whether a BLOCK-tier tool failed, whether pip-audit ran on a Python repo, and every `*_armed` flag. The drain then judges every registered repo's rows (`~/.aramid/fleet_verdict.json`) and posts notices to aramid's own channel (`~/.aramid/notices.jsonl`). Nothing is written into any repo; no process reads another repo's ledger; `aramid uninstall` leaves the store alone.
+
+```powershell
+aramid fleet             # repo x criteria matrix, streak, verdict with reasons
+aramid fleet --json      # the verdict file verbatim
+aramid notices           # pending notices, one per line
+aramid notices show <id>
+aramid notices ack <id>  # acking anywhere silences it everywhere
+```
+
+The verdict is `ready` only when every registered repo's latest row is green on every criterion, that has held for at least 14 days and across at least 2 aramid versions, and at least one repo has an armed consumer. Disarming a consumer inside the streak restarts the streak at the disarming row (the verdict names the repo, flag and time), so a disarm costs the full waiting period rather than pinning the verdict forever. A registered repo with no rows makes it `insufficient-data`; anything else is `not-ready` with the red repos and criteria named. `pip-audit` on a pyproject-only Python repo reads red on purpose: the gate does not audit those dependencies yet, and 1.0 waits for that.
+
+Where you see it: the Claude Code session-start hook prints the verdict and any notice due in this repo (`aramid: fleet: ...`, `aramid: NOTICE <id> ...`); `aramid status` prints the same lines; a gate run ends with `aramid: N fleet notice(s) pending -- see `aramid notices`` and `check --json` carries `fleet_notices_pending`. A notice is repeated in a given repo at most once a day until acked; `readiness-reached` and `readiness-broken` mark transitions, and a `fleet-defect` notice fires when the same defect sits on three consecutive rows of one repo and clears itself when it goes.
+
+Policy lives in `~/.aramid/fleet.toml` (optional; defaults shown):
+
+```toml
+schema_version = 1
+[readiness]
+min_days = 14
+min_versions = 2
+[notices]
+repeat_hours = 24
+defect_rows = 3
+gate_trailer = true
+```
+
+Everything is fail-open: a missing, corrupt or unwritable store costs one stderr line and never changes a gate's, the drain's, or the hook's exit code. The push is budgeted at 2 s and the judgement at 30 s; over budget, the row or verdict is skipped and said so. The store directory can be redirected with the `ARAMID_FLEET_DIR` environment variable (the test suite does this so it never touches yours).
 
 ---
 

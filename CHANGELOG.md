@@ -10,6 +10,31 @@ to publish a tag that disagrees with it.
 
 ## [Unreleased]
 
+### Added
+
+- **Fleet health and the 1.0 readiness verdict.** Every recording gate run
+  appends one row for its own repo to `~/.aramid/fleet_health.jsonl` (skip
+  streaks, consumer streaks, resolver defects, self-inflicted blocks,
+  whether pip-audit ran, every `*_armed` flag); the drain judges every
+  registered repo's rows into `~/.aramid/fleet_verdict.json` (`ready`
+  only after every repo is green for 14 days across 2 aramid versions with
+  an armed consumer somewhere) and posts `readiness-reached`,
+  `readiness-broken` and `fleet-defect` notices to aramid's own channel,
+  `~/.aramid/notices.jsonl`. New commands `aramid fleet [--json]` and
+  `aramid notices [list|show <id>|ack <id>]`; the session-start hook and
+  `aramid status` print the verdict and any notice due in the current repo;
+  a gate run ends with a one-line pending count and `check --json` carries
+  `fleet_notices_pending`. Policy in `~/.aramid/fleet.toml`. Everything is
+  fail-open and offline; nothing is written into any repo and no process
+  reads another repo's ledger. `RELEASING.md` gains "The 1.0 gate".
+- `check --json` carries `stacks` on the result internally; no JSON change.
+
+### Changed
+
+- `aramid status`'s skip-streak, consumer and resolver-defect lines are now
+  rendered from one `Health` snapshot (`aramid.health`) shared with the
+  fleet row, so the two surfaces cannot disagree. Output is unchanged.
+
 ## [0.8.1] — 2026-09-02
 
 ### Added

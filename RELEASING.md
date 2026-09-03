@@ -122,6 +122,15 @@ artifact cannot be recalled, only superseded:
 | `twine check` | A package page that renders wrong — or, as was true right up until the 0.2.0 metadata work, one with **no description at all** |
 | Clean-venv **sdist** smoke test | An sdist that publishes fine and fails on install. The wheel and the sdist are built by different code paths, and any consumer whose platform or policy forces a source build gets this artifact |
 
+## The 1.0 gate
+
+A 1.0.0 tag needs two things the release workflow cannot check:
+
+1. **`aramid fleet` reads `ready`** on the maintainer's machine: every registered repo green on every criterion, held for at least 14 days across at least 2 releases, with an armed consumer somewhere; a disarm inside the streak restarts it at the disarming row (fleet-readiness spec, `docs/superpowers/specs/2026-09-02-aramid-fleet-readiness-design.md`). The verdict is recomputed by every scheduled drain; the session-start hook and `aramid status` show it, and `readiness-reached` arrives as a notice.
+2. **API freeze** (the manual criterion): the two most recent releases carry no `Changed` or `Removed` entry against the declared compatibility surface -- the CLI names and flags, the exit codes, `check --json` keys, the ledger statuses, and `aramid.toml` keys. Judged by reading `CHANGELOG.md` at release time; not automated.
+
+Until both hold, the next release is `0.x`. Cutting 1.0.0 on a `not-ready` verdict is a decision to make in the changelog, not silently.
+
 ## Promoting a release to the live tool
 
 Releasing publishes an artifact. **Promoting installs it** as the tool every
