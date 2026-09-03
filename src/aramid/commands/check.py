@@ -78,7 +78,9 @@ import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 
+from aramid import __version__
 from aramid import config as config_mod
+from aramid import fleet
 from aramid import pipeline
 from aramid import policy
 from aramid import reporter
@@ -223,9 +225,22 @@ def cmd_check(root, gate: Gate, mode: str, strict: bool = False, as_json: bool =
 
         output = reporter.render_json(result) if as_json else reporter.render_console(result, ledger)
         print(output)
+        # Fleet health row (fleet-readiness spec section 5): this repo's own
+        # signals, appended to the machine-level store AFTER the report is
+        # printed, so a slow or broken store can never delay or hide the
+        # verdict. Fail-open inside `record_health`. A `--no-record` run is a
+        # snapshot, not evidence, and writes nothing.
+        if record:
+            fleet.record_health(root, cfg, ledger, result, gate=gate,
+                                aramid_version=__version__, now=_now())
         return exit_code
     except Exception as exc:  # engine error mid-run -> exit 3, never a silent 0.
         print(f"aramid: check: engine error: {exc}", file=sys.stderr)
+        # The row says the gate died: criteria all red, audit unknown. The
+        # ledger may be the thing that broke; `record_health` tolerates that.
+        if record:
+            fleet.record_health(root, cfg, ledger, None, gate=gate,
+                                aramid_version=__version__, now=_now(), engine_error=True)
         return 3
     finally:
         ledger.close()
