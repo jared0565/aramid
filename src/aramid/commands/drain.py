@@ -17,8 +17,10 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable
 
+from aramid import __version__
 from aramid import autolearn
 from aramid import config as config_mod
+from aramid import fleet
 from aramid import gitutil, policy, queue, redact, registry, triage
 from aramid import ledger as ledger_mod
 from aramid.consumers.base import CONSUMERS, ConsumerResult, DrainContext
@@ -281,6 +283,15 @@ def cmd_drain(targets: list, *, dry_run: bool = False, max_items: int | None = N
             except Exception as exc:
                 print(f"aramid drain: autolearn rollup skipped for {root}: {exc}",
                       file=sys.stderr)
+
+        # Fleet judgement (fleet-readiness spec section 6): judge every
+        # registered repo's health rows, write the verdict, post notices.
+        # Reads only ~/.aramid/fleet_health.jsonl -- never another repo's
+        # ledger -- and fails open: a broken store never fails the drain.
+        try:
+            fleet.run_judgement(clock(), aramid_version=__version__)
+        except Exception as exc:
+            print(f"aramid drain: fleet judgement skipped: {exc}", file=sys.stderr)
         print(f"aramid drain: {drained} item(s) drained, "
               f"{len(candidates) - drained} left")
         return 2 if degraded else 0
