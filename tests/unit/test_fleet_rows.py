@@ -2,10 +2,13 @@
 torn, corrupt or newer reads as what it can, with one stderr note; and the
 push never raises and never exceeds its budget."""
 import json
+import re
 
 from aramid import fleet, health
+from aramid import ledger as ledger_mod
 from aramid.fingerprint import normalize_path
 from aramid.ledger import Ledger
+from aramid.models import Event, EventType, Finding, Gate, Severity, Verdict
 from aramid.pipeline import GateResult
 
 NOW = "2026-09-03T12:00:00+00:00"
@@ -16,6 +19,24 @@ def _result(**kw):
                 run_id="run-1", tools_ran=("gitleaks", "semgrep"), stacks=("python",))
     base.update(kw)
     return GateResult(**base)
+
+
+def _run(lg, run_id, tools, gate="pre-push", expected=None):
+    payload = {"gate": gate, "tools": list(tools)}
+    if expected is not None:
+        payload["expected"] = list(expected)
+    lg.append(Event(EventType.RUN_STARTED, run_id, NOW, payload=payload))
+
+
+def _consumer(lg, name, state, note, duration_s=0.0):
+    lg.append(Event(EventType.CONSUMER_RUN_FINISHED, "d", NOW,
+                    payload={"consumer": name, "state": state, "note": note,
+                             "duration_s": duration_s, "finding_count": 0}))
+
+
+def _f(fid, tool="semgrep", rule="r", verdict=Verdict.WARN, file="a.py"):
+    return Finding(fid, tool, rule, "high", Severity.HIGH, verdict, file, 1, "m", "e",
+                   Gate.PRE_PUSH)
 
 
 def test_build_row_has_exactly_the_spec_shape(tmp_path):
@@ -36,6 +57,43 @@ def test_build_row_has_exactly_the_spec_shape(tmp_path):
                                "resolvers_ok": True, "no_self_inflicted_block": True,
                                "dep_audit_ran": False}
     assert row["evidence"]["armed"] == {}
+    lg.close()
+
+
+def test_build_row_evidence_carries_every_signal(tmp_path):
+    """The other build_row test uses a fresh ledger and an empty result, so
+    none of the evidence comprehensions or the resolver_defects string
+    format ever run against real data. Drive a real ledger through a skip
+    streak, a stood-down consumer and a never-ran resolver, plus a real
+    GateResult carrying a degraded block-tier tool, and pin every field."""
+    lg = Ledger(tmp_path / "l.db")
+    _run(lg, "p1", ["gitleaks", "semgrep"], expected=["gitleaks", "semgrep"])
+    _run(lg, "p2", ["gitleaks"], expected=["gitleaks", "semgrep"])
+    for _ in range(3):
+        _consumer(lg, "mutation", "degraded", "baseline timeout: x", duration_s=100.0)
+    _consumer(lg, "mutation", "ok", "mutation giving up: nope", duration_s=0.0)
+    # A different gate than the skip-streak runs above: record_run's own
+    # "gate" argument writes a THIRD pre-push RUN_STARTED event, which would
+    # otherwise pollute the skip-streak count computed from p1/p2. The
+    # never-ran resolver grade below does not key off this gate at all.
+    lg.record_run("r0", NOW, "pre-commit", set(), set(),
+                  [_f("a" * 64, tool="mutation", rule="bool-swap")])
+    ledger_mod.note_yield(lg, "r1", NOW, resolver="evidence_gone", tool="llm-review",
+                          considered=0, resolved=0)
+    h = health.snapshot(None, lg, _result(degraded=["semgrep"], degraded_block_tier=True),
+                        gate="pre-push")
+    row = fleet.build_row(tmp_path, h, aramid_version="0.9.0", now=NOW)
+    ev = row["evidence"]
+    assert ev["skip_streaks"] == {"pre-push": {"semgrep": 1}}
+    assert ev["stood_down"] == ["mutation"]
+    assert ev["degraded_consumers"] == []
+    assert ev["no_work"] == []
+    assert "gap_addressed/mutation NEVER RAN" in ev["resolver_defects"]
+    for entry in ev["resolver_defects"]:
+        assert re.match(r"^[a-z_]+/[a-z-]+ [A-Z ]+$", entry)
+    assert ev["bad_tools"] == ["semgrep"]
+    assert ev["degraded_block_tier"] is True
+    assert row["criteria"]["no_self_inflicted_block"] is False
     lg.close()
 
 
