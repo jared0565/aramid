@@ -59,6 +59,44 @@ def _lines(r, capsys):
     return capsys.readouterr().out.splitlines()
 
 
+def test_ready_line_full_shape():
+    # readiness_line's other two shapes (spec section 8) are not reachable
+    # through the hook fixtures above, which only ever write a not-ready
+    # verdict -- asserted directly against the pure function instead.
+    v = _verdict(
+        verdict="ready",
+        repos={f"f:/p/r{i}": {"name": f"r{i}", "rows": 5, "latest_at": NOW, "green": True,
+                              "red_criteria": [], "criteria": {}} for i in range(1, 6)},
+        fleet={"all_green_now": True, "streak_started_at": NOW, "days_held": 21.0,
+              "versions_in_streak": ["0.8.0", "0.9.0"], "armed_anywhere": True,
+              "disarm_in_streak": False, "blockers": [], "breaking_row": None})
+    assert fleet.readiness_line(v) == (
+        "fleet: 1.0 readiness READY -- 5/5 repos green, streak 21d, versions 2/2")
+
+
+def test_insufficient_data_line_full_shape():
+    v = _verdict(
+        verdict="insufficient-data",
+        repos={
+            "f:/p/aramid": {"name": "aramid", "rows": 41, "latest_at": NOW, "green": True,
+                           "red_criteria": [], "criteria": {}},
+            "f:/p/bytes": {"name": "bytes", "rows": 7, "latest_at": NOW, "green": True,
+                          "red_criteria": [], "criteria": {}},
+            "f:/p/demo": {"name": "demo", "rows": 2, "latest_at": NOW, "green": True,
+                         "red_criteria": [], "criteria": {}},
+            "f:/p/atlas_data": {"name": "atlas_data", "rows": 0, "latest_at": None,
+                               "green": False, "red_criteria": [], "criteria": {}},
+            "f:/p/graphite": {"name": "graphite", "rows": 0, "latest_at": None,
+                             "green": False, "red_criteria": [], "criteria": {}},
+        },
+        fleet={"all_green_now": False, "streak_started_at": None, "days_held": 0.0,
+              "versions_in_streak": [], "armed_anywhere": False,
+              "disarm_in_streak": False, "blockers": [], "breaking_row": None})
+    assert fleet.readiness_line(v) == (
+        "fleet: 1.0 readiness INSUFFICIENT DATA -- 3/5 repos green, streak 0d, "
+        "versions 0/2; no rows: atlas_data, graphite")
+
+
 def test_no_verdict_yet_line_sits_before_the_commands_line(tmp_path, monkeypatch, capsys):
     r = _onboarded(tmp_path, monkeypatch)
     lines = _lines(r, capsys)
