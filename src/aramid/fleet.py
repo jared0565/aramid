@@ -19,10 +19,13 @@ import os
 import sys
 import time
 import tomllib
+from collections import defaultdict
 from dataclasses import dataclass
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from aramid import health as health_mod
+from aramid import registry
 from aramid.fingerprint import normalize_path
 
 SCHEMA_VERSION = 1
@@ -228,3 +231,160 @@ def record_health(root, cfg, ledger, result, *, gate, aramid_version: str, now: 
         append_row(build_row(root, h, aramid_version=aramid_version, now=now))
     except Exception as exc:
         print(f"aramid: fleet: health row not recorded ({exc})", file=sys.stderr)
+
+
+ROW_WINDOW_DAYS = 180
+READY, NOT_READY, INSUFFICIENT = "ready", "not-ready", "insufficient-data"
+
+
+def _parse(at) -> datetime | None:
+    try:
+        parsed = datetime.fromisoformat(str(at))
+    except (TypeError, ValueError):
+        return None
+    return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
+
+
+def registered_repos(entries: list[dict] | None = None) -> dict[str, str]:
+    """registry key -> display name for every registered repo. The registry
+    stores resolved paths, so `repo_key` on them equals the key a gate run
+    in that repo writes."""
+    entries = registry.load_registry() if entries is None else entries
+    return {repo_key(e["path"]): Path(e["path"]).name for e in entries}
+
+
+def _red_criteria(crit: dict) -> list[str]:
+    return [k for k in health_mod.CRITERIA
+            if not (crit.get(k) is True or (k == "dep_audit_ran" and crit.get(k) is None))]
+
+
+def _red_detail(row: dict) -> str:
+    """Why a row is red, per criterion, from its own evidence -- so a notice
+    can say `(resolvers_ok: file_departed/mutation BLIND)` instead of
+    sending the reader to the store."""
+    ev = row.get("evidence", {})
+    parts = []
+    for k in _red_criteria(row.get("criteria", {})):
+        if k == "no_skip_streak":
+            what = ", ".join(f"{g}/{t} x{n}" for g, tools in sorted((ev.get("skip_streaks") or {}).items())
+                             for t, n in sorted(tools.items()))
+        elif k == "consumers_healthy":
+            what = ", ".join(sorted(set((ev.get("degraded_consumers") or []) + (ev.get("stood_down") or [])
+                                        + (ev.get("no_work") or []))))
+        elif k == "resolvers_ok":
+            what = ", ".join(ev.get("resolver_defects") or [])
+        elif k == "no_self_inflicted_block":
+            what = "engine error" if row.get("engine_error") else ", ".join(ev.get("bad_tools") or [])
+        else:
+            what = "pip-audit did not run"
+        parts.append(f"{k}: {what}" if what else k)
+    return "; ".join(parts)
+
+
+def judge(rows: list[dict], registered: dict[str, str], policy: Policy, now: str,
+          *, aramid_version: str = "") -> dict:
+    """Spec section 6. Walk the registered repos' rows in time order,
+    tracking each repo's latest row; the fleet is green at a row when every
+    registered repo has a row and its latest is green. The streak starts at
+    the row that turned the fleet green and resets on any red row -- or on
+    a disarm (criterion 6), which restarts it at the disarming row rather
+    than pinning the verdict forever."""
+    now_dt = _parse(now) or datetime.now(timezone.utc)
+    cutoff = now_dt - timedelta(days=ROW_WINDOW_DAYS)
+    live = []
+    for r in rows:
+        at = _parse(r.get("at"))
+        if at is None or at < cutoff or r.get("repo") not in registered:
+            continue
+        live.append((at, r))
+    live.sort(key=lambda p: p[0])
+
+    latest: dict[str, dict] = {}
+    counts: dict[str, int] = defaultdict(int)
+    streak_start: str | None = None
+    versions: set[str] = set()
+    disarm: dict | None = None
+    for _at, r in live:
+        repo = r["repo"]
+        prev = latest.get(repo)
+        latest[repo] = r
+        counts[repo] += 1
+        if prev is not None and streak_start is not None:
+            before = prev.get("evidence", {}).get("armed") or {}
+            after = r.get("evidence", {}).get("armed") or {}
+            for flag, was in before.items():
+                if was and not after.get(flag, False):
+                    disarm = {"name": r.get("name") or repo, "flag": flag, "at": r["at"]}
+                    streak_start, versions = None, set()
+                    break
+        green = all(k in latest and health_mod.row_green(latest[k].get("criteria", {}))
+                    for k in registered)
+        if green:
+            if streak_start is None:
+                streak_start, versions = r["at"], set()
+            versions.add(str(r.get("aramid_version", "")))
+        else:
+            streak_start, versions, disarm = None, set(), None
+
+    repos_out: dict[str, dict] = {}
+    for key, name in sorted(registered.items(), key=lambda kv: kv[1].casefold()):
+        row = latest.get(key)
+        if row is None:
+            repos_out[key] = {"name": name, "rows": 0, "latest_at": None, "green": False,
+                              "red_criteria": [], "criteria": {}}
+            continue
+        crit = dict(row.get("criteria", {}))
+        repos_out[key] = {"name": row.get("name") or name, "rows": counts[key],
+                          "latest_at": row["at"], "green": health_mod.row_green(crit),
+                          "red_criteria": _red_criteria(crit), "criteria": crit}
+    missing = sorted((v["name"] for v in repos_out.values() if v["rows"] == 0), key=str.casefold)
+    all_green_now = bool(registered) and not missing and all(v["green"] for v in repos_out.values())
+    armed_anywhere = any(any((r.get("evidence", {}).get("armed") or {}).values())
+                         for r in latest.values())
+    days_held = 0.0
+    if streak_start is not None:
+        start_dt = _parse(streak_start)
+        days_held = max(0.0, (now_dt - start_dt).total_seconds() / 86400.0)
+    days_held = round(days_held, 2)
+
+    red_rows = [r for r in latest.values() if not health_mod.row_green(r.get("criteria", {}))]
+    breaking = None
+    if red_rows:
+        b = max(red_rows, key=lambda r: str(r.get("at", "")))
+        breaking = {"repo": b["repo"], "name": b.get("name") or b["repo"], "at": b["at"],
+                    "run_id": b.get("run_id"), "red_criteria": _red_criteria(b.get("criteria", {})),
+                    "detail": _red_detail(b)}
+
+    reasons = [f"{v['name']}: {', '.join(v['red_criteria'])}"
+               for v in repos_out.values() if v["red_criteria"]]
+    blockers: list[str] = []
+    if not registered:
+        verdict = INSUFFICIENT
+        reasons.append("no repos registered")
+    elif missing:
+        verdict = INSUFFICIENT
+        reasons.append("no rows: " + ", ".join(missing))
+    elif not all_green_now:
+        verdict = NOT_READY
+    else:
+        if days_held < policy.min_days:
+            blockers.append(f"streak {days_held:.1f}d < {policy.min_days}d")
+        if len(versions) < policy.min_versions:
+            blockers.append(f"versions {len(versions)}/{policy.min_versions} in streak")
+        if not armed_anywhere:
+            blockers.append("no repo has an armed consumer")
+        verdict = READY if not blockers else NOT_READY
+        if disarm is not None:
+            blockers.append(f"streak restarted by {disarm['name']} disarming "
+                            f"{disarm['flag']} at {disarm['at']}")
+    reasons.extend(blockers)
+
+    return {"schema_version": SCHEMA_VERSION, "computed_at": now,
+            "aramid_version": aramid_version,
+            "policy": {"min_days": policy.min_days, "min_versions": policy.min_versions},
+            "repos": repos_out,
+            "fleet": {"all_green_now": all_green_now, "streak_started_at": streak_start,
+                      "days_held": days_held, "versions_in_streak": sorted(versions),
+                      "armed_anywhere": armed_anywhere, "disarm_in_streak": disarm is not None,
+                      "blockers": blockers, "breaking_row": breaking},
+            "verdict": verdict, "reasons": reasons}
