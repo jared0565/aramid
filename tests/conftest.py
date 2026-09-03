@@ -16,7 +16,7 @@ from pathlib import Path
 import pytest
 
 import aramid
-from aramid import autolearn, config, registry, toolpath
+from aramid import autolearn, config, fleet, registry, toolpath
 
 
 @pytest.fixture
@@ -133,6 +133,20 @@ def _isolated_user_config(tmp_path, monkeypatch):
     today's typical clean-machine behavior instead of inventing a new one."""
     monkeypatch.setattr(config, "_user_config_path",
                         lambda: tmp_path / "no-such-user-config.toml")
+
+
+@pytest.fixture(autouse=True)
+def _isolated_fleet_store(tmp_path, monkeypatch):
+    """Keep every fleet write (`fleet.store_dir()`) off the real `~/.aramid`.
+
+    `cmd_check` appends a fleet health row on every recording run and
+    `cmd_drain` writes the verdict and notices; without this, every gate a
+    test runs -- hundreds per suite -- would land in the developer's real
+    store and the drain tests would judge a fleet that includes tmp repos.
+    Set via ENV VAR, like the tools dir above, because several tests drive
+    the gate through a real git hook in a spawned process that a monkeypatch
+    cannot reach. A later `monkeypatch.setenv` in a test body still wins."""
+    monkeypatch.setenv(fleet.FLEET_DIR_ENV, str(tmp_path / "aramid-fleet"))
 
 
 @pytest.fixture(autouse=True)
