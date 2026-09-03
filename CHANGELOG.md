@@ -10,6 +10,24 @@ to publish a tag that disagrees with it.
 
 ## [Unreleased]
 
+### Changed
+
+- **pip-audit now audits pyproject-only Python repos.** With no
+  `requirements*.txt` at the root, the deps runner hands pip-audit the repo
+  itself (project-path mode) when `pyproject.toml` carries a `[project]`
+  table, so the declared dependencies and their transitive closure are
+  audited at pre-push (about 40 s; WARN tier, never BLOCK). Requirements
+  files keep precedence when both exist -- pip-audit refuses to combine the
+  two -- so requirements-based repos are unchanged. A tool-only pyproject
+  (no `[project]` table) is still not a dependency source: pip-audit exits 1
+  with empty output on it, and 1 is the "vulnerabilities found" code, so
+  the runner never asks. One predicate (`runners.deps.python_sources`) now
+  answers applicability for the pipeline, the expected-tools expansion that
+  feeds skip streaks, and `doctor`, whose pip-audit WARN survives only for
+  the tool-only case. Fleet criterion 5 (`dep_audit_ran`) can read green on
+  such repos once this is promoted; it was the standing red on aramid's
+  own repo since 0.9.0.
+
 ## [0.9.0] — 2026-09-03
 
 ### Added

@@ -2642,3 +2642,18 @@ def test_gate_all_runs_every_runner_either_tier_runs():
     union = set(pipeline.GATE_RUNNER_KEYS[Gate.PRE_COMMIT]) | set(pipeline.GATE_RUNNER_KEYS[Gate.PRE_PUSH])
     missing = union - set(pipeline.GATE_RUNNER_KEYS[Gate.ALL])
     assert not missing, f"Gate.ALL omits {sorted(missing)} -- a full scan that skips a tier is not full"
+
+
+def test_deps_is_applicable_for_a_pyproject_with_a_project_table(tmp_path):
+    root = tmp_path / "pp"
+    root.mkdir()
+    (root / "pyproject.toml").write_text(
+        "[project]\nname = \"x\"\ndependencies = [\"requests\"]\n", encoding="utf-8")
+    assert pipeline._is_applicable("deps", _ctx(root, stacks=("python",))) is True
+
+
+def test_deps_is_not_applicable_for_a_tool_only_pyproject(tmp_path):
+    root = tmp_path / "tp"
+    root.mkdir()
+    (root / "pyproject.toml").write_text("[tool.ruff]\nline-length = 100\n", encoding="utf-8")
+    assert pipeline._is_applicable("deps", _ctx(root, stacks=("python",))) is False

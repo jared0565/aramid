@@ -2,8 +2,17 @@
 (npm/pnpm/yarn), lockfile-keyed cache with a 24h TTL.
 
 Python: `pip-audit -r <requirements*.txt> -f json` over every
-requirements*.txt found at the repo root (skip+note via MISSING if none
-exist -- pip-audit against a repo venv is not implemented here, see report).
+requirements*.txt found at the repo root; with none, `pip-audit <root>
+-f json` (project-path mode) when pyproject.toml carries a `[project]`
+table, which is the dependency source pip-audit resolves there. Neither
+-> MISSING. The two modes never combine (pip-audit refuses `-r` beside a
+project path), so requirements files keep precedence -- the behaviour
+every requirements-based repo already had. A tool-only pyproject (no
+`[project]` table) is NOT a source: pip-audit exits 1 with empty stdout on
+it, and 1 is in the OK set ("vulnerabilities found"), so asking would
+read as a clean audit. `python_sources()` is the one predicate; pipeline
+applicability, toolset expectation and doctor all call it rather than
+globbing themselves. pip-audit against a repo venv is not implemented.
 pip-audit's own JSON output carries no per-vulnerability severity field at
 all (verified against pip_audit/_format/json.py upstream); per design doc §3
 ("advisories with no severity data default to WARN"), every pip-audit
@@ -52,6 +61,7 @@ import dataclasses
 import hashlib
 import json
 import time
+import tomllib
 from pathlib import Path
 
 from aramid import toolpath
@@ -61,6 +71,7 @@ from aramid.runners.base import RunnerResult, ToolState, run_subprocess
 from aramid.runners._util import json_or_crashed, relativize
 
 NAME_PIP_AUDIT = "pip-audit"
+PYPROJECT = "pyproject.toml"
 NAME_CARGO_AUDIT = "cargo-audit"
 # A DISTINCT tool name, not a rule namespace under NAME_CARGO_AUDIT: keeping
 # it out of `policy._DEPS_TOOLS` is guarantee 1 of three (see
@@ -126,28 +137,59 @@ def _find_requirements(root: Path) -> list[Path]:
     return sorted(p for p in root.glob("requirements*.txt") if p.is_file())
 
 
-def _locate_in_requirements(root: Path, pkg_name: str) -> tuple[str, int]:
-    """Best-effort: find the requirements*.txt line naming pkg_name."""
+def _pyproject_with_project_table(root: Path) -> Path | None:
+    """pyproject.toml when it parses and declares a `[project]` table --
+    the only shape pip-audit's project-path mode accepts. A file that is
+    missing, unreadable, malformed or tool-only reads as no source."""
+    path = root / PYPROJECT
+    if not path.is_file():
+        return None
+    try:
+        data = tomllib.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, tomllib.TOMLDecodeError):
+        return None
+    return path if isinstance(data.get("project"), dict) else None
+
+
+def python_sources(root: Path) -> list[Path]:
+    """The files pip-audit would audit here: every requirements*.txt at the
+    root, else the pyproject.toml with a `[project]` table, else nothing.
+    THE predicate for "does the Python dependency audit apply" -- shared by
+    run_python, pipeline._is_applicable, toolset.expected_tool_names and
+    doctor.probe_deps so the four cannot drift."""
     reqs = _find_requirements(root)
-    for req in reqs:
+    if reqs:
+        return reqs
+    pyproject = _pyproject_with_project_table(root)
+    return [pyproject] if pyproject is not None else []
+
+
+def _locate_dependency(root: Path, pkg_name: str) -> tuple[str, int]:
+    """Best-effort: the source line naming pkg_name -- a requirements*.txt
+    line, or the `[project]` dependency entry in pyproject.toml (project
+    mode). Falls back to line 1 of the first source."""
+    sources = python_sources(root)
+    want = pkg_name.lower().replace("_", "-")
+    for src in sources:
         try:
-            lines = req.read_text().splitlines()
-        except OSError:
+            lines = src.read_text(encoding="utf-8").splitlines()
+        except (OSError, UnicodeDecodeError):
             continue
         for i, line in enumerate(lines, start=1):
-            if line.strip().lower().startswith(pkg_name.lower()):
-                return relativize(str(req), root), i
-    if reqs:
-        return relativize(str(reqs[0]), root), 1
+            if line.strip().strip("'\",").lower().replace("_", "-").startswith(want):
+                return relativize(str(src), root), i
+    if sources:
+        return relativize(str(sources[0]), root), 1
     return "requirements.txt", 1
 
 
 def run_python(ctx) -> RunnerResult:
-    reqs = _find_requirements(ctx.root)
-    if not reqs:
+    sources = python_sources(ctx.root)
+    if not sources:
         return RunnerResult(NAME_PIP_AUDIT, ToolState.MISSING)
+    reqs = [s for s in sources if s.name != PYPROJECT]
 
-    key_bytes = b"\x00".join(r.read_bytes() for r in reqs)
+    key_bytes = b"\x00".join(s.read_bytes() for s in sources)
     cache_path = _cache_path(ctx.root, key_bytes)
     if not getattr(ctx, "force_refresh", False):
         cached = _read_cache(cache_path)
@@ -155,8 +197,11 @@ def run_python(ctx) -> RunnerResult:
             return RunnerResult(NAME_PIP_AUDIT, ToolState.OK, raw=cached)
 
     argv = ["pip-audit"]
-    for r in reqs:
-        argv += ["-r", str(r)]
+    if reqs:
+        for r in reqs:
+            argv += ["-r", str(r)]
+    else:
+        argv.append(str(ctx.root))  # project-path mode: the [project] table
     argv += ["-f", "json"]
 
     result = run_subprocess(argv, ctx.root, TIMEOUT_S)
@@ -175,7 +220,7 @@ def parse_pip_audit(result: RunnerResult, ctx) -> list[RawFinding]:
         if dep.get("skip_reason"):
             continue
         for vuln in dep.get("vulns", []):
-            file_, line = _locate_in_requirements(ctx.root, dep["name"])
+            file_, line = _locate_dependency(ctx.root, dep["name"])
             desc = vuln.get("description") or vuln["id"]
             findings.append(RawFinding(
                 tool=NAME_PIP_AUDIT,
@@ -616,13 +661,13 @@ def _run_combined(ctx, runners: list) -> RunnerResult:
 
 
 def run(ctx) -> RunnerResult:
-    reqs = _find_requirements(ctx.root)
+    py_sources = python_sources(ctx.root)
     pm = ctx.pkg_manager or detect_package_manager(ctx.root)
     has_js = pm is not None and _lockfile_path(ctx.root, pm) is not None
     has_cargo = (ctx.root / _CARGO_LOCKFILE).exists()
 
     applicable = []
-    if reqs:
+    if py_sources:
         applicable.append(run_python)
     if has_js:
         applicable.append(run_js)

@@ -375,3 +375,16 @@ def test_expected_tool_names_never_carries_the_tests_registry_key(tmp_path, monk
         "that ran on every push as skipped on every push")
     # The key stays where it belongs: mark-unreachable's universe.
     assert "tests" in toolset.selected_tool_names(root, cfg)
+
+
+def test_pip_audit_selected_for_a_pyproject_with_a_project_table(tmp_path, monkeypatch):
+    cfg = _cfg(tmp_path, monkeypatch, tmp_path)
+    (tmp_path / "pyproject.toml").write_text(
+        "[project]\nname = \"x\"\ndependencies = [\"requests\"]\n", encoding="utf-8")
+    assert deps.NAME_PIP_AUDIT in toolset.selected_tool_names(tmp_path, cfg)
+
+
+def test_pip_audit_not_selected_for_a_tool_only_pyproject(tmp_path, monkeypatch):
+    cfg = _cfg(tmp_path, monkeypatch, tmp_path)
+    (tmp_path / "pyproject.toml").write_text("[tool.ruff]\nline-length = 100\n", encoding="utf-8")
+    assert deps.NAME_PIP_AUDIT not in toolset.selected_tool_names(tmp_path, cfg)

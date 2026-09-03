@@ -848,16 +848,26 @@ def test_doctor_flags_a_foreign_managed_slot_with_no_surviving_relocation(tmp_pa
 # audited, and nothing said so. Same "control that looks like coverage and is
 # not" shape as the cargo-audit case above. Report, do not block.
 
-def test_probe_deps_says_pip_audit_does_not_run_on_a_pyproject_only_python_repo(tmp_path, monkeypatch):
+def test_probe_deps_stays_quiet_when_the_pyproject_has_a_project_table(tmp_path, monkeypatch):
+    # A [project] table is a dependency source pip-audit can audit directly
+    # (project-path mode), so the "does NOT run" note would now be a lie.
     root = _repo(tmp_path)
     (root / "pyproject.toml").write_text("[project]\nname='x'\n", encoding="utf-8")
+    monkeypatch.setattr(doctor.toolpath, "resolve", lambda name: None)
+
+    assert doctor.probe_deps(root) == []
+
+
+def test_probe_deps_says_pip_audit_does_not_run_on_a_tool_only_pyproject(tmp_path, monkeypatch):
+    root = _repo(tmp_path)
+    (root / "pyproject.toml").write_text("[tool.ruff]\nline-length = 100\n", encoding="utf-8")
     monkeypatch.setattr(doctor.toolpath, "resolve", lambda name: None)
 
     statuses = doctor.probe_deps(root)
 
     assert [s.name for s in statuses] == ["pip-audit"]
     assert statuses[0].warn is True
-    assert "requirements" in statuses[0].detail and "does NOT run" in statuses[0].detail
+    assert "[project]" in statuses[0].detail and "does NOT run" in statuses[0].detail
 
 
 def test_probe_deps_stays_quiet_about_pip_audit_when_a_requirements_file_exists(tmp_path, monkeypatch):
@@ -872,7 +882,8 @@ def test_probe_deps_stays_quiet_about_pip_audit_when_a_requirements_file_exists(
 def test_pip_audit_applicability_note_does_not_change_doctor_exit_code(tmp_path, monkeypatch, capsys):
     monkeypatch.setattr(doctor, "probe_toolchain", lambda root: _all_present())
     root = _onboarded(tmp_path, with_shim=True)
-    (root / "pyproject.toml").write_text("[project]\nname='x'\n", encoding="utf-8")
+    # A tool-only pyproject: the one Python shape the audit still cannot cover.
+    (root / "pyproject.toml").write_text("[tool.ruff]\nline-length = 100\n", encoding="utf-8")
 
     rc = doctor.cmd_doctor(root)
     out = capsys.readouterr()

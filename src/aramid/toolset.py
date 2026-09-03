@@ -173,7 +173,7 @@ def _expand_keys(keys, root: Path, ctx) -> set[str]:
                     names.add(deps.NAME_CARGO_AUDIT_WARNINGS)
             elif ctx.pkg_manager:
                 names.add(ctx.pkg_manager)
-            if any(root.glob("requirements*.txt")):
+            if deps.python_sources(root):
                 names.add(deps.NAME_PIP_AUDIT)
         elif key == "tests":
             # See the T-8 plan's Global Constraint 5: "tests" (the literal

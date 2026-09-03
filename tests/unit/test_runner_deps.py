@@ -790,3 +790,79 @@ def test_cargo_warning_without_an_advisory_falls_back_to_its_kind(tmp_path):
     assert len(findings) == 1
     assert findings[0].rule == "yanked"
     assert findings[0].message == "ghostcrate 1.2.3: ghostcrate is yanked"
+
+
+# ---------------- python: pyproject [project] as the dependency source ----------------
+
+PYPROJECT_WITH_DEPS = (
+    "[project]\n"
+    "name = \"x\"\n"
+    "version = \"0.0.1\"\n"
+    "dependencies = [\n"
+    "  \"requests==2.25.0\",\n"
+    "  \"django==3.2.0\",\n"
+    "]\n"
+)
+TOOL_ONLY_PYPROJECT = "[tool.ruff]\nline-length = 100\n"
+
+
+def test_python_sources_prefers_requirements_then_pyproject_then_nothing(tmp_path):
+    assert deps.python_sources(tmp_path) == []
+    (tmp_path / "pyproject.toml").write_text(TOOL_ONLY_PYPROJECT, encoding="utf-8")
+    assert deps.python_sources(tmp_path) == []  # a tool-only pyproject declares no dependencies
+    (tmp_path / "pyproject.toml").write_text(PYPROJECT_WITH_DEPS, encoding="utf-8")
+    assert deps.python_sources(tmp_path) == [tmp_path / "pyproject.toml"]
+    (tmp_path / "requirements.txt").write_text("django==3.2.0\n", encoding="utf-8")
+    assert deps.python_sources(tmp_path) == [tmp_path / "requirements.txt"]
+
+
+def test_run_python_audits_the_pyproject_when_no_requirements_file_exists(tmp_path, monkeypatch):
+    (tmp_path / "pyproject.toml").write_text(PYPROJECT_WITH_DEPS, encoding="utf-8")
+    captured = {}
+
+    def fake_run_subprocess(argv, cwd, timeout_s, env=None):
+        captured["argv"] = argv
+        return RunnerResult(tool="pip-audit", state=ToolState.OK, raw=PIP_AUDIT.read_text())
+
+    monkeypatch.setattr(deps, "run_subprocess", fake_run_subprocess)
+    result = deps.run_python(RunContext(root=tmp_path))
+    assert result.state is ToolState.OK
+    assert captured["argv"] == ["pip-audit", str(tmp_path), "-f", "json"]
+
+
+def test_run_python_prefers_requirements_files_over_the_pyproject(tmp_path, monkeypatch):
+    # pip-audit refuses `-r` together with a project path, so one source wins;
+    # requirements files keep precedence to leave existing repos unchanged.
+    (tmp_path / "pyproject.toml").write_text(PYPROJECT_WITH_DEPS, encoding="utf-8")
+    (tmp_path / "requirements.txt").write_text("django==3.2.0\n", encoding="utf-8")
+    captured = {}
+
+    def fake_run_subprocess(argv, cwd, timeout_s, env=None):
+        captured["argv"] = argv
+        return RunnerResult(tool="pip-audit", state=ToolState.OK, raw=PIP_AUDIT.read_text())
+
+    monkeypatch.setattr(deps, "run_subprocess", fake_run_subprocess)
+    deps.run_python(RunContext(root=tmp_path))
+    assert captured["argv"][1] == "-r"
+    assert str(tmp_path) not in captured["argv"]
+
+
+def test_run_python_is_missing_for_a_pyproject_without_a_project_table(tmp_path, monkeypatch):
+    # pip-audit exits 1 with empty stdout on such a file, and 1 is in the OK
+    # set (it means "vulnerabilities found") -- so the runner must never ask.
+    (tmp_path / "pyproject.toml").write_text(TOOL_ONLY_PYPROJECT, encoding="utf-8")
+
+    def explode(*a, **k):
+        raise AssertionError("pip-audit must not be invoked")
+
+    monkeypatch.setattr(deps, "run_subprocess", explode)
+    assert deps.run_python(RunContext(root=tmp_path)).state is ToolState.MISSING
+
+
+def test_parse_pip_audit_locates_a_project_mode_finding_in_the_pyproject(tmp_path):
+    (tmp_path / "pyproject.toml").write_text(PYPROJECT_WITH_DEPS, encoding="utf-8")
+    result = RunnerResult(tool="pip-audit", state=ToolState.OK, raw=PIP_AUDIT.read_text())
+    findings = deps.parse(result, RunContext(root=tmp_path))
+    assert len(findings) == 1
+    assert findings[0].file == "pyproject.toml"
+    assert findings[0].line == 6  # the `"django==3.2.0",` entry

@@ -374,7 +374,7 @@ def _is_applicable(key: str, ctx: RunContext) -> bool:
     if key == "typecheck":
         return typecheck.has_tsconfig(ctx.root) or typecheck.has_mypy_config(ctx.root)
     if key == "deps":
-        return ctx.pkg_manager is not None or any(ctx.root.glob("requirements*.txt"))
+        return ctx.pkg_manager is not None or bool(deps.python_sources(ctx.root))
     if key == "tests":
         # `[tests].enabled = false` removes the gate rather than degrading
         # it: a runner that is never selected cannot surface as
