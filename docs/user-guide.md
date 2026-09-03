@@ -554,7 +554,7 @@ defect_rows = 3
 gate_trailer = true
 ```
 
-Everything is fail-open: a missing, corrupt or unwritable store costs one stderr line and never changes a gate's, the drain's, or the hook's exit code. The push is budgeted at 2 s and the judgement at 30 s; over budget, the row or verdict is skipped and said so. The store directory can be redirected with the `ARAMID_FLEET_DIR` environment variable (the test suite does this so it never touches yours).
+Everything is fail-open: a missing, corrupt or unwritable store costs one stderr line and never changes a gate's, the drain's, or the hook's exit code. The push is budgeted at 2 s and the judgement at 30 s; over budget, the row or verdict is skipped and said so. The store directory can be redirected with the `ARAMID_FLEET_DIR` environment variable (the test suite does this so it never touches yours). A verdict older than 12 hours is marked stale -- the scheduled drain is not running.
 
 ---
 

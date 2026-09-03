@@ -3,6 +3,7 @@ they are working in. Full-line assertions; `shown` events respect
 repeat_hours; a broken channel costs the fleet lines and nothing else."""
 import subprocess
 import sys
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from aramid import fleet, notices
@@ -140,6 +141,15 @@ def test_a_channel_that_is_a_directory_still_prints_the_verdict_line(tmp_path, m
     lines = _lines(r, capsys)
     assert "aramid: fleet: no verdict yet -- first drain after promotion computes it" in lines
     assert not any("NOTICE" in ln for ln in lines)
+
+
+def test_a_stale_verdict_marks_the_readiness_line(tmp_path, monkeypatch, capsys):
+    r = _onboarded(tmp_path, monkeypatch)
+    computed_at = (datetime.now(timezone.utc) - timedelta(hours=13)).isoformat()
+    fleet.write_verdict(_verdict(computed_at=computed_at))
+    line = next(ln for ln in _lines(r, capsys)
+               if ln.startswith("aramid: fleet: 1.0 readiness"))
+    assert line.endswith(f" (stale: computed {computed_at})")
 
 
 def test_an_internal_fleet_error_costs_only_the_fleet_lines(tmp_path, monkeypatch, capsys):

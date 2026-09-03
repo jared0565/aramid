@@ -169,6 +169,13 @@ def test_breaking_row_detail_names_every_red_criterion():
         "no_self_inflicted_block: gitleaks")
 
 
+def test_a_fresh_verdicts_readiness_line_is_unchanged_by_now():
+    v = fleet.judge(_ready_rows(), REG, POLICY, NOW, aramid_version="0.9.0")
+    assert fleet.readiness_line(v) == fleet.readiness_line(v, now=NOW)
+    assert fleet.readiness_line(v, now=None) == fleet.readiness_line(v, now=NOW)
+    assert not fleet.readiness_line(v, now=NOW).endswith(")")
+
+
 def test_registered_repos_uses_the_registry_key_and_basename(tmp_path):
     entries = [{"path": str(tmp_path / "Atlas_Data"), "registered_at": "t"}]
     assert fleet.registered_repos(entries) == {

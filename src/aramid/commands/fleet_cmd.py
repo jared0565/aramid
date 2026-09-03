@@ -21,7 +21,7 @@ def cmd_fleet(as_json: bool = False) -> int:
     if as_json:
         print(json.dumps(verdict, indent=2, sort_keys=True))
         return 0
-    print(fleet.render_report(verdict, fleet.load_policy()))
+    print(fleet.render_report(verdict, fleet.load_policy(), now=_now()))
     return 0
 
 

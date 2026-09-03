@@ -111,6 +111,7 @@ def load_policy() -> Policy:
 
 PUSH_BUDGET_S = 2.0
 MAX_NOTICE_LINES = 3
+STALE_AFTER_H = 12              # three drain intervals
 _monotonic = time.monotonic     # seam for the budget tests
 
 
@@ -567,7 +568,20 @@ def run_judgement(now: str, *, aramid_version: str, entries: list[dict] | None =
 _LABELS = {READY: "READY", NOT_READY: "NOT READY", INSUFFICIENT: "INSUFFICIENT DATA"}
 
 
-def readiness_line(verdict: dict | None) -> str:
+def _stale_suffix(computed_at, now: str | None) -> str:
+    """Empty unless `now` is given and is more than STALE_AFTER_H hours past
+    `computed_at`: the marker that the scheduled drain has stopped running."""
+    if now is None:
+        return ""
+    now_dt, computed_dt = _parse(now), _parse(computed_at)
+    if now_dt is None or computed_dt is None:
+        return ""
+    if now_dt - computed_dt > timedelta(hours=STALE_AFTER_H):
+        return f" (stale: computed {computed_at})"
+    return ""
+
+
+def readiness_line(verdict: dict | None, *, now: str | None = None) -> str:
     """Spec section 8's one-line verdict; the same string on every surface."""
     if verdict is None:
         return "fleet: no verdict yet -- first drain after promotion computes it"
@@ -589,7 +603,8 @@ def readiness_line(verdict: dict | None) -> str:
         tail.append("no rows: " + ", ".join(missing))
     tail.extend(info.get("blockers", []))
     tail.extend(info.get("notes", []))
-    return line + ("; " + "; ".join(tail) if tail else "")
+    line += "; " + "; ".join(tail) if tail else ""
+    return line + _stale_suffix(verdict.get("computed_at"), now)
 
 
 def delivery_lines(root, *, surface: str, now: str, policy: Policy | None = None) -> list[str]:
@@ -600,7 +615,7 @@ def delivery_lines(root, *, surface: str, now: str, policy: Policy | None = None
     try:
         from aramid import notices as notices_mod
         policy = policy or load_policy()
-        lines = [readiness_line(read_verdict())]
+        lines = [readiness_line(read_verdict(), now=now)]
         repo = repo_key(root)
         due = notices_mod.due(repo, now, policy.repeat_hours)
         shown, remaining = due[:MAX_NOTICE_LINES], due[MAX_NOTICE_LINES:]
@@ -620,7 +635,7 @@ _COLUMNS = (("no_skip_streak", "skip"), ("consumers_healthy", "consumers"),
             ("dep_audit_ran", "dep-audit"))
 
 
-def render_report(verdict: dict | None, policy: Policy) -> str:
+def render_report(verdict: dict | None, policy: Policy, *, now: str | None = None) -> str:
     """`aramid fleet`: the repo x criteria matrix, the streak, the verdict
     with its reasons. `ok` / `RED` / `-` (not applicable, or no rows)."""
     out = [f"fleet health -- 1.0 readiness (policy: {policy.min_days} days, "
@@ -652,6 +667,7 @@ def render_report(verdict: dict | None, policy: Policy) -> str:
         out.append("  streak: none (fleet not green)")
     out.append(f"  armed anywhere: {'yes' if info.get('armed_anywhere') else 'no'}")
     out.append("")
-    out.append(f"verdict: {verdict.get('verdict')}")
+    out.append(f"verdict: {verdict.get('verdict')}"
+              + _stale_suffix(verdict.get("computed_at"), now))
     out.extend(f"  - {r}" for r in verdict.get("reasons", []))
     return "\n".join(out)
