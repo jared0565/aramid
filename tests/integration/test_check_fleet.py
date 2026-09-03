@@ -10,7 +10,7 @@ from types import SimpleNamespace
 import pytest
 
 import aramid
-from aramid import fleet, pipeline
+from aramid import fleet, notices, pipeline
 from aramid.commands.check import cmd_check
 from aramid.models import Gate
 from aramid.runners.base import RunnerResult, ToolState
@@ -105,3 +105,24 @@ def test_subprocess_gate_exits_identically_with_a_broken_store(tmp_path, checkou
     assert a.returncode == b.returncode
     assert (healthy_store / "fleet_health.jsonl").is_file()
     assert "aramid: fleet: health row not recorded (" in b.stderr
+
+
+def test_gate_output_carries_the_pending_count(tmp_path, clean_gate, capsys):
+    root = _repo(tmp_path)
+    notices.post("fleet-defect", "k", title="t", body="b", evidence={}, now="2026-09-20T12:00:00+00:00")
+    assert cmd_check(root, Gate.PRE_COMMIT, "staged") == 0
+    assert capsys.readouterr().out.splitlines()[-1] == \
+        "aramid: 1 fleet notice(s) pending -- see `aramid notices`"
+    assert cmd_check(root, Gate.PRE_COMMIT, "staged", as_json=True) == 0
+    assert json.loads(capsys.readouterr().out)["fleet_notices_pending"] == 1
+
+
+def test_gate_trailer_policy_off_keeps_the_json_key(tmp_path, clean_gate, capsys):
+    root = _repo(tmp_path)
+    fleet.policy_path().parent.mkdir(parents=True, exist_ok=True)
+    fleet.policy_path().write_text("[notices]\ngate_trailer = false\n", encoding="utf-8")
+    notices.post("fleet-defect", "k", title="t", body="b", evidence={}, now="2026-09-20T12:00:00+00:00")
+    assert cmd_check(root, Gate.PRE_COMMIT, "staged") == 0
+    assert "fleet notice" not in capsys.readouterr().out
+    assert cmd_check(root, Gate.PRE_COMMIT, "staged", as_json=True) == 0
+    assert json.loads(capsys.readouterr().out)["fleet_notices_pending"] == 1

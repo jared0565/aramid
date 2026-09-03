@@ -223,6 +223,12 @@ def cmd_check(root, gate: Gate, mode: str, strict: bool = False, as_json: bool =
         if exit_code != result.exit_code:
             result = dataclasses.replace(result, exit_code=exit_code)
 
+        # The notice COUNT rides the report (fleet-readiness spec section 8);
+        # read here, not in the reporter, which touches no filesystem.
+        from aramid import notices as notices_mod
+        result = dataclasses.replace(result, fleet_notices_pending=notices_mod.pending_count(),
+                                     fleet_trailer=fleet.load_policy().gate_trailer)
+
         output = reporter.render_json(result) if as_json else reporter.render_console(result, ledger)
         print(output)
         # Fleet health row (fleet-readiness spec section 5): this repo's own

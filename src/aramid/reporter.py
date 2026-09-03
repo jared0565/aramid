@@ -135,6 +135,13 @@ def render_console(result: GateResult, ledger: Ledger) -> str:
             "(any tier, committed)"
         )
 
+    # A count only, never a `shown` event: the gate is the cheapest surface
+    # and must stay so. The full lines live in the session-start hook and
+    # `aramid status`.
+    pending = getattr(result, "fleet_notices_pending", None)
+    if getattr(result, "fleet_trailer", False) and pending:
+        lines.append(f"aramid: {pending} fleet notice(s) pending -- see `aramid notices`")
+
     return "\n".join(lines)
 
 
@@ -203,5 +210,9 @@ def render_json(result: GateResult) -> str:
         # no ledger row, and this is the only place a saved copy can say so.
         "run_id": str(getattr(result, "run_id", "") or ""),
         "recorded": bool(getattr(result, "recorded", True)),
+        # Always present: an int is a real count (0 = none pending), null
+        # means the notices store could not be read. Absent means an aramid
+        # too old to have a fleet.
+        "fleet_notices_pending": getattr(result, "fleet_notices_pending", None),
     }
     return json.dumps(payload, indent=2)

@@ -180,6 +180,14 @@ class GateResult:
     # would spend the row's own budget on a fact the run had in hand.
     # Additive; the default keeps every construction site valid.
     stacks: tuple = ()
+    # Fleet notices pending on this machine when the report was rendered
+    # (fleet-readiness spec section 8): 0 when none, None when the channel
+    # could not be read. Set by commands/check.py, which owns the read; the
+    # reporter stays pure formatting. `fleet_trailer` carries the operator's
+    # `[notices].gate_trailer` policy the same way, so the console line can
+    # be switched off without touching the JSON key, which is always present.
+    fleet_notices_pending: int | None = None
+    fleet_trailer: bool = False
 
 
 def _tool_provenance(selected) -> dict:
