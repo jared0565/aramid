@@ -116,3 +116,28 @@ def test_cli_notices_ack_dispatch(tmp_path, monkeypatch, capsys):
     nid = notices.post("fleet-defect", "k", title="t", body="b", evidence={}, now=NOW)
     assert cli.main(["notices", "ack", nid]) == 0
     assert notices.pending() == []
+
+
+def test_fleet_report_never_tracebacks(monkeypatch, capsys):
+    def boom():
+        raise RuntimeError("disk gone")
+    monkeypatch.setattr(fleet, "read_verdict", boom)
+    assert cmd_fleet() == 0
+    assert capsys.readouterr().err == "aramid: fleet: report failed (disk gone)\n"
+
+
+def test_notices_command_never_tracebacks(tmp_path, monkeypatch, capsys):
+    def boom(events=None):
+        raise RuntimeError("channel gone")
+    monkeypatch.setattr(notices, "pending", boom)
+    assert cmd_notices("list", None, tmp_path) == 3
+    assert capsys.readouterr().err == "aramid: notices: command failed (channel gone)\n"
+
+
+def test_render_report_survives_an_explicit_null_days_held(capsys):
+    v = _full_verdict()
+    v["fleet"]["streak_started_at"] = NOW
+    v["fleet"]["days_held"] = None
+    fleet.write_verdict(v)
+    assert cmd_fleet() == 0
+    assert "streak: since" in capsys.readouterr().out

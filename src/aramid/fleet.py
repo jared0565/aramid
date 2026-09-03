@@ -692,7 +692,7 @@ def render_report(verdict: dict | None, policy: Policy, *, now: str | None = Non
     if info.get("streak_started_at"):
         versions = ", ".join(info.get("versions_in_streak", [])) or "none"
         out.append(f"  streak: since {info['streak_started_at']} "
-                   f"({float(info.get('days_held', 0.0)):.1f}d, versions: {versions})")
+                   f"({float(info.get('days_held') or 0.0):.1f}d, versions: {versions})")
     else:
         out.append("  streak: none (fleet not green)")
     out.append(f"  armed anywhere: {'yes' if info.get('armed_anywhere') else 'no'}")
