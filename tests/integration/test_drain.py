@@ -355,3 +355,38 @@ def test_drain_rolls_up_autolearn_state(tmp_path, monkeypatch, recent_iso):
     assert state["audits"]["performed"] == 1
     assert state["posteriors"]["p/m|cheap|plain"]["clean"] == 1
     assert list(state["cursors"].values())[0] > 0
+
+
+# ---- a consumer that proved nothing still records that it looked (round 180) ---
+
+class _LookedConsumer:
+    """An empty repair claim that names what the run examined."""
+    NAME = "fake"
+
+    @classmethod
+    def consume(cls, item, ctx):
+        from aramid.consumers.base import Repaired
+        return ConsumerResult(consumer=cls.NAME, state="ok",
+                              repaired=Repaired(tool="mutation", reason="mutant_killed",
+                                                ids=(), examined=("f" * 64,)))
+
+
+def test_an_empty_repair_claim_still_yields_what_the_consumer_examined(tmp_path, seam, monkeypatch):
+    """The drain handed the ledger a claim only when it had ids, so a
+    completed run that killed nothing wrote no `mutant_killed` yield and a
+    consumer's census read NEVER RAN forever (interop round 180)."""
+    r = _risky_repo(tmp_path)
+    registry.register(r, "t0")
+    monkeypatch.setattr(drain_mod, "CONSUMERS", {"fake": _LookedConsumer})
+
+    assert cmd_drain([], dry_run=False) == 0
+
+    led = Ledger(r / ".aramid" / "ledger.db")
+    try:
+        ys = [e for e in led.events() if e.type is EventType.RESOLVER_YIELD
+              and e.payload.get("resolver") == "mutant_killed"]
+    finally:
+        led.close()
+    assert len(ys) == 1, "an empty claim is still a run that looked"
+    assert (ys[0].payload["tool"], ys[0].payload["considered"],
+            ys[0].payload["resolved"]) == ("mutation", 1, 0)

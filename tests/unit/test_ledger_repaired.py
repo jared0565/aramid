@@ -196,3 +196,35 @@ def test_a_pending_retest_finding_resolves_when_the_producer_proves_the_kill(led
 
     assert got == [FID]
     assert led.open_findings()[FID]["status"] == "fixed"
+
+
+# ------------------------------- what was EXAMINED counts, claimed or not ---
+# Interop round 180: a consumer's resolver census graded `mutant_killed/
+# mutation` NEVER RAN after a completed mutation run, because the drain handed
+# the ledger a claim only when there was one. A resolver that ran and proved
+# nothing must still say what it looked at, or "never ran" and "nothing to
+# prove" are the same row -- and the second is not a defect.
+
+def test_examined_ids_count_as_considered_without_being_resolved(led):
+    _seed(led, _finding(FID), _finding(OTHER))
+
+    out = ledger_mod.resolve_repaired(led, "r1", NOW, tool="mutation", reason="mutant_killed",
+                                      ids=(FID,), examined=(FID, OTHER), present_ids=set())
+
+    assert out == [FID]
+    assert led.open_findings()[OTHER]["status"] == "open", "examined is not a claim"
+    y = [e for e in led.events() if e.type is EventType.RESOLVER_YIELD][-1]
+    assert (y.payload["resolver"], y.payload["tool"]) == ("mutant_killed", "mutation")
+    assert (y.payload["considered"], y.payload["resolved"]) == (2, 1)
+
+
+def test_an_empty_claim_still_records_what_was_examined(led):
+    _seed(led, _finding(FID))
+
+    out = ledger_mod.resolve_repaired(led, "r1", NOW, tool="mutation", reason="mutant_killed",
+                                      ids=(), examined=(FID,), present_ids=set())
+
+    assert out == []
+    assert led.open_findings()[FID]["status"] == "open"
+    y = [e for e in led.events() if e.type is EventType.RESOLVER_YIELD][-1]
+    assert (y.payload["considered"], y.payload["resolved"]) == (1, 0)

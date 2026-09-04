@@ -37,10 +37,21 @@ class Repaired:
     the claim a silent no-op, so it is stated rather than inferred.
     `reason` lands in the ledger as `auto_resolved`, so it must read as a cause
     ("mutant_killed"), not as a restatement of the outcome.
+
+    `examined` is NOT a claim: the recorded ids (open or pending_retest) the
+    run read and could have proved, whether or not it did. It exists so that
+    an EMPTY claim is still a claim that the run looked. Without it a
+    completed mutation run that killed nothing recorded was indistinguishable
+    from a consumer that never ran, and a consumer's resolver census graded
+    `mutant_killed` NEVER RAN forever (interop round 180). A producer
+    reports `Repaired(ids=(), examined=<what it read>)` on every completed
+    run; the ledger records `considered = |ids ∪ examined|`, which the census
+    grades NO OPPORTUNITY / NO CLEARS -- an outcome, not a defect.
     """
     tool: str
     reason: str
     ids: tuple = ()
+    examined: tuple = ()
 
 
 @dataclass

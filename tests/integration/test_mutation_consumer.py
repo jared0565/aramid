@@ -1049,15 +1049,26 @@ def test_a_consumer_reports_the_identities_it_proved_repaired(tmp_path, monkeypa
     assert set(res.repaired.ids) <= _fps(res, "killed_fps")
 
 
-def test_a_run_that_kills_nothing_claims_no_repair(tmp_path, monkeypatch):
-    """The safe direction, pinned: proving nothing must clear nothing. A
-    producer that reports an empty claim is indistinguishable from one that
-    never ran, which is what makes the mechanism opt-in."""
+def test_a_run_that_kills_nothing_claims_no_repair_but_says_what_it_examined(tmp_path, monkeypatch):
+    """The safe direction, pinned: proving nothing must clear nothing. But an
+    empty claim used to be indistinguishable from a consumer that never ran,
+    and a consumer's resolver census graded `mutant_killed` NEVER RAN after a
+    completed mutation run (interop round 180). The claim now names the
+    recorded survivors the run examined, so the ledger can write "looked,
+    proved 0" -- an outcome, not a defect."""
     r, base, head = _repo(tmp_path, WEAK_TEST)
+    weak = _consume(r, base, head, monkeypatch, tmp_path)
+    assert weak.repaired is not None and weak.repaired.ids == ()
+    assert weak.repaired.examined == (), "nothing was recorded before the first run"
+    survived = sorted(_fps(weak, "survivor_fps"))
+    assert survived, f"fixture produced no survivor: {weak.note}"
+    _seed_open(r, survived[0])
 
-    res = _consume(r, base, head, monkeypatch, tmp_path)
+    res = _consume(r, base, head, monkeypatch, tmp_path)   # same weak suite: nothing dies
 
-    assert not (res.repaired and res.repaired.ids)
+    assert res.repaired is not None
+    assert res.repaired.ids == ()
+    assert survived[0] in set(res.repaired.examined)
 
 
 def test_a_drained_repair_flips_the_open_finding_to_fixed(tmp_path, monkeypatch):
@@ -1364,7 +1375,8 @@ def test_a_new_test_that_kills_nothing_claims_nothing_and_reconfirms(tmp_path, m
 
     res = _consume(r, head, head2, monkeypatch, tmp_path, item_id="q2")
 
-    assert res.repaired is None
+    assert res.repaired is not None and res.repaired.ids == (), "nothing died: no claim"
+    assert set(res.repaired.examined) == ids, "but the run says which survivors it re-tested"
     assert res.extra["retested"] == len(ids)
     assert res.extra["retest_killed"] == 0
     assert _ids_of(r, res.findings) == ids, "still surviving: re-reported under the same ids"

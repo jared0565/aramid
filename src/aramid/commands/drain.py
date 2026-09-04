@@ -144,12 +144,20 @@ def _consume_item(root: Path, cfg, ledger, item, clock) -> bool:
         # (source touched, or a `test_<module>.py` added) so a dev is not
         # blocked, and names this re-drain as its backstop. The backstop could
         # only ever re-REPORT; here it can also CONFIRM.
-        if result.repaired and result.repaired.ids:
+        #
+        # Any claim, INCLUDING an empty one: a producer that examined the
+        # recorded survivors and killed none still gets its yield row
+        # (`considered N, resolved 0`), which the census grades as an
+        # outcome. Handing the ledger a claim only when it had ids meant a
+        # consumer whose runs never killed a recorded survivor read
+        # `mutant_killed NEVER RAN` forever (interop round 180).
+        if result.repaired is not None:
             ledger_mod.resolve_repaired(ledger, run_id, clock(),
                                         tool=result.repaired.tool,
                                         reason=result.repaired.reason,
                                         ids=result.repaired.ids,
-                                        present_ids={f.id for f in findings})
+                                        present_ids={f.id for f in findings},
+                                        examined=getattr(result.repaired, "examined", ()))
         payload = {"consumer": name, "item_id": item.id,
                    "state": result.state,
                    "duration_s": round(duration, 3),

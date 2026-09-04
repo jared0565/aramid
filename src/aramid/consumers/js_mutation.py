@@ -319,12 +319,15 @@ def consume(item, ctx: DrainContext) -> ConsumerResult:
     note = f"{stats['survived']} survivor(s) of {stats['tested']} mutant(s) tested"
     if stats["truncated"]:
         note += " (truncated: budget/cap hit, remainder dropped)"
+    # Reported on EVERY completed run, kills or none: `examined` names the
+    # open findings this run read, so an empty claim is still a run that
+    # looked (consumers.base.Repaired; interop round 180).
     return ConsumerResult(consumer=NAME, state="ok", findings=findings,
                           duration_s=time.monotonic() - started, cost=0.0,
                           note=note, extra=dict(stats),
                           repaired=base.Repaired(tool=TOOL, reason="mutant_killed",
-                                                 ids=repaired_ids)
-                          if repaired_ids else None)
+                                                 ids=repaired_ids,
+                                                 examined=tuple(sorted(open_ids))))
 
 
 base.CONSUMERS[NAME] = sys.modules[__name__]

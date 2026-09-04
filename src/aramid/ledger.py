@@ -300,7 +300,7 @@ def resolve_departed(ledger, run_id: str, at: str, *, root, tool: str,
 
 
 def resolve_repaired(ledger, run_id: str, at: str, *, tool: str, reason: str,
-                     ids, present_ids) -> list[str]:
+                     ids, present_ids, examined=()) -> list[str]:
     """Resolve one producer's open findings that it has PROVED repaired.
 
     The counterpart to `resolve_departed`: a producer whose finding is
@@ -366,9 +366,15 @@ def resolve_repaired(ledger, run_id: str, at: str, *, tool: str, reason: str,
     record is skipped and counted through `diagnostics`, not swallowed.
     """
     wanted = set(ids or ())
+    # `examined` (consumers.base.Repaired.examined): what the producer READ
+    # and could have proved -- the recorded survivors -- claimed or not. It
+    # is counted, never resolved. Without it an empty claim yielded
+    # `considered 0`, and a consumer's census could not tell a run that
+    # looked and proved nothing from one that never ran (round 180).
+    considered = len(wanted | set(examined or ()))
     if not wanted:
         note_yield(ledger, run_id, at, resolver=reason, tool=tool,
-                   considered=0, resolved=0)
+                   considered=considered, resolved=0)
         return []
     resolved: list[str] = []
     skipped = 0
@@ -395,19 +401,21 @@ def resolve_repaired(ledger, run_id: str, at: str, *, tool: str, reason: str,
             skipped += 1
             continue
     diagnostics.note_skipped(f"{tool}-repaired-resolve", skipped)
-    # `wanted`, not the open set: this resolver is driven by the producer's
-    # CLAIM (see above), so what it walked is what was claimed. A claim that
-    # matches nothing open is the interesting row -- a producer proving
-    # repairs the ledger has no record of is as broken as one proving none.
+    # `wanted` plus `examined`, not the open set: this resolver is driven by
+    # the producer's CLAIM (see above) over the recorded ids it READ, so what
+    # it walked is what was claimed or examined. A claim that matches nothing
+    # open is the interesting row -- a producer proving repairs the ledger has
+    # no record of is as broken as one proving none.
     #
     # NOTE THE ASYMMETRY, because it changes who is at fault. Everywhere else
     # `considered` is counted AFTER the tool/status filter, so a low number
     # means the resolver saw little. Here it is counted BEFORE, so a high
     # `considered` with a zero `resolved` indicts the PRODUCER -- it proved
-    # repairs for ids the ledger does not hold open -- not this function. The
-    # report grades that combination as informational for exactly that reason.
+    # repairs for ids the ledger does not hold open, or examined survivors
+    # and killed none -- not this function. The report grades that
+    # combination as informational for exactly that reason.
     note_yield(ledger, run_id, at, resolver=reason, tool=tool,
-               considered=len(wanted), resolved=len(resolved))
+               considered=considered, resolved=len(resolved))
     return resolved
 
 

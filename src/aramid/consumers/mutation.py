@@ -142,6 +142,21 @@ def _open_finding_ids(ledger) -> set:
         return set()
 
 
+def _recorded_survivor_ids(ledger) -> set:
+    """Every recorded survivor this run could prove -- open, or
+    `pending_retest` (the gate's optimistic resolve waiting for exactly this
+    proof). Reported as `Repaired.examined` on EVERY completed run, claimed
+    or not, so the ledger can tell "looked, proved 0" from "never ran"
+    (interop round 180). Never raises: an unreadable ledger reads as
+    nothing examined, the permissive direction."""
+    try:
+        return {fid for fid, rec in ledger.open_findings().items()
+                if rec.get("tool") == "mutation"
+                and rec.get("status") in ("open", "pending_retest")}
+    except Exception:
+        return set()
+
+
 def _new_target() -> dict:
     # `survived_s1` is "survived stage 1 AND the full suite passed on it":
     # the confirm moves a mutant OUT of it on any other outcome (killed_s2,
@@ -439,6 +454,7 @@ def consume(item, ctx: DrainContext) -> ConsumerResult:
              "retest_killed": 0, "retest_truncated": False}
     scores: dict[str, dict] = {}
     open_ids = _open_finding_ids(ctx.ledger)
+    examined = _recorded_survivor_ids(ctx.ledger)
     repaired_ids: set = set()
     findings: list[RawFinding] = []
     tmp = Path(tempfile.mkdtemp(prefix="aramid-mut-"))
@@ -760,12 +776,16 @@ def consume(item, ctx: DrainContext) -> ConsumerResult:
     # ones an earlier drain recorded. Timeouts and errors are unattributable
     # and never get here at all.
     killed = tuple(sorted(repaired_ids))
+    # Reported on EVERY completed run, kills or none: `examined` names the
+    # recorded survivors this run read, so an empty claim is still a run
+    # that looked (consumers.base.Repaired; interop round 180).
     return ConsumerResult(consumer=NAME, state="ok", findings=findings,
                           duration_s=time.monotonic() - started, cost=0.0,
                           note=note, extra=extra,
                           repaired=base.Repaired(tool="mutation",
                                                  reason="mutant_killed",
-                                                 ids=killed) if killed else None)
+                                                 ids=killed,
+                                                 examined=tuple(sorted(examined))))
 
 
 base.CONSUMERS[NAME] = sys.modules[__name__]
