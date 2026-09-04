@@ -17,7 +17,7 @@ to publish a tag that disagrees with it.
   `<tempdir>/aramid-<kind>-<random>/wt` and remove it in a `finally` that
   a kill never reaches; on Windows an open file held by a grandchild leaves
   a few-KB shell behind, and a stale `.git/worktrees` registration survives
-  `git worktree prune` while the directory exists (measured: 36 shells over
+  `git worktree prune` while the directory exists (measured: 34 shells over
   six weeks, one or two per scheduled drain, plus one dangling red-proof
   registration). `aramid.leftovers.sweep` now runs for every repo a drain
   probes: shells older than six hours go, with their registrations; a

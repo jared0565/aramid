@@ -9,7 +9,7 @@ and on Windows ``shutil.rmtree`` leaves a shell behind when a grandchild of
 the run still holds a file open. Both leave a few KB of skeleton per run
 and, when the kill came first, a stale registration in ``.git/worktrees``
 that ``git worktree prune`` will not touch while the directory exists.
-Measured on the machine that found it: 36 shells over six weeks, one or two
+Measured on the machine that found it: 34 shells over six weeks, one or two
 per scheduled drain.
 
 The drain calls :func:`sweep` for every repo it probes. The rule is age
