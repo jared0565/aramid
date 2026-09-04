@@ -810,6 +810,7 @@ class Ledger:
                       if item.state == QUEUED}
         queue_types = {EventType.QUEUE_ITEM_ADDED.value,
                        EventType.QUEUE_ITEM_COALESCED.value,
+                       EventType.QUEUE_ITEM_DEFERRED.value,
                        EventType.QUEUE_ITEM_DRAINED.value,
                        EventType.QUEUE_ITEM_EXPIRED.value}
         latest_singleton: dict[str, int] = {}  # type -> newest seq

@@ -98,6 +98,20 @@ def test_compact_keeps_queued_item_events_and_latest_triage(tmp_path):
     led.close()
 
 
+def test_compact_keeps_a_queued_items_deferrals(tmp_path):
+    """A deferral is queue state on a still-queued item (round 177): dropping
+    it in compaction would reset the starvation the next drain is meant to
+    correct."""
+    led = Ledger(tmp_path / "l.db")
+    item = queue.enqueue(led, "2026-07-13T11:00:00+00:00", "aaa", "bbb", 55, ["r1"])
+    queue.mark_deferred(led, item.id, "run1", "2026-07-13T15:00:00+00:00",
+                        reason="drain budget", after=["F:/other"], elapsed_s=1723, budget_s=600.0)
+    led.compact()
+    got = queue.materialize_queue(led.events())[item.id]
+    assert (got.state, got.deferred, got.deferred_reason) == ("queued", 1, "drain budget")
+    led.close()
+
+
 def test_compact_drops_terminal_queue_items_keeps_latest_consumer_and_run(tmp_path):
     led = Ledger(tmp_path / "l.db")
     item = queue.enqueue(led, "2026-07-13T10:00:00+00:00", "a", "b", 50, ["r"])

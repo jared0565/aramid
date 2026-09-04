@@ -86,6 +86,10 @@ class EventType(StrEnum):
     QUEUE_ITEM_COALESCED = "queue_item_coalesced"
     QUEUE_ITEM_DRAINED = "queue_item_drained"
     QUEUE_ITEM_EXPIRED = "queue_item_expired"
+    # A drain stopped (budget or item limit) with this item still queued.
+    # Written by the DRAIN into the starved repo's own ledger; replayed onto
+    # `QueueItem.deferred`, which the next drain orders on first (round 177).
+    QUEUE_ITEM_DEFERRED = "queue_item_deferred"
     CONSUMER_RUN_FINISHED = "consumer_run_finished"
 
     # What a resolver SAW, not only what it cleared. Emitted once per

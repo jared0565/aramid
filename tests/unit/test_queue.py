@@ -96,6 +96,40 @@ def test_expire_stale_only_past_expiry(tmp_path):
     led.close()
 
 
+# ------------------------------------------- an item left behind remembers it ---
+# Interop round 177: `drain --all` pops one item per repo by score under ONE
+# drain-wide budget checked between items, so an active repo's item can spend
+# the whole drain and a quieter repo's item is left queued with nothing
+# anywhere saying why -- and the same order repeats next time. The deferral
+# is recorded in the starved repo's own ledger and replayed onto the item.
+
+def test_deferred_event_type_exists():
+    assert EventType.QUEUE_ITEM_DEFERRED.value == "queue_item_deferred"
+
+
+def test_deferral_counts_survive_coalesce_and_end_on_drain(tmp_path):
+    led = Ledger(tmp_path / "l.db")
+    item = queue.enqueue(led, _iso(NOW), "aaa1111", "bbb2222", 45, ["r"])
+    assert queue.materialize_queue(led.events())[item.id].deferred == 0
+
+    queue.mark_deferred(led, item.id, "run1", _iso(NOW + timedelta(hours=4)),
+                        reason="drain budget", after=["F:/other"], elapsed_s=1723, budget_s=600.0)
+
+    got = queue.materialize_queue(led.events())[item.id]
+    assert (got.deferred, got.deferred_reason, got.state) == (1, "drain budget", "queued")
+    assert got.updated_at == _iso(NOW + timedelta(hours=4))
+    ev = [e for e in led.events() if e.type is EventType.QUEUE_ITEM_DEFERRED][0]
+    assert ev.finding_id == item.id and ev.run_id == "run1"
+    assert ev.payload == {"reason": "drain budget", "after": ["F:/other"],
+                          "elapsed_s": 1723, "budget_s": 600.0}
+    # A coalesce (new head absorbed) keeps the count: the starvation did not end.
+    queue.enqueue(led, _iso(NOW + timedelta(hours=5)), "bbb2222", "ccc3333", 90, ["r2"])
+    assert queue.materialize_queue(led.events())[item.id].deferred == 1
+    queue.mark_drained(led, item.id, "run2", _iso(NOW + timedelta(hours=8)))
+    assert queue.materialize_queue(led.events())[item.id].state == "drained"
+    led.close()
+
+
 def test_triage_records_head_and_paths(tmp_path):
     led = Ledger(tmp_path / "l.db")
     assert queue.last_triaged_head(led) is None

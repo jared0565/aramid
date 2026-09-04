@@ -29,6 +29,14 @@ class QueueItem:
     state: str
     created_at: str
     updated_at: str
+    # How many drains stopped with this item still queued, and why the last
+    # one did ("drain budget" / "item limit"). A coalesce keeps the count --
+    # absorbing a new head does not end the starvation -- and the next drain
+    # opens the most-deferred item FIRST, regardless of score (round 177:
+    # an active repo's item spent the drain-wide budget and a tied, quieter
+    # repo's item was never opened, with nothing anywhere saying why).
+    deferred: int = 0
+    deferred_reason: str | None = None
 
     @property
     def range_str(self) -> str:
@@ -48,19 +56,30 @@ def materialize_queue(events: list[Event]) -> dict[str, QueueItem]:
             items[e.finding_id] = QueueItem(
                 id=prev.id, base=e.payload.get("base"), head=e.payload["head"],
                 score=e.payload["score"], reasons=tuple(e.payload.get("reasons", [])),
-                state=prev.state, created_at=prev.created_at, updated_at=e.at)
+                state=prev.state, created_at=prev.created_at, updated_at=e.at,
+                deferred=prev.deferred, deferred_reason=prev.deferred_reason)
+        elif e.type is EventType.QUEUE_ITEM_DEFERRED and e.finding_id in items:
+            prev = items[e.finding_id]
+            items[e.finding_id] = QueueItem(
+                id=prev.id, base=prev.base, head=prev.head, score=prev.score,
+                reasons=prev.reasons, state=prev.state,
+                created_at=prev.created_at, updated_at=e.at,
+                deferred=prev.deferred + 1,
+                deferred_reason=e.payload.get("reason") or prev.deferred_reason)
         elif e.type is EventType.QUEUE_ITEM_DRAINED and e.finding_id in items:
             prev = items[e.finding_id]
             items[e.finding_id] = QueueItem(
                 id=prev.id, base=prev.base, head=prev.head, score=prev.score,
                 reasons=prev.reasons, state=DRAINED,
-                created_at=prev.created_at, updated_at=e.at)
+                created_at=prev.created_at, updated_at=e.at,
+                deferred=prev.deferred, deferred_reason=prev.deferred_reason)
         elif e.type is EventType.QUEUE_ITEM_EXPIRED and e.finding_id in items:
             prev = items[e.finding_id]
             items[e.finding_id] = QueueItem(
                 id=prev.id, base=prev.base, head=prev.head, score=prev.score,
                 reasons=prev.reasons, state=EXPIRED,
-                created_at=prev.created_at, updated_at=e.at)
+                created_at=prev.created_at, updated_at=e.at,
+                deferred=prev.deferred, deferred_reason=prev.deferred_reason)
     return items
 
 
@@ -97,6 +116,20 @@ def enqueue(ledger: Ledger, at: str, base: str | None, head: str,
 
 def mark_drained(ledger: Ledger, item_id: str, run_id: str, at: str) -> None:
     ledger.append(Event(EventType.QUEUE_ITEM_DRAINED, run_id, at, finding_id=item_id))
+
+
+def mark_deferred(ledger: Ledger, item_id: str, run_id: str, at: str, *,
+                  reason: str, after: list, elapsed_s: int, budget_s: float) -> None:
+    """Record that a drain stopped with this item still queued.
+
+    Written by the drain (`run_id` is the drain's) into THIS repo's ledger:
+    `reason` is "drain budget" or "item limit", `after` the normalized roots
+    the drain did open this run, `elapsed_s` / `budget_s` the numbers that
+    stopped it. `status` and `drain --dry-run` render it; the next drain
+    orders on `QueueItem.deferred` first (round 177)."""
+    ledger.append(Event(EventType.QUEUE_ITEM_DEFERRED, run_id, at, finding_id=item_id,
+                        payload={"reason": reason, "after": list(after),
+                                 "elapsed_s": int(elapsed_s), "budget_s": float(budget_s)}))
 
 
 def expire_stale(ledger: Ledger, now_iso: str, expiry_days: int) -> list[str]:
