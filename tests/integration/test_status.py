@@ -1064,7 +1064,7 @@ def test_status_last_run_line_says_how_long_the_run_took(tmp_path, monkeypatch, 
     out = capsys.readouterr().out
 
     assert rc == 0
-    assert "last run: 2026-08-29T10:00:00+00:00 (run run1, 0 blocking, took 570s)" in out
+    assert "last run: 2026-08-29T10:00:00+00:00 (pre-push run run1, 0 blocking, took 570s)" in out
 
 
 def test_status_last_run_line_stays_silent_about_duration_on_an_older_ledger(
@@ -1082,7 +1082,7 @@ def test_status_last_run_line_stays_silent_about_duration_on_an_older_ledger(
     out = capsys.readouterr().out
 
     assert rc == 0
-    assert "last run: 2026-08-29T10:00:00+00:00 (run run1, 0 blocking)" in out
+    assert "last run: 2026-08-29T10:00:00+00:00 (pre-push run run1, 0 blocking)" in out
     assert "took" not in out.split("last run:")[1].splitlines()[0]
 
 
@@ -1256,5 +1256,5 @@ def test_status_last_run_line_counts_no_historical_scan_hit_as_blocking(
     out = capsys.readouterr().out
 
     assert rc == 0
-    assert "last run: 2026-09-04T03:02:52+00:00 (run scan1, 0 blocking, took 8s)" in out
+    assert "last run: 2026-09-04T03:02:52+00:00 (historical-scan run scan1, 0 blocking, took 8s)" in out
     assert "not-a-secret" in out or "historical: 3" in out   # the hits are still reported, elsewhere

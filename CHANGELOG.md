@@ -10,6 +10,15 @@ to publish a tag that disagrees with it.
 
 ## [Unreleased]
 
+### Changed
+
+- **`aramid status`'s `last run:` line names the run's gate**, e.g.
+  `last run: <at> (pre-push run <id>, 0 blocking, took 570s)` or
+  `(historical-scan run <id>, ...)`. The newest run is whatever ran last,
+  and after `aramid init` that is the full-history scan rather than a gate;
+  without the label its line read like a gate's (interop round 172). A
+  ledger whose run carries no gate keeps the old `(run <id>, ...)` shape.
+
 ### Fixed
 
 - **`aramid status` no longer reports the init history scan's secrets as

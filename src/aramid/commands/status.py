@@ -30,11 +30,20 @@ def _parse_at(at: str) -> datetime | None:
 
 
 def _last_run_line(ledger: Ledger) -> str:
-    runs = [e for e in ledger.events() if e.type is EventType.RUN_FINISHED]
+    events = ledger.events()
+    runs = [e for e in events if e.type is EventType.RUN_FINISHED]
     if not runs:
         return "last run: none"
     last = runs[-1]
-    line = f"last run: {last.at} (run {last.run_id}, {last.payload.get('blocking', 0)} blocking"
+    # Name the gate: the newest run is whatever ran last, and after `aramid
+    # init` that is the full-history scan, not a gate -- read without the
+    # label, its line looked like a gate's (interop round 172 s3). The gate
+    # sits on the run's RUN_STARTED payload; a ledger without it keeps the
+    # old shape rather than inventing one.
+    gate = next((e.payload.get("gate") for e in events
+                 if e.type is EventType.RUN_STARTED and e.run_id == last.run_id), None)
+    label = f"{gate} run {last.run_id}" if gate else f"run {last.run_id}"
+    line = f"last run: {last.at} ({label}, {last.payload.get('blocking', 0)} blocking"
     # `finished_at` is newer than `at`; a ledger written before it has none,
     # and that reads as unknown rather than as zero seconds.
     finished = last.payload.get("finished_at")
