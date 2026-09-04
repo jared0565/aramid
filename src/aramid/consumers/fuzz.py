@@ -23,7 +23,7 @@ from aramid.consumers import base
 from aramid.consumers.base import ConsumerResult, DrainContext
 from aramid.fingerprint import compute_fingerprint
 from aramid.normalizer import RawFinding
-from aramid.runners.base import ToolState, run_subprocess
+from aramid.runners.base import ToolState, run_subprocess, worktree_import_env
 
 NAME = "fuzz"
 TOOL = "fuzz"
@@ -245,9 +245,16 @@ def consume(item, ctx: DrainContext) -> ConsumerResult:
         # PYTHONHASHSEED=0 pins the driver's hash randomization so set/dict
         # iteration (and thus a crash's args_repr in the finding message) is
         # reproducible across drains, not just its fingerprint.
+        # worktree_import_env: the driver loads each TARGET file by path, but
+        # the file's own imports resolve through sys.path, and `-m` puts only
+        # the worktree ROOT there -- so a src-layout package came from the
+        # installed distribution (fuzzing worktree code against installed
+        # dependencies) or, for a module the commit added, from nowhere
+        # (interop round 187: `import_failures 1` on graphite's cache commit).
+        # Same inversion red-proof and mutation each had once; see the helper.
         result = run_subprocess(
             [sys.executable, "-m", "aramid.fuzzdriver", str(spec_path)],
-            wt, remaining, env={"PYTHONHASHSEED": "0"})
+            wt, remaining, env={"PYTHONHASHSEED": "0", **worktree_import_env(wt)})
         if result.state is ToolState.TIMEOUT:
             stats["timeouts"] += 1
             # What the driver waits on is the call into a target function
@@ -291,6 +298,8 @@ def consume(item, ctx: DrainContext) -> ConsumerResult:
         stats["crashes"] = out.get("crashes", 0)
         stats["contract_exceptions"] = out.get("contract_exceptions", 0)
         stats["import_failures"] = len(out.get("import_failures", []))
+        # Which files, and why -- the row is what a consumer's reader has.
+        stats["import_failed"] = dict(out.get("import_errors", {}))
         stats["skipped_unhinted"] = out.get("unfuzzable", 0)
         # A target whose file import-failed never reaches the driver's
         # per-function loop, so its functions never count as unfuzzable --

@@ -45,6 +45,9 @@ def run_spec(spec: dict) -> dict:
     records, seen = [], set()
     cases_run = crashes = contract = unfuzzable = 0
     import_failures = []
+    # Why each of those files refused, keyed by the same rel path: the count
+    # alone sent a consumer's reader guessing which module (interop round 187).
+    import_errors: dict = {}
     # What was actually CALLED, as opposed to merely asked for. A function that
     # is missing, uncallable, or has no usable hints is skipped silently, and a
     # file that fails to import takes all of its functions with it -- every one
@@ -60,8 +63,9 @@ def run_spec(spec: dict) -> dict:
         cases = int(target.get("cases", 50))
         try:
             module, abs_path = _load_module(root, rel)
-        except Exception:
+        except Exception as exc:
             import_failures.append(rel)
+            import_errors[rel] = f"{type(exc).__name__}: {exc}"[:200]
             continue
         for func_name in target.get("functions", []):
             fn = getattr(module, func_name, None)
@@ -106,7 +110,8 @@ def run_spec(spec: dict) -> dict:
                     contract += 1
     return {"records": records, "cases_run": cases_run, "crashes": crashes,
             "contract_exceptions": contract, "unfuzzable": unfuzzable,
-            "import_failures": import_failures, "fuzzed": fuzzed}
+            "import_failures": import_failures, "import_errors": import_errors,
+            "fuzzed": fuzzed}
 
 
 def _note_progress(path, rel: str, func_name: str, n: int) -> None:

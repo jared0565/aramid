@@ -1,9 +1,12 @@
 """Integration: the fuzz consumer against real git worktrees + the real
 driver subprocess on tiny fixture repos."""
+import os
 import subprocess
+from pathlib import Path
 
 import pytest
 
+import aramid
 from aramid import config as config_mod
 from aramid.consumers import fuzz as fuzz_consumer
 from aramid.consumers.base import DrainContext
@@ -54,6 +57,15 @@ def _repo(tmp_path, body, filename="lib.py", extra_toml=""):
 
 
 def _consume(r, base, head, monkeypatch, tmp_path):
+    # The consumer spawns `python -m aramid.fuzzdriver`; a bare child resolves
+    # the INSTALLED wheel, not the aramid this process imported (the
+    # `checkout_env` fixture's rationale). Until 2026-09-04 every test here
+    # exercised the wheel's driver: a driver change could not fail a test.
+    # Bound per test through monkeypatch, so nothing outlives it.
+    src_root = Path(aramid.__file__).resolve().parent.parent
+    prior = os.environ.get("PYTHONPATH")
+    monkeypatch.setenv("PYTHONPATH",
+                       str(src_root) + (os.pathsep + prior if prior else ""))
     monkeypatch.setattr(config_mod, "_user_config_path",
                          lambda: tmp_path / "no-user.toml")
     cfg = config_mod.load_config(r)
@@ -662,3 +674,74 @@ def test_a_timed_out_driver_that_left_no_position_says_so(tmp_path, monkeypatch)
     assert "before its first call" in res.note
     assert "no cases run" in res.note
     assert "hung_in" not in res.extra
+
+
+# --- the driver must see the WORKTREE package, not the installed one --------
+
+_SRC_TARGET = """from pkg.helper import helper
+
+
+def g(a: int) -> int:
+    return helper(a)
+"""
+
+_SRC_HELPER = """def helper(a: int) -> int:
+    return a
+"""
+
+
+def _src_layout_repo(tmp_path):
+    """src/pkg/target.py imports src/pkg/helper.py, and both are new in the
+    feature commit: the package exists only in the worktree, never in any
+    installed distribution, exactly like a module a commit adds."""
+    r = tmp_path / "r"
+    r.mkdir()
+    _git(r, "init", "-q", "-b", "main")
+    _git(r, "config", "user.email", "t@t")
+    _git(r, "config", "user.name", "t")
+    (r / "aramid.toml").write_text(
+        "schema_version = 1\n[fuzz]\nmax_functions = 5\ncases_per_function = 20\n",
+        encoding="utf-8")
+    (r / "README.md").write_text("base\n", encoding="utf-8")
+    _git(r, "add", "-A")
+    _git(r, "commit", "-q", "-m", "base")
+    base = _sha(r)
+    pkg = r / "src" / "pkg"
+    pkg.mkdir(parents=True)
+    (pkg / "__init__.py").write_text("", encoding="utf-8")
+    (pkg / "helper.py").write_text(_SRC_HELPER, encoding="utf-8")
+    (pkg / "target.py").write_text(_SRC_TARGET, encoding="utf-8")
+    _git(r, "add", "-A")
+    _git(r, "commit", "-q", "-m", "feature")
+    return r, base, _sha(r)
+
+
+def test_a_src_layout_target_imports_its_own_worktree_package(tmp_path, monkeypatch):
+    # Interop round 187: graphite's fuzz row read import_failures 1 on a
+    # commit that added a module. The driver loaded the target file by path
+    # but the file's own package imports resolved through sys.path, which
+    # held the worktree root and never its src/ -- so a src-layout package
+    # came from the INSTALLED distribution, or from nowhere.
+    r, base, head = _src_layout_repo(tmp_path)
+
+    res = _consume(r, base, head, monkeypatch, tmp_path)
+
+    assert res.state == "ok"
+    assert res.extra["import_failures"] == 0, res.extra
+    assert res.extra["functions_fuzzed"] == 2      # helper and g
+    assert _no_worktrees(r)
+
+
+def test_an_import_failure_names_its_file_and_reason(tmp_path, monkeypatch):
+    # The count alone sent a reader guessing which module (round 187). The
+    # row now carries the file and the exception that refused it.
+    r, base, head = _repo(tmp_path, "import totally_nonexistent_xyz\n"
+                                    "def g(a: int) -> int:\n    return a\n",
+                          filename="bad.py")
+
+    res = _consume(r, base, head, monkeypatch, tmp_path)
+
+    assert res.extra["import_failures"] == 1
+    failed = res.extra["import_failed"]
+    assert list(failed) == ["bad.py"]
+    assert failed["bad.py"].startswith("ModuleNotFoundError")

@@ -78,6 +78,20 @@ to publish a tag that disagrees with it.
 
 ### Fixed
 
+- **The fuzz driver sees the worktree's own package.** The driver loads each
+  target file by path, but the file's own imports resolve through
+  `sys.path`, and `python -m` put only the worktree ROOT there -- so a
+  src-layout package came from the installed distribution (worktree code
+  fuzzed against installed dependencies) or, for a module the commit added,
+  from nowhere: interop round 187 read `import_failures 1` on graphite's
+  cache commit. The consumer now launches the driver with
+  `worktree_import_env(wt)` (`<wt>/src`, `<wt>` first), the inversion
+  red-proof and mutation each had once. The row also names what failed and
+  why: `import_failed` maps each file to `<ExcType>: <message>`, where the
+  count alone sent a reader guessing. The fuzz consumer tests had been
+  exercising the INSTALLED wheel's driver (a bare child resolves
+  site-packages); they now bind the checkout's `src` on the child's
+  PYTHONPATH per test, so a driver change can fail a test again.
 - **An accepted degradation passes -- under `--strict` and the CI-parity
   shim too.** `--accept-degraded` / `ARAMID_ACCEPT_DEGRADED` returned exit
   2 (pre-push BLOCK tier only); the plain shim mapped that to 0, but under
