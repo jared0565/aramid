@@ -77,6 +77,7 @@ schema_version = 1
 [readiness]
 min_days = 14          # user's choice: strict
 min_versions = 2       # distinct aramid versions inside the green streak
+max_row_age_days = 7   # a repo whose latest row is older than this is stale; 0 disables (amendment A1)
 [notices]
 repeat_hours = 24      # a pending notice is re-shown in a given repo at most this often
 defect_rows = 3        # a fleet-defect notice needs the same defect on this many consecutive rows
@@ -125,8 +126,8 @@ if record:
 Algorithm, `fleet.judge(rows, registry, policy, now) -> Verdict`:
 
 1. Consider only rows for repos **currently registered**; rows for deregistered repos are ignored. Rows older than 180 days are ignored (and compacted away, §10).
-2. Sort rows by `at`. Walk them, maintaining `latest[repo]`. The fleet is **green at time t** iff every registered repo has a row and its latest row is green (§4), and criterion 6 holds over the current streak.
-3. `streak_started_at` = the time of the transition into green that has held continuously through `now`; any transition to red resets it to `null`. A registered repo with **no rows** makes the fleet `insufficient-data`, which also resets the streak — a newly onboarded repo has to earn its rows (strict, per the user's choice).
+2. Sort rows by `at`. Walk them, maintaining `latest[repo]`. The fleet is **green at time t** iff every registered repo has a row, its latest row is green (§4) and no older than `max_row_age_days` at t (amendment A1), and criterion 6 holds over the current streak.
+3. `streak_started_at` = the time of the transition into green that has held continuously through `now`; any transition to red resets it to `null`. A registered repo with **no rows** makes the fleet `insufficient-data`, which also resets the streak — a newly onboarded repo has to earn its rows (strict, per the user's choice). A registered repo whose latest row is **older than `max_row_age_days` at `now`** is stale and makes the fleet `insufficient-data` the same way (amendment A1).
 4. `versions_in_streak` = distinct `aramid_version` over rows with `at >= streak_started_at`. `days_held = now - streak_started_at`.
 5. `ready` iff a streak exists, `days_held >= min_days`, `len(versions_in_streak) >= min_versions`, `armed_anywhere`, and not `disarm_in_streak`. Otherwise `not-ready` with `reasons` naming every red repo/criterion, or `insufficient-data`.
 6. Write `fleet_verdict.json` atomically.
@@ -154,6 +155,8 @@ aramid: NOTICE 9f3c1a7e2b40 readiness-broken: Atlas_Data went red at 2026-09-03T
 ```
 
 **`aramid status`** (new `fleet:` block after `scheduled drain:`): the same two line shapes without the `aramid:` prefix, plus `fleet: no verdict yet -- first drain after promotion computes it` when `fleet_verdict.json` is absent.
+
+Amendment A1 adds one tail to the readiness line, `stale: <name> (<age>d) -- window <W>d`, after `red:` and `no rows:` and before the blockers, and a third clause to the `aramid fleet` header (`..., 7-day row window)`). See A1.4.
 
 **Gate console trailer** (last line, console mode only, when `gate_trailer` is on and pending > 0):
 
@@ -199,3 +202,40 @@ aramid: 2 fleet notice(s) pending -- see `aramid notices`
 ## 12. Out of scope
 
 Network access of any kind; "a newer aramid is available" checks; cross-machine aggregation; reading other repos' ledgers; automating criterion 7; changing what `init` writes; any change to a consumer's tracked files.
+
+## Amendment A1 (2026-09-04): the freshness window
+
+**Decision, operator, 2026-09-04 ~02:10Z.** A registered repo's latest row counts toward the fleet's green streak only while it is no older than `max_row_age_days` (default **7**); a stale row makes the fleet `insufficient-data` and **resets** the streak. Announced to graphite-agent as channel round 171.
+
+### A1.1 Why
+
+Sections 6.2 to 6.3 as written evaluate `green` only when a row arrives, and `days_held` is pure wall clock. `ready` was therefore reachable from two green rows carrying two versions followed by 14 idle days, and `armed_anywhere` could be read off a row up to 180 days old. "Held continuously for 14 days" was meant as continuing positive evidence; the code read it as absence of contrary evidence. On an active fleet the two coincide; on an idle one they do not. Recorded at the final review of the implementation plan (Important 7) and parked until the operator decided.
+
+Options weighed and rejected: a 3-day window (a long weekend restarts the 14-day clock); keeping the spec as written (documenting that readiness measures absence of contrary evidence); a 7-day window that only **pauses** `days_held` (a new "paused" state on every surface). Seven days guarantees at least two rows per repo inside any 14-day streak, tolerates a week idle, and reuses the `insufficient-data` label the judge already has -- strict, matching the deregistration decision of 2026-09-03: a registered repo with no rows blocks any verdict, and a registered repo with only old rows now does too.
+
+### A1.2 Policy (amends §3.4)
+
+`[readiness].max_row_age_days`, integer days, default `7`. `0` **disables** the window and restores the behaviour of §6 as originally written. A negative or non-integer value falls back to the default like every other key (`_int_or`). The verdict's `policy` block carries it: `{"min_days": 14, "min_versions": 2, "max_row_age_days": 7}`.
+
+### A1.3 Judge (amends §6, steps 2, 3 and 5)
+
+Let `W` be the window as a duration; a row is **fresh at time t** when `t - row.at <= W` (exactly `W` old is still fresh). With `W` disabled nothing below applies.
+
+- **Step 2, during the walk.** The fleet is green at a row's time `t` iff every registered repo has a row, its latest row is green **and fresh at `t`**, and criterion 6 holds. In addition, **before** a row is applied, if a streak is open and any repo's latest row -- the same repo's previous row included -- is no longer fresh at `t`, the streak resets (`streak_started_at = null`, versions cleared, disarm forgotten) exactly as a red row resets it. The second rule catches the gap the first cannot see: a single-repo fleet, or every repo silent past the window and then all pushing on the same day, produces no row inside the gap for the walk to evaluate.
+- **Step 3, at `now`.** A registered repo whose latest row is not fresh at `now` is **stale**. Any stale repo makes the verdict `insufficient-data`, resets the streak, and `days_held` reads `0`. Label precedence for prediction: no repos registered -> a registered repo with no rows -> **a registered repo with a stale row** -> a red latest row -> the ready checks. A row that is stale **and** red reads `insufficient-data` with both reasons listed: an old row is not evidence of the current state in either direction.
+- **Step 5, output (additive; `schema_version` unchanged).** Per repo: `stale: bool` and `age_days: float | null` (days from the latest row to `now`, two decimals; `null` with no rows). Fleet: `stale_repos: [<name>, ...]` sorted case-insensitively. `reasons` gains `stale: <name> (<age>d), <name> (<age>d) -- window <W>d` after the `no rows:` entry and before any blocker; `<age>` has one decimal so a `7.4d` row never reads as `7d` beside a `7d` window.
+- **Transitions (§6, unchanged in code).** `ready` -> `insufficient-data` caused by staleness has no breaking row (every latest row is still green), so the existing no-breaking-row branch keys the `readiness-broken` notice on the prior verdict's streak start; its title reads `fleet readiness lost -- stale: ...`. No new notice kind.
+
+### A1.4 Surfaces (amends §8)
+
+- Readiness line (session-start hook, `aramid status`): the tail gains `stale: <name> (<age>d) -- window <W>d`, placed after `red:` and `no rows:` and before the blockers, e.g. `fleet: 1.0 readiness INSUFFICIENT DATA -- 2/2 repos green, streak 0d, versions 0/2; stale: graphite (9.3d) -- window 7d`. The `N/N repos green` count stays a property of the rows (a stale row can still be green); the tail says why the verdict is not. Verdict files written before A1 carry no `stale` keys and render exactly as before.
+- `aramid fleet`: the header reads `fleet health -- 1.0 readiness (policy: 14 days, 2 versions, 7-day row window)`, or `..., no row window)` when disabled; the matrix is unchanged and the `stale:` reason prints under `verdict:` like any other.
+- `aramid fleet --json`: the verdict file verbatim, with the new keys.
+
+### A1.5 Testing (amends §10)
+
+Streak math, table-driven, no sleeps: two green rows then idle past the window -> `insufficient-data`, `stale` named, streak `null`, `days_held` 0, and the same rows under `max_row_age_days = 0` -> `ready` (the original behaviour, still reachable); an active fleet with rows every 6 days for 20 days under the default policy -> `ready` (the window does not tax the happy path); a cross-repo gap inside the walk restarts the streak at the returning row; a same-repo gap in a single-repo fleet restarts it too; `no rows` beats `stale`, `stale` beats red, both reasons listed; exactly `W` old is fresh. Policy: default `7`, `0` accepted, negative and string fall back. Rendering: full-line assertions for the readiness-line tail and both `aramid fleet` headers. Drain: the transition fixtures place rows at most 6 days apart so they run under the production default rather than a disabled window, and a `ready` verdict left idle past the window posts `readiness-broken` keyed on the prior streak start.
+
+### A1.6 Rollout
+
+Ships in the next MINOR (a new policy key is new surface). No tracked file in any consumer changes. Expected first reading on this machine: no change -- both registered repos' latest rows are hours old. The first observable effect is that a `ready` verdict now needs every registered repo to have pushed within the last 7 days at the moment of the drain, throughout the 14-day streak. Documented in `docs/user-guide.md` (policy block and one paragraph).
