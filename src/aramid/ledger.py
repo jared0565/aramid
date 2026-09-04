@@ -558,12 +558,24 @@ class Ledger:
                    expected_tools: set[str] | None = None,
                    root: Path | None = None,
                    examined_by_tool: dict[str, set[str]] | None = None,
-                   finished_at: str | None = None):
+                   finished_at: str | None = None,
+                   certified=None, refs_moved=None, head_at_exit: str | None = None):
         state, seen = _materialize(self.events())
         present = {f.id for f in findings}
         payload = {"gate": gate, "tools": sorted(scope_tools)}
         if selected_tools is not None:
             payload["selected"] = sorted(selected_tools)
+        if certified is not None:
+            # WHAT this pre-push run certified: the refs git handed the hook
+            # (local ref + the sha git resolved BEFORE the hook), HEAD at
+            # start, and whether the refs came from git's stdin at all.
+            # Written only when supplied -- absent on older rows and on every
+            # other gate -- because a reader must not confuse "not recorded"
+            # with "certified nothing" (interop round 176; pushrefs).
+            from aramid import pushrefs
+            payload["refs"] = pushrefs.payload_refs(certified)
+            payload["head_at_start"] = certified.head_at_start
+            payload["hook"] = bool(certified.hook)
         if expected_tools is not None:
             # What THIS GATE should have run, as opposed to `selected` (the
             # union across every gate) and `tools` (what actually ran). The
@@ -689,6 +701,13 @@ class Ledger:
                                     if str(f.verdict) == "block" and not f.historical)}
         if finished_at is not None:
             finished["finished_at"] = finished_at
+        if refs_moved is not None:
+            # Every certified ref re-resolved at exit; empty means none moved.
+            # Same absent-vs-empty rule as `refs` on RUN_STARTED.
+            from aramid import pushrefs
+            finished["refs_moved"] = pushrefs.payload_moved(refs_moved)
+        if head_at_exit is not None:
+            finished["head_at_exit"] = head_at_exit
         self.append(Event(EventType.RUN_FINISHED, run_id, at, payload=finished))
         return new_ids
 

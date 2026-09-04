@@ -100,6 +100,11 @@ def _resolve(root: Path, ref: str) -> str | None:
     return sha if cp.returncode == 0 and sha else None
 
 
+def head(root: Path) -> str | None:
+    """HEAD's commit sha now, or None outside a repo / on an unborn branch."""
+    return _resolve(Path(root), "HEAD")
+
+
 def certify(root: Path, refs, hook: bool) -> Certification:
     """Pin what this gate run is certifying: the refs git named (already
     carrying the shas git resolved) and HEAD as of now."""

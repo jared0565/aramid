@@ -30,6 +30,7 @@ from typing import Callable
 from aramid import config as config_mod
 from aramid import (gitutil, mutation_gate, mutation_score_gate, policy, red_proof, redact,
                     tdd, tests_gate, toolpath)
+from aramid import pushrefs
 from aramid import review as review_mod
 from aramid.detectors import (detect_package_manager, detect_stacks, detect_tests,
                               unrooted_stack_notices)
@@ -111,6 +112,9 @@ class GateResult:
     # someone reads when CI and local disagree: two finding sets are only
     # comparable when the analyzers behind them are.
     tool_provenance: dict = field(default_factory=dict)
+    # Certified refs that moved while the gate ran (`pushrefs.Moved`, pre-push
+    # only). Non-empty voids the certification: `cmd_check` fails the gate.
+    refs_moved: tuple = ()
     # Finding ids whose BLOCK verdict came from the no-new-warnings RATCHET
     # rather than from `policy.classify`. Recorded at the escalation site
     # below, where both the before and after values are in hand.
@@ -816,7 +820,14 @@ def _overrides_from_ledger(ledger: Ledger) -> list[OverrideRecord]:
 def run_gate(root: Path, gate: Gate, mode: str, cfg: config_mod.Config, ledger: Ledger,
              accept_degraded: str | None = None, *,
              clock: Callable[[], str] = _default_clock,
-             run_id: str | None = None) -> GateResult:
+             run_id: str | None = None,
+             certified=None) -> GateResult:
+    """`certified` (a `pushrefs.Certification`, pre-push only): the refs
+    git handed the hook, pinned by `commands.check` BEFORE this call. They
+    are re-resolved after the last runner returns; a ref that moved is
+    carried on `GateResult.refs_moved` and on the run row, and `cmd_check`
+    fails the gate on it (interop round 176: over smart HTTP git ships the
+    tip as of hook EXIT, so a commit made during the gate ships ungated)."""
     run_id = run_id if run_id is not None else uuid.uuid4().hex
     at = clock()
 
@@ -977,6 +988,12 @@ def run_gate(root: Path, gate: Gate, mode: str, cfg: config_mod.Config, ledger: 
         expected_tools = toolset.expected_tool_names(root, cfg, gate)
     except Exception:
         expected_tools = None
+    # Drift: every certified ref re-resolved AFTER the last runner returned
+    # and BEFORE the row is written, so the row says what the gate saw at
+    # exit. Nothing here can raise (pushrefs fails closed by returning a
+    # moved ref with `after=None`, never an exception).
+    moved = pushrefs.drift(root, certified) if certified is not None else None
+    head_at_exit = pushrefs.head(root) if certified is not None else None
     new_ids = ledger.record_run(run_id, at, str(gate), scope_tools, scope_files, findings,
                                 selected_tools=selected_tools,
                                 expected_tools=expected_tools, root=root,
@@ -984,7 +1001,9 @@ def run_gate(root: Path, gate: Gate, mode: str, cfg: config_mod.Config, ledger: 
                                 # Every runner has returned by here; this is
                                 # the wall clock the ledger could not carry
                                 # while `at` was its only timestamp.
-                                finished_at=clock())
+                                finished_at=clock(),
+                                certified=certified, refs_moved=moved,
+                                head_at_exit=head_at_exit)
 
     # record_run above can NEVER resolve a whole-suite finding: those carry the
     # synthetic `<test-suite>` marker, which is not a path and so is never in
@@ -1272,4 +1291,5 @@ def run_gate(root: Path, gate: Gate, mode: str, cfg: config_mod.Config, ledger: 
                        # re-derivation: the two surfaces disagreeing about what
                        # ran is the defect this closes.
                        tools_ran=tuple(sorted(scope_tools)),
-                       stacks=tuple(sorted(ctx.stacks)))
+                       stacks=tuple(sorted(ctx.stacks)),
+                       refs_moved=tuple(moved or ()))

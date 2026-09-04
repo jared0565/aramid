@@ -83,6 +83,7 @@ from aramid import config as config_mod
 from aramid import fleet
 from aramid import pipeline
 from aramid import policy
+from aramid import pushrefs
 from aramid import reporter
 from aramid.commands import override as override_cmd
 from aramid.ledger import Ledger
@@ -185,6 +186,24 @@ def cmd_check(root, gate: Gate, mode: str, strict: bool = False, as_json: bool =
 
         fresh = gate is Gate.PRE_PUSH and not ledger.has_baseline()
 
+        # What this run certifies (pre-push only; interop round 176). Over
+        # smart HTTP git ships the tip as of hook EXIT, so the refs git named
+        # on the hook's stdin are pinned here, BEFORE anything runs, and
+        # re-resolved by run_gate after the last runner returns.
+        certified = None
+        if gate is Gate.PRE_PUSH:
+            hook_text = pushrefs.read_hook_stdin()      # None unless ARAMID_HOOK is set
+            refs = pushrefs.parse_push_lines(hook_text or "")
+            if hook_text is not None and not refs:
+                # git's "Everything up-to-date", or a push that only deletes:
+                # nothing ships, so there is nothing to certify -- and no run
+                # row, because a row with no tools reads as a skip and would
+                # start a skip streak for a push that shipped nothing.
+                print("aramid: pre-push: nothing to push -- git handed the hook an "
+                      "empty ref list; gate not run", file=sys.stderr)
+                return 0
+            certified = pushrefs.certify(root, refs, hook=hook_text is not None)
+
         # Gate START, before anything detects. Deliberately not on the
         # detection path: every armed tool's gate skips records whose status
         # is not "open" (mutation's is the sharpest), so an invalidation that
@@ -196,7 +215,8 @@ def cmd_check(root, gate: Gate, mode: str, strict: bool = False, as_json: bool =
         if invalidated:
             print(override_cmd.render_invalidations(invalidated), file=sys.stderr)
 
-        result = pipeline.run_gate(root, gate, mode, cfg, ledger, accept_degraded=accept_degraded)
+        result = pipeline.run_gate(root, gate, mode, cfg, ledger, accept_degraded=accept_degraded,
+                                   certified=certified)
         result = dataclasses.replace(result, recorded=record)
 
         exit_code = result.exit_code
@@ -212,6 +232,15 @@ def cmd_check(root, gate: Gate, mode: str, strict: bool = False, as_json: bool =
                 print("aramid: check: fresh ledger -- baseline written; legacy findings do "
                       "not block the first pre-push run", file=sys.stderr)
                 exit_code = 2 if result.degraded else 0
+
+        if result.refs_moved:
+            # A certified ref moved while the gate ran: the certification is
+            # void and git will not say so (over smart HTTP it ships the
+            # moved tip while printing the pre-hook range). Fail, not warn --
+            # and AFTER the fresh-ledger downgrade above, which grandfathers
+            # legacy findings, never a moved branch.
+            print("aramid: pre-push: " + pushrefs.render(result.refs_moved), file=sys.stderr)
+            exit_code = 1
 
         if strict and exit_code in (2, 3):
             exit_code = 1

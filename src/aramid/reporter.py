@@ -176,6 +176,10 @@ def render_json(result: GateResult) -> str:
         "exit_code": result.exit_code,
         "findings": [_finding(f) for f in result.findings],
         "degraded": list(result.degraded),
+        # Certified refs that moved while the gate ran (pre-push; interop
+        # round 176). Always present: empty means the gate looked and nothing
+        # moved, absent means an aramid too old to certify.
+        "refs_moved": [dataclasses.asdict(m) for m in getattr(result, "refs_moved", ()) or ()],
         "new_ids": list(result.new_ids),
         "stale_overrides": [dataclasses.asdict(s) for s in result.stale_overrides],
         # Always present, even when empty: an ABSENT key means an aramid old
