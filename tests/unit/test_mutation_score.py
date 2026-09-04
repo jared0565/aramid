@@ -3,14 +3,40 @@ from aramid.models import Event, EventType
 
 
 def _crf(idx, target, killed_s1, survived_s1, fully,
-         killed_fps=(), survivor_fps=()):
+         killed_fps=(), survivor_fps=(), killed_s2=None):
+    t = {"generated": killed_s1 + survived_s1 + (killed_s2 or 0),
+         "killed_s1": killed_s1, "survived_s1": survived_s1,
+         "timeouts": 0, "errors": 0,
+         "fully_mutated": fully, "killed_fps": list(killed_fps),
+         "survivor_fps": list(survivor_fps)}
+    if killed_s2 is not None:      # rows written before the key existed omit it
+        t["killed_s2"] = killed_s2
     return Event(EventType.CONSUMER_RUN_FINISHED, f"r{idx}", "t", payload={
         "consumer": "mutation", "item_id": "q",
-        "mutation_scores": {"schema": 1, "targets": {target: {
-            "generated": killed_s1 + survived_s1, "killed_s1": killed_s1,
-            "survived_s1": survived_s1, "timeouts": 0, "errors": 0,
-            "fully_mutated": fully, "killed_fps": list(killed_fps),
-            "survivor_fps": list(survivor_fps)}}}})
+        "mutation_scores": {"schema": 1, "targets": {target: t}}})
+
+
+# --- verdict-based rate (interop round 174, Q3) ------------------------------
+#
+# `survived_s1` used to mean "passed stage 1", and stayed set when the
+# full-suite confirm timed out, errored, or killed the mutant -- so a mutant
+# that never reached a verdict read as a survivor, and one the full suite
+# killed read as BOTH killed and survived. The consumer now moves those out of
+# `survived_s1` (timeouts/errors/unconfirmed) or into `killed_s2`, and the
+# rate counts kills of either stage over mutants with a verdict.
+
+def test_rate_counts_a_full_suite_kill_as_a_kill():
+    events = [_crf(0, "f.py::g", 1, 1, True, killed_s2=2)]
+    s = mutation_score.iter_target_scores(events)[0]
+    assert s.killed_s2 == 2
+    assert s.rate == 3 / 4
+
+
+def test_rows_without_killed_s2_keep_the_old_rate():
+    events = [_crf(0, "f.py::g", 2, 1, True)]
+    s = mutation_score.iter_target_scores(events)[0]
+    assert s.killed_s2 == 0
+    assert s.rate == 2 / 3
 
 
 def test_iter_target_scores_parses_and_indexes():

@@ -143,8 +143,14 @@ def _open_finding_ids(ledger) -> set:
 
 
 def _new_target() -> dict:
-    return {"generated": 0, "killed_s1": 0, "survived_s1": 0,
-            "timeouts": 0, "errors": 0, "killed_fps": [], "survivor_fps": []}
+    # `survived_s1` is "survived stage 1 AND the full suite passed on it":
+    # the confirm moves a mutant OUT of it on any other outcome (killed_s2,
+    # timeouts, errors, unconfirmed), so `killed_s1 + killed_s2 + survived_s1`
+    # is exactly the mutants with a verdict (interop round 174, Q3). Keys are
+    # additive on `mutation_scores` schema 1; the reader defaults them to 0.
+    return {"generated": 0, "killed_s1": 0, "killed_s2": 0, "survived_s1": 0,
+            "unconfirmed": 0, "timeouts": 0, "errors": 0,
+            "killed_fps": [], "survivor_fps": []}
 
 
 def _tgt(scores: dict, rel: str, func: str) -> dict:
@@ -158,7 +164,11 @@ def _tgt(scores: dict, rel: str, func: str) -> dict:
 
 def _finalize_scores(scores: dict) -> dict:
     for t in scores.values():
-        t["fully_mutated"] = (t["killed_s1"] + t["survived_s1"] == t["generated"])
+        # Every generated mutant reached a verdict: killed at either stage,
+        # or survived the full suite. Timeouts, errors and unconfirmed
+        # mutants are the gap that makes a target `(partial)`.
+        t["fully_mutated"] = (t["killed_s1"] + t["killed_s2"] + t["survived_s1"]
+                              == t["generated"])
     return {"schema": 1, "targets": scores}
 
 
@@ -619,20 +629,34 @@ def consume(item, ctx: DrainContext) -> ConsumerResult:
                         stats["errors"] += 1
                         t_of(m.func)["errors"] += 1
                         continue
-                    # putative survivor (pass, or exit 5 = nothing selected)
+                    # putative survivor (pass, or exit 5 = nothing selected).
+                    # `stats["survived"]` is the item-level count of exactly
+                    # that -- passed stage 1 -- and stays so. The per-target
+                    # `survived_s1` is the SCORE's term and means "and the
+                    # full suite passed on it": every other confirm outcome
+                    # below moves the mutant out of it again, otherwise a
+                    # confirm that never reached a verdict read downstream as
+                    # a survivor, and a full-suite kill as both (round 174).
                     stats["survived"] += 1
-                    t_of(m.func)["survived_s1"] += 1
+                    t = t_of(m.func)
+                    t["survived_s1"] += 1
                     if confirms_used >= confirm_cap:
+                        # Never confirmed: not a survivor, not a kill, and
+                        # not a measurement either.
                         stats["truncated"] = True
+                        t["survived_s1"] -= 1
+                        t["unconfirmed"] += 1
                         continue
                     confirms_used += 1
                     s2 = run_subprocess(full_argv, wt, full_timeout,
                                         env=worktree_import_env(wt))
                     if s2.state is ToolState.TIMEOUT:
                         stats["timeouts"] += 1
+                        t["survived_s1"] -= 1
+                        t["timeouts"] += 1
                     elif s2.state is ToolState.OK and s2.returncode == 0:
                         stats["confirmed"] += 1
-                        t_of(m.func)["survivor_fps"].append(
+                        t["survivor_fps"].append(
                             _mutant_fp(rel, m.op, m.line, lines))
                         findings.append(RawFinding(
                             tool="mutation", rule=m.op, severity_raw="medium",
@@ -641,8 +665,10 @@ def consume(item, ctx: DrainContext) -> ConsumerResult:
                                      f" (unkilled by: {_suite_label(full_argv)})")))
                     elif s2.state is ToolState.OK and s2.returncode in (1, 2):
                         stats["killed_s2"] += 1
+                        t["survived_s1"] -= 1
+                        t["killed_s2"] += 1
                         fp = _mutant_fp(rel, m.op, m.line, lines)
-                        t_of(m.func)["killed_fps"].append(fp)
+                        t["killed_fps"].append(fp)
                         # Already a full-suite verdict -- this IS the
                         # confirmation the stage-1 branch has to go and buy.
                         repaired_ids.add(fp)
@@ -651,7 +677,8 @@ def consume(item, ctx: DrainContext) -> ConsumerResult:
                         # crash): the putative survivor is NOT reported -- a
                         # survivor requires the full suite to PASS on it.
                         stats["errors"] += 1
-                        t_of(m.func)["errors"] += 1
+                        t["survived_s1"] -= 1
+                        t["errors"] += 1
                 except Exception:
                     stats["errors"] += 1
                 finally:

@@ -26,7 +26,8 @@ def cmd_mutation_score(root, *, as_json: bool = False) -> int:
             print(json.dumps({
                 "targets": [
                     {"target": s.target, "run_index": s.run_index,
-                     "killed_s1": s.killed_s1, "survived_s1": s.survived_s1,
+                     "killed_s1": s.killed_s1, "killed_s2": s.killed_s2,
+                     "survived_s1": s.survived_s1,
                      "rate": s.rate, "fully_mutated": s.fully_mutated}
                     for s in (latest[k] for k in sorted(latest))],
                 "regressions": [
@@ -68,8 +69,12 @@ def cmd_mutation_score(root, *, as_json: bool = False) -> int:
                 lines.append(f"  {target}: not measured (0 mutants tested)")
                 continue
             fm = "" if s.fully_mutated else " (partial)"
+            # Kills of either stage over mutants with a verdict -- the same
+            # two terms `rate` is computed from, so the fraction and the
+            # rate cannot disagree.
+            killed = s.killed_s1 + s.killed_s2
             lines.append(f"  {target}: kill-rate {s.rate:.2f} "
-                         f"({s.killed_s1}/{s.killed_s1 + s.survived_s1}){fm}")
+                         f"({killed}/{killed + s.survived_s1}){fm}")
         if regressions:
             lines.append("  regressions:")
             for r in sorted(regressions, key=lambda r: (r.target, r.kind)):

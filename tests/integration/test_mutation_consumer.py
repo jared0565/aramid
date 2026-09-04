@@ -1580,6 +1580,93 @@ def test_missing_command_give_up_releases_when_the_command_changes(tmp_path, mon
     assert res.note.startswith(mut_consumer.missing_note_prefix("./nope/python")), res.note
 
 
+# ------------- a confirm without a verdict is not a survivor (round 174, Q3) ---
+#
+# `survived_s1` was incremented when a mutant passed stage 1 and never undone:
+# a confirm that timed out, errored, or was skipped by `confirm_cap` left the
+# mutant counted as a survivor in the per-target score, and a full-suite KILL
+# counted it as both killed and survived. `mutation-score` then read those
+# rows as low kill rates on targets that had none.
+
+def _scripted(monkeypatch, confirm_result):
+    """Same shape as `test_stage2_usage_error_never_reports_survivor`: a
+    targeted stage-1 run names test_calc.py and passes (putative survivor);
+    the first full run is the baseline (green); every later full run is a
+    confirm and returns `confirm_result`."""
+    from aramid.runners.base import RunnerResult, ToolState
+    fulls = {"n": 0}
+
+    def scripted(argv, cwd, timeout, **kw):
+        joined = " ".join(str(a) for a in argv)
+        if "test_calc.py" in joined:
+            return RunnerResult(tool="pytest", state=ToolState.OK, returncode=0)
+        fulls["n"] += 1
+        if fulls["n"] == 1:
+            return RunnerResult(tool="pytest", state=ToolState.OK, returncode=0)
+        return confirm_result
+    monkeypatch.setattr(mut_consumer, "run_subprocess", scripted)
+
+
+def _target(res, key="calc.py::is_adult"):
+    return res.extra["mutation_scores"]["targets"][key]
+
+
+def test_confirm_timeout_moves_the_mutant_out_of_survived(tmp_path, monkeypatch):
+    from aramid.runners.base import RunnerResult, ToolState
+    r, base, head = _repo(tmp_path, WEAK_TEST)
+    _scripted(monkeypatch, RunnerResult(tool="pytest", state=ToolState.TIMEOUT, duration_s=60.0))
+
+    res = _consume(r, base, head, monkeypatch, tmp_path)
+
+    t = _target(res)
+    assert t["survived_s1"] == 0, t
+    assert t["timeouts"] >= 1 and t["fully_mutated"] is False, t
+    assert res.extra["confirmed"] == 0 and res.findings == []
+
+
+def test_confirm_error_moves_the_mutant_out_of_survived(tmp_path, monkeypatch):
+    from aramid.runners.base import RunnerResult, ToolState
+    r, base, head = _repo(tmp_path, WEAK_TEST)
+    _scripted(monkeypatch, RunnerResult(tool="pytest", state=ToolState.OK, returncode=4))
+
+    res = _consume(r, base, head, monkeypatch, tmp_path)
+
+    t = _target(res)
+    assert t["survived_s1"] == 0, t
+    assert t["errors"] >= 1 and t["fully_mutated"] is False, t
+
+
+def test_confirm_kill_is_counted_as_killed_s2_not_survived(tmp_path, monkeypatch):
+    from aramid.runners.base import RunnerResult, ToolState
+    r, base, head = _repo(tmp_path, WEAK_TEST)
+    _scripted(monkeypatch, RunnerResult(tool="pytest", state=ToolState.OK, returncode=1))
+
+    res = _consume(r, base, head, monkeypatch, tmp_path)
+
+    t = _target(res)
+    assert t["killed_s2"] >= 1, t
+    assert t["survived_s1"] == 0, t
+    assert t["fully_mutated"] is True, "a full-suite kill IS a verdict"
+
+
+def test_confirm_cap_leaves_the_unconfirmed_out_of_the_score(tmp_path, monkeypatch):
+    """`confirm_cap = 0`: every putative survivor is skipped, none confirmed.
+    Not a survivor, not a kill -- and not a measurement either."""
+    from aramid.runners.base import RunnerResult, ToolState
+    r, base, head = _repo(tmp_path, WEAK_TEST)
+    (r / "aramid.toml").write_text(
+        "schema_version = 1\n[mutation]\nmax_mutants = 3\nconfirm_cap = 0\n"
+        "wall_budget_s = 300\nmutant_timeout_s = 60\n", encoding="utf-8")
+    _scripted(monkeypatch, RunnerResult(tool="pytest", state=ToolState.OK, returncode=0))
+
+    res = _consume(r, base, head, monkeypatch, tmp_path)
+
+    t = _target(res)
+    assert t["survived_s1"] == 0, t
+    assert t["unconfirmed"] >= 1 and t["fully_mutated"] is False, t
+    assert res.extra["truncated"] is True
+
+
 def test_failing_baseline_note_carries_rc_and_last_line_and_a_log(tmp_path, monkeypatch):
     r, base, head = _repo(tmp_path, "def test_always_fails():\n    assert False\n")
     res = _consume(r, base, head, monkeypatch, tmp_path)

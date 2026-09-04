@@ -23,11 +23,21 @@ class TargetScore:
     fully_mutated: bool
     killed_fps: frozenset
     survivor_fps: frozenset
+    # Survived stage 1, killed by the full suite. Last, with a default: rows
+    # written before the key existed (pre-round-174) parse to 0, which is
+    # also what they meant -- back then a full-suite kill stayed in
+    # `survived_s1` and counted AGAINST the rate.
+    killed_s2: int = 0
 
     @property
     def rate(self) -> float | None:
-        d = self.killed_s1 + self.survived_s1
-        return self.killed_s1 / d if d else None
+        """Kills over mutants that reached a verdict. `survived_s1` is, for
+        rows written from round 174 on, "survived stage 1 AND the full suite
+        passed on it"; a confirm that timed out or errored is neither a
+        kill nor a survival and is in neither term."""
+        killed = self.killed_s1 + self.killed_s2
+        d = killed + self.survived_s1
+        return killed / d if d else None
 
 
 def iter_target_scores(events) -> list[TargetScore]:
@@ -51,7 +61,8 @@ def iter_target_scores(events) -> list[TargetScore]:
                     survived_s1=int(t["survived_s1"]),
                     fully_mutated=bool(t["fully_mutated"]),
                     killed_fps=frozenset(t.get("killed_fps", [])),
-                    survivor_fps=frozenset(t.get("survivor_fps", []))))
+                    survivor_fps=frozenset(t.get("survivor_fps", [])),
+                    killed_s2=int(t.get("killed_s2", 0))))
             except (KeyError, TypeError, ValueError):
                 continue
     return out
