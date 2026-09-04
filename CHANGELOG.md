@@ -29,6 +29,36 @@ to publish a tag that disagrees with it.
   consumer's case already adjudicated `not-a-secret` (interop round 172).
   Historical findings are now excluded from the count; the hits are still
   reported where they belong, in the unrotated-historical-secrets section.
+- **A repo-relative `[tests].command` now resolves in the drain.** A
+  relative argv[0] that contains a path separator is anchored to the repo
+  root and launched absolute, by the gate, the mutation consumer and
+  `doctor` alike (one parsing rule, `runners.tests._argv`). It used to be
+  resolved against the current process's cwd: the gate's happens to be the
+  repo root, the scheduled drain's is whatever the scheduler gave it, so
+  the same command ran at the gate and was `MISSING` in the drain -- 43
+  `baseline failing` rows over three weeks, none of which ran a test
+  (interop round 174). `toolpath.resolve` now always returns an absolute
+  path; a relative hit used to come back relative and then be launched
+  from a different cwd.
+- **A baseline command that does not resolve is named as such.** A new
+  note family, `baseline command not found: <argv0> (resolved from <cwd>;
+  set ...)`, replaces `baseline failing` for the MISSING case; it is
+  repo-scoped like the timeout family (three strikes on any items, released
+  when the command changes) because no commit fixes a path. A genuinely
+  red baseline keeps its head-scoped note byte-for-byte and now appends
+  `-- rc N: <last output line>`; the last 60 lines of stdout and stderr go
+  to `.aramid/logs/mutation-baseline-<item>-<head12>.log` (interop round
+  174).
+- **`mutation-score` no longer counts a confirm without a verdict as a
+  survivor.** The per-target `survived_s1` was never undone when the
+  full-suite confirm timed out, errored, was skipped by `confirm_cap`, or
+  KILLED the mutant, so those read as survivors (and a full-suite kill as
+  both killed and survived). Two additive per-target keys, `killed_s2` and
+  `unconfirmed`, take the moved mutants; `survived_s1` now means "survived
+  stage 1 and the full suite passed on it"; `rate` is kills of either stage
+  over mutants with a verdict and `fully_mutated` compares that sum to
+  `generated`. Rows written by earlier versions parse unchanged and to the
+  same rate they always had (interop round 174).
 
 ## [0.11.0] — 2026-09-04
 
