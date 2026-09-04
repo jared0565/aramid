@@ -35,6 +35,21 @@ to publish a tag that disagrees with it.
   `aramid: <tool> timed out after <N> s and was killed` instead of being a
   0-byte file. Until now a push refused on a degraded BLOCK-tier tool left
   no surface anywhere naming the budget it blew.
+- **An item the drain leaves behind is deferred, shown, and opened first
+  next time.** `drain --all` pops one item per repo under ONE drain-wide
+  wall-clock budget checked only between items, so an active repo's item
+  could spend the whole drain and a tied, quieter repo's item was left
+  queued with the line saying so on a stdout the scheduler discards -- and
+  the same order repeated at every drain (interop round 177). When the loop
+  stops on the budget or the item limit, every candidate left behind gets a
+  `queue_item_deferred` row in its own repo's ledger (`reason`, the repos
+  the drain did open, elapsed and budget); `QueueItem.deferred` replays it;
+  candidates sort most-deferred first, then by score; `drain --dry-run`
+  prints `deferred=1 (drain budget)`; `status`'s queue line reads
+  `deferred 1x: drain budget`; and `drain --help` names the exit codes
+  (0 / 2 a consumer degraded or a repo could not be probed / 3 lock held or
+  registry unusable). The budget stays drain-wide and a running item is
+  never preempted.
 
 ### Changed
 
