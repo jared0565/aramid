@@ -537,7 +537,7 @@ aramid notices show <id>
 aramid notices ack <id>  # acking anywhere silences it everywhere
 ```
 
-The verdict is `ready` only when every registered repo's latest row is green on every criterion, that has held for at least 14 days and across at least 2 aramid versions, and at least one repo has an armed consumer. Disarming a consumer inside the streak restarts the streak at the disarming row (the verdict names the repo, flag and time), so a disarm costs the full waiting period rather than pinning the verdict forever. A registered repo with no rows makes it `insufficient-data`; anything else is `not-ready` with the red repos and criteria named. `pip-audit` on a pyproject-only Python repo reads red on purpose: the gate does not audit those dependencies yet, and 1.0 waits for that.
+The verdict is `ready` only when every registered repo's latest row is green on every criterion, that has held for at least 14 days and across at least 2 aramid versions, and at least one repo has an armed consumer. Disarming a consumer inside the streak restarts the streak at the disarming row (the verdict names the repo, flag and time), so a disarm costs the full waiting period rather than pinning the verdict forever. A registered repo with no rows makes it `insufficient-data`, and so does a registered repo whose latest row is older than the freshness window (7 days by default): a streak is held by rows, not by silence, so every registered repo has to record a gate run at least weekly for the whole 14 days or the clock restarts. Anything else is `not-ready` with the red repos and criteria named. `pip-audit` on a pyproject-only Python repo reads red on purpose: the gate does not audit those dependencies yet, and 1.0 waits for that.
 
 Where you see it: the Claude Code session-start hook prints the verdict and any notice due in this repo (`aramid: fleet: ...`, `aramid: NOTICE <id> ...`); `aramid status` prints the same lines. That `fleet:` line is the last drain's verdict, not this gate's: a gate run only appends its row, and the next `aramid drain` (scheduled, or run by hand) reads the rows and rewrites the verdict, so a row that turns a criterion green or red moves the line at the next drain, not at the gate. A gate run ends with `aramid: N fleet notice(s) pending -- see `aramid notices`` and `check --json` carries `fleet_notices_pending`. A notice is repeated in a given repo at most once a day until acked; `readiness-reached` and `readiness-broken` mark transitions, and a `fleet-defect` notice fires when the same defect sits on three consecutive rows of one repo and clears itself when it goes. Each surface prints at most three notices per visit; `aramid notices` lists them all.
 
@@ -548,6 +548,7 @@ schema_version = 1
 [readiness]
 min_days = 14
 min_versions = 2
+max_row_age_days = 7   # 0 disables the freshness window
 [notices]
 repeat_hours = 24
 defect_rows = 3

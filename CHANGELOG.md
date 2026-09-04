@@ -10,6 +10,19 @@ to publish a tag that disagrees with it.
 
 ## [Unreleased]
 
+### Added
+
+- **Fleet readiness now needs fresh rows, not just green ones.** A new
+  `[readiness].max_row_age_days` policy key (default 7; `0` disables) makes a
+  registered repo whose latest fleet-health row is older than the window
+  read `stale`: the verdict is `insufficient-data`, the streak resets, and
+  the readiness line and `aramid fleet` name the repo, its row age and the
+  window (`stale: graphite (9.3d) -- window 7d`). Before this, "held for 14
+  days" was satisfied by two green rows and 14 idle days. `fleet_verdict.json`
+  gains additive keys (`repos.<key>.stale`, `repos.<key>.age_days`,
+  `fleet.stale_repos`, `policy.max_row_age_days`); no schema bump. Spec
+  amendment A1.
+
 ## [0.10.0] — 2026-09-03
 
 ### Changed
