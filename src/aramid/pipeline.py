@@ -101,6 +101,12 @@ class GateResult:
     # `run_subprocess`), which would never name-match "tests" in
     # BLOCK_TIER_KEYS even though it IS the BLOCK-tier "tests" slot degrading.
     degraded_block_tier: bool = False
+    # WHY each name in `degraded` could not vouch for anything this run:
+    # {"gitleaks": "timeout after 120 s"}. The names alone were all the
+    # console, the log and the run row carried, so a push refused on a
+    # degraded BLOCK-tier tool had no surface saying which budget it blew
+    # (2026-09-04). Same keys as `degraded`; see `_degraded_reasons`.
+    degraded_reasons: dict = field(default_factory=dict)
     # WHICH BINARY produced these findings, per runner key that actually ran:
     # {"ruff": {"path": "...", "dependency_copy": "..."}}. `dependency_copy`
     # appears ONLY when it differs from `path` -- i.e. when the tool aramid
@@ -677,7 +683,10 @@ def _run_selected(selected: dict[str, object], ctx: RunContext,
         finished = dict(outcomes)
     for key in selected:
         if key not in finished:
-            results[key] = RunnerResult(key, ToolState.TIMEOUT)
+            results[key] = RunnerResult(
+                key, ToolState.TIMEOUT,
+                stderr=(f"aramid: {key} was still running when the gate's {budget_s:g} s "
+                        f"budget expired; abandoned, its output discarded"))
             continue
         ok, value = finished[key]
         results[key] = value if ok else RunnerResult(key, ToolState.CRASHED,
@@ -719,6 +728,28 @@ _LOG_STDOUT_CAP = 64 * 1024
 # stdout carries only a banner and a count; failures explain themselves on
 # stderr, which is still persisted.
 _NO_STDOUT_TOOLS = frozenset({"gitleaks"})
+
+
+def _degraded_reasons(flat_results: list[RunnerResult]) -> dict[str, str]:
+    """Tool name -> why it could not vouch for anything this run, for every
+    result in a `_BAD_STATES` state. This is the ONE computation behind
+    `GateResult.degraded` (its sorted keys), `degraded_reasons`, the console's
+    `skipped (degraded tools)` list and the run row's `degraded` map, so the
+    four cannot disagree about which tools degraded.
+
+    A TIMEOUT from `run_subprocess` carries the measured wall time; the bare
+    one `_run_selected` builds for a runner abandoned at the gate's budget
+    carries none, and says so rather than claiming 0 s."""
+    reasons: dict[str, str] = {}
+    for r in flat_results:
+        if r.state is ToolState.TIMEOUT:
+            reasons[r.tool] = (f"timeout after {r.duration_s:.0f} s" if r.duration_s
+                               else "timeout (gate budget expired)")
+        elif r.state is ToolState.MISSING:
+            reasons[r.tool] = "not found"
+        elif r.state is ToolState.CRASHED:
+            reasons[r.tool] = f"crashed (exit {r.returncode})"
+    return reasons
 
 
 def _log_body(r: RunnerResult) -> str:
@@ -960,6 +991,7 @@ def run_gate(root: Path, gate: Gate, mode: str, cfg: config_mod.Config, ledger: 
 
     # 7. record this run; enforce the pre-push no-new-warnings ratchet.
     scope_tools = {r.tool for r in flat_results if r.state is ToolState.OK}
+    degraded_reasons = _degraded_reasons(flat_results)
     scope_files = set(files)
     # What each runner can VOUCH for having analyzed. `state is OK` alone
     # conflates "ran and found nothing" with "ran over nothing" -- ruff exits
@@ -1003,7 +1035,8 @@ def run_gate(root: Path, gate: Gate, mode: str, cfg: config_mod.Config, ledger: 
                                 # while `at` was its only timestamp.
                                 finished_at=clock(),
                                 certified=certified, refs_moved=moved,
-                                head_at_exit=head_at_exit)
+                                head_at_exit=head_at_exit,
+                                degraded=degraded_reasons)
 
     # record_run above can NEVER resolve a whole-suite finding: those carry the
     # synthetic `<test-suite>` marker, which is not a path and so is never in
@@ -1225,7 +1258,7 @@ def run_gate(root: Path, gate: Gate, mode: str, cfg: config_mod.Config, ledger: 
         findings = [*findings, *synthesized]
 
     # 8. exit code.
-    degraded_tools = sorted({r.tool for r in flat_results if r.state in _BAD_STATES})
+    degraded_tools = sorted(degraded_reasons)
     degraded_block_tier = any(
         key in results and results[key].state in _BAD_STATES for key in BLOCK_TIER_KEYS
     )
@@ -1283,6 +1316,7 @@ def run_gate(root: Path, gate: Gate, mode: str, cfg: config_mod.Config, ledger: 
     return GateResult(exit_code=exit_code, findings=findings, degraded=degraded_tools,
                        new_ids=new_ids, stale_overrides=stale, run_id=run_id,
                        degraded_block_tier=degraded_block_tier,
+                       degraded_reasons=degraded_reasons,
                        tool_provenance=_tool_provenance(selected),
                        ratchet_escalated=ratchet_escalated,
                        scope_widened=scope_widened,

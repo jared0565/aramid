@@ -26,6 +26,15 @@ to publish a tag that disagrees with it.
   An empty ref list under the marker (git's `Everything up-to-date`, or a
   delete-only push) ships nothing: the gate returns 0 without running the
   tools and without a run row (interop round 176).
+- **A degraded tool says why.** `skipped (degraded tools):` lists
+  `gitleaks (timeout after 120 s)`, `semgrep (not found)` or
+  `ruff (crashed (exit 2))` instead of the bare name; `check --json` carries
+  the map as `degraded_reasons`; the run's `run_finished` row carries it as
+  `degraded` (empty when every selected tool ran, absent on rows from an
+  older aramid); and a timed-out tool's log now holds the line
+  `aramid: <tool> timed out after <N> s and was killed` instead of being a
+  0-byte file. Until now a push refused on a degraded BLOCK-tier tool left
+  no surface anywhere naming the budget it blew.
 
 ### Changed
 
@@ -38,6 +47,19 @@ to publish a tag that disagrees with it.
 
 ### Fixed
 
+- **`check --all` no longer times gitleaks out on a big gitignored cache.**
+  `--all` pointed `gitleaks dir` at the repo root, and `dir` walks
+  everything under its one path with no exclude option (a global-allowlist
+  `paths` entry stops the regexes, not the walk: measured 65.6 s with one
+  against 67.7 s without). On aramid's own checkout the gitignored
+  `.cache/` (15,388 files, 418 MB) cost 63 s of a 68 s scan against the
+  runner's 120 s budget; a concurrent drain pushed it over, the pre-push
+  gate degraded gitleaks, and `--strict` refused two pushes whose gates had
+  nothing blocking. gitleaks now scans a temporary copy holding exactly the
+  tracked files (`--all`'s definition, and the only files a push can ship),
+  with each reported path rewritten back to the repo -- 381 files in 2.6 s
+  here. Regular files only: a submodule, a deleted path or a symlink in
+  `git ls-files` is skipped, never an error.
 - **`aramid status` no longer reports the init history scan's secrets as
   "blocking".** `record_run` counted a run's `blocking` by verdict alone, and
   a secret's verdict is BLOCK, so after `aramid init` the `last run:` line

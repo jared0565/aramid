@@ -134,3 +134,15 @@ def test_failed_kill_tree_bounds_the_post_kill_wait(tmp_path, monkeypatch):
     elapsed = time.monotonic() - start
     assert result.state is base.ToolState.TIMEOUT
     assert elapsed < 10, f"post-kill wait was not bounded: {elapsed:.1f}s"
+
+
+def test_timeout_result_says_what_happened(tmp_path):
+    """A TIMEOUT result used to carry no output at all, so the tool's log was
+    a 0-byte file and the gate printed `skipped (degraded tools): gitleaks`
+    with nothing anywhere naming the budget it blew (2026-09-04: two pushes
+    refused on a gate with blocking 0). The result says so itself now;
+    `pipeline._log_body` persists stderr as it always did."""
+    r = run_subprocess([sys.executable, "-c", "import time;time.sleep(30)"], tmp_path, 0.5)
+    assert r.state is ToolState.TIMEOUT
+    assert "timed out after 0.5 s" in r.stderr, r.stderr
+    assert "killed" in r.stderr, r.stderr

@@ -1,3 +1,5 @@
+import json
+import os
 from pathlib import Path
 
 
@@ -223,3 +225,95 @@ def test_a_range_still_wins_over_full_tree():
 
     assert argv[1] == "git"
     assert "--log-opts" in argv
+
+
+# ------------------------------------ --all scans a COPY of the tracked files ---
+# Measured 2026-09-04 on aramid's own repo: `gitleaks dir <root>` walked the
+# gitignored `.cache/` (15,388 files, 418 MB) for 63 s of a 68 s scan against
+# a 120 s budget. Under load from a concurrent drain it timed out, the
+# pre-push gate reported gitleaks degraded, and `--strict` refused a push
+# whose gate had blocking 0 -- twice in one morning. The 381 tracked files
+# scan in 1.4 s. `gitleaks dir` takes one path and cannot exclude anything,
+# so `--all` hands it a directory holding exactly `ctx.files`.
+
+def _fake_dir_scan(seen: dict, leak: bool = True):
+    """A gitleaks double for `dir` mode: records the directory it was pointed
+    at and what was in it AT CALL TIME (the copy is gone once run() returns),
+    and reports one leak in <dir>/src/a.py the way gitleaks does -- as an
+    absolute path under the directory it scanned."""
+    def fake(argv, cwd, timeout_s, env=None):
+        scanned = Path(argv[argv.index("dir") + 1])
+        seen["dir"] = scanned
+        seen["files"] = sorted(p.relative_to(scanned).as_posix()
+                               for p in scanned.rglob("*") if p.is_file())
+        report = Path(argv[argv.index("--report-path") + 1])
+        items = [{"RuleID": "generic-api-key", "File": str(scanned / "src" / "a.py"),
+                  "StartLine": 1, "Secret": "s", "Description": "d"}] if leak else []
+        report.write_text(json.dumps(items))
+        return RunnerResult("gitleaks", ToolState.OK, "", "", 0.1, 1 if leak else 0)
+    return fake
+
+
+def test_full_tree_scans_a_copy_holding_only_the_tracked_files(tmp_path, monkeypatch):
+    root = tmp_path / "r"
+    (root / "src").mkdir(parents=True)
+    (root / ".cache").mkdir()
+    (root / "src" / "a.py").write_text("key = 'x'\n")
+    (root / ".cache" / "blob.json").write_text("{}")          # gitignored: never staged
+    (root / "untracked.txt").write_text("not in ctx.files\n")
+    seen = {}
+    monkeypatch.setattr(gitleaks, "run_subprocess", _fake_dir_scan(seen))
+    ctx = RunContext(root=root, files=["src/a.py"], rng=None, full_tree=True)
+
+    result = gitleaks.run(ctx)
+
+    assert seen["dir"] != root and root not in seen["dir"].parents, "the repo itself is not walked"
+    assert seen["files"] == ["src/a.py"]
+    assert not seen["dir"].exists(), "the copy is gone once the scan returns"
+    assert result.state is ToolState.OK
+    [finding] = gitleaks.parse(result, ctx)
+    assert finding.file == "src/a.py", "the leak is reported at its REPO path, not the copy's"
+    assert json.loads(result.raw)[0]["File"] == str(root / "src" / "a.py")
+
+
+def test_full_tree_copies_only_regular_files(tmp_path, monkeypatch):
+    """`git ls-files` also lists a submodule (a directory), a path deleted in
+    the working tree, and -- on POSIX, where the test can make one -- a
+    symlink. gitleaks skips symlinks itself; none of the three may abort the
+    scan."""
+    root = tmp_path / "r"
+    (root / "src").mkdir(parents=True)
+    (root / "src" / "a.py").write_text("x = 1\n")
+    (root / "sub").mkdir()                                     # a gitlink
+    (root / ".cache").mkdir()
+    (root / ".cache" / "blob").write_text("ignored; would show up in a root walk")
+    files = ["src/a.py", "sub", "gone.py"]
+    if os.name != "nt":
+        os.symlink(root / "src" / "a.py", root / "link.py")
+        files.append("link.py")
+    seen = {}
+    monkeypatch.setattr(gitleaks, "run_subprocess", _fake_dir_scan(seen))
+    ctx = RunContext(root=root, files=files, rng=None, full_tree=True)
+
+    result = gitleaks.run(ctx)
+
+    assert result.state is ToolState.OK
+    assert seen["files"] == ["src/a.py"]
+
+
+def test_full_tree_with_nothing_tracked_scans_an_empty_directory(tmp_path, monkeypatch):
+    """Zero tracked files is zero files to scan -- not a fall-back to walking
+    the whole tree, which would report leaks in files nobody can commit."""
+    root = tmp_path / "r"
+    root.mkdir()
+    (root / "junk.txt").write_text("untracked\n")
+    seen = {}
+    monkeypatch.setattr(gitleaks, "run_subprocess", _fake_dir_scan(seen, leak=False))
+    ctx = RunContext(root=root, files=[], rng=None, full_tree=True)
+
+    result = gitleaks.run(ctx)
+
+    assert seen["dir"] != root
+    assert seen["files"] == []
+    assert result.state is ToolState.OK
+    assert gitleaks.parse(result, ctx) == []

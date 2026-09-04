@@ -559,7 +559,8 @@ class Ledger:
                    root: Path | None = None,
                    examined_by_tool: dict[str, set[str]] | None = None,
                    finished_at: str | None = None,
-                   certified=None, refs_moved=None, head_at_exit: str | None = None):
+                   certified=None, refs_moved=None, head_at_exit: str | None = None,
+                   degraded: dict[str, str] | None = None):
         state, seen = _materialize(self.events())
         present = {f.id for f in findings}
         payload = {"gate": gate, "tools": sorted(scope_tools)}
@@ -708,6 +709,15 @@ class Ledger:
             finished["refs_moved"] = pushrefs.payload_moved(refs_moved)
         if head_at_exit is not None:
             finished["head_at_exit"] = head_at_exit
+        if degraded is not None:
+            # Which tools could not vouch for anything, and why:
+            # {"gitleaks": "timeout after 120 s"}. `tools` on RUN_STARTED
+            # lists only the tools that RAN, so a degraded one was simply
+            # absent from the row and a reader could not tell "not selected"
+            # from "selected and blew its budget" (2026-09-04, a refused
+            # push). Empty means every selected tool ran; absent means an
+            # aramid too old to record it.
+            finished["degraded"] = dict(degraded)
         self.append(Event(EventType.RUN_FINISHED, run_id, at, payload=finished))
         return new_ids
 

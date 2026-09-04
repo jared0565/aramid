@@ -2657,3 +2657,39 @@ def test_deps_is_not_applicable_for_a_tool_only_pyproject(tmp_path):
     root.mkdir()
     (root / "pyproject.toml").write_text("[tool.ruff]\nline-length = 100\n", encoding="utf-8")
     assert pipeline._is_applicable("deps", _ctx(root, stacks=("python",))) is False
+
+
+# ------------------------------------ a degraded tool's REASON is recorded ---
+
+def test_a_degraded_tool_records_why_on_every_surface(tmp_path, monkeypatch):
+    """2026-09-04: gitleaks timed out in a pre-push gate, `--strict` refused
+    the push, and the only traces were a 0-byte log and the name in
+    `skipped (degraded tools)`. The reason now travels with the name: on the
+    result, on the console, and on the run's own RUN_FINISHED row -- where
+    `status`, the drain and the next reader look first."""
+    from aramid import reporter
+
+    root = _repo(tmp_path)
+    cfg = _cfg(root, tmp_path, monkeypatch)
+    ledger = _ledger(tmp_path)
+    monkeypatch.setitem(pipeline.RUNNERS, "gitleaks",
+                         _fake(RunnerResult("gitleaks", ToolState.TIMEOUT, duration_s=120.4)))
+    monkeypatch.setitem(pipeline.RUNNERS, "fake",
+                         _fake(RunnerResult("fake", ToolState.MISSING)))
+    monkeypatch.setitem(pipeline.GATE_RUNNER_KEYS, Gate.PRE_PUSH, ["gitleaks", "fake"])
+
+    result = pipeline.run_gate(root, Gate.PRE_PUSH, "range", cfg, ledger, run_id="run-dr")
+
+    assert result.degraded == ["fake", "gitleaks"]
+    assert result.degraded_reasons == {"gitleaks": "timeout after 120 s", "fake": "not found"}
+    assert "  - gitleaks (timeout after 120 s)" in reporter.render_console(result, ledger)
+    finished = [e for e in ledger.events() if e.type is EventType.RUN_FINISHED][-1]
+    assert finished.payload["degraded"] == {"gitleaks": "timeout after 120 s", "fake": "not found"}
+
+    # A clean run says so positively: the key is present and empty.
+    monkeypatch.setitem(pipeline.GATE_RUNNER_KEYS, Gate.PRE_PUSH, ["ok"])
+    monkeypatch.setitem(pipeline.RUNNERS, "ok", _fake(RunnerResult("ok", ToolState.OK)))
+    pipeline.run_gate(root, Gate.PRE_PUSH, "range", cfg, ledger, run_id="run-ok")
+    finished = [e for e in ledger.events() if e.type is EventType.RUN_FINISHED][-1]
+    assert finished.payload["degraded"] == {}
+    ledger.close()

@@ -13,8 +13,23 @@ file missing or empty, which parses just as cleanly as a genuinely-clean
 "[]" -- so the returncode is checked explicitly and BEFORE trusting an
 empty/absent report as "no leaks"; without that check a crashed gitleaks
 (a BLOCK-tier secrets gate) would silently read as "scanned clean".
+
+`--all` (full_tree) does NOT point `gitleaks dir` at the repo root. `dir`
+takes one path and walks everything under it -- there is no exclude flag,
+and a global-allowlist `paths` entry stops the regexes, not the walk
+(measured 65.6 s with one against 67.7 s without). Pointed at the root it
+therefore walks every gitignored cache too. Measured 2026-09-04 on aramid's
+own checkout: `.cache/` held 15,388 files / 418 MB and cost 63 s of a 68 s
+scan against TIMEOUT_S = 120; a concurrent drain pushed it past the budget,
+the pre-push gate degraded gitleaks, and `--strict` refused a push whose
+gate had blocking 0 -- twice in a morning. The 381 tracked files scan in
+1.4 s. So `run` copies `ctx.files` (what `--all` means: `gitutil.
+all_tracked_files`) into a temporary directory and scans THAT, then rewrites
+each reported `File` back to its path under the repo -- the only files a
+push can ship and the only place a reported leak can be fixed.
 """
 import json
+import shutil
 import tempfile
 from pathlib import Path
 
@@ -37,7 +52,46 @@ _OK_RETURNCODES = frozenset({0, 1})
 _SEVERITY_RAW = "high"
 
 
-def _build_argv(ctx, report_path: Path) -> list[str]:
+def _stage_tracked(ctx, staging: Path) -> Path:
+    """Copy `ctx.files` (root-relative) under `staging`, keeping their
+    relative paths, and return `staging` for `gitleaks dir` (module
+    docstring: why the root itself is never walked).
+
+    Only regular files are copied: `git ls-files` also lists a submodule (a
+    directory), a path deleted in the working tree, and symlinks -- which
+    gitleaks skips by itself. A file that vanishes or cannot be read between
+    the listing and the copy is one gitleaks could not have scanned in place
+    either, and is skipped rather than failing a BLOCK-tier scanner.
+    """
+    staging.mkdir(parents=True, exist_ok=True)
+    root = Path(ctx.root)
+    for rel in ctx.files:
+        src = root / rel
+        if src.is_symlink() or not src.is_file():
+            continue
+        dst = staging / rel
+        try:
+            dst.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(src, dst)
+        except OSError:
+            continue
+    return staging
+
+
+def _unstage(items: list, staging: Path, root: Path) -> list:
+    """Rewrite each report item's `File` from the staging copy back to the
+    same file under `root` -- absolute, the way `gitleaks dir <root>` itself
+    reports -- so `parse` (and everything after it: `relativize`, the
+    fingerprint's line read-back) sees repo paths and nothing downstream
+    knows a copy existed."""
+    for item in items:
+        path = item.get("File")
+        if path:
+            item["File"] = str(Path(root) / relativize(path, staging))
+    return items
+
+
+def _build_argv(ctx, report_path: Path, scan_root: Path | None = None) -> list[str]:
     # `ctx.rng is not None`, NOT truthiness: `pipeline.FULL_HISTORY_RNG`
     # ("") is a deliberately falsy-but-not-None sentinel meaning "range
     # mode, no @{u}/origin/HEAD yet -- scan every commit reachable from
@@ -63,10 +117,12 @@ def _build_argv(ctx, report_path: Path) -> list[str]:
     #
     # `dir` is gitleaks' working-tree scan. It cannot attribute a leak to the
     # commit that introduced it, which is why range mode above still wins --
-    # that attribution is the whole value of the pre-push path.
+    # that attribution is the whole value of the pre-push path. `scan_root`
+    # is the staging copy of the tracked files `run` builds (module
+    # docstring); the repo root only when no copy was made.
     if getattr(ctx, "full_tree", False):
         return [
-            "gitleaks", "dir", str(ctx.root),
+            "gitleaks", "dir", str(scan_root or ctx.root),
             "--report-format", "json", "--report-path", str(report_path),
         ]
     return [
@@ -76,9 +132,16 @@ def _build_argv(ctx, report_path: Path) -> list[str]:
 
 
 def run(ctx) -> RunnerResult:
-    with tempfile.TemporaryDirectory() as td:
+    # ignore_cleanup_errors: the directory now holds a copy of the tracked
+    # tree, and a gitleaks killed on timeout can still hold a file open on
+    # Windows for a moment. A leftover temp directory beats a BLOCK-tier
+    # runner raising out of its own cleanup.
+    with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as td:
         report_path = Path(td) / "gitleaks-report.json"
-        argv = _build_argv(ctx, report_path)
+        scan_root = None
+        if ctx.rng is None and getattr(ctx, "full_tree", False):
+            scan_root = _stage_tracked(ctx, Path(td) / "tree")
+        argv = _build_argv(ctx, report_path, scan_root)
         result = run_subprocess(argv, ctx.root, TIMEOUT_S)
         if result.state in (ToolState.MISSING, ToolState.TIMEOUT):
             return result
@@ -89,10 +152,12 @@ def run(ctx) -> RunnerResult:
             return RunnerResult(NAME, ToolState.CRASHED, raw=text, stderr=result.stderr,
                                  duration_s=result.duration_s, returncode=result.returncode)
         try:
-            json.loads(text or "[]")
+            items = json.loads(text or "[]")
         except json.JSONDecodeError:
             return RunnerResult(NAME, ToolState.CRASHED, raw=text, stderr=result.stderr,
                                  duration_s=result.duration_s, returncode=result.returncode)
+        if scan_root is not None:
+            text = json.dumps(_unstage(items, scan_root, ctx.root))
         return RunnerResult(NAME, ToolState.OK, raw=text or "[]", stderr=result.stderr,
                              duration_s=result.duration_s, returncode=result.returncode)
 
@@ -109,18 +174,18 @@ def parse(result: RunnerResult, ctx) -> list[RawFinding]:
     # always leaves RawFinding.commit as None (its Commit field, if present
     # at all, carries no meaningful ref there).
     is_history_scan = ctx.rng is not None
-    # SCAN WIDE, REPORT NARROW. `gitleaks dir` takes a single path and walks
-    # everything under it -- including files git ignores. Measured on this
-    # repo: 24 hits, of which 14 were in `.superpowers/` local review
-    # artifacts and `__pycache__/`. Reporting those would be wrong twice
-    # over: `--all` is defined as all TRACKED files (`all_tracked_files`), and
-    # a finding in a path that can never be committed is a finding nobody can
-    # ever fix or retire.
+    # REPORT NARROW, whatever was scanned. `--all` is defined as all TRACKED
+    # files (`all_tracked_files`), and a finding in a path that can never be
+    # committed is a finding nobody can ever fix or retire. Measured on this
+    # repo before the scan itself was narrowed: 24 hits, of which 14 were in
+    # `.superpowers/` local review artifacts and `__pycache__/`.
     #
-    # Filtering here rather than narrowing the scan because `gitleaks dir`
-    # accepts one path only -- passing a file list is silently ignored and it
-    # rescans the whole tree, which is how this was confirmed rather than
-    # assumed.
+    # `run` now scans a copy holding exactly `ctx.files` (module docstring),
+    # so this filter should drop nothing -- it stays as the guarantee that a
+    # report naming anything else (a root scan when no copy was made) is
+    # still reported on tracked files only. `gitleaks dir` accepts one path;
+    # passing a file list is silently ignored and it rescans the whole tree,
+    # which is how the copy became the mechanism rather than a file list.
     scope = None
     if getattr(ctx, "full_tree", False) and ctx.files:
         scope = {normalize_path(f) for f in ctx.files}

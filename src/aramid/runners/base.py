@@ -319,7 +319,14 @@ def run_subprocess(argv, cwd: Path, timeout_s: float, env=None) -> RunnerResult:
             proc.communicate(timeout=_POST_KILL_DRAIN_S)
         except subprocess.TimeoutExpired:
             proc.kill()
-        return RunnerResult(tool, ToolState.TIMEOUT, duration_s=time.monotonic()-start)
+        # The result says what happened, because nothing else can: a killed
+        # child leaves no report and no exit code, so a bare TIMEOUT wrote a
+        # 0-byte log and the gate named the tool with no reason (2026-09-04,
+        # gitleaks on a pre-push gate, two pushes refused with blocking 0).
+        return RunnerResult(tool, ToolState.TIMEOUT,
+                            stderr=(f"aramid: {tool} timed out after {timeout_s:g} s and was "
+                                    f"killed; whatever it had written is discarded"),
+                            duration_s=time.monotonic()-start)
     return RunnerResult(tool, ToolState.OK, out, err, time.monotonic()-start, proc.returncode)
 
 class Runner(Protocol):

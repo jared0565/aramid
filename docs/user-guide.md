@@ -201,6 +201,8 @@ Two details of the mechanism:
 | `2` | degraded / WARN — a tool skipped or timed out, nothing genuinely BLOCK-tier fired |
 | `3` | engine or config error (crash, bad args, missing prerequisite, refusal) |
 
+A degraded tool is listed with its reason -- `skipped (degraded tools):` then `  - gitleaks (timeout after 120 s)`, `  - semgrep (not found)`, or `  - ruff (crashed (exit 2))` -- and the same `{tool: reason}` map is written to the run's `run_finished` row as `degraded` (empty when every selected tool ran) and to `check --json` as `degraded_reasons`. A tool that timed out also says so in its own log under `.aramid/logs/`, which used to be empty for exactly that case.
+
 Layered on top of that base contract:
 
 - `check --strict` remaps `2`/`3` → `1` (CI mode — no soft states).
@@ -230,7 +232,7 @@ aramid check --range
 aramid check --all
 ```
 
-These three are mutually exclusive. If none is given, the mode defaults per gate: `staged` for `--gate pre-commit`, `range` for `--gate pre-push`, `all` for `--gate all`. `--all` widens the FILE set to the whole tracked tree (and takes the pre-push time budget); it does not change which runners run -- that is `--gate`'s job, so `--gate pre-commit --all` is still a gitleaks+ruff scan. For both tiers at once, use `--gate all`.
+These three are mutually exclusive. If none is given, the mode defaults per gate: `staged` for `--gate pre-commit`, `range` for `--gate pre-push`, `all` for `--gate all`. `--all` widens the FILE set to the whole tracked tree (and takes the pre-push time budget); it does not change which runners run -- that is `--gate`'s job, so `--gate pre-commit --all` is still a gitleaks+ruff scan. For both tiers at once, use `--gate all`. Under `--all`, gitleaks scans a temporary copy of exactly the tracked files rather than walking the checkout: `gitleaks dir` has no exclude option, and pointed at the repo root it walks every gitignored cache too -- on aramid's own checkout a 418 MB `.cache/` cost 63 s of a 68 s scan against gitleaks' 120 s budget, and under load the tool timed out and `--strict` refused a push whose gate had nothing blocking. The 381 tracked files scan in about 2 s.
 
 ### Looking without recording
 
@@ -247,7 +249,7 @@ aramid check --strict --json
 ```
 
 - `--strict` — remaps exit codes `2`/`3` to `1` (treat degraded/error as failure; no soft-pass in CI).
-- `--json` — renders the machine-readable report instead of the console report. Beyond `findings`, it carries `exit_code` (the final one, after `--strict` and the fresh-ledger rule), `degraded`, `new_ids`, `stale_overrides`, `tools` (which binary backed each probed key), `tools_ran` (what actually ran), `scope_widened`, and — since 0.7.1 — `fresh_ledger_baseline` / `grandfathered` (see the fresh-ledger rule above), and `run_id` / `recorded` (`recorded: false` means the run was `--no-record`: a real report against a snapshot, with no ledger row to match it against). Every finding carries `escalated_by_ratchet` and `verdict_before_ratchet`.
+- `--json` — renders the machine-readable report instead of the console report. Beyond `findings`, it carries `exit_code` (the final one, after `--strict` and the fresh-ledger rule), `degraded` and `degraded_reasons` (the `{tool: reason}` map behind it), `new_ids`, `stale_overrides`, `tools` (which binary backed each probed key), `tools_ran` (what actually ran), `scope_widened`, and — since 0.7.1 — `fresh_ledger_baseline` / `grandfathered` (see the fresh-ledger rule above), and `run_id` / `recorded` (`recorded: false` means the run was `--no-record`: a real report against a snapshot, with no ledger row to match it against). Every finding carries `escalated_by_ratchet` and `verdict_before_ratchet`.
 - `--accept-degraded --reason "why"` — accept a degraded run instead of blocking on it; `--reason` defaults to `"no reason given"` if `--accept-degraded` is passed without one. The same signal can be supplied via the `ARAMID_ACCEPT_DEGRADED` environment variable, which hooks inherit from the parent git process automatically.
 
 ---

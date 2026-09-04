@@ -379,3 +379,23 @@ def test_no_log_pointer_is_invented_when_no_log_was_written(tmp_path):
 
     assert ".aramid/logs" not in out, out
     ledger.close()
+
+
+# ------------------------------------------- a degraded tool names its reason ----
+
+def test_degraded_tools_render_their_reason(tmp_path):
+    """`skipped (degraded tools): gitleaks` was the whole story of a refused
+    push; the reason (a blown 120 s budget) was recorded nowhere. The console
+    and the JSON both carry it now; a result built without one still lists."""
+    ledger = Ledger(tmp_path / "l.db")
+    result = GateResult(exit_code=2, findings=[], degraded=["gitleaks", "semgrep"], new_ids=[],
+                        stale_overrides=[], run_id="r1",
+                        degraded_reasons={"gitleaks": "timeout after 120 s"})
+
+    out = reporter.render_console(result, ledger)
+
+    assert "  - gitleaks (timeout after 120 s)\n" in out, out
+    assert "  - semgrep\n" in out, out
+    assert json.loads(reporter.render_json(result))["degraded_reasons"] == {
+        "gitleaks": "timeout after 120 s"}
+    ledger.close()

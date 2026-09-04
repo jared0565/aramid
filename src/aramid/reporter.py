@@ -100,8 +100,13 @@ def render_console(result: GateResult, ledger: Ledger) -> str:
 
     if result.degraded:
         lines.append("skipped (degraded tools):")
+        # The reason beside the name: `gitleaks (timeout after 120 s)`. A
+        # name alone told a reader whose push was refused nothing about
+        # which budget was blown, and the tool's log was empty too.
+        reasons = getattr(result, "degraded_reasons", None) or {}
         for tool in result.degraded:
-            lines.append(f"  - {tool}")
+            why = reasons.get(tool)
+            lines.append(f"  - {tool} ({why})" if why else f"  - {tool}")
 
     # The rule id printed above is aramid's CANONICAL one -- deliberately
     # stripped of semgrep's config-path prefix so it is identical in every
@@ -176,6 +181,9 @@ def render_json(result: GateResult) -> str:
         "exit_code": result.exit_code,
         "findings": [_finding(f) for f in result.findings],
         "degraded": list(result.degraded),
+        # Why each degraded tool degraded, keyed like `degraded`. Always
+        # present; empty means nothing degraded.
+        "degraded_reasons": dict(getattr(result, "degraded_reasons", None) or {}),
         # Certified refs that moved while the gate ran (pre-push; interop
         # round 176). Always present: empty means the gate looked and nothing
         # moved, absent means an aramid too old to certify.
