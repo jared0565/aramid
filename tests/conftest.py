@@ -16,7 +16,7 @@ from pathlib import Path
 import pytest
 
 import aramid
-from aramid import autolearn, config, fleet, registry, toolpath
+from aramid import autolearn, config, fleet, leftovers, registry, toolpath
 
 
 @pytest.fixture
@@ -60,6 +60,20 @@ def _isolated_registry(tmp_path, monkeypatch):
     `monkeypatch.setattr(registry, "registry_path", ...)` in a test body
     still wins."""
     monkeypatch.setattr(registry, "registry_path", lambda: tmp_path / "repos.toml")
+
+
+@pytest.fixture(autouse=True)
+def _isolated_temp_shells(tmp_path, monkeypatch):
+    """Keep `leftovers.sweep` off the real temp dir. Every `cmd_drain`
+    sweeps `leftovers.temp_root()` for dead `aramid-<kind>-*` shells; the
+    first run of the drain suite after the sweep landed removed 34 of them
+    from the developer machine for real -- correct on the machine, but
+    machine state is not the suite's to change, and a test that plants a
+    shell must see only its own. A test that wants the real dir sets
+    `temp_root` back itself (none does)."""
+    shells = tmp_path / "aramid-temp"
+    shells.mkdir(exist_ok=True)
+    monkeypatch.setattr(leftovers, "temp_root", lambda: shells)
 
 
 @pytest.fixture(autouse=True)

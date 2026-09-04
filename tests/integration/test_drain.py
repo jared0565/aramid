@@ -1,3 +1,5 @@
+import os
+import time
 import subprocess
 from pathlib import Path
 from types import SimpleNamespace
@@ -478,3 +480,43 @@ def test_dry_run_names_the_deferral(tmp_path, seam, fake_consumer, capsys):
     lines = [ln for ln in capsys.readouterr().out.splitlines() if "(dry-run)" in ln]
     assert any(str(r2) in ln and "deferred=1 (drain budget)" in ln for ln in lines), lines
     assert any(str(r1) in ln and "deferred" not in ln for ln in lines), lines
+
+
+# --- leftover sweep (what dead consumers left in the temp dir) -------------
+
+def _old_shell(temp, name):
+    shell = temp / name
+    (shell / "wt").mkdir(parents=True)
+    then = time.time() - 24 * 3600
+    os.utime(shell, (then, then))
+    return shell
+
+
+def test_drain_removes_what_dead_consumers_left_in_the_temp_dir(
+        tmp_path, seam, fake_consumer, monkeypatch, capsys):
+    from aramid import leftovers
+    temp = tmp_path / "temp"
+    monkeypatch.setattr(leftovers, "temp_root", lambda: temp)
+    shell = _old_shell(temp, "aramid-mut-dead1234")
+    r = _risky_repo(tmp_path)
+    registry.register(r, "t0")
+
+    assert cmd_drain([], dry_run=False) == 0
+
+    assert not shell.exists()
+    assert "removed 1 leftover worktree dir(s)" in capsys.readouterr().out
+
+
+def test_drain_dry_run_counts_leftovers_and_keeps_them(
+        tmp_path, seam, fake_consumer, monkeypatch, capsys):
+    from aramid import leftovers
+    temp = tmp_path / "temp"
+    monkeypatch.setattr(leftovers, "temp_root", lambda: temp)
+    shell = _old_shell(temp, "aramid-red-dead1234")
+    r = _risky_repo(tmp_path)
+    registry.register(r, "t0")
+
+    assert cmd_drain([], dry_run=True) == 0
+
+    assert shell.exists()
+    assert " leftovers=1" in capsys.readouterr().out

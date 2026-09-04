@@ -12,6 +12,22 @@ to publish a tag that disagrees with it.
 
 ### Added
 
+- **The drain sweeps what killed consumers left in the temp dir.** Every
+  worktree consumer and the red-proof gate step create
+  `<tempdir>/aramid-<kind>-<random>/wt` and remove it in a `finally` that
+  a kill never reaches; on Windows an open file held by a grandchild leaves
+  a few-KB shell behind, and a stale `.git/worktrees` registration survives
+  `git worktree prune` while the directory exists (measured: 36 shells over
+  six weeks, one or two per scheduled drain, plus one dangling red-proof
+  registration). `aramid.leftovers.sweep` now runs for every repo a drain
+  probes: shells older than six hours go, with their registrations; a
+  registration git reports as locked is live whatever its age; only the
+  `aramid-mut-`/`-red-`/`-fuzz-`/`-jsmut-` prefixes are ever considered.
+  The drain prints `removed N leftover worktree dir(s)`, `--dry-run`
+  appends `leftovers=N`, a dir that will not go is named on stderr, and
+  nothing here degrades the drain or reaches the ledger. The test suite
+  isolates the sweep to a per-test temp dir (a first run of the drain
+  suite swept the developer machine for real). Rounds 178/181/183.
 - **The pre-push gate certifies the refs git handed it, and fails when one
   moved while it ran.** The gate now reads the `<local ref> <local sha>
   <remote ref> <remote sha>` lines git writes to the hook's stdin (only

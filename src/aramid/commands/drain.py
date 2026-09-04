@@ -21,7 +21,7 @@ from aramid import __version__
 from aramid import autolearn
 from aramid import config as config_mod
 from aramid import fleet
-from aramid import gitutil, policy, queue, redact, registry, triage
+from aramid import gitutil, leftovers, policy, queue, redact, registry, triage
 from aramid import ledger as ledger_mod
 from aramid.consumers.base import CONSUMERS, ConsumerResult, DrainContext
 from aramid.fingerprint import normalize_path
@@ -100,6 +100,24 @@ def _sweep(root: Path, cfg, ledger, at: str) -> None:
         triage.run_triage(root, cfg, ledger, gitutil.first_parent(root, head), head, at)
     else:
         triage.run_triage(root, cfg, ledger, last, head, at)
+
+
+def _sweep_leftovers(root: Path, *, dry_run: bool) -> leftovers.Sweep:
+    """Hygiene, never a failure: the shells and stale worktree registrations
+    that killed consumers left behind (see aramid.leftovers). Removed ones
+    are said on stdout, ones that would not go on stderr; nothing here
+    degrades the drain or reaches the ledger."""
+    try:
+        report = leftovers.sweep(root, dry_run=dry_run)
+    except Exception as exc:
+        print(f"aramid drain: {root}: leftover sweep skipped: {exc}", file=sys.stderr)
+        return leftovers.Sweep()
+    if not dry_run and report.removed:
+        print(f"aramid drain: {root}: removed {len(report.removed)} leftover worktree dir(s)")
+    if report.failed:
+        print(f"aramid drain: {root}: {len(report.failed)} leftover dir(s) would not go: "
+              + ", ".join(report.failed), file=sys.stderr)
+    return report
 
 
 def _consume_item(root: Path, cfg, ledger, item, clock) -> bool:
@@ -212,6 +230,7 @@ def cmd_drain(targets: list, *, dry_run: bool = False, max_items: int | None = N
             try:
                 root = gitutil.repo_root(repo_path.resolve())
                 cfg = config_mod.load_config(root)
+                leftover = _sweep_leftovers(root, dry_run=dry_run)
                 if dry_run:
                     # read-only preview: report what WOULD be swept/popped
                     if (root / ".aramid" / "ledger.db").exists():
@@ -226,6 +245,8 @@ def cmd_drain(targets: list, *, dry_run: bool = False, max_items: int | None = N
                     if item is not None and item.deferred:
                         # Why the last drain did not open it (round 177).
                         line += f" deferred={item.deferred} ({item.deferred_reason})"
+                    if leftover.removed:
+                        line += f" leftovers={len(leftover.removed)}"
                     print(line)
                     continue
                 ledger = Ledger(root / ".aramid" / "ledger.db")
