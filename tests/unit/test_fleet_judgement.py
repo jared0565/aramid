@@ -43,8 +43,14 @@ def _seed(rows):
 
 
 def _ready_rows():
+    # An ACTIVE fleet: both repos push every 6 days (20, 14, 8, 2 days ago),
+    # so these rows are ready under the production default window
+    # (amendment A1) rather than by silence. Streak since _at(20), 20 days,
+    # versions 0.8.0 then 0.9.0.
     return [_row(R_A, 20, "0.8.0", armed=ARMED), _row(R_B, 20, "0.8.0"),
-            _row(R_A, 10, "0.9.0", armed=ARMED), _row(R_B, 10, "0.9.0")]
+            _row(R_A, 14, "0.8.0", armed=ARMED), _row(R_B, 14, "0.8.0"),
+            _row(R_A, 8, "0.9.0", armed=ARMED), _row(R_B, 8, "0.9.0"),
+            _row(R_A, 2, "0.9.0", armed=ARMED), _row(R_B, 2, "0.9.0")]
 
 
 def _registered():
@@ -154,12 +160,12 @@ def test_two_rows_of_a_defect_are_not_yet_a_notice():
 
 def test_compaction_drops_rows_older_than_180_days_once_a_day():
     _seed(_entries_rows(_ready_rows() + [_row(R_A, 200, armed=ARMED)]))
-    assert len(fleet.read_rows()) == 5
+    assert len(fleet.read_rows()) == 9
     _judge()
-    assert len(fleet.read_rows()) == 4
+    assert len(fleet.read_rows()) == 8
     _seed(_entries_rows([_row(R_A, 199, armed=ARMED)]))
     _judge(LATER)                                    # within 24h: not rewritten
-    assert len(fleet.read_rows()) == 5
+    assert len(fleet.read_rows()) == 9
     assert fleet.read_verdict()["compacted_at"] == NOW
 
 
@@ -231,3 +237,20 @@ def test_the_no_breaking_row_readiness_broken_key_is_stable_across_retries():
     broken = [n for n in notices.pending() if n["notice_kind"] == "readiness-broken"]
     assert len(broken) == 1
     assert broken[0]["key"] == f"streak:{prev_start}"
+
+
+def test_going_stale_from_ready_posts_readiness_broken_on_the_prior_streak():
+    """Amendment A1: a READY fleet left idle past the window reads
+    insufficient-data with no breaking row, so the notice keys on the prior
+    verdict's streak start (the existing no-breaking-row branch)."""
+    _seed(_entries_rows(_ready_rows()))
+    prior = _judge()
+    assert prior["verdict"] == "ready"
+    later = (NOW_DT + timedelta(days=6)).isoformat()      # latest rows are now 8 days old
+    v = _judge(later)
+    assert v["verdict"] == "insufficient-data"
+    assert v["reasons"] == ["stale: a (8.0d), b (8.0d) -- window 7d"]
+    broken = [n for n in notices.pending() if n["notice_kind"] == "readiness-broken"]
+    assert len(broken) == 1
+    assert broken[0]["key"] == "streak:" + prior["fleet"]["streak_started_at"]
+    assert broken[0]["title"] == "fleet readiness lost -- stale: a (8.0d), b (8.0d) -- window 7d"
