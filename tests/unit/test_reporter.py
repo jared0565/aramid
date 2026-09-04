@@ -399,3 +399,22 @@ def test_degraded_tools_render_their_reason(tmp_path):
     assert json.loads(reporter.render_json(result))["degraded_reasons"] == {
         "gitleaks": "timeout after 120 s"}
     ledger.close()
+
+
+def test_an_accepted_degradation_says_so(tmp_path):
+    """`--accept-degraded` / `ARAMID_ACCEPT_DEGRADED` turns a degraded run
+    into a pass with a ledger-logged reason; the console and the JSON both
+    carry the reason, so a pass with a skipped BLOCK-tier tool is never
+    mistaken for a clean one."""
+    ledger = Ledger(tmp_path / "l.db")
+    result = GateResult(exit_code=0, findings=[], degraded=["gitleaks"], new_ids=[],
+                        stale_overrides=[], run_id="r1",
+                        degraded_reasons={"gitleaks": "timeout after 120 s"},
+                        accepted_reason="fixed in a3f53c9, unreleased")
+
+    out = reporter.render_console(result, ledger)
+
+    assert "degraded, ACCEPTED: fixed in a3f53c9, unreleased" in out, out
+    assert "infrastructure_bypass" in out, "the reader is told where the acceptance is recorded"
+    assert json.loads(reporter.render_json(result))["accepted_reason"] == "fixed in a3f53c9, unreleased"
+    ledger.close()

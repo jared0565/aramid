@@ -141,7 +141,7 @@ def test_missing_block_tier_tool_at_prepush_exits_one(tmp_path, monkeypatch):
     ledger.close()
 
 
-def test_missing_block_tier_tool_with_accept_degraded_exits_two_and_logs_bypass(tmp_path, monkeypatch):
+def test_missing_block_tier_tool_with_accept_degraded_exits_zero_and_logs_bypass(tmp_path, monkeypatch):
     root = _repo(tmp_path)
     (root / "tests").mkdir()  # see comment above -- keeps "tests" applicable.
     (root / "tests" / "test_x.py").write_text(
@@ -156,7 +156,8 @@ def test_missing_block_tier_tool_with_accept_degraded_exits_two_and_logs_bypass(
     result = pipeline.run_gate(root, Gate.PRE_PUSH, "range", cfg, ledger,
                                 accept_degraded="ci runner has no test binary", run_id="run-c2")
 
-    assert result.exit_code == 2
+    assert result.exit_code == 0, "accepted: the bypass row is the record, the exit is a pass"
+    assert result.accepted_reason == "ci runner has no test binary"
     bypass_events = [e for e in ledger.events() if e.type is EventType.INFRASTRUCTURE_BYPASS]
     assert len(bypass_events) == 1
     assert bypass_events[0].payload["reason"] == "ci runner has no test binary"
@@ -204,7 +205,7 @@ def test_accept_degraded_bypass_survives_single_suite_missing_tool_binary(tmp_pa
     result = pipeline.run_gate(root, Gate.PRE_PUSH, "range", cfg, ledger,
                                 accept_degraded="ci runner has no test binary", run_id="run-c2-real")
 
-    assert result.exit_code == 2
+    assert result.exit_code == 0
     assert not any(f.rule == "tests-tool-missing" for f in result.findings)
     bypass_events = [e for e in ledger.events() if e.type is EventType.INFRASTRUCTURE_BYPASS]
     assert len(bypass_events) == 1
@@ -272,7 +273,7 @@ def test_dual_stack_missing_sub_blocks_and_accept_degraded_bypasses(tmp_path, mo
     ledger2 = _ledger(tmp_path, name="ledger2.db")
     result2 = pipeline.run_gate(root, Gate.PRE_PUSH, "range", cfg, ledger2,
                                 accept_degraded="ci runner has no npm binary", run_id="run-f7-bypass")
-    assert result2.exit_code == 2
+    assert result2.exit_code == 0
     bypass_events = [e for e in ledger2.events() if e.type is EventType.INFRASTRUCTURE_BYPASS]
     assert len(bypass_events) == 1
     assert bypass_events[0].payload["reason"] == "ci runner has no npm binary"

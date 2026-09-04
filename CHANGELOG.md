@@ -47,6 +47,40 @@ to publish a tag that disagrees with it.
 
 ### Fixed
 
+- **An accepted degradation passes -- under `--strict` and the CI-parity
+  shim too.** `--accept-degraded` / `ARAMID_ACCEPT_DEGRADED` returned exit
+  2 (pre-push BLOCK tier only); the plain shim mapped that to 0, but under
+  `[hooks].pre_push_match_ci` the shim runs `--strict`, which remapped it to
+  1 AFTER the `infrastructure_bypass` row was written, so the documented
+  escape hatch refused the push with its acceptance on record. The gate now
+  exits 0 on an accepted run, for any gate and any tier (a WARN-tier
+  degradation was never covered), prints `degraded, ACCEPTED: <reason>
+  (recorded in the ledger as infrastructure_bypass)` and carries
+  `accepted_reason` in `check --json`. A genuine BLOCK finding still exits 1.
+- **A completed mutation run records what it examined, so `mutant_killed`
+  stops reading NEVER RAN.** The drain handed the ledger a repair claim only
+  when it had ids, so a run that killed no recorded survivor wrote no
+  `mutant_killed` yield row and the resolver census graded the pair NEVER
+  RAN forever -- a consumer whose only survivor is overridden could never
+  flip it (interop round 180). `Repaired` gains `examined` (the open /
+  pending_retest survivors the run read); both mutation consumers report it
+  on every completed run, kills or none; `resolve_repaired` counts
+  `considered = |ids ∪ examined|` and yields on an empty claim. The census
+  grades that NO OPPORTUNITY / NO CLEARS -- an outcome, not a defect.
+- **llm-review falls through on a length-capped answer instead of degrading
+  the item.** ollama-cloud's `done_reason: "length"` (the model ran to its
+  output cap; one review produced 65,536 tokens in 166 s and no JSON) was
+  read as the reviewer's malformed VERDICT. The provider now returns
+  `error: truncated`, the arm loop falls through to the next arm on it, and
+  when every arm is capped the item degrades under the `malformed response
+  from <provider> (output cap hit)` note -- the family the three-strike
+  give-up counts. The request also carries `options.num_predict = 16384`,
+  bounding a runaway generation at the cap (interop rounds 179/180).
+- **`ARAMID.md` documents `[fuzz].skip_name_patterns`.** The key was in the
+  user guide and the packaged defaults but not in what `aramid init` writes,
+  so a consumer read the installed wheel's source for its semantics; the
+  template now shows the twelve packaged globs and states that a repo's
+  list REPLACES them (interop round 180).
 - **`check --all` no longer times gitleaks out on a big gitignored cache.**
   `--all` pointed `gitleaks dir` at the repo root, and `dir` walks
   everything under its one path with no exclude option (a global-allowlist

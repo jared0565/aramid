@@ -107,6 +107,12 @@ def render_console(result: GateResult, ledger: Ledger) -> str:
         for tool in result.degraded:
             why = reasons.get(tool)
             lines.append(f"  - {tool} ({why})" if why else f"  - {tool}")
+        accepted = getattr(result, "accepted_reason", None)
+        if accepted:
+            # A pass with a skipped tool is not a clean pass: say who
+            # accepted it, why, and where that is recorded.
+            lines.append(f"degraded, ACCEPTED: {accepted} "
+                         f"(recorded in the ledger as infrastructure_bypass)")
 
     # The rule id printed above is aramid's CANONICAL one -- deliberately
     # stripped of semgrep's config-path prefix so it is identical in every
@@ -184,6 +190,10 @@ def render_json(result: GateResult) -> str:
         # Why each degraded tool degraded, keyed like `degraded`. Always
         # present; empty means nothing degraded.
         "degraded_reasons": dict(getattr(result, "degraded_reasons", None) or {}),
+        # Non-None when the run's degradation was ACCEPTED (exit 0 with an
+        # `infrastructure_bypass` row): a CI reader must not take that 0
+        # for a clean run.
+        "accepted_reason": getattr(result, "accepted_reason", None),
         # Certified refs that moved while the gate ran (pre-push; interop
         # round 176). Always present: empty means the gate looked and nothing
         # moved, absent means an aramid too old to certify.

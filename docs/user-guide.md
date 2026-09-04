@@ -250,7 +250,7 @@ aramid check --strict --json
 
 - `--strict` — remaps exit codes `2`/`3` to `1` (treat degraded/error as failure; no soft-pass in CI).
 - `--json` — renders the machine-readable report instead of the console report. Beyond `findings`, it carries `exit_code` (the final one, after `--strict` and the fresh-ledger rule), `degraded` and `degraded_reasons` (the `{tool: reason}` map behind it), `new_ids`, `stale_overrides`, `tools` (which binary backed each probed key), `tools_ran` (what actually ran), `scope_widened`, and — since 0.7.1 — `fresh_ledger_baseline` / `grandfathered` (see the fresh-ledger rule above), and `run_id` / `recorded` (`recorded: false` means the run was `--no-record`: a real report against a snapshot, with no ledger row to match it against). Every finding carries `escalated_by_ratchet` and `verdict_before_ratchet`.
-- `--accept-degraded --reason "why"` — accept a degraded run instead of blocking on it; `--reason` defaults to `"no reason given"` if `--accept-degraded` is passed without one. The same signal can be supplied via the `ARAMID_ACCEPT_DEGRADED` environment variable, which hooks inherit from the parent git process automatically.
+- `--accept-degraded --reason "why"` — accept a degraded run instead of blocking on it: the gate exits `0`, writes an `infrastructure_bypass` ledger row carrying the reason, prints `degraded, ACCEPTED: <reason>` and carries `accepted_reason` in `--json`, so the pass is never mistaken for a clean one. `--strict` does not remap an accepted run, and the CI-parity shim needs no exit-code arm for it (until 0.12.0 the accepted run exited `2`, which `--strict` turned into `1` -- under `[hooks].pre_push_match_ci` the hatch refused the push with its acceptance on record). A genuine BLOCK finding still exits `1`; `--reason` defaults to `"no reason given"` if `--accept-degraded` is passed without one. The same signal can be supplied via the `ARAMID_ACCEPT_DEGRADED` environment variable, which hooks inherit from the parent git process automatically.
 
 ---
 
@@ -773,7 +773,7 @@ aramid check --gate pre-push --all --strict --json
 
 **A push is blocked and you're not sure why** — run `aramid check --gate pre-push --all --json` manually to see the full report, then `aramid ledger list` or `aramid status` to see what's open.
 
-**You need to get past a degraded run without waiting** — `aramid check --accept-degraded --reason "why"`, or set `ARAMID_ACCEPT_DEGRADED` in the environment (hooks inherit it automatically from the parent git process).
+**You need to get past a degraded run without waiting** — the run then exits `0` with the reason on an `infrastructure_bypass` ledger row and `degraded, ACCEPTED: <reason>` on the console, under `--strict` and the CI-parity shim too: `aramid check --accept-degraded --reason "why"`, or set `ARAMID_ACCEPT_DEGRADED` in the environment (hooks inherit it automatically from the parent git process).
 
 **You want to suppress a finding you've reviewed** — `aramid override <id> --reason "..."` for a WARN-tier finding you only need quiet on your own machine. For a BLOCK-tier finding, `override` refuses on purpose and prints the entry to paste into `.aramid-suppressions.toml`. Use that committed file for anything the team should see — it takes **any** tier, not just BLOCK.
 

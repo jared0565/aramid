@@ -107,6 +107,11 @@ class GateResult:
     # degraded BLOCK-tier tool had no surface saying which budget it blew
     # (2026-09-04). Same keys as `degraded`; see `_degraded_reasons`.
     degraded_reasons: dict = field(default_factory=dict)
+    # The `--accept-degraded` / `ARAMID_ACCEPT_DEGRADED` reason when this run's
+    # degradation was ACCEPTED: exit 0 with an `infrastructure_bypass` row.
+    # None on every other run. On the result so the console and the JSON can
+    # say a pass with a skipped tool is not a clean pass.
+    accepted_reason: str | None = None
     # WHICH BINARY produced these findings, per runner key that actually ran:
     # {"ruff": {"path": "...", "dependency_copy": "..."}}. `dependency_copy`
     # appears ONLY when it differs from `path` -- i.e. when the tool aramid
@@ -1301,13 +1306,25 @@ def run_gate(root: Path, gate: Gate, mode: str, cfg: config_mod.Config, ledger: 
         for f in findings
     )
 
+    accepted_reason = None
     if gating_block_findings:
         exit_code = 1
-    elif accept_degraded and gate is Gate.PRE_PUSH and degraded_block_tier:
+    elif accept_degraded and degraded_tools:
+        # ACCEPTED: the operator said, with a reason, that this run's
+        # degradation does not block. The bypass row is the record, and the
+        # exit is a PASS -- 0, not 2. It used to return 2 (for the pre-push
+        # BLOCK tier only): the non-CI shim mapped that to 0, but under
+        # `[hooks].pre_push_match_ci` the shim runs `--strict`, which
+        # remapped 2 to 1 AFTER the row was written, so the documented
+        # escape hatch refused the push with its acceptance on record
+        # (2026-09-04, three pushes refused on a degraded gitleaks). Any
+        # gate and any tier now: a WARN-tier degradation was never covered
+        # and exited 2 without a row.
         ledger.append(Event(
             EventType.INFRASTRUCTURE_BYPASS, run_id, at,
             payload={"reason": accept_degraded, "gate": str(gate), "degraded": degraded_tools}))
-        exit_code = 2 if degraded_tools else 0
+        exit_code = 0
+        accepted_reason = accept_degraded
     else:
         exit_code = policy.escalate_degraded(0, degraded_block_tier, gate)
         if exit_code == 0 and degraded_tools:
@@ -1317,6 +1334,7 @@ def run_gate(root: Path, gate: Gate, mode: str, cfg: config_mod.Config, ledger: 
                        new_ids=new_ids, stale_overrides=stale, run_id=run_id,
                        degraded_block_tier=degraded_block_tier,
                        degraded_reasons=degraded_reasons,
+                       accepted_reason=accepted_reason,
                        tool_provenance=_tool_provenance(selected),
                        ratchet_escalated=ratchet_escalated,
                        scope_widened=scope_widened,

@@ -477,11 +477,42 @@ def test_env_accept_degraded_is_read_when_flag_arg_absent(tmp_path, monkeypatch)
 
     rc = cmd_check(root, Gate.PRE_PUSH, "range")
 
-    assert rc == 2
+    assert rc == 0, "an ACCEPTED degradation passes; the bypass row is the record"
     ledger = Ledger(root / ".aramid" / "ledger.db")
     events = [e for e in ledger.events() if e.type.value == "infrastructure_bypass"]
     assert len(events) == 1
     assert events[0].payload["reason"] == "ci has no fake binary"
+    ledger.close()
+
+
+def test_an_accepted_degradation_passes_under_strict_too(tmp_path, monkeypatch, capsys):
+    """The hatch was dead exactly where it was documented to work: with
+    `[hooks].pre_push_match_ci` the managed shim runs `--all --strict` and
+    has no `2) exit 0` arm, and `--strict` remapped the accept branch's 2 to
+    1 AFTER the bypass row was written -- the push was refused with its
+    acceptance on record (2026-09-04, three refused pushes on a degraded
+    gitleaks). An accepted run exits 0 from the gate itself, so there is
+    nothing for `--strict` or the shim to remap, and the console says so."""
+    root = _repo(tmp_path)
+    _no_user_config(tmp_path, monkeypatch)
+    ledger = Ledger(root / ".aramid" / "ledger.db")
+    ledger.write_baseline("seed", "2026-01-01T00:00:00+00:00", set())
+    ledger.close()
+    monkeypatch.setitem(pipeline.RUNNERS, "fake",
+                         _fake(RunnerResult("fake", ToolState.MISSING)))
+    monkeypatch.setitem(pipeline.GATE_RUNNER_KEYS, Gate.PRE_PUSH, ["fake"])
+    monkeypatch.setattr(pipeline, "BLOCK_TIER_KEYS", frozenset({"fake"}))
+
+    rc = cmd_check(root, Gate.PRE_PUSH, "range", strict=True,
+                   accept_degraded="gitleaks walks the 418 MB cache; fixed, unreleased")
+
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert "degraded, ACCEPTED: gitleaks walks the 418 MB cache; fixed, unreleased" in out, out
+    ledger = Ledger(root / ".aramid" / "ledger.db")
+    events = [e for e in ledger.events() if e.type.value == "infrastructure_bypass"]
+    assert [e.payload["reason"] for e in events] == [
+        "gitleaks walks the 418 MB cache; fixed, unreleased"]
     ledger.close()
 
 

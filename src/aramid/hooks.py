@@ -94,7 +94,11 @@ def _exit_case_lines(gate: Gate, match_ci: bool = False) -> list[str]:
         # CI parity: nothing is softened. Note this only ever changes the
         # WARN-tier case -- a degraded BLOCK-tier tool already exits 1 via
         # policy.escalate_degraded, so `2) exit 0` was never swallowing a
-        # gitleaks/semgrep/tests degradation.
+        # gitleaks/semgrep/tests degradation. An ACCEPTED degradation
+        # (`--accept-degraded` / `ARAMID_ACCEPT_DEGRADED`) exits 0 from the
+        # gate itself with its `infrastructure_bypass` row, so it needs no
+        # arm here either -- it used to exit 2, which `--strict` remapped to
+        # 1 and this case then refused (2026-09-04).
         return ['case "$status" in', '  *) exit "$status" ;;', "esac"]
     return ['case "$status" in', "  2) exit 0 ;;", '  *) exit "$status" ;;', "esac"]
 
