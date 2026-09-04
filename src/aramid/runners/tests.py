@@ -115,9 +115,11 @@ suite to a SECOND concurrent suite alongside an already-detected Python
 one, never the single-suite case (B1 regression).
 """
 import dataclasses
+import os
 import shlex
 import sys
 import time
+from pathlib import Path
 
 from aramid.normalizer import RawFinding
 from aramid.detectors import detect_package_manager, detect_tests
@@ -232,7 +234,7 @@ def _detected(ctx) -> set[str]:
     return cached if cached is not None else detect_tests(ctx.root)
 
 
-def _argv(command: str | list) -> list[str]:
+def _argv(command: str | list, root: Path | None = None) -> list[str]:
     """A repo's configured `[tests].command` -> argv for run_subprocess.
 
     A list/tuple is taken verbatim, which sidesteps shell quoting entirely
@@ -241,17 +243,34 @@ def _argv(command: str | list) -> list[str]:
     is split POSIX-style, which is what nearly every real command
     ("pytest -q tests/unit") needs.
 
+    With `root`, a relative argv[0] that contains a path separator is
+    anchored to it and made absolute. The gate happens to run with the repo
+    root as its cwd, so `../.venvs/dev/Scripts/python.exe` worked there by
+    accident; the drain runs from wherever the scheduler started it and
+    launches into a throwaway worktree, and the same command resolved
+    against neither (interop round 174: 43 `baseline failing` rows that
+    never started a process). A path that does not exist under `root` is
+    left alone -- `run_subprocess` reports it MISSING, which is the verdict
+    a misconfiguration deserves. Bare names stay bare: PATH lookup is
+    `toolpath.resolve`'s job, not this function's.
+
     Note there is no shell anywhere in this path -- run_subprocess execs the
     argv directly, so a command is exactly as trusted as the repo's own test
     suite, which the gate already runs.
     """
-    if isinstance(command, (list, tuple)):
-        return [str(c) for c in command]
-    return shlex.split(command)
+    argv = ([str(c) for c in command] if isinstance(command, (list, tuple))
+            else shlex.split(command))
+    if argv and root is not None:
+        head = argv[0]
+        if ("/" in head or os.sep in head) and not Path(head).is_absolute():
+            anchored = Path(root) / head
+            if anchored.is_file():
+                argv[0] = str(anchored.resolve())
+    return argv
 
 
 def run_custom(ctx, command) -> RunnerResult:
-    argv = _argv(command)
+    argv = _argv(command, ctx.root)
     if not argv:
         # A configured command that parses to nothing is a misconfiguration.
         # MISSING degrades the BLOCK-tier slot (exit 1 at pre-push) rather

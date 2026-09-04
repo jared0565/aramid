@@ -149,7 +149,7 @@ def _is_test_file(rel: str) -> bool:
     return name.endswith(".py") and (name.startswith("test_") or name.endswith("_test.py"))
 
 
-def _stage1_argv(wt: Path, rel: str, cfg=None) -> list[str]:
+def _stage1_argv(wt: Path, rel: str, cfg=None, root: Path | None = None) -> list[str]:
     module = Path(rel).stem
     tests_dir = wt / "tests"
     if tests_dir.exists():
@@ -162,7 +162,7 @@ def _stage1_argv(wt: Path, rel: str, cfg=None) -> list[str]:
     # Unsafe -k token (pytest keyword / expression-breaking chars): pytest
     # would exit 4 (usage error) and the suite would never run. Full suite
     # is always correct, just slower.
-    return _full_argv(cfg)
+    return _full_argv(cfg, root)
 
 
 def _suite_label(argv) -> str:
@@ -188,7 +188,7 @@ def _suite_label(argv) -> str:
     return " ".join(p for p in argv[1:] if p != "-m") or "the configured suite"
 
 
-def _full_argv(cfg=None) -> list[str]:
+def _full_argv(cfg=None, root: Path | None = None) -> list[str]:
     """Mutation's whole-suite command: `[mutation].test_command` if the repo
     declares one, else `[tests].command`, else a bare `pytest -q`.
 
@@ -213,13 +213,16 @@ def _full_argv(cfg=None) -> list[str]:
 
     `runners.tests._argv` is reused rather than reimplemented: it already
     handles the list-or-string form and the POSIX splitting, and a second
-    copy of that logic is how the two would drift.
+    copy of that logic is how the two would drift. `root` is the repo root
+    (NOT the worktree): a repo-relative argv[0] is anchored there and
+    launched absolute, so it resolves from whatever cwd the drain happens
+    to have and inside the throwaway worktree alike (interop round 174).
     """
     if cfg is not None:
         for section, key in (("mutation", "test_command"), ("tests", "command")):
             command = (getattr(cfg, section, None) or {}).get(key)
             if command:
-                argv = tests_runner._argv(command)
+                argv = tests_runner._argv(command, root)
                 if argv:
                     return argv
     return [sys.executable, "-m", "pytest", "-q"]
@@ -315,7 +318,7 @@ def consume(item, ctx: DrainContext) -> ConsumerResult:
     # Hoisted above the worktree: both give-up checks need the suite command
     # and the budget, and neither needs a checkout. `_full_argv` reads config
     # only.
-    full_argv = _full_argv(ctx.cfg)
+    full_argv = _full_argv(ctx.cfg, ctx.root)
     suite = _suite_label(full_argv)
     # A per-mutant timeout pressed into service as a whole-suite budget is a
     # guess, and for any repo whose suite is genuinely long it is the wrong
@@ -480,7 +483,7 @@ def consume(item, ctx: DrainContext) -> ConsumerResult:
                 tested_fps.add(_mutant_fp(rel, m.op, m.line, lines))
                 try:
                     src_path.write_text(m.source, encoding="utf-8")
-                    s1_argv = _stage1_argv(wt, rel, ctx.cfg)
+                    s1_argv = _stage1_argv(wt, rel, ctx.cfg, ctx.root)
                     s1 = run_subprocess(
                         s1_argv, wt,
                         full_timeout if s1_argv == full_argv else mutant_timeout,

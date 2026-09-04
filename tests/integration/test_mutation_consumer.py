@@ -1467,3 +1467,44 @@ def test_retest_candidates_include_a_pending_retest_survivor(tmp_path):
     finally:
         led.close()
     assert got == [("p" * 64, "calc.py", 3)]
+
+
+# --------------- a repo-relative command in the drain (interop round 174) ---
+#
+# graphite's `[tests].command` names its dev-venv interpreter by a
+# repo-relative path. At the gate that resolved by accident (the gate's cwd
+# IS the repo root); in the scheduled drain (no Start In) it resolved against
+# nothing, `run_subprocess` said MISSING, and the consumer reported it as
+# `baseline failing` -- 43 rows over three weeks, none of which ran a test.
+
+def _repo_relative_launcher(r):
+    """A launcher script inside the repo, the shape a dev-venv interpreter
+    takes. Delegates to whatever `python` is on PATH, so the real pytest
+    runs through it."""
+    d = r / "tools"
+    d.mkdir()
+    if os.name == "nt":
+        p = d / "py.cmd"
+        p.write_text("@echo off\r\npython %*\r\n", encoding="utf-8")
+    else:
+        p = d / "py"
+        p.write_text("#!/bin/sh\nexec python \"$@\"\n", encoding="utf-8")
+        p.chmod(0o755)
+    _git(r, "add", "-A")
+    _git(r, "commit", "-q", "-m", "launcher")
+    return "tools/" + p.name
+
+
+def test_repo_relative_test_command_runs_from_any_drain_cwd(tmp_path, monkeypatch):
+    r, base, _ = _repo(tmp_path, WEAK_TEST)
+    rel = _repo_relative_launcher(r)
+    head = _sha(r)
+    (r / "aramid.toml").write_text(
+        "schema_version = 1\n[mutation]\nmax_mutants = 3\nconfirm_cap = 3\n"
+        "wall_budget_s = 300\nmutant_timeout_s = 60\n"
+        f"[tests]\ncommand = [\"{rel}\", \"-m\", \"pytest\", \"-q\"]\n", encoding="utf-8")
+    # The scheduled drain's cwd is never the repo root.
+    monkeypatch.chdir(tmp_path)
+    res = _consume(r, base, head, monkeypatch, tmp_path)
+    assert not res.note.startswith("baseline"), res.note
+    assert res.state == "ok" and res.extra["tested"] >= 1, res.note

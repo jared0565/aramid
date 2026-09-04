@@ -182,3 +182,22 @@ def test_fake_tool_hard_links_rather_than_writing_a_new_executable(
         "expected exactly one new hard link to the session's tool source; "
         f"st_nlink went {before} -> {after}, which means a fresh executable "
         "was written per test again")
+
+
+def test_resolve_returns_an_absolute_path_for_a_relative_hit(tmp_path, monkeypatch):
+    """A relative argv[0] that resolves against the cwd used to come back
+    relative, and `run_subprocess` then launched it with a DIFFERENT cwd
+    (the mutation worktree), where it no longer resolved -- despite the
+    comment there promising an absolute launch. Absolutize at resolution.
+    (interop round 174)"""
+    d = tmp_path / "tools"
+    d.mkdir()
+    p = d / ("py.cmd" if os.name == "nt" else "py")
+    p.write_text("@echo off\r\n" if os.name == "nt" else "#!/bin/sh\n", encoding="utf-8")
+    if os.name != "nt":
+        p.chmod(0o755)
+    monkeypatch.chdir(tmp_path)
+    got = toolpath.resolve("tools/" + p.name)
+    assert got is not None
+    assert got.is_absolute(), f"relative hit returned relative: {got}"
+    assert got == p.resolve()

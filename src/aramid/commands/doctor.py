@@ -509,7 +509,7 @@ def _effective_test_command(cfg):
     return _tests_section(cfg).get("command", cfg.test_command)
 
 
-def _configured_argv0(command) -> tuple[str | None, str | None]:
+def _configured_argv0(command, root: Path | None = None) -> tuple[str | None, str | None]:
     """Parse a configured `[tests].command` down to just its argv[0] -- the
     only thing doctor may look at (see `probe_tests`' docstring for why it
     must never reach `probe_tool` here). Reuses `runners.tests._argv` -- the
@@ -534,7 +534,9 @@ def _configured_argv0(command) -> tuple[str | None, str | None]:
     yield a usable argv[0]."""
     from aramid.runners.tests import _argv
     try:
-        argv = _argv(command)
+        # `root` so a repo-relative argv[0] is judged the way the gate and
+        # the drain judge it (anchored to the repo), not against doctor's cwd.
+        argv = _argv(command, root)
     except (TypeError, ValueError, AttributeError) as exc:
         return None, f"[tests].command is set but not a valid command ({exc})"
     if not argv or not argv[0]:
@@ -590,7 +592,7 @@ def probe_tests(root: Path, cfg) -> list[ToolStatus]:
 
     command = _effective_test_command(cfg)
     if command:
-        argv0, reason = _configured_argv0(command)
+        argv0, reason = _configured_argv0(command, root)
         if reason is not None:
             return [ToolStatus("tests", False, detail=reason)]
         located = toolpath.resolve(argv0)

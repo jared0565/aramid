@@ -890,3 +890,28 @@ def test_pip_audit_applicability_note_does_not_change_doctor_exit_code(tmp_path,
 
     assert rc == 0
     assert "pip-audit" in out.out and "does NOT run" in out.out
+
+
+def test_probe_tests_resolves_a_repo_relative_command_from_a_foreign_cwd(
+        tmp_path, monkeypatch):
+    """doctor and the drain must agree on whether `[tests].command` resolves.
+    Interop round 174: the drain said MISSING for a repo-relative interpreter
+    that doctor, run from the repo root, called present. Both now anchor a
+    relative argv[0] to the repo, so the verdict no longer depends on cwd."""
+    root = _repo(tmp_path)
+    d = root / "tools"
+    d.mkdir()
+    p = d / ("py.cmd" if sys.platform == "win32" else "py")
+    p.write_text("@echo off\r\n" if sys.platform == "win32" else "#!/bin/sh\n",
+                 encoding="utf-8")
+    if sys.platform != "win32":
+        p.chmod(0o755)
+    (root / "aramid.toml").write_text(
+        f'schema_version = 1\n[tests]\ncommand = ["tools/{p.name}", "-m", "pytest"]\n',
+        encoding="utf-8")
+    monkeypatch.chdir(tmp_path)
+
+    statuses = doctor.probe_tests(root, config_mod.load_config(root))
+
+    assert len(statuses) == 1
+    assert statuses[0].present, statuses[0].detail

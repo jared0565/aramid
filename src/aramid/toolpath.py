@@ -184,14 +184,20 @@ def resolve(name: str) -> Path | None:
     Never raises: resolution failure must surface as a MISSING/degraded tool
     through the normal fail-open path, never as an exception inside a gate."""
     try:
+        # Absolute, always. `shutil.which` hands a relative `name` back
+        # relative when it resolves against the cwd, and `run_subprocess`
+        # then launched it with a DIFFERENT cwd (the mutation worktree),
+        # where it no longer resolved -- despite the comment there promising
+        # an absolute launch (interop round 174).
         exe = shutil.which(name)
         if exe:
-            return Path(exe)
+            p = Path(exe)
+            return p if p.is_absolute() else p.resolve()
 
         # An absolute/relative path handed straight through (not a bare name).
         direct = Path(name)
         if direct.exists() and direct.is_file():
-            return direct
+            return direct.resolve()
 
         for d in (*scripts_dirs(), tools_dir()):
             candidate = d / exe_name(name)
