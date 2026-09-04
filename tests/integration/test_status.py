@@ -465,6 +465,28 @@ def test_status_shows_queue_and_drain_sections(tmp_path, capsys, monkeypatch):
     assert "registry: NOT registered" in out
 
 
+def test_status_says_why_a_queued_item_was_not_opened(tmp_path, capsys, monkeypatch):
+    """Round 177: a scheduled drain left a repo's item queued because another
+    repo's item spent the drain-wide budget, and no surface in the starved
+    repo said so. The queue line carries the deferral."""
+    from aramid import queue, registry
+    monkeypatch.setattr(registry, "registry_path", lambda: tmp_path / "repos.toml")
+    root = tmp_path / "repo"
+    (root / ".aramid").mkdir(parents=True)
+    led = Ledger(root / ".aramid" / "ledger.db")
+    item = queue.enqueue(led, "2026-07-13T00:00:00+00:00", "a", "b", 45, ["security-path: auth.py"])
+    queue.mark_deferred(led, item.id, "drain1", "2026-07-13T04:00:00+00:00",
+                        reason="drain budget", after=["F:/other"], elapsed_s=1723, budget_s=600.0)
+    led.close()
+
+    assert cmd_status(root) == 0
+
+    out = capsys.readouterr().out
+    line = next(ln for ln in out.splitlines() if ln.startswith("queue: "))
+    assert "1 queued (score 45" in line
+    assert "deferred 1x: drain budget)" in line, line
+
+
 def test_status_empty_queue_and_never_drained(tmp_path, capsys, monkeypatch):
     from aramid import registry
     monkeypatch.setattr(registry, "registry_path", lambda: tmp_path / "repos.toml")

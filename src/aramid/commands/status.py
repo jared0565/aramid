@@ -257,7 +257,11 @@ def _queue_lines(ledger: Ledger) -> list[str]:
     q = queued[0]
     age_h = int((datetime.now(timezone.utc)
                  - datetime.fromisoformat(q.created_at)).total_seconds() // 3600)
-    lines = [f"queue: {len(queued)} queued (score {q.score}, {age_h}h old) | "
+    # Why the last drain did not open it, when it did not (round 177): a
+    # starved repo's `status` used to read like one nothing had looked at.
+    deferral = (f", deferred {q.deferred}x: {q.deferred_reason}"
+                if getattr(q, "deferred", 0) else "")
+    lines = [f"queue: {len(queued)} queued (score {q.score}, {age_h}h old{deferral}) | "
              f"{drained_n} drained | {expired_n} expired"]
     lines.extend(f"  {reason}" for reason in q.reasons)
     return lines

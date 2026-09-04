@@ -390,3 +390,91 @@ def test_an_empty_repair_claim_still_yields_what_the_consumer_examined(tmp_path,
     assert len(ys) == 1, "an empty claim is still a run that looked"
     assert (ys[0].payload["tool"], ys[0].payload["considered"],
             ys[0].payload["resolved"]) == ("mutation", 1, 0)
+
+
+# ------------------------- an item left behind is deferred, and goes first ---
+# Interop round 177: two repos with tied scores; the drain-wide budget was
+# spent by the first item (checked only BETWEEN items), the second was never
+# opened, and the same order would repeat at every scheduled drain.
+
+def _ticks(*values):
+    """A scripted clock for `cmd_drain(monotonic=...)`: one value for
+    `started`, then one per between-items check."""
+    it = iter(values)
+    return lambda: next(it)
+
+
+def _head(r):
+    return subprocess.run(["git", "rev-parse", "HEAD"], cwd=r, check=True,
+                          capture_output=True, text=True).stdout.strip()
+
+
+def _deferrals(r):
+    led = Ledger(r / ".aramid" / "ledger.db")
+    try:
+        evs = [e for e in led.events() if e.type is EventType.QUEUE_ITEM_DEFERRED]
+        item = queue.queued_item(queue.materialize_queue(led.events()))
+    finally:
+        led.close()
+    return evs, item
+
+
+def test_budget_stop_defers_the_left_items_in_their_own_ledgers(tmp_path, seam, fake_consumer):
+    from aramid.fingerprint import normalize_path
+    r1, r2 = _risky_repo(tmp_path, "r1"), _risky_repo(tmp_path, "r2")
+    registry.register(r1, "t0")
+    registry.register(r2, "t0")
+
+    # started; r1's check passes; r2's check finds the budget gone
+    assert cmd_drain([], dry_run=False, monotonic=_ticks(0.0, 0.0, 10_000.0)) == 0
+
+    assert [c.head for c in fake_consumer.calls] == [_head(r1)], "equal scores: registry order"
+    evs, item = _deferrals(r2)
+    assert len(evs) == 1 and evs[0].finding_id == item.id
+    assert evs[0].payload["reason"] == "drain budget"
+    assert evs[0].payload["after"] == [normalize_path(str(r1))]
+    assert (evs[0].payload["elapsed_s"], evs[0].payload["budget_s"]) == (10_000, 600.0)
+    assert (item.deferred, item.deferred_reason) == (1, "drain budget")
+    evs1, _ = _deferrals(r1)
+    assert evs1 == [], "the item that WAS opened is not deferred"
+
+
+def test_a_deferred_item_is_opened_first_next_time(tmp_path, seam, fake_consumer):
+    r1, r2 = _risky_repo(tmp_path, "r1"), _risky_repo(tmp_path, "r2")
+    registry.register(r1, "t0")
+    registry.register(r2, "t0")
+    cmd_drain([], dry_run=False, monotonic=_ticks(0.0, 0.0, 10_000.0))   # r1 drained, r2 deferred
+    _commit(r1, "src/auth_login2.py", "def g(x):\n    exec(x)\n", "risky again")  # r1 re-queues
+    fake_consumer.calls = []
+
+    assert cmd_drain([], dry_run=False, monotonic=_ticks(0.0, 0.0, 0.0)) == 0
+
+    heads = [c.head for c in fake_consumer.calls]
+    assert heads[0] == _head(r2), "the deferred item goes first, whatever the scores"
+    assert len(heads) == 2
+
+
+def test_item_limit_defers_with_its_own_reason(tmp_path, seam, fake_consumer):
+    r1, r2 = _risky_repo(tmp_path, "r1"), _risky_repo(tmp_path, "r2")
+    registry.register(r1, "t0")
+    registry.register(r2, "t0")
+
+    assert cmd_drain([], dry_run=False, max_items=1) == 0
+
+    evs, item = _deferrals(r2)
+    assert len(evs) == 1 and evs[0].payload["reason"] == "item limit"
+    assert item.deferred == 1
+
+
+def test_dry_run_names_the_deferral(tmp_path, seam, fake_consumer, capsys):
+    r1, r2 = _risky_repo(tmp_path, "r1"), _risky_repo(tmp_path, "r2")
+    registry.register(r1, "t0")
+    registry.register(r2, "t0")
+    cmd_drain([], dry_run=False, monotonic=_ticks(0.0, 0.0, 10_000.0))
+    capsys.readouterr()
+
+    assert cmd_drain([], dry_run=True) == 0
+
+    lines = [ln for ln in capsys.readouterr().out.splitlines() if "(dry-run)" in ln]
+    assert any(str(r2) in ln and "deferred=1 (drain budget)" in ln for ln in lines), lines
+    assert any(str(r1) in ln and "deferred" not in ln for ln in lines), lines

@@ -108,7 +108,17 @@ def build_parser() -> argparse.ArgumentParser:
                           help="wall-clock watchdog in seconds; on expiry triage "
                                "self-kills with exit 3 (used by the post-commit shim)")
 
-    p_drain = sub.add_parser("drain", help="sweep registered repos, pop queued items, consume")
+    p_drain = sub.add_parser(
+        "drain", help="sweep registered repos, pop queued items, consume",
+        description=("Sweep the registered repos for new commits, pop one queued item per "
+                     "repo (most-deferred first, then highest score) and run every consumer "
+                     "on it, under one drain-wide wall-clock budget checked between items. "
+                     "An item left behind on the budget is recorded as deferred in its own "
+                     "repo's ledger and opened first next time."),
+        # Round 177 asked what exit 2 meant because this said nothing.
+        epilog=("exit codes: 0 every popped item fully consumed; 2 a consumer degraded or "
+                "raised, or a repo could not be probed (the rest completed); 3 engine "
+                "error -- another drain holds the lock, or the registry is unusable."))
     drain_scope = p_drain.add_mutually_exclusive_group()
     drain_scope.add_argument("--all", action="store_true", help="drain every registered repo")
     drain_scope.add_argument("--repo", default=None, help="drain a single repo (default: .)")

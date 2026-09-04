@@ -222,8 +222,11 @@ def cmd_drain(targets: list, *, dry_run: bool = False, max_items: int | None = N
                             ledger.close()
                     else:
                         item = None
-                    print(f"aramid drain (dry-run): {root} queued="
-                          f"{item.score if item else 'none'}")
+                    line = f"aramid drain (dry-run): {root} queued={item.score if item else 'none'}"
+                    if item is not None and item.deferred:
+                        # Why the last drain did not open it (round 177).
+                        line += f" deferred={item.deferred} ({item.deferred_reason})"
+                    print(line)
                     continue
                 ledger = Ledger(root / ".aramid" / "ledger.db")
                 try:
@@ -247,7 +250,13 @@ def cmd_drain(targets: list, *, dry_run: bool = False, max_items: int | None = N
         if dry_run:
             return 0
 
-        candidates.sort(key=lambda c: -c[0])
+        # Most-DEFERRED first, then score, stable (so registry order still
+        # breaks a full tie). One deferral guarantees an item is opened by
+        # the second scheduled drain after it was queued; two repos starving
+        # each other resolve to the more-deferred one, which is the fair
+        # order. Round 177: a tied, quieter repo lost on registry order and
+        # the winner spent the drain-wide budget, at every drain.
+        candidates.sort(key=lambda c: (-c[2].deferred, -c[0]))
         budget_s = max((float(c[3].drain.get("wall_clock_budget_s", 600.0))
                         for c in candidates), default=600.0)
         limit = max_items if max_items is not None else \
@@ -255,10 +264,36 @@ def cmd_drain(targets: list, *, dry_run: bool = False, max_items: int | None = N
                      for c in candidates), default=10)
         drained = 0
         rolled: dict[str, tuple] = {}
-        for score_val, root, item, cfg in candidates:
-            if drained >= limit or monotonic() - started > budget_s:
-                print(f"aramid drain: budget reached; {len(candidates) - drained} "
-                      f"item(s) left queued")
+        drained_roots: list[str] = []
+        drain_run_id = uuid.uuid4().hex
+        for idx, (score_val, root, item, cfg) in enumerate(candidates):
+            now = monotonic()
+            if drained >= limit or now - started > budget_s:
+                left = candidates[idx:]
+                reason = "item limit" if drained >= limit else "drain budget"
+                print(f"aramid drain: budget reached; {len(left)} item(s) left queued")
+                # The budget is drain-wide and checked only BETWEEN items
+                # (an item's consumers carry their own budgets; preempting a
+                # running mutation would waste 25 minutes and write a
+                # degraded row), so what changes is who goes next time:
+                # every item left behind gets a DEFERRED row in ITS repo's
+                # ledger, which `status` / `--dry-run` show and the next
+                # drain sorts on. Same failure shape as every other per-repo
+                # write here: a ledger that cannot take the row degrades the
+                # drain, never raises out of it.
+                for _s, left_root, left_item, _c in left:
+                    try:
+                        left_ledger = Ledger(left_root / ".aramid" / "ledger.db")
+                        try:
+                            queue.mark_deferred(left_ledger, left_item.id, drain_run_id, clock(),
+                                                reason=reason, after=list(drained_roots),
+                                                elapsed_s=int(now - started), budget_s=budget_s)
+                        finally:
+                            left_ledger.close()
+                    except Exception as exc:
+                        print(f"aramid drain: {left_root}: could not record the deferral: {exc}",
+                              file=sys.stderr)
+                        degraded = True
                 break
             ledger = Ledger(root / ".aramid" / "ledger.db")
             try:
@@ -270,6 +305,7 @@ def cmd_drain(targets: list, *, dry_run: bool = False, max_items: int | None = N
             finally:
                 ledger.close()
             drained += 1
+            drained_roots.append(normalize_path(str(root)))
             rolled[str(root)] = (root, cfg)
 
         # Auto-learn rollup (autolearn spec section 8.3): fold each drained
