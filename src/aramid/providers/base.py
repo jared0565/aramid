@@ -21,6 +21,12 @@ ERR_QUOTA = "quota"
 ERR_TIMEOUT = "timeout"
 ERR_MALFORMED = "malformed"
 ERR_ERROR = "error"
+# The model ran to its output cap and the text is cut mid-answer. Distinct
+# from MALFORMED, which is the reviewer's own verdict being unparseable: a
+# capped response is the PROVIDER failing to answer, so the arm loop falls
+# through to the next arm on it (interop rounds 179/180: 65,536 tokens from
+# deepseek-v4-flash in 166 s, read as a malformed verdict, item degraded).
+ERR_TRUNCATED = "truncated"
 
 
 @dataclass
@@ -29,7 +35,7 @@ class ProviderResponse:
     tokens_in: int = 0
     tokens_out: int = 0
     cost_usd: float = 0.0
-    error: str = ""    # "" | unavailable | quota | timeout | malformed | error
+    error: str = ""    # "" | unavailable | quota | timeout | malformed | error | truncated
 
 
 PROVIDERS: dict[str, object] = {}  # populated by provider modules at import

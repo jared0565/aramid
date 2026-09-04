@@ -581,6 +581,51 @@ def test_attempts_record_fallthrough_errors(tmp_path, monkeypatch):
     assert sel["served"]["provider"] == "fake-a"
 
 
+def test_a_truncated_response_falls_through_to_the_next_arm(tmp_path, monkeypatch):
+    """A provider that hit its output cap did not answer: the next arm gets
+    the packet, and the attempt is recorded as `truncated` (interop rounds
+    179/180: a consumer's only arm ran to 65,536 tokens and the item was
+    degraded as a malformed verdict)."""
+    r, base_sha, head_sha = _repo(tmp_path)
+    a = _Fake("fake-a", [ProviderResponse(text=_finding_json("high"))])
+    b = _Fake("fake-b", [ProviderResponse(text='{"findings": [{"ti', tokens_out=65536,
+                                          error=providers_base.ERR_TRUNCATED)])
+    _wire(monkeypatch, a, b)
+    led = Ledger(tmp_path / "l.db")
+    try:
+        got = llm_review.consume(_item_score(base_sha, head_sha, 90),
+                                 _ctx_ladder(r, led, _LADDER_AB))
+    finally:
+        led.close()
+    sel = got.extra["selection"]
+    assert [(x["provider"], x["error"]) for x in sel["attempts"]] == \
+        [("fake-b", "truncated"), ("fake-a", "")]
+    assert sel["served"]["provider"] == "fake-a"
+
+
+def test_every_arm_truncated_is_a_malformed_response_not_an_outage(tmp_path, monkeypatch):
+    """With no arm left, the item degrades under the `malformed response`
+    note family -- the one `_MALFORMED_GIVE_UP` counts -- naming the cap, so
+    a model that always runs to its cap stands down after three items
+    instead of holding the consumer red forever."""
+    r, base_sha, head_sha = _repo(tmp_path)
+    a = _Fake("fake-a", [ProviderResponse(text="", tokens_out=65536,
+                                          error=providers_base.ERR_TRUNCATED)])
+    b = _Fake("fake-b", [ProviderResponse(text="", tokens_out=65536,
+                                          error=providers_base.ERR_TRUNCATED)])
+    _wire(monkeypatch, a, b)
+    led = Ledger(tmp_path / "l.db")
+    try:
+        got = llm_review.consume(_item_score(base_sha, head_sha, 90),
+                                 _ctx_ladder(r, led, _LADDER_AB))
+    finally:
+        led.close()
+    assert got.state == "degraded"
+    assert got.note.startswith("malformed response from fake-b"), got.note
+    assert "output cap" in got.note
+    assert [x["error"] for x in got.extra["selection"]["attempts"]] == ["truncated", "truncated"]
+
+
 def test_refute_outcome_recorded(tmp_path, monkeypatch):
     r, base_sha, head_sha = _repo(tmp_path)
     a = _Fake("fake-a", [ProviderResponse(text=_finding_json("critical"))])

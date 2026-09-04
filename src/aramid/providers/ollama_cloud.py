@@ -28,13 +28,24 @@ def available(cfg) -> bool:
     return installed()
 
 
+# Output-token cap sent as `options.num_predict`. Generous for a review
+# answer (a few thousand tokens, thinking included) and a quarter of the
+# 65,536 a model once produced before answering nothing.
+NUM_PREDICT = 16384
+
+
 def review(prompt: str, model: str, timeout_s: float, *, effort: str = "") -> ProviderResponse:
     key = os.environ.get("OLLAMA_API_KEY")
     if not key:
         return ProviderResponse(text="", error=base.ERR_UNAVAILABLE)
     payload = {"model": model,
                "messages": [{"role": "user", "content": prompt}],
-               "stream": False}
+               "stream": False,
+               # Bound a runaway generation at the cap rather than the
+               # model's maximum: a review answer is a few thousand tokens,
+               # and the one that ran to 65,536 took 166 s and answered
+               # nothing (`done_reason: length` below).
+               "options": {"num_predict": NUM_PREDICT}}
     if effort:
         payload["think"] = True
     body = json.dumps(payload).encode("utf-8")
@@ -70,8 +81,13 @@ def review(prompt: str, model: str, timeout_s: float, *, effort: str = "") -> Pr
     except (ValueError, KeyError, IndexError, TypeError, AttributeError):
         return ProviderResponse(text="", error=base.ERR_MALFORMED)
 
+    # `done_reason: "length"` is ollama's own statement that generation hit
+    # the cap: the text is cut mid-answer and is not a verdict. The spend is
+    # still logged -- the tokens were produced -- and the error routes the
+    # arm loop to the next provider (providers.base.ERR_TRUNCATED).
+    error = base.ERR_TRUNCATED if data.get("done_reason") == "length" else ""
     resp = ProviderResponse(text=text, tokens_in=tokens_in, tokens_out=tokens_out,
-                            cost_usd=0.0)
+                            cost_usd=0.0, error=error)
     _log(resp, model)
     return resp
 

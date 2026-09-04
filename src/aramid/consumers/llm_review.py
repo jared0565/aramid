@@ -179,7 +179,11 @@ def consume(item, ctx: DrainContext) -> ConsumerResult:
         if r.error in ("", providers_base.ERR_MALFORMED):
             resp, reviewer_arm = r, arm
             break
-        # unavailable/quota/timeout/error: fall through to the next provider
+        # unavailable/quota/timeout/error/truncated: fall through to the next
+        # provider. `truncated` (the model ran to its output cap) is the
+        # provider failing to answer, not the reviewer's verdict being
+        # unparseable -- read as MALFORMED it degraded the item on the arm's
+        # own 65,536-token non-answer (interop rounds 179/180).
     if resp is None:
         # Failed arms still leave their trace (autolearn spec section 6):
         # keep attempts + the shadow decision even on total outage.
@@ -195,8 +199,18 @@ def consume(item, ctx: DrainContext) -> ConsumerResult:
             "hallucination_rejected": 0,
             "tokens": {"in": 0, "out": 0},
         }
-        return ConsumerResult(consumer=NAME, state="degraded",
-                              note="all providers unavailable",
+        # Every arm ran to its output cap: not an outage, a response nobody
+        # could parse. Filed under the `malformed response` note family so
+        # `_MALFORMED_GIVE_UP` counts it and a model that always hits its
+        # cap stands down after three items instead of holding the consumer
+        # degraded forever.
+        truncated = [x for x in attempts if x["error"] == providers_base.ERR_TRUNCATED]
+        if truncated:
+            sel["malformed"] = True
+            note = f"malformed response from {truncated[0]['provider']} (output cap hit)"
+        else:
+            note = "all providers unavailable"
+        return ConsumerResult(consumer=NAME, state="degraded", note=note,
                               extra={"selection": sel})
     provider = providers_base.PROVIDERS[reviewer_arm.provider]   # for the refute cross-check
 

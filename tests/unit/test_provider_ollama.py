@@ -64,6 +64,39 @@ def test_effort_sets_think(monkeypatch):
     assert seen["body"]["think"] is True
 
 
+def test_a_length_capped_response_is_truncated_not_a_verdict(monkeypatch):
+    """A model that ran to its output cap returns `done_reason: "length"` and
+    a body cut mid-JSON; the consumer read that as the reviewer's malformed
+    VERDICT and degraded the item (interop rounds 179/180: 65,536 tokens from
+    deepseek-v4-flash in 166 s). A cap hit is the provider failing to answer,
+    which the arm loop must fall through on."""
+    body = json.dumps({"message": {"role": "assistant", "content": '{"findings": [{"ti'},
+                       "done_reason": "length", "prompt_eval_count": 8452, "eval_count": 65536})
+    monkeypatch.setattr(ollama_cloud.urllib.request, "urlopen",
+                        lambda req, timeout: io.BytesIO(body.encode("utf-8")))
+
+    resp = ollama_cloud.review("PACKET", "deepseek-v4-flash", 240.0)
+
+    assert resp.error == base.ERR_TRUNCATED == "truncated"
+    assert resp.tokens_out == 65536, "the spend is real even when the answer is not"
+
+
+def test_the_request_caps_the_output(monkeypatch):
+    """`num_predict` bounds a runaway generation at the cap instead of the
+    model's maximum; the review JSON for a packet is a few thousand tokens."""
+    seen = {}
+
+    def fake_urlopen(req, timeout):
+        seen["body"] = json.loads(req.data.decode("utf-8"))
+        return io.BytesIO(RESPONSE.encode("utf-8"))
+    monkeypatch.setattr(ollama_cloud.urllib.request, "urlopen", fake_urlopen)
+
+    ollama_cloud.review("PACKET", "deepseek-v4-flash", 240.0)
+
+    assert seen["body"]["options"] == {"num_predict": ollama_cloud.NUM_PREDICT}
+    assert ollama_cloud.NUM_PREDICT == 16384
+
+
 def test_missing_key_unavailable(monkeypatch):
     monkeypatch.delenv("OLLAMA_API_KEY")
     assert ollama_cloud.review("P", "m", 240.0).error == base.ERR_UNAVAILABLE
