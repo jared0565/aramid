@@ -30,6 +30,8 @@ from aramid.runners.base import ToolState, run_subprocess, worktree_import_env
 NAME = "mutation"
 _BASELINE_GIVE_UP = 3   # mirrors llm_review._MALFORMED_GIVE_UP
 _TIMEOUT_GIVE_UP = 3    # same threshold, deliberately a DIFFERENT counter
+_MISSING_GIVE_UP = 3    # repo-scoped like the timeout family: no commit fixes a path
+_LOG_TAIL_LINES = 60    # of stdout and of stderr, in the baseline log
 
 
 def timeout_note_prefix(budget: float, suite: str) -> str:
@@ -78,6 +80,25 @@ def failing_note_prefix(head: str) -> str:
     the misreading the timeout reword removed. One grammar down the column.
     """
     return f"baseline failing (last seen @ {head[:12]})"
+
+
+def missing_note_prefix(argv0: str) -> str:
+    """The note family for "the baseline command could not be resolved".
+
+    Distinct from `failing_note_prefix` because the two demand opposite
+    responses: a red suite is fixed at a commit, a command that does not
+    resolve is fixed in `aramid.toml`. They shared one note for three weeks
+    (interop round 174: 43 rows of `baseline failing` in 2-7 s, none of
+    which started a process) and the reader was sent looking for a broken
+    test that did not exist.
+
+    Repo-scoped, like the timeout family and for the same reason: a path is
+    a property of the config and no commit ever resolves one. argv[0] is in
+    the prefix as the release valve -- change the command and the count
+    falls to zero. The emit site appends the cwd it was resolved from and
+    the remedy; the counter matches on this prefix.
+    """
+    return f"baseline command not found: {argv0}"
 
 
 _SAFE_STEM = re.compile(r"^[A-Za-z0-9_]+$")
@@ -139,6 +160,41 @@ def _finalize_scores(scores: dict) -> dict:
     for t in scores.values():
         t["fully_mutated"] = (t["killed_s1"] + t["survived_s1"] == t["generated"])
     return {"schema": 1, "targets": scores}
+
+
+def _last_line(res) -> str:
+    """The last non-empty line of stderr, else of stdout, else a marker.
+    pytest puts its summary on stdout, so stderr alone is often empty;
+    a crash before collection puts the traceback on stderr, so stderr
+    wins when it has anything."""
+    for text in (res.stderr or "", res.raw or ""):
+        lines = [ln.strip() for ln in text.splitlines() if ln.strip()]
+        if lines:
+            return lines[-1][:160]
+    return "(no output)"
+
+
+def _tail_log(root: Path, item_id: str, head: str, res) -> None:
+    """The last `_LOG_TAIL_LINES` of stdout and of stderr, under
+    `.aramid/logs/` beside the gate's own logs, named by item and head so a
+    re-run at the same head overwrites rather than accumulates. Best
+    effort: a log that cannot be written costs nothing but the log (spec
+    section 9, fail-open) -- but says so on stderr, the way the worktree
+    cleanup does, rather than vanishing. Only OSError is caught: that is
+    the failure this function can legitimately have (a read-only tree, a
+    full disk); anything else is a bug and should surface."""
+    logs = root / ".aramid" / "logs"
+    out = "\n".join((res.raw or "").splitlines()[-_LOG_TAIL_LINES:])
+    err = "\n".join((res.stderr or "").splitlines()[-_LOG_TAIL_LINES:])
+    body = (f"--- stdout (last {_LOG_TAIL_LINES} lines) ---\n{out}\n"
+            f"--- stderr (last {_LOG_TAIL_LINES} lines) ---\n{err}\n")
+    try:
+        logs.mkdir(parents=True, exist_ok=True)
+        (logs / f"mutation-baseline-{item_id}-{head[:12]}.log").write_text(
+            body, encoding="utf-8")
+    except OSError as exc:
+        print(f"aramid: mutation: baseline log not written under {logs}: {exc}",
+              file=sys.stderr)
 
 
 def _is_test_file(rel: str) -> bool:
@@ -343,6 +399,17 @@ def consume(item, ctx: DrainContext) -> ConsumerResult:
                   f"[mutation].baseline_timeout_s, or point "
                   f"[mutation].test_command at a narrower suite"))
 
+    if base.note_count_any_item(
+            ctx.ledger, NAME, missing_note_prefix(full_argv[0])) >= _MISSING_GIVE_UP:
+        # Repo-scoped, permanent until the command changes -- the prefix
+        # carries argv[0], so editing the config is what releases it. `ok`
+        # for the same reason as the two give-ups around it.
+        return ConsumerResult(
+            consumer=NAME, state="ok",
+            note=(f"mutation giving up: {full_argv[0]} not found after "
+                  f"{_MISSING_GIVE_UP} attempts -- fix [mutation].test_command "
+                  f"or [tests].command"))
+
     if base.prior_note_count(ctx.ledger, NAME, item.id,
                              failing_note_prefix(item.head)) >= _BASELINE_GIVE_UP:
         # A permanently-red suite must stop pinning the queue item: after 3
@@ -383,6 +450,20 @@ def consume(item, ctx: DrainContext) -> ConsumerResult:
         full_timeout = baseline_budget
         base_res = run_subprocess(full_argv, wt, full_timeout,
                                   env=worktree_import_env(wt))
+        if base_res.state is ToolState.MISSING:
+            # Nothing ran. Not a red suite (head-scoped, retried per commit)
+            # and not a slow one (budget-scoped): a path that does not
+            # resolve, which only an `aramid.toml` edit fixes. Names the cwd
+            # it was resolved from because that is the variable the reader
+            # cannot see -- the scheduled drain's cwd is whatever the
+            # scheduler gave it (interop round 174).
+            return ConsumerResult(
+                consumer=NAME, state="degraded",
+                note=(f"{missing_note_prefix(full_argv[0])} (resolved from "
+                      f"{Path.cwd()}; set [mutation].test_command or "
+                      f"[tests].command to a name on PATH, an absolute path, "
+                      f"or a repo-relative path)"),
+                duration_s=time.monotonic() - started)
         if base_res.state is ToolState.OK and base_res.returncode == _PYTEST_NO_TESTS_RC:
             # Permanent structural absence, not a failing baseline: the note
             # deliberately keeps the "no python test stack" wording used by
@@ -423,11 +504,18 @@ def consume(item, ctx: DrainContext) -> ConsumerResult:
                       f" (last seen @ {item.head[:12]})"),
                 duration_s=time.monotonic() - started)
         if base_res.state is not ToolState.OK or base_res.returncode != 0:
-            # Note text is load-bearing: the give-up counter above matches it.
-            # Both ends call failing_note_prefix so they cannot drift apart.
-            return ConsumerResult(consumer=NAME, state="degraded",
-                                  note=failing_note_prefix(item.head),
-                                  duration_s=time.monotonic() - started)
+            # Note text is load-bearing: the give-up counter above matches it
+            # by PREFIX. Both ends call failing_note_prefix so they cannot
+            # drift apart, and the suffix is free to say what the counter
+            # never needed: the exit code and the last line of output. The
+            # tails go to a log beside the gate's own (round 174: three weeks
+            # of `baseline failing` with nothing anywhere saying what failed).
+            _tail_log(ctx.root, item.id, item.head, base_res)
+            return ConsumerResult(
+                consumer=NAME, state="degraded",
+                note=(f"{failing_note_prefix(item.head)} -- rc "
+                      f"{base_res.returncode}: {_last_line(base_res)}"),
+                duration_s=time.monotonic() - started)
         # The one run that can actually MEASURE the suite is one that finished.
         # A timeout only ever yields the budget you set, so recording "elapsed"
         # there would be circular; this is the number that tells an operator

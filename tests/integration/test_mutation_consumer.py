@@ -494,6 +494,11 @@ def test_note_families_are_pinned_to_their_literal_wording():
     # cannot drift into two grammars again.
     assert mut_consumer.timeout_note_prefix(480.0, "pytest -q") == \
         "baseline timeout: pytest -q did not finish within the 480s budget"
+    # The fourth family (interop round 174): the command never resolved, so
+    # nothing ran -- neither red nor slow. argv[0] is in the prefix on
+    # purpose: it is the release valve, like the timeout family's inputs.
+    assert mut_consumer.missing_note_prefix("./nope/python") == \
+        "baseline command not found: ./nope/python"
 
 
 def test_failing_baseline_note_uses_the_last_seen_grammar(tmp_path, monkeypatch):
@@ -502,7 +507,9 @@ def test_failing_baseline_note_uses_the_last_seen_grammar(tmp_path, monkeypatch)
     res = _consume(r, base, head, monkeypatch, tmp_path)
 
     assert res.state == "degraded"
-    assert res.note == mut_consumer.failing_note_prefix(head)
+    # Prefix, not equality: the note now carries ` -- rc N: <last line>`
+    # after the prefix, and the give-up counter matches on the prefix.
+    assert res.note.startswith(mut_consumer.failing_note_prefix(head) + " -- rc ")
     # The discriminator. Asserting only `startswith("baseline failing")` --
     # which is what tests/unit/test_ledger_compact.py does, correctly, because
     # it is testing compaction and not wording -- passes on BOTH spellings and
@@ -542,7 +549,9 @@ def test_failing_giveup_ignores_the_old_note_format(tmp_path, monkeypatch):
 
     assert res.state == "degraded", \
         "old-format notes no longer satisfy the counter -- this is the reset"
-    assert res.note == mut_consumer.failing_note_prefix(head)
+    # Prefix, not equality: the note now carries ` -- rc N: <last line>`
+    # after the prefix, and the give-up counter matches on the prefix.
+    assert res.note.startswith(mut_consumer.failing_note_prefix(head) + " -- rc ")
 
 
 def test_timeout_giveup_survives_an_advancing_head(tmp_path, monkeypatch):
@@ -1508,3 +1517,78 @@ def test_repo_relative_test_command_runs_from_any_drain_cwd(tmp_path, monkeypatc
     res = _consume(r, base, head, monkeypatch, tmp_path)
     assert not res.note.startswith("baseline"), res.note
     assert res.state == "ok" and res.extra["tested"] >= 1, res.note
+
+
+# ---------------- the baseline that never started (round 174, s1 and s4) ---
+#
+# `baseline failing` covered two things that demand opposite responses: a red
+# suite (fixed at a commit) and a command that does not resolve (fixed in
+# aramid.toml). The second gets its own family, repo-scoped like the timeout
+# family because no commit ever fixes a path. And a genuinely red baseline
+# now says WHY: rc and the last output line on the note, the tails in a log.
+
+def _with_missing_command(r):
+    (r / "aramid.toml").write_text(
+        "schema_version = 1\n[mutation]\nmax_mutants = 3\nconfirm_cap = 3\n"
+        "wall_budget_s = 300\nmutant_timeout_s = 60\n"
+        "[tests]\ncommand = [\"./nope/python\", \"-m\", \"pytest\"]\n", encoding="utf-8")
+
+
+def test_missing_baseline_command_is_named_not_reported_as_failing(tmp_path, monkeypatch):
+    r, base, head = _repo(tmp_path, WEAK_TEST)
+    _with_missing_command(r)
+    res = _consume(r, base, head, monkeypatch, tmp_path)
+    assert res.state == "degraded"
+    assert res.note.startswith(mut_consumer.missing_note_prefix("./nope/python")), res.note
+    assert "baseline failing" not in res.note
+    assert "[mutation].test_command" in res.note, "the remedy must be named"
+    assert _no_worktrees(r)
+
+
+def test_missing_command_gives_up_after_three_across_items(tmp_path, monkeypatch):
+    """Repo-scoped: three MISSING notes on ANY items latch the give-up, the
+    way the timeout family does -- a path is a property of the config, and
+    a new commit never resolves one. The drain writes the notes the counter
+    reads, so they are seeded here the way the other give-up tests do, one
+    per item to prove the scope."""
+    r, base, head = _repo(tmp_path, WEAK_TEST)
+    _with_missing_command(r)
+    prefix = mut_consumer.missing_note_prefix("./nope/python")
+    for i in range(3):
+        _seed_notes(r, 1, f"{prefix} (resolved from /somewhere; set ...)", item_id=f"q{i}")
+    monkeypatch.setattr(mut_consumer, "run_subprocess",
+                         lambda *a, **kw: (_ for _ in ()).throw(
+                             AssertionError("give-up path must not run anything")))
+
+    res = _consume(r, base, head, monkeypatch, tmp_path, item_id="q9")
+
+    assert res.state == "ok"
+    assert res.note.startswith("mutation giving up: ./nope/python not found after 3 attempts"), res.note
+    assert "[tests].command" in res.note
+
+
+def test_missing_command_give_up_releases_when_the_command_changes(tmp_path, monkeypatch):
+    """The release valve: argv[0] is in the prefix, so three strikes against
+    one path say nothing about the next one."""
+    r, base, head = _repo(tmp_path, WEAK_TEST)
+    _with_missing_command(r)
+    _seed_notes(r, 3, mut_consumer.missing_note_prefix("./old/python") + " (resolved from x)")
+
+    res = _consume(r, base, head, monkeypatch, tmp_path)
+
+    assert res.state == "degraded"
+    assert res.note.startswith(mut_consumer.missing_note_prefix("./nope/python")), res.note
+
+
+def test_failing_baseline_note_carries_rc_and_last_line_and_a_log(tmp_path, monkeypatch):
+    r, base, head = _repo(tmp_path, "def test_always_fails():\n    assert False\n")
+    res = _consume(r, base, head, monkeypatch, tmp_path)
+    assert res.state == "degraded"
+    # The prefix is byte-identical (the give-up counter matches on it); the
+    # suffix is where the diagnosis lives.
+    assert res.note.startswith(mut_consumer.failing_note_prefix(head) + " -- rc 1: "), res.note
+    assert "1 failed" in res.note, res.note
+    log = r / ".aramid" / "logs" / f"mutation-baseline-q1-{head[:12]}.log"
+    assert log.is_file(), sorted(p.name for p in (r / ".aramid" / "logs").glob("*")) \
+        if (r / ".aramid" / "logs").exists() else "no logs dir"
+    assert "test_always_fails" in log.read_text(encoding="utf-8")
