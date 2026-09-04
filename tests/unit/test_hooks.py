@@ -469,6 +469,25 @@ def test_match_ci_uses_the_same_argv_as_the_CI_step():
     assert "-m aramid check --gate pre-push --all --strict" in data
 
 
+def test_shim_tells_the_gate_that_git_is_on_stdin():
+    """`ARAMID_HOOK=<gate>` on BOTH interpreter arms. The gate reads the
+    pre-push ref lines git writes to the hook's stdin only under that
+    marker: by hand and in CI the process has an empty non-tty stdin too,
+    and reading it there would turn CI's pre-push-tier run into "nothing
+    to push" (interop round 176; spec 4.1)."""
+    for match_ci in (False, True):
+        data = render_shim(Gate.PRE_PUSH, Path("C:/py/python.exe"), match_ci=match_ci).decode()
+        assert 'ARAMID_HOOK=pre-push "$INTERP" -P -m aramid check --gate pre-push' in data
+        assert "ARAMID_HOOK=pre-push py -3 -P -m aramid check --gate pre-push" in data
+    commit = render_shim(Gate.PRE_COMMIT, Path("C:/py/python.exe")).decode()
+    assert 'ARAMID_HOOK=pre-commit "$INTERP" -P -m aramid check --gate pre-commit' in commit
+    # The global template shim invokes the gate as a hook too.
+    from aramid.hooks import render_template_shim
+    tmpl = render_template_shim(Gate.PRE_PUSH, Path("C:/py/python.exe")).decode()
+    assert 'ARAMID_HOOK=pre-push "$INTERP" -P -m aramid check --gate pre-push' in tmpl
+    assert "ARAMID_HOOK=pre-push py -3 -P -m aramid check --gate pre-push" in tmpl
+
+
 def test_match_ci_stops_swallowing_a_degraded_run():
     """`2) exit 0` is what makes the hook weaker than CI for a WARN-tier
     degradation. A BLOCK-tier degradation already exits 1 via

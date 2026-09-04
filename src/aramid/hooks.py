@@ -159,10 +159,15 @@ def render_shim(gate: Gate, interpreter: Path, match_ci: bool = False) -> bytes:
         "",
         f'INTERP="{interp_sh}"',
         'if [ -x "$INTERP" ]; then',
-        f'    "$INTERP" -P -m aramid check {_check_args(gate, match_ci)}',
+        # ARAMID_HOOK=<gate>: the gate reads the pre-push ref lines git
+        # writes to this hook's stdin ONLY under this marker -- by hand and
+        # in CI the process has an empty non-tty stdin too, and reading it
+        # there would turn CI's pre-push-tier run into "nothing to push"
+        # (interop round 176; pushrefs.read_hook_stdin).
+        f'    ARAMID_HOOK={hook} "$INTERP" -P -m aramid check {_check_args(gate, match_ci)}',
         "    status=$?",
         "elif command -v py >/dev/null 2>&1; then",
-        f"    py -3 -P -m aramid check {_check_args(gate, match_ci)}",
+        f"    ARAMID_HOOK={hook} py -3 -P -m aramid check {_check_args(gate, match_ci)}",
         "    status=$?",
         "else",
         '    echo "aramid: no usable python interpreter (tried $INTERP and py -3)" >&2',
@@ -218,10 +223,11 @@ def render_template_shim(gate: Gate, interpreter: Path) -> bytes:
         "",
         f'INTERP="{interp_sh}"',
         'if [ -x "$INTERP" ]; then',
-        f'    "$INTERP" -P -m aramid check --gate {hook}',
+        # Same marker as the managed shim (see render_shim): git is on stdin.
+        f'    ARAMID_HOOK={hook} "$INTERP" -P -m aramid check --gate {hook}',
         "    status=$?",
         "elif command -v py >/dev/null 2>&1; then",
-        f"    py -3 -P -m aramid check --gate {hook}",
+        f"    ARAMID_HOOK={hook} py -3 -P -m aramid check --gate {hook}",
         "    status=$?",
         "else",
         '    echo "aramid: no usable python interpreter (tried $INTERP and py -3)" >&2',
