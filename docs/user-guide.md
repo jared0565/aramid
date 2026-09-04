@@ -175,6 +175,23 @@ On the very first `pre-push` run against a fresh ledger (no baseline yet), arami
 
 **In CI this happens on every run.** `.aramid/` is normally gitignored, so every CI checkout is a fresh ledger and every CI pre-push run is "the first" — the ratchet's new-warning escalation can never fail a CI step by exit code alone. The `--json` report says so: `fresh_ledger_baseline` is `true` and `grandfathered` lists the escalated ids the downgrade waved through (both keys are always present; `false`/`[]` on an ordinary run). A CI step that wants the ratchet to bite must read those keys — or persist `.aramid/` between runs so the baseline survives. Intrinsic BLOCKs (secrets, semgrep BLOCK rules, a failed test suite) still exit `1` regardless.
 
+### What the pre-push gate certifies -- and a branch that moves while it runs
+
+git hands every pre-push hook one line per ref on stdin (`<local ref> <local sha> <remote ref> <remote sha>`). Over a native transport (`ssh://`, `file://`, `git://`) it ships exactly those shas. Over **smart HTTP it does not**: the parent runs the hook first, then `git-remote-http` has `send-pack` resolve the refspec by *name*, at hook exit. So a commit made on the branch while a long gate runs ships, ungated, while `git push` prints the pre-hook range. (Measured on git 2.53; a consumer saw it in production with an 18-minute gate.)
+
+The gate therefore pins what it certifies before anything runs -- the refs on the hook's stdin, plus `HEAD` -- and re-resolves them after the last runner returns. If any moved, the push fails with
+
+```
+aramid: pre-push: main moved during the gate: 12a1d68 -> 673c804; re-run the push
+```
+
+and the run row records both sides: `refs`, `head_at_start` and `hook` on `run_started`, `refs_moved` and `head_at_exit` on `run_finished` (`aramid check --json` carries `refs_moved` too). The fix is the message: re-run the push, so the gate certifies what actually ships. Do not commit on a branch while its push is inside the hook.
+
+Two details of the mechanism:
+
+- The gate reads the hook's stdin only when the managed shim tells it git is on the other end (`ARAMID_HOOK=pre-push`, exported by the shim `aramid init` writes). Run by hand, or in CI, there are no ref lines and the gate certifies `HEAD` at start against `HEAD` at exit, under the name `HEAD`. Re-run `aramid init` after upgrading to get the marker into an existing shim.
+- Under the marker, an empty ref list -- git's `Everything up-to-date`, or a push that only deletes a branch -- ships nothing, so the gate prints `nothing to push` and returns `0` without running the tools and without writing a run row (a row with no tools would read as a skip and start a skip streak for a push that shipped nothing).
+
 ### The exit-code contract
 
 | Code | Meaning |

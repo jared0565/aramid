@@ -10,6 +10,23 @@ to publish a tag that disagrees with it.
 
 ## [Unreleased]
 
+### Added
+
+- **The pre-push gate certifies the refs git handed it, and fails when one
+  moved while it ran.** The gate now reads the `<local ref> <local sha>
+  <remote ref> <remote sha>` lines git writes to the hook's stdin (only
+  under `ARAMID_HOOK=pre-push`, which the managed shim exports -- re-run
+  `aramid init` to get it into an existing shim), pins them plus `HEAD`
+  before anything runs, and re-resolves them after the last runner returns.
+  A moved ref fails the push with `aramid: pre-push: main moved during the
+  gate: 12a1d68 -> 673c804; re-run the push`. The run row records both sides
+  (`refs`, `head_at_start`, `hook` on `run_started`; `refs_moved`,
+  `head_at_exit` on `run_finished`) and `check --json` carries `refs_moved`.
+  Run by hand or in CI, `HEAD` at start is certified against `HEAD` at exit.
+  An empty ref list under the marker (git's `Everything up-to-date`, or a
+  delete-only push) ships nothing: the gate returns 0 without running the
+  tools and without a run row (interop round 176).
+
 ### Changed
 
 - **`aramid status`'s `last run:` line names the run's gate**, e.g.
@@ -59,6 +76,14 @@ to publish a tag that disagrees with it.
   over mutants with a verdict and `fully_mutated` compares that sum to
   `generated`. Rows written by earlier versions parse unchanged and to the
   same rate they always had (interop round 174).
+- **A commit made while the pre-push gate ran no longer ships ungated over
+  HTTPS.** git runs the pre-push hook first and, over smart HTTP, has
+  `send-pack` resolve the refspec by name at hook exit, so the gate certified
+  one tip and git shipped another while printing the pre-hook range
+  (reproduced on git 2.53; a consumer's 18-minute gate certified `12a1d68`
+  and GitHub received `673c804`). The gate's range was `@{u}..HEAD` resolved
+  at start and it never read the hook's stdin. See Added above (interop
+  round 176).
 
 ## [0.11.0] — 2026-09-04
 
