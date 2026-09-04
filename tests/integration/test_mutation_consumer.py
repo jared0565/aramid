@@ -1691,3 +1691,44 @@ def test_failing_baseline_note_carries_rc_and_last_line_and_a_log(tmp_path, monk
     assert log.is_file(), sorted(p.name for p in (r / ".aramid" / "logs").glob("*")) \
         if (r / ".aramid" / "logs").exists() else "no logs dir"
     assert "test_always_fails" in log.read_text(encoding="utf-8")
+
+
+def _mark_pending_retest(r, ids):
+    """The gate's optimistic resolve: `gap_addressed` leaves each survivor
+    `pending_retest`, waiting for the drain's verified re-test."""
+    from aramid.models import Event, EventType
+    led = Ledger(r / ".aramid" / "ledger.db")
+    try:
+        for n, fid in enumerate(sorted(ids)):
+            led.append(Event(EventType.FINDING_RESOLVED, "gate", f"2026-08-28T00:01:{n:02d}+00:00",
+                             finding_id=fid,
+                             payload={"auto_resolved": "gap_addressed", "pending_retest": True}))
+    finally:
+        led.close()
+
+
+@pytest.mark.parametrize("pending", [False, True], ids=["open", "pending_retest"])
+def test_a_stage1_kill_of_a_recorded_survivor_is_claimed_whatever_its_status(
+        tmp_path, monkeypatch, pending):
+    # Interop round 188: graphite committed a tightened test IN the file
+    # stage 1 selects (tests/test_<module>.py), the gate moved the survivor
+    # to pending_retest two seconds after it was filed, and the drain
+    # re-test then killed it at stage 1 -- and the row read `killed_s1 1`
+    # beside `retest_killed 0`, with no claim and no mutant_killed yield.
+    # The claim gate admitted `open` survivors only, so the one state that
+    # exists to be proved by this re-test was the one state it could not
+    # claim. The `open` arm is the control: it always worked.
+    r, head, ids = _with_recorded_survivors(tmp_path, monkeypatch)
+    if pending:
+        _mark_pending_retest(r, ids)
+    head2 = _commit_file(r, "tests/test_calc.py", KILLER)
+
+    res = _consume(r, head, head2, monkeypatch, tmp_path, item_id="q2")
+
+    assert res.state == "ok", res.note
+    assert res.extra["retested"] == len(ids)
+    assert res.extra["killed_s1"] >= len(ids), res.extra
+    assert res.extra["retest_killed"] == len(ids), res.extra
+    assert res.repaired is not None and set(res.repaired.ids) == ids, (res.repaired, ids)
+    assert f"re-tested {len(ids)} of {len(ids)} open survivor(s), {len(ids)} killed" in res.note
+    assert _no_worktrees(r)

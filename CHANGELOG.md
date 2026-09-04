@@ -78,6 +78,19 @@ to publish a tag that disagrees with it.
 
 ### Fixed
 
+- **A stage-1 kill of a `pending_retest` survivor is confirmed and claimed.**
+  The mutation consumer confirmed (full suite) and claimed a stage-1 kill
+  only when the fingerprint was among its OPEN findings; a survivor the
+  gate had already moved to `pending_retest` (`gap_addressed`, waiting for
+  exactly this re-test) was the one state a re-test could not claim. The
+  row read `killed_s1 1` beside `retest_killed 0`, the note said `0
+  killed`, no `mutant_killed` yield was written and the finding stayed
+  `pending_retest` (interop round 188, graphite row 5207, the tightened
+  test in the stage-1 file). The load-bearing set is now the recorded
+  survivors -- open or `pending_retest` -- the same set `Repaired.examined`
+  reports; `resolve_repaired` already accepted a `pending_retest` id. A
+  parametrized test runs the stage-1 killer against both statuses; the
+  `open` arm always passed.
 - **The fuzz driver sees the worktree's own package.** The driver loads each
   target file by path, but the file's own imports resolve through
   `sys.path`, and `python -m` put only the worktree ROOT there -- so a

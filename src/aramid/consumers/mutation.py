@@ -127,28 +127,20 @@ def _mutant_fp(rel: str, op: str, line: int, lines: list[str]) -> str:
     return compute_fingerprint("mutation", op, rel, lc, 0)
 
 
-def _open_finding_ids(ledger) -> set:
-    """Ids of this producer's currently-OPEN findings.
-
-    Read for one reason only: to know which kills are load-bearing. A kill
-    that matches nothing open changes no state, so it needs no confirmation
-    and costs nothing -- which is almost every kill, and is what keeps the
-    confirmation below affordable. Never raises: an unreadable ledger yields
-    an empty set, i.e. no claims, which is the safe direction."""
-    try:
-        return {fid for fid, rec in ledger.open_findings().items()
-                if rec.get("tool") == "mutation" and rec.get("status") == "open"}
-    except Exception:
-        return set()
-
-
 def _recorded_survivor_ids(ledger) -> set:
     """Every recorded survivor this run could prove -- open, or
     `pending_retest` (the gate's optimistic resolve waiting for exactly this
     proof). Reported as `Repaired.examined` on EVERY completed run, claimed
     or not, so the ledger can tell "looked, proved 0" from "never ran"
-    (interop round 180). Never raises: an unreadable ledger reads as
-    nothing examined, the permissive direction."""
+    (interop round 180).
+
+    Also the set that decides which stage-1 kills are LOAD-BEARING: a kill
+    matching none of these changes no state, so it needs no confirmation
+    and costs nothing -- almost every kill, which is what keeps confirmation
+    affordable. It used to be a separate open-only set, and a survivor the
+    gate had moved to `pending_retest` was then the one state a re-test
+    could not claim (interop round 188). Never raises: an unreadable ledger
+    reads as nothing examined and nothing claimable, the safe direction."""
     try:
         return {fid for fid, rec in ledger.open_findings().items()
                 if rec.get("tool") == "mutation"
@@ -453,7 +445,6 @@ def consume(item, ctx: DrainContext) -> ConsumerResult:
              "retest_candidates": len(retests), "retested": 0,
              "retest_killed": 0, "retest_truncated": False}
     scores: dict[str, dict] = {}
-    open_ids = _open_finding_ids(ctx.ledger)
     examined = _recorded_survivor_ids(ctx.ledger)
     repaired_ids: set = set()
     findings: list[RawFinding] = []
@@ -623,7 +614,13 @@ def consume(item, ctx: DrainContext) -> ConsumerResult:
                         # selects exactly one file by module name. Claiming
                         # that as a repair writes a fix that never happened
                         # into an append-only ledger.
-                        if fp in open_ids:
+                        # `examined`, not "open": a survivor the gate has
+                        # already moved to `pending_retest` (gap_addressed)
+                        # is waiting for exactly this kill; admitting only
+                        # `open` here left that state unclaimable -- the
+                        # row read `killed_s1 1` beside `retest_killed 0`
+                        # and no yield (interop round 188).
+                        if fp in examined:
                             if confirms_used >= confirm_cap:
                                 stats["truncated"] = True
                                 continue
