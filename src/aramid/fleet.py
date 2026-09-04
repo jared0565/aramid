@@ -65,12 +65,15 @@ def policy_path() -> Path:
 @dataclass(frozen=True)
 class Policy:
     """Operator policy from `fleet.toml` (spec section 3.4). The defaults ARE
-    the user's chosen strict threshold: 14 days and 2 aramid versions."""
+    the user's chosen strict threshold: 14 days and 2 aramid versions, and
+    (amendment A1) a latest row no older than 7 days per repo -- 0 disables
+    that window."""
     min_days: int = 14
     min_versions: int = 2
     repeat_hours: int = 24
     defect_rows: int = 3
     gate_trailer: bool = True
+    max_row_age_days: int = 7
 
 
 def _int_or(value, default: int) -> int:
@@ -103,6 +106,7 @@ def load_policy() -> Policy:
     return Policy(
         min_days=_int_or(readiness.get("min_days"), defaults.min_days),
         min_versions=_int_or(readiness.get("min_versions"), defaults.min_versions),
+        max_row_age_days=_int_or(readiness.get("max_row_age_days"), defaults.max_row_age_days),
         repeat_hours=_int_or(notices.get("repeat_hours"), defaults.repeat_hours),
         defect_rows=_int_or(notices.get("defect_rows"), defaults.defect_rows),
         gate_trailer=trailer if isinstance(trailer, bool) else defaults.gate_trailer,

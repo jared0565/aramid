@@ -25,16 +25,34 @@ def test_store_dir_defaults_to_home_dot_aramid(monkeypatch):
 def test_policy_defaults_when_fleet_toml_is_absent():
     assert fleet.load_policy() == fleet.Policy(min_days=14, min_versions=2,
                                                repeat_hours=24, defect_rows=3,
-                                               gate_trailer=True)
+                                               gate_trailer=True, max_row_age_days=7)
 
 
 def test_policy_reads_every_key(tmp_path):
     p = fleet.policy_path()
     p.parent.mkdir(parents=True)
     p.write_text('schema_version = 1\n[readiness]\nmin_days = 3\nmin_versions = 1\n'
+                 'max_row_age_days = 5\n'
                  '[notices]\nrepeat_hours = 6\ndefect_rows = 2\ngate_trailer = false\n',
                  encoding="utf-8")
-    assert fleet.load_policy() == fleet.Policy(3, 1, 6, 2, False)
+    assert fleet.load_policy() == fleet.Policy(3, 1, 6, 2, False, 5)
+
+
+def test_policy_zero_row_window_is_accepted_as_disabled():
+    # Amendment A1.2: 0 disables the window; it is a value, not a mistake.
+    p = fleet.policy_path()
+    p.parent.mkdir(parents=True)
+    p.write_text('[readiness]\nmax_row_age_days = 0\n', encoding="utf-8")
+    assert fleet.load_policy().max_row_age_days == 0
+
+
+def test_policy_negative_or_string_row_window_falls_back():
+    p = fleet.policy_path()
+    p.parent.mkdir(parents=True)
+    p.write_text('[readiness]\nmax_row_age_days = -1\n', encoding="utf-8")
+    assert fleet.load_policy().max_row_age_days == 7
+    p.write_text('[readiness]\nmax_row_age_days = "week"\n', encoding="utf-8")
+    assert fleet.load_policy().max_row_age_days == 7
 
 
 def test_policy_unreadable_falls_back_to_defaults_with_one_note(capsys):
