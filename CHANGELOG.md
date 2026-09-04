@@ -10,6 +10,17 @@ to publish a tag that disagrees with it.
 
 ## [Unreleased]
 
+### Fixed
+
+- **`aramid status` no longer reports the init history scan's secrets as
+  "blocking".** `record_run` counted a run's `blocking` by verdict alone, and
+  a secret's verdict is BLOCK, so after `aramid init` the `last run:` line
+  read `3 blocking` beside a green gate -- the three were history hits the
+  ledger records as historical and non-blocking by contract, and in that
+  consumer's case already adjudicated `not-a-secret` (interop round 172).
+  Historical findings are now excluded from the count; the hits are still
+  reported where they belong, in the unrotated-historical-secrets section.
+
 ## [0.11.0] — 2026-09-04
 
 ### Added

@@ -1231,3 +1231,30 @@ def test_status_surfaces_a_fuzz_driver_that_keeps_timing_out_with_nothing_run(
     assert "fuzz: 5 run(s) certified nothing" in out
     assert "625s spent" in out
     assert "daemon.py:serve" in out, "the line names what to act on"
+
+
+# ------------------------------------- last run: the historical scan never blocks ---
+
+def test_status_last_run_line_counts_no_historical_scan_hit_as_blocking(
+        tmp_path, monkeypatch, capsys):
+    """Interop round 172 s3: after `aramid init`, `last run:` read `3 blocking`
+    beside a green gate. The three were the init scan's history hits, which the
+    ledger records as historical and non-blocking by contract (init's own exit
+    code never sees them) -- but `record_run` counted them by verdict, and a
+    secret's verdict is BLOCK. The count must follow the contract."""
+    root = _repo(tmp_path)
+    _no_user_config(tmp_path, monkeypatch)
+    _write_toml(root, armed=True, bake_started=None)
+    ledger = Ledger(root / ".aramid" / "ledger.db")
+    hits = [_f(f"hist{i}", tool="gitleaks", rule="generic-api-key", verdict=Verdict.BLOCK,
+               historical=True) for i in range(3)]
+    ledger.record_run("scan1", "2026-09-04T03:02:52+00:00", "historical-scan", {"gitleaks"},
+                      set(), hits, finished_at="2026-09-04T03:03:00+00:00")
+    ledger.close()
+
+    rc = cmd_status(root)
+    out = capsys.readouterr().out
+
+    assert rc == 0
+    assert "last run: 2026-09-04T03:02:52+00:00 (run scan1, 0 blocking, took 8s)" in out
+    assert "not-a-secret" in out or "historical: 3" in out   # the hits are still reported, elsewhere

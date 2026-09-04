@@ -680,7 +680,13 @@ class Ledger:
         # taken by the caller when the run's findings were recorded. Written
         # only when supplied, never copied from `at`: absent means 'too old
         # to have recorded it', which a reader must not confuse with zero.
-        finished = {"blocking": sum(1 for f in findings if str(f.verdict)=="block")}
+        # A historical finding is non-blocking by this ledger's own contract
+        # (init's full-history scan records secrets that never touch an exit
+        # code), so it does not count here even though a secret's verdict is
+        # BLOCK: `status` printed a consumer's three adjudicated history hits
+        # as `3 blocking` beside a green gate (interop round 172 s3).
+        finished = {"blocking": sum(1 for f in findings
+                                    if str(f.verdict) == "block" and not f.historical)}
         if finished_at is not None:
             finished["finished_at"] = finished_at
         self.append(Event(EventType.RUN_FINISHED, run_id, at, payload=finished))
