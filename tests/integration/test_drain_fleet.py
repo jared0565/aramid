@@ -59,8 +59,12 @@ def test_drain_judges_the_fleet_and_posts_transitions(tmp_path, seam):
     registry.register(a, "t0")
     registry.register(b, "t0")
     armed = {"semgrep_block_armed": True}
+    # An active fleet: rows 6 days apart, inside the default freshness window
+    # (amendment A1), so readiness is earned by rows rather than by silence.
     for row in (_row(a, 20, "0.8.0", armed=armed), _row(b, 20, "0.8.0"),
-                _row(a, 10, "0.9.0", armed=armed), _row(b, 10, "0.9.0")):
+                _row(a, 14, "0.8.0", armed=armed), _row(b, 14, "0.8.0"),
+                _row(a, 8, "0.9.0", armed=armed), _row(b, 8, "0.9.0"),
+                _row(a, 2, "0.9.0", armed=armed), _row(b, 2, "0.9.0")):
         fleet.append_row(row)
 
     assert cmd_drain([], clock=lambda: NOW) == 0

@@ -674,6 +674,13 @@ def readiness_line(verdict: dict | None, *, now: str | None = None) -> str:
     missing = sorted((v["name"] for v in repos.values() if not v.get("rows")), key=str.casefold)
     if missing:
         tail.append("no rows: " + ", ".join(missing))
+    # Amendment A1: verdicts written before it carry no `stale` key and
+    # render exactly as before.
+    stale = [f"{v['name']} ({float(v.get('age_days') or 0.0):.1f}d)"
+             for v in repos.values() if v.get("stale")]
+    if stale:
+        window = verdict.get("policy", {}).get("max_row_age_days")
+        tail.append("stale: " + ", ".join(stale) + (f" -- window {window}d" if window else ""))
     tail.extend(info.get("blockers", []))
     tail.extend(info.get("notes", []))
     line += "; " + "; ".join(tail) if tail else ""
@@ -711,8 +718,10 @@ _COLUMNS = (("no_skip_streak", "skip"), ("consumers_healthy", "consumers"),
 def render_report(verdict: dict | None, policy: Policy, *, now: str | None = None) -> str:
     """`aramid fleet`: the repo x criteria matrix, the streak, the verdict
     with its reasons. `ok` / `RED` / `-` (not applicable, or no rows)."""
+    window = (f"{policy.max_row_age_days}-day row window" if policy.max_row_age_days > 0
+              else "no row window")
     out = [f"fleet health -- 1.0 readiness (policy: {policy.min_days} days, "
-           f"{policy.min_versions} versions)", ""]
+           f"{policy.min_versions} versions, {window})", ""]
     if verdict is None:
         out.append("  no verdict yet -- first drain after promotion computes it")
         return "\n".join(out)

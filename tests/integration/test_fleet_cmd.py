@@ -46,7 +46,8 @@ def test_fleet_report_full_lines(capsys):
     fleet.write_verdict(_full_verdict())
     assert cmd_fleet() == 0
     lines = capsys.readouterr().out.splitlines()
-    assert lines[0] == "fleet health -- 1.0 readiness (policy: 14 days, 2 versions)"
+    assert lines[0] == ("fleet health -- 1.0 readiness (policy: 14 days, 2 versions, "
+                        "7-day row window)")
     assert lines[2] == ("  repo      rows  latest                     skip        consumers   "
                         "resolvers   self-block  dep-audit")
     assert lines[3] == ("  aramid      41  2026-09-20T12:00:00+00:00  ok          ok          "
@@ -57,6 +58,15 @@ def test_fleet_report_full_lines(capsys):
     assert lines[7] == "  armed anywhere: no"
     assert lines[9] == "verdict: not-ready"
     assert lines[10:] == ["  - aramid: dep_audit_ran", "  - no repo is armed"]
+
+
+def test_fleet_report_header_says_when_the_row_window_is_disabled(capsys):
+    fleet.policy_path().parent.mkdir(parents=True, exist_ok=True)
+    fleet.policy_path().write_text("[readiness]\nmax_row_age_days = 0\n", encoding="utf-8")
+    fleet.write_verdict(_full_verdict())
+    assert cmd_fleet() == 0
+    assert capsys.readouterr().out.splitlines()[0] == (
+        "fleet health -- 1.0 readiness (policy: 14 days, 2 versions, no row window)")
 
 
 def test_fleet_report_without_a_verdict(capsys):

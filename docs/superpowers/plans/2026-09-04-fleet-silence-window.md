@@ -417,7 +417,7 @@ Commit message: `feat(fleet): the judge applies the freshness window -- a stale 
 
 **Files:**
 - Modify: `src/aramid/fleet.py:617-641` (`readiness_line`), `src/aramid/fleet.py:671-675` (`render_report` header)
-- Test: `tests/unit/test_fleet_judge.py`, `tests/integration/test_fleet_cmd.py:46-60`
+- Test: `tests/unit/test_fleet_judge.py`, `tests/integration/test_fleet_cmd.py:46-60`, and `tests/integration/test_drain_fleet.py:62-64` (found in execution: its end-to-end fixture places rows 10 days apart and runs under the production default, so it becomes the same 20/14/8/2-day active fleet as the unit fixture)
 
 **Interfaces:**
 - Consumes: the verdict keys from Task 2.

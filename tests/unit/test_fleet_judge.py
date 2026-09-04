@@ -268,3 +268,19 @@ def test_no_rows_beats_stale_and_stale_beats_red():
     assert v["verdict"] == "insufficient-data"
     assert v["reasons"] == ["a: dep_audit_ran", "no rows: c"]
     assert v["fleet"]["stale_repos"] == ["a", "b"]
+
+
+def test_the_readiness_line_names_stale_repos_and_the_window():
+    v = fleet.judge(_ready_rows(), REG, DEFAULT, NOW, aramid_version="0.9.0")
+    assert fleet.readiness_line(v) == (
+        "fleet: 1.0 readiness INSUFFICIENT DATA -- 2/2 repos green, streak 0d, versions 0/2; "
+        "stale: a (10.0d), b (10.0d) -- window 7d")
+
+
+def test_a_verdict_written_before_a1_renders_unchanged():
+    v = fleet.judge(_ready_rows(), REG, POLICY, NOW, aramid_version="0.9.0")
+    for repo in v["repos"].values():
+        del repo["stale"], repo["age_days"]
+    del v["fleet"]["stale_repos"], v["policy"]["max_row_age_days"]
+    assert fleet.readiness_line(v) == (
+        "fleet: 1.0 readiness READY -- 2/2 repos green, streak 20d, versions 2/2")
