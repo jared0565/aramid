@@ -559,6 +559,21 @@ def _onboarded(root: Path) -> str:
     return m.group(1).strip()
 
 
+def _stamped_during(action):
+    """Run `action` and return (its result, the set of ISO dates that were
+    'today' at some instant while it ran). Reading `date.today()` AFTER a
+    multi-second action asserts against a moving target: CI run 33819596268
+    started its suite at 23:55Z and crossed midnight mid-run, so cmd_init
+    stamped 2026-09-03 and the assertion, evaluated seconds later, wanted
+    2026-09-04 (windows py3.14, 2026-09-04T00:09Z). Bracketing the action
+    keeps the assertion exact on every day but the one it straddles."""
+    from datetime import date
+    before = date.today()
+    result = action()
+    after = date.today()
+    return result, {before.isoformat(), after.isoformat()}
+
+
 def test_reinit_preserves_the_original_onboarding_date(tmp_path, monkeypatch):
     """`_render_aramid_md` stamps `date.today()`, and ARAMID.md is ALWAYS
     regenerated -- so every later `init` re-run silently overwrote a
@@ -595,13 +610,12 @@ def test_first_init_stamps_today(tmp_path, monkeypatch):
     """The other side: with no ARAMID.md there is no history to preserve, so
     today IS the onboarding date. Without this, 'preserve' could be
     implemented as 'never write a date at all' and still pass above."""
-    from datetime import date
-
     monkeypatch.setattr(doctor, "probe_toolchain", _fake_present)
     r = _repo(tmp_path)
-    assert init.cmd_init(r) == 0
+    rc, today = _stamped_during(lambda: init.cmd_init(r))
+    assert rc == 0
 
-    assert _onboarded(r) == date.today().isoformat()
+    assert _onboarded(r) in today
 
 
 def test_reinit_over_an_unparseable_aramid_md_falls_back_to_today(tmp_path, monkeypatch):
@@ -609,15 +623,14 @@ def test_reinit_over_an_unparseable_aramid_md_falls_back_to_today(tmp_path, monk
     today is the only option, and it must not crash -- the existing
     idempotency test overwrites ARAMID.md with prose for exactly this
     reason."""
-    from datetime import date
-
     monkeypatch.setattr(doctor, "probe_toolchain", _fake_present)
     r = _repo(tmp_path)
     assert init.cmd_init(r) == 0
     (r / "ARAMID.md").write_text("stale hand-written notes\n", encoding="utf-8")
 
-    assert init.cmd_init(r) == 0
-    assert _onboarded(r) == date.today().isoformat()
+    rc, today = _stamped_during(lambda: init.cmd_init(r))
+    assert rc == 0
+    assert _onboarded(r) in today
 
 
 def test_preserving_the_date_changes_nothing_else(tmp_path, monkeypatch):
