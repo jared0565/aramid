@@ -193,6 +193,24 @@ That check reads the installed distribution's `direct_url.json`, not
 `aramid.__file__` — this repo's own suite imports the tree on purpose, so a
 `__file__` check would fire on every legitimate run and be trained away.
 
+### After promoting, push a throwaway annotated tag before telling anyone
+
+The pre-push gate on every checkout runs the wheel that is LIVE, never the
+candidate, so a release's own `vX.Y.Z` tag push (step 5) is certified by the
+PREVIOUS release. 0.12.0 shipped a certification that refused every
+annotated-tag push -- its own tag went out under 0.11.0 and could not have
+caught it; graphite's 1.0.1 tag did, one hour after promotion (interop
+round 193). So, once promoted, rehearse the shape the release just changed
+the rules for, from this checkout:
+
+```
+git tag -a rehearsal-vX.Y.Z -m "rehearsal" && git push origin rehearsal-vX.Y.Z
+git push origin :rehearsal-vX.Y.Z && git tag -d rehearsal-vX.Y.Z
+```
+
+An annotated tag is the object git hands the hook UNPEELED; a branch push
+proves nothing about it. Only then tell the consumers.
+
 ### After promoting, tell the consumers
 
 Their pinned version moved. Say what changed, and say that anything they

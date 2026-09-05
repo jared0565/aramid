@@ -10,6 +10,19 @@ to publish a tag that disagrees with it.
 
 ## [Unreleased]
 
+### Changed
+
+- `aramid drain --help` says that every drain except `--dry-run` ends by
+  recomputing the machine-level readiness verdict, queue or no queue, so
+  `drain --repo .` on an empty queue is how a repo turns green in `status`
+  before the scheduled run (interop round 192 asked whether that was
+  intended; it is). The `[fuzz]` example in the generated ARAMID.md no
+  longer labels `"main", "_run"` as "this repo's additions" -- the file is
+  rendered from a template, not from the repo's config -- and RELEASING.md
+  gains the rehearsal step the 0.12.0 tag-push defect showed was missing:
+  push and delete a throwaway annotated tag right after promoting, since a
+  release's own tag is certified by the previous release's hook.
+
 ### Fixed
 
 - **The pre-push certification refused every annotated-tag push.** git's

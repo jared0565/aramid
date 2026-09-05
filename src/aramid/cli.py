@@ -114,7 +114,10 @@ def build_parser() -> argparse.ArgumentParser:
                      "repo (most-deferred first, then highest score) and run every consumer "
                      "on it, under one drain-wide wall-clock budget checked between items. "
                      "An item left behind on the budget is recorded as deferred in its own "
-                     "repo's ledger and opened first next time."),
+                     "repo's ledger and opened first next time. Every drain except --dry-run, queue or no "
+                     "queue, ends by recomputing the machine-level 1.0 readiness verdict "
+                     "from the rows that exist, so `drain --repo .` on an empty queue is "
+                     "how a repo turns green in `status` before the scheduled run."),
         # Round 177 asked what exit 2 meant because this said nothing.
         epilog=("exit codes: 0 every popped item fully consumed; 2 a consumer degraded or "
                 "raised, or a repo could not be probed (the rest completed); 3 engine "
