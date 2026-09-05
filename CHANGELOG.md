@@ -10,6 +10,23 @@ to publish a tag that disagrees with it.
 
 ## [Unreleased]
 
+### Fixed
+
+- **The pre-push certification refused every annotated-tag push.** git's
+  pre-push stdin carries each ref's OBJECT id -- for an annotated tag the
+  tag object, not the commit it peels to -- and that is also what
+  `send-pack` ships at hook exit. The exit-time re-resolution asked git
+  for `<ref>^{commit}`, so an annotated tag compared unequal to itself and
+  the gate failed with `v1.0.1 moved during the gate: <tag object> ->
+  <commit>; re-run the push` after an otherwise green run (interop round
+  193, graphite-agent, on graphite's 1.0.1 tag; aramid's own v0.12.0 tag
+  went out under the 0.11.0 shim, before the certification existed).
+  Certified refs are now re-resolved UNPEELED (`git rev-parse <ref>`), like
+  with like: a branch still compares commit to commit, an annotated tag
+  compares tag object to tag object, and a tag re-created on the same
+  commit during the gate is still reported moved, because a different tag
+  object is what would ship. `HEAD` at start and exit is still the commit.
+
 ## [0.12.0] — 2026-09-04
 
 ### Added

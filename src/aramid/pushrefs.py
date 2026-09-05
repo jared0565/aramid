@@ -91,13 +91,26 @@ def read_hook_stdin() -> str | None:
         return None
 
 
-def _resolve(root: Path, ref: str) -> str | None:
+def _rev_parse(root: Path, spec: str) -> str | None:
     try:
-        cp = gitutil._run(root, "rev-parse", "--verify", "--quiet", f"{ref}^{{commit}}")
+        cp = gitutil._run(root, "rev-parse", "--verify", "--quiet", spec)
     except Exception:
         return None
     sha = (cp.stdout or "").strip()
     return sha if cp.returncode == 0 and sha else None
+
+
+def _resolve(root: Path, ref: str) -> str | None:
+    """The COMMIT a rev peels to -- right for HEAD, wrong for a pushed ref."""
+    return _rev_parse(root, f"{ref}^{{commit}}")
+
+
+def _resolve_object(root: Path, ref: str) -> str | None:
+    """The object a ref names, UNPEELED: for an annotated tag the tag object,
+    which is what git's pre-push stdin carries and what send-pack ships at
+    exit. Comparing a peeled re-resolution against it read every annotated
+    tag push as "moved" (interop round 193)."""
+    return _rev_parse(root, ref)
 
 
 def head(root: Path) -> str | None:
@@ -112,8 +125,10 @@ def certify(root: Path, refs, hook: bool) -> Certification:
 
 
 def drift(root: Path, cert: Certification) -> list[Moved]:
-    """Every certified ref re-resolved. A ref whose sha differs from the one
-    git handed the hook has moved; one that no longer resolves is reported
+    """Every certified ref re-resolved, unpeeled, like with like: git handed
+    the hook each ref's object id (a tag object for an annotated tag) and
+    ships whatever the ref names at exit. A ref whose object differs from the
+    one git handed the hook has moved; one that no longer resolves is reported
     moved with `after=None` -- fail closed, it is not what was certified.
     With no refs (by hand, no marker) HEAD at start is compared with HEAD
     now, under the name `HEAD`."""
@@ -121,7 +136,7 @@ def drift(root: Path, cert: Certification) -> list[Moved]:
     moved: list[Moved] = []
     if cert.refs:
         for r in cert.refs:
-            now = _resolve(root, r.local_ref)
+            now = _resolve_object(root, r.local_ref)
             if now != r.local_sha:
                 moved.append(Moved(r.local_ref, r.local_sha, now))
         return moved

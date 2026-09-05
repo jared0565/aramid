@@ -117,6 +117,45 @@ def test_a_ref_that_no_longer_resolves_counts_as_moved(tmp_path):
     assert pushrefs.drift(r, cert) == [pushrefs.Moved("refs/heads/gone", sha, None)]
 
 
+def test_an_annotated_tag_is_not_drift_the_tag_object_is_what_git_handed_over(tmp_path):
+    # Interop round 193 (graphite-agent): git's pre-push stdin carries the
+    # ref's OBJECT id -- for an annotated tag that is the tag object, not
+    # the commit it peels to. Re-resolving through ^{commit} peeled one side
+    # only, so every annotated tag push was refused as "moved".
+    r = _repo(tmp_path)
+    _git(r, "tag", "-a", "v1", "-m", "Release v1")
+    tag_obj = _git(r, "rev-parse", "refs/tags/v1")
+    assert tag_obj != _git(r, "rev-parse", "refs/tags/v1^{}")   # really annotated
+    cert = pushrefs.certify(
+        r, [pushrefs.PushRef("refs/tags/v1", tag_obj, "refs/tags/v1", ZERO)], hook=True)
+    assert pushrefs.drift(r, cert) == []
+
+
+def test_a_lightweight_tag_is_not_drift_either(tmp_path):
+    r = _repo(tmp_path)
+    _git(r, "tag", "v1")
+    sha = _git(r, "rev-parse", "refs/tags/v1")
+    assert sha == _git(r, "rev-parse", "HEAD")
+    cert = pushrefs.certify(
+        r, [pushrefs.PushRef("refs/tags/v1", sha, "refs/tags/v1", ZERO)], hook=True)
+    assert pushrefs.drift(r, cert) == []
+
+
+def test_an_annotated_tag_recreated_during_the_gate_is_drift(tmp_path):
+    # Like with like, UNPEELED: what ships at exit is the ref's current
+    # object. A tag re-created on the same commit is a different tag object
+    # (peeling both sides would hide that) and is not what was certified.
+    r = _repo(tmp_path)
+    _git(r, "tag", "-a", "v1", "-m", "Release v1")
+    before = _git(r, "rev-parse", "refs/tags/v1")
+    cert = pushrefs.certify(
+        r, [pushrefs.PushRef("refs/tags/v1", before, "refs/tags/v1", ZERO)], hook=True)
+    _git(r, "tag", "-a", "-f", "v1", "-m", "Release v1, re-tagged")
+    after = _git(r, "rev-parse", "refs/tags/v1")
+    assert after != before and _git(r, "rev-parse", "v1^{}") == _git(r, "rev-parse", "HEAD")
+    assert pushrefs.drift(r, cert) == [pushrefs.Moved("refs/tags/v1", before, after)]
+
+
 # ----------------------------------------------------------------- render ---
 
 def test_render_is_the_line_the_finding_asked_for():

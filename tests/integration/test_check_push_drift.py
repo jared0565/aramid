@@ -108,6 +108,28 @@ def test_no_movement_keeps_the_verdict_and_records_empty_drift(tmp_path, monkeyp
     assert finished["refs_moved"] == [] and finished["head_at_exit"] == sha
 
 
+def test_an_annotated_tag_push_is_certified_not_refused(tmp_path, monkeypatch, capsys):
+    """Interop round 193: `git push origin v1.0.1` (annotated) ran an 11-minute
+    green gate and was refused "moved during the gate: <tag object> ->
+    <commit>". git's stdin line carries the TAG OBJECT id; the exit
+    re-resolution must compare the same thing, unpeeled."""
+    root, sha, calls = _arm(tmp_path, monkeypatch, commit_during_gate=False)
+    _git(root, "tag", "-a", "v1", "-m", "Release v1")
+    tag_obj = _git(root, "rev-parse", "refs/tags/v1")
+    assert tag_obj != sha                      # annotated: not the commit
+    _hook_stdin(monkeypatch, tag_obj, text=f"refs/tags/v1 {tag_obj} refs/tags/v1 {ZERO}\n")
+
+    rc = cmd_check(root, Gate.PRE_PUSH, "range")
+
+    assert rc == 0 and calls == ["ran"]
+    assert "moved during the gate" not in capsys.readouterr().err
+    started = _events(root, EventType.RUN_STARTED)[-1].payload
+    assert started["refs"] == [{"local_ref": "refs/tags/v1", "local_sha": tag_obj,
+                               "remote_ref": "refs/tags/v1", "remote_sha": ZERO}]
+    finished = _events(root, EventType.RUN_FINISHED)[-1].payload
+    assert finished["refs_moved"] == [] and finished["head_at_exit"] == sha
+
+
 def test_empty_ref_list_under_the_marker_skips_the_gate(tmp_path, monkeypatch, capsys):
     """git's "Everything up-to-date": nothing ships, nothing to certify. No
     run row either -- a row with no tools would read as a skip and start a
