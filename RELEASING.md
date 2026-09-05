@@ -205,11 +205,32 @@ the rules for, from this checkout:
 
 ```
 git tag -a rehearsal-vX.Y.Z -m "rehearsal" && git push origin rehearsal-vX.Y.Z
-git push origin :rehearsal-vX.Y.Z && git tag -d rehearsal-vX.Y.Z
+sleep 90   # let the CI run this push spawns check the tag out before it goes
+gh api -X DELETE repos/jared0565/aramid/git/refs/tags/rehearsal-vX.Y.Z && git tag -d rehearsal-vX.Y.Z
 ```
 
 An annotated tag is the object git hands the hook UNPEELED; a branch push
 proves nothing about it. Only then tell the consumers.
+
+Two things the first run of this step (0.13.0, 2026-09-05) taught:
+
+- **Delete the remote tag through the API, not with a deletion push, and
+  not at once.** `aramid.yml` runs on every push, so the tag push starts a
+  CI run on the tagged commit; delete the ref before that run's checkout
+  and it fails with `couldn't find remote ref` -- harmless (`verify-ci`
+  counts any green run on the commit) but a red mark for nothing. A
+  `git push origin :rehearsal-vX.Y.Z` would run another full pre-push gate
+  for a ref that ships nothing; the API call does not.
+- **The release whose hook is being fixed cannot push its own tag through
+  the documented step 5.** Its tag is certified by the live hook, which is
+  the one with the defect. The managed shim launches
+  `python -P -m aramid ...` with the environment inherited, and `-P` keeps
+  `PYTHONPATH` (only `-E`/`-I` strip it), so
+  `PYTHONPATH=F:/Projects/aramid/src git push origin vX.Y.Z` runs the
+  same gate with the CANDIDATE tree certifying its own tag. Rehearse it
+  first with a throwaway annotated tag, and know the limit: the ledger row
+  does not record which aramid ran the gate, so acceptance of a shape the
+  live wheel refuses is the only evidence that the route reached the tree.
 
 ### After promoting, tell the consumers
 

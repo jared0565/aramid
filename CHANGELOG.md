@@ -10,6 +10,15 @@ to publish a tag that disagrees with it.
 
 ## [Unreleased]
 
+### Changed
+
+- RELEASING.md's post-promotion rehearsal step deletes the throwaway tag
+  through the API after a 90 s grace (a deletion push runs a whole gate for
+  a ref that ships nothing, and deleting before the CI checkout leaves a red
+  run), and documents the route a hook-fixing release uses to push its own
+  tag: `PYTHONPATH=<checkout>/src` makes the candidate tree certify it,
+  because the managed shim's `python -P` keeps `PYTHONPATH`.
+
 ## [0.13.0] — 2026-09-05
 
 ### Added
