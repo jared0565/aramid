@@ -156,6 +156,30 @@ def test_an_annotated_tag_recreated_during_the_gate_is_drift(tmp_path):
     assert pushrefs.drift(r, cert) == [pushrefs.Moved("refs/tags/v1", before, after)]
 
 
+# ---------------------------------------------------------------- resolve ---
+
+
+def _fake_git(monkeypatch, returncode, stdout):
+    def run(root, *args):
+        return subprocess.CompletedProcess(["git", *args], returncode, stdout=stdout, stderr="")
+    monkeypatch.setattr(pushrefs.gitutil, "_run", run)
+
+
+def test_rev_parse_is_none_when_git_fails_even_if_it_printed(tmp_path, monkeypatch):
+    # The 06:00Z drain of 2026-09-05 confirmed `and -> or` on this guard
+    # unkilled. Both halves are load-bearing: a failed git that still wrote
+    # to stdout must not certify a sha, or drift compares garbage as a ref.
+    _fake_git(monkeypatch, 128, "deadbeef\n")
+    assert pushrefs._rev_parse(tmp_path, "refs/tags/v1") is None
+
+
+def test_rev_parse_is_none_not_empty_when_git_succeeds_silently(tmp_path, monkeypatch):
+    # The other half: a zero exit with nothing printed is "no object", None,
+    # never the empty string (which `or` would hand back as a sha).
+    _fake_git(monkeypatch, 0, "")
+    assert pushrefs._rev_parse(tmp_path, "HEAD") is None
+
+
 # ----------------------------------------------------------------- render ---
 
 def test_render_is_the_line_the_finding_asked_for():
