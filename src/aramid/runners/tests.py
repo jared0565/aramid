@@ -115,6 +115,7 @@ suite to a SECOND concurrent suite alongside an already-detected Python
 one, never the single-suite case (B1 regression).
 """
 import dataclasses
+import math
 import os
 import re
 import shlex
@@ -300,7 +301,9 @@ def parse_pytest_progress(line: str) -> tuple[int | None, int | None, int] | Non
 
 def format_tests_progress(done: int | None, total: int | None, percent: int,
                           elapsed_s: float) -> str:
-    secs = int(elapsed_s)
+    # A progress line never raises into the gate: a non-finite or negative
+    # elapsed (fuzz reached `int(inf)`, 2026-09-05) reads as 0s.
+    secs = int(elapsed_s) if math.isfinite(elapsed_s) and elapsed_s > 0 else 0
     elapsed = f"{secs // 60}m{secs % 60:02d}s" if secs >= 60 else f"{secs}s"
     if done is not None and total is not None:
         return f"aramid: tests {done}/{total} ({percent}%) {elapsed} elapsed"

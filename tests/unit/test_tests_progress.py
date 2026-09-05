@@ -50,6 +50,15 @@ def test_progress_line_under_a_minute_has_no_minutes():
         "aramid: tests 69/151 (45%) 7s elapsed"
 
 
+def test_a_non_finite_or_negative_elapsed_reads_as_zero_not_a_crash():
+    # The 15:00Z drain's fuzz pass (2026-09-05) reached `int(inf)`:
+    # OverflowError out of a progress line. A monotonic clock never gives
+    # inf, but a progress line must never raise into the gate either way.
+    for bad in (float("inf"), float("-inf"), float("nan"), -3.0):
+        assert tests_runner.format_tests_progress(1, 2, 50, bad) == \
+            "aramid: tests 1/2 (50%) 0s elapsed", bad
+
+
 def test_progress_line_at_exactly_one_minute_switches_to_minutes():
     assert tests_runner.format_tests_progress(69, 151, 45, 60.0) == \
         "aramid: tests 69/151 (45%) 1m00s elapsed"

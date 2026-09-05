@@ -2718,3 +2718,85 @@ def test_run_gate_hands_every_runner_a_progress_sink(tmp_path, monkeypatch):
     pipeline.run_gate(root, Gate.PRE_COMMIT, "staged", cfg, ledger, run_id="run-prog")
     assert seen and all(isinstance(s, StderrReporter) for s in seen)
     ledger.close()
+
+
+# ------------------------------------ run_gate ctx pins (15:00Z drain, 09-05) ----
+# Three mutants in run_gate's RunContext construction survived `pytest -q
+# tests/unit` the first time the drain mutated the function (it was touched
+# for the progress sink). Each pin below was proven red with the mutation
+# hand-applied (scratchpad prove_kills.py).
+
+def _ctx_seen_by_gitleaks(monkeypatch):
+    seen = []
+
+    def run(ctx):
+        seen.append(ctx)
+        return RunnerResult("gitleaks", ToolState.OK, raw="[]")
+
+    monkeypatch.setitem(pipeline.RUNNERS, "gitleaks",
+                        SimpleNamespace(run=run, parse=lambda r, c: []))
+    return seen
+
+
+def test_all_mode_and_only_all_mode_scans_the_full_tree_fresh(tmp_path, monkeypatch):
+    # `mode == "all"` -> `!=` survived: nothing pinned the mapping from the
+    # mode to the two flags gitleaks and deps read (the 0.2.0 wheel scanned
+    # NOTHING under --all because of exactly this field).
+    root = _repo(tmp_path)
+    cfg = _cfg(root, tmp_path, monkeypatch)
+    ledger = _ledger(tmp_path)
+    seen = _ctx_seen_by_gitleaks(monkeypatch)
+    pipeline.run_gate(root, Gate.PRE_COMMIT, "all", cfg, ledger, run_id="run-all")
+    pipeline.run_gate(root, Gate.PRE_COMMIT, "staged", cfg, ledger, run_id="run-staged")
+    assert [(c.full_tree, c.force_refresh) for c in seen] == [(True, True), (False, False)]
+    ledger.close()
+
+
+def test_deps_cargo_audit_warnings_reaches_the_ctx_and_a_missing_section_reads_false(
+        tmp_path, monkeypatch):
+    # `(cfg.deps or {})` -> `and` survived: no unit test set the key.
+    root = _repo(tmp_path)
+    cfg = _cfg(root, tmp_path, monkeypatch)
+    ledger = _ledger(tmp_path)
+    seen = _ctx_seen_by_gitleaks(monkeypatch)
+    monkeypatch.setattr(cfg, "deps", {"cargo_audit_warnings": True})
+    pipeline.run_gate(root, Gate.PRE_COMMIT, "staged", cfg, ledger, run_id="run-deps-on")
+    monkeypatch.setattr(cfg, "deps", None)
+    pipeline.run_gate(root, Gate.PRE_COMMIT, "staged", cfg, ledger, run_id="run-deps-none")
+    assert [c.cargo_audit_warnings for c in seen] == [True, False]
+    ledger.close()
+
+
+def test_range_mode_with_an_upstream_hands_the_score_gate_the_push_delta(
+        tmp_path, monkeypatch):
+    # `mode == "range" and rng` -> `!=`: the sibling test above covers the
+    # no-upstream half; this is the half with a REAL upstream, where the
+    # 2b gate must receive the delta and not None.
+    root = _repo(tmp_path)
+    bare = tmp_path / "origin.git"
+    _git(root, "clone", "-q", "--bare", str(root), str(bare))
+    _git(root, "remote", "add", "origin", str(bare))
+    _git(root, "fetch", "-q", "origin")
+    _git(root, "branch", "-q", "-u", "origin/main")
+    assert gitutil.resolve_range(root) == "@{u}..HEAD"
+    (root / "b.py").write_text("x = 2\n", encoding="utf-8")
+    _git(root, "add", "b.py")
+    _git(root, "commit", "-q", "-m", "delta")
+
+    cfg = _cfg(root, tmp_path, monkeypatch)
+    ledger = _ledger(tmp_path)
+    monkeypatch.setitem(pipeline.GATE_RUNNER_KEYS, Gate.PRE_PUSH, [])
+    handed = []
+
+    def fake_score_gate(cfg_, ledger_, gate_, changed_files):
+        handed.append(changed_files)
+        return []
+
+    monkeypatch.setattr(pipeline.mutation_score_gate, "mutation_score_gate_findings",
+                        fake_score_gate)
+    pipeline.run_gate(root, Gate.PRE_PUSH, "range", cfg, ledger, run_id="run-range-up")
+    pipeline.run_gate(root, Gate.PRE_PUSH, "staged", cfg, ledger, run_id="run-staged-up")
+    assert len(handed) == 2
+    assert handed[0] is not None and "b.py" in set(handed[0])
+    assert handed[1] is None
+    ledger.close()
