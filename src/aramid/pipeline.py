@@ -30,6 +30,7 @@ from typing import Callable
 from aramid import config as config_mod
 from aramid import (gitutil, mutation_gate, mutation_score_gate, policy, red_proof, redact,
                     tdd, tests_gate, toolpath)
+from aramid import progress as progress_mod
 from aramid import pushrefs
 from aramid import review as review_mod
 from aramid.detectors import (detect_package_manager, detect_stacks, detect_tests,
@@ -939,7 +940,13 @@ def run_gate(root: Path, gate: Gate, mode: str, cfg: config_mod.Config, ledger: 
                       gate_deadline=gate_deadline,
                       detected_tests=detected_tests,
                       cargo_audit_warnings=(cfg.deps or {}).get(
-                          "cargo_audit_warnings", False))
+                          "cargo_audit_warnings", False),
+                      # The one place a sink is provided: a runner that can
+                      # read progress off its child (tests) reports through
+                      # it to stderr, which git relays live to the terminal a
+                      # push was typed in. Consumers build their own ctx and
+                      # get the default None -- the drain stays silent.
+                      progress=progress_mod.StderrReporter())
     selected = _select_runners(gate, ctx)
 
     # 3. run concurrently under the gate's wall-clock budget.

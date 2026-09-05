@@ -10,6 +10,24 @@ to publish a tag that disagrees with it.
 
 ## [Unreleased]
 
+### Added
+
+- **The gate reports test-suite progress while the suite runs.** A push on
+  a repo whose suite takes minutes used to show nothing until the hook
+  exited (this repo: ~19 min of silence). The tests runner now taps the
+  suite's stdout as it arrives and, for a pytest-shaped command, asks
+  pytest for `console_output_style=count` and turns each `[ N/M]` marker
+  into one line on stderr -- `aramid: tests 1234/2394 (52%) 9m12s elapsed`
+  -- which git relays live to the terminal the push was typed in. On a
+  terminal the line overwrites itself in place; in a log or CI step it is
+  written at most every 30 s, and the last state always lands. A
+  configured `[tests].command` that already sets `console_output_style`
+  is left alone, and a non-pytest suite (npm, cargo, go) prints nothing.
+  Under the hood `run_subprocess` gained an opt-in `on_stdout_line` tap
+  (default off: the plain path is unchanged) and `RunContext` a
+  `progress` sink, provided only by `run_gate` -- the drain's consumers
+  build their own context and stay silent.
+
 ### Changed
 
 - `aramid drain --help` says that every drain except `--dry-run` ends by

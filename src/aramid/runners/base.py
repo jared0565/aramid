@@ -1,11 +1,12 @@
 import os
 import subprocess
 import sys
+import threading
 import time
 from dataclasses import dataclass, field
 from enum import StrEnum
 from pathlib import Path
-from typing import Protocol
+from typing import Callable, Protocol
 
 from aramid import toolpath
 
@@ -212,6 +213,14 @@ class RunContext:
       `parse()` takes (result, ctx) and never sees a Config. Additive field:
       default False keeps every existing construction site valid AND keeps
       the feature off for every repo that has not asked for it.
+    progress: a sink `(text: str) -> None` a long runner may hand short
+      status lines to while its child is still running (today: the tests
+      runner, reading pytest's `[ N/M]` marker off a tapped stdout). run_gate
+      provides `aramid.progress.StderrReporter`; a sink with a callable
+      `flush()` gets it called when the runner is done. Additive field:
+      default None means no tap, no extra argv, no extra output -- the
+      launcher is called exactly as before, which is what every RunContext
+      built outside run_gate (consumers, tests) gets.
     """
     root: Path
     files: list[str] = field(default_factory=list)
@@ -227,6 +236,7 @@ class RunContext:
     gate_deadline: float | None = None
     detected_tests: set[str] | None = None
     cargo_audit_warnings: bool = False
+    progress: Callable[[str], None] | None = None
 
 _WIN = sys.platform == "win32"
 _POST_KILL_DRAIN_S = 5.0   # cap on the post-_kill_tree reap wait (test seam)
@@ -285,7 +295,48 @@ def worktree_import_env(wt: Path) -> dict[str, str]:
     return {"PYTHONPATH": os.pathsep.join(parts)}
 
 
-def run_subprocess(argv, cwd: Path, timeout_s: float, env=None) -> RunnerResult:
+def _tapped_communicate(proc: subprocess.Popen, timeout_s: float, on_stdout_line):
+    """`proc.communicate(timeout=...)` with a tap on stdout.
+
+    One daemon reader per pipe (a single-threaded read of stdout would let
+    a chatty stderr fill its OS buffer and wedge the child). Each stdout
+    line reaches `on_stdout_line` as it is written, newline stripped; the
+    first time the tap raises it is switched off for the rest of the run,
+    with one stderr line saying so -- a progress reporter is decoration
+    and must never fail a gate, nor spam one line per test. Both
+    buffers are returned whole, so the result is what `communicate` gave.
+    Raises `subprocess.TimeoutExpired` exactly where `communicate` would;
+    the readers are daemon threads, so a killed child cannot pin the
+    interpreter at exit (runners/base.py `_kill_tree` doctrine)."""
+    chunks: dict[str, list[str]] = {"out": [], "err": []}
+
+    def pump(name, stream, tap):
+        for line in iter(stream.readline, ""):
+            chunks[name].append(line)
+            if tap is not None:
+                try:
+                    tap(line.rstrip("\r\n"))
+                except Exception as exc:  # noqa: BLE001 -- decoration never fails the run
+                    print(f"aramid: progress reporting stopped: {exc!r}", file=sys.stderr)
+                    tap = None
+        stream.close()
+
+    readers = [threading.Thread(target=pump, args=("out", proc.stdout, on_stdout_line), daemon=True),
+               threading.Thread(target=pump, args=("err", proc.stderr, None), daemon=True)]
+    for t in readers:
+        t.start()
+    proc.wait(timeout=timeout_s)        # TimeoutExpired propagates to the caller
+    for t in readers:
+        t.join(timeout=_POST_KILL_DRAIN_S)
+    return "".join(chunks["out"]), "".join(chunks["err"])
+
+
+def run_subprocess(argv, cwd: Path, timeout_s: float, env=None, *,
+                   on_stdout_line=None) -> RunnerResult:
+    """Launch `argv` and capture it. `on_stdout_line`, when given, is called
+    with every stdout line AS IT ARRIVES (the gate's test suite ran ~19 min
+    with nothing on screen because output was only read at exit); without
+    it this is the plain `communicate` path, unchanged."""
     tool = Path(argv[0]).name
     # Resolve through toolpath, NOT bare `shutil.which`: aramid downloads some
     # binaries itself (gitleaks -> ~/.aramid/tools) and pip can place console
@@ -312,11 +363,19 @@ def run_subprocess(argv, cwd: Path, timeout_s: float, env=None) -> RunnerResult:
                             encoding="utf-8", errors="replace",
                             env={**os.environ, **(env or {})}, **kwargs)
     try:
-        out, err = proc.communicate(timeout=timeout_s)
+        if on_stdout_line is None:
+            out, err = proc.communicate(timeout=timeout_s)
+        else:
+            out, err = _tapped_communicate(proc, timeout_s, on_stdout_line)
     except subprocess.TimeoutExpired:
         _kill_tree(proc)
         try:
-            proc.communicate(timeout=_POST_KILL_DRAIN_S)
+            if on_stdout_line is None:
+                proc.communicate(timeout=_POST_KILL_DRAIN_S)
+            else:
+                # The reader threads own the pipes; `communicate` here would
+                # race them for a stream one of them may already have closed.
+                proc.wait(timeout=_POST_KILL_DRAIN_S)
         except subprocess.TimeoutExpired:
             proc.kill()
         # The result says what happened, because nothing else can: a killed

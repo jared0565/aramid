@@ -116,6 +116,7 @@ one, never the single-suite case (B1 regression).
 """
 import dataclasses
 import os
+import re
 import shlex
 import sys
 import time
@@ -269,6 +270,85 @@ def _argv(command: str | list, root: Path | None = None) -> list[str]:
     return argv
 
 
+# --- progress: what the suite is doing while the gate waits on it ----------
+# The whole-tree suite takes ~19 min here and the gate showed nothing until
+# it ended (2026-09-05). With a `progress` sink on the RunContext (run_gate
+# provides `aramid.progress.StderrReporter`), a pytest-shaped command is
+# asked for `console_output_style=count`, its stdout is tapped as it
+# arrives, and every `[ N/M]` (or `[ P%]`) marker becomes one short line
+# through the sink. No sink: no tap, no argv change, no extra output.
+
+_COUNT_MARKER = re.compile(r"\[\s*(\d+)/(\d+)\]\s*$")
+_PERCENT_MARKER = re.compile(r"\[\s*(\d+)%\]\s*$")
+_STYLE_KEY = "console_output_style"
+
+
+def parse_pytest_progress(line: str) -> tuple[int | None, int | None, int] | None:
+    """`(done, total, percent)` from a pytest progress marker at the END of
+    a line, or None. Count style gives all three; percent style (a repo
+    that already set its own style) gives only the percent. A marker that
+    is not at the line end -- e.g. inside a FAILED test id -- is not one."""
+    m = _COUNT_MARKER.search(line)
+    if m:
+        done, total = int(m.group(1)), int(m.group(2))
+        return done, total, (done * 100 // total if total else 0)
+    m = _PERCENT_MARKER.search(line)
+    if m:
+        return None, None, int(m.group(1))
+    return None
+
+
+def format_tests_progress(done: int | None, total: int | None, percent: int,
+                          elapsed_s: float) -> str:
+    secs = int(elapsed_s)
+    elapsed = f"{secs // 60}m{secs % 60:02d}s" if secs >= 60 else f"{secs}s"
+    if done is not None and total is not None:
+        return f"aramid: tests {done}/{total} ({percent}%) {elapsed} elapsed"
+    return f"aramid: tests {percent}% {elapsed} elapsed"
+
+
+def _is_pytest_argv(argv) -> bool:
+    return any(Path(a).stem == "pytest" for a in argv)
+
+
+def with_count_style(argv):
+    """Append `-o console_output_style=count` to a pytest-shaped argv unless
+    the command already sets the style (`-o key=v` or `-okey=v`). Anything
+    that is not pytest is returned as given."""
+    argv = list(argv)
+    if not _is_pytest_argv(argv):
+        return argv
+    for i, a in enumerate(argv):
+        if a == "-o" and i + 1 < len(argv) and argv[i + 1].startswith(_STYLE_KEY + "="):
+            return argv
+        if a.startswith("-o" + _STYLE_KEY + "="):
+            return argv
+    return argv + ["-o", _STYLE_KEY + "=count"]
+
+
+def _run_suite(argv, ctx, timeout_s: float) -> RunnerResult:
+    """`run_subprocess` for a test suite: tapped for progress when the ctx
+    carries a sink and the command is pytest, plain otherwise -- the plain
+    call is byte-for-byte what it was, which `test_tests_progress` pins."""
+    sink = getattr(ctx, "progress", None)
+    if sink is None or not _is_pytest_argv(argv):
+        return run_subprocess(argv, ctx.root, timeout_s)
+    started = time.monotonic()
+
+    def tap(line: str) -> None:
+        parsed = parse_pytest_progress(line)
+        if parsed is not None:
+            sink(format_tests_progress(*parsed, time.monotonic() - started))
+
+    sink("aramid: tests collecting")
+    try:
+        return run_subprocess(with_count_style(argv), ctx.root, timeout_s, on_stdout_line=tap)
+    finally:
+        flush = getattr(sink, "flush", None)
+        if callable(flush):
+            flush()
+
+
 def run_custom(ctx, command) -> RunnerResult:
     argv = _argv(command, ctx.root)
     if not argv:
@@ -277,12 +357,12 @@ def run_custom(ctx, command) -> RunnerResult:
         # than resolving to "no findings" -- a gate cannot fall silent just
         # because its own config is malformed.
         return RunnerResult("tests", ToolState.MISSING)
-    return run_subprocess(argv, ctx.root, _timeout(ctx))
+    return _run_suite(argv, ctx, _timeout(ctx))
 
 
 def run_pytest(ctx, timeout_s: float | None = None) -> RunnerResult:
-    return run_subprocess(["pytest", "-q"], ctx.root,
-                           timeout_s if timeout_s is not None else _timeout(ctx))
+    return _run_suite(["pytest", "-q"], ctx,
+                      timeout_s if timeout_s is not None else _timeout(ctx))
 
 
 def run_npm_test(ctx, timeout_s: float | None = None) -> RunnerResult:

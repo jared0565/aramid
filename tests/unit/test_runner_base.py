@@ -146,3 +146,70 @@ def test_timeout_result_says_what_happened(tmp_path):
     assert r.state is ToolState.TIMEOUT
     assert "timed out after 0.5 s" in r.stderr, r.stderr
     assert "killed" in r.stderr, r.stderr
+
+
+# ------------------------------------------------ on_stdout_line streaming ----
+# The gate ran the test suite for ~19 min with nothing on screen, because the
+# launcher pipes the child and only reads it at exit. `on_stdout_line` is an
+# OPT-IN tap: with it, every stdout line reaches the callback as it is
+# written; without it, nothing about the launcher changes.
+
+_THREE_LINES = "import sys\nfor i in range(3):\n    print('line', i); sys.stdout.flush()\n"
+
+
+def test_on_stdout_line_sees_every_line_in_order_and_raw_is_still_complete(tmp_path):
+    seen = []
+    r = run_subprocess([sys.executable, "-c", _THREE_LINES], tmp_path, 10,
+                       on_stdout_line=seen.append)
+    assert seen == ["line 0", "line 1", "line 2"]
+    assert r.state is ToolState.OK and r.returncode == 0
+    assert r.raw.splitlines() == ["line 0", "line 1", "line 2"]
+
+
+def test_on_stdout_line_arrives_before_the_child_exits(tmp_path):
+    # Streaming means the tap fires while the child is still alive -- a
+    # callback that only ran at exit would satisfy the ordering test above.
+    code = ("import sys, time\nprint('early'); sys.stdout.flush()\n"
+            "time.sleep(1.5)\nprint('late')\n")
+    stamps = []
+    start = time.monotonic()
+    run_subprocess([sys.executable, "-c", code], tmp_path, 10,
+                   on_stdout_line=lambda line: stamps.append((line, time.monotonic() - start)))
+    assert [s[0] for s in stamps] == ["early", "late"]
+    assert stamps[0][1] < 1.0, stamps
+
+
+def test_on_stdout_line_still_captures_a_large_stderr_without_deadlock(tmp_path):
+    # Two pipes, one reader per pipe: a child that fills stderr past the OS
+    # buffer while stdout is being tapped must still finish.
+    code = ("import sys\nsys.stderr.write('e' * 300000); sys.stderr.flush()\n"
+            "print('done')\n")
+    seen = []
+    r = run_subprocess([sys.executable, "-c", code], tmp_path, 20, on_stdout_line=seen.append)
+    assert r.state is ToolState.OK and seen == ["done"]
+    assert len(r.stderr) == 300000
+
+
+def test_on_stdout_line_timeout_still_kills(tmp_path):
+    code = "import sys, time\nprint('tick'); sys.stdout.flush()\ntime.sleep(30)\n"
+    seen = []
+    r = run_subprocess([sys.executable, "-c", code], tmp_path, 0.5, on_stdout_line=seen.append)
+    assert r.state is ToolState.TIMEOUT
+    assert seen == ["tick"]
+    assert "timed out after 0.5 s" in r.stderr
+
+
+def test_a_raising_tap_is_switched_off_and_never_fails_the_run(tmp_path, capsys):
+    # A progress reporter is decoration: it must never turn a green suite
+    # red, and a broken one must not be retried once per test line either.
+    calls = []
+
+    def boom(line):
+        calls.append(line)
+        raise RuntimeError("reporter bug")
+    r = run_subprocess([sys.executable, "-c", _THREE_LINES], tmp_path, 10, on_stdout_line=boom)
+    assert r.state is ToolState.OK and r.returncode == 0
+    assert r.raw.splitlines() == ["line 0", "line 1", "line 2"]
+    assert calls == ["line 0"]
+    assert capsys.readouterr().err == \
+        "aramid: progress reporting stopped: RuntimeError('reporter bug')\n"

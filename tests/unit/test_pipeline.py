@@ -199,7 +199,7 @@ def test_accept_degraded_bypass_survives_single_suite_missing_tool_binary(tmp_pa
 
     monkeypatch.setattr(
         tests_runner_mod, "run_subprocess",
-        lambda argv, cwd, timeout_s, env=None: RunnerResult(tool="pytest", state=ToolState.MISSING))
+        lambda argv, cwd, timeout_s, env=None, **kw: RunnerResult(tool="pytest", state=ToolState.MISSING))
     monkeypatch.setitem(pipeline.GATE_RUNNER_KEYS, Gate.PRE_PUSH, ["tests"])
 
     result = pipeline.run_gate(root, Gate.PRE_PUSH, "range", cfg, ledger,
@@ -248,7 +248,7 @@ def test_dual_stack_missing_sub_blocks_and_accept_degraded_bypasses(tmp_path, mo
     cfg = _cfg(root, tmp_path, monkeypatch)
     monkeypatch.setitem(pipeline.GATE_RUNNER_KEYS, Gate.PRE_PUSH, ["tests"])
 
-    def fake_run_subprocess(argv, cwd, timeout_s, env=None):
+    def fake_run_subprocess(argv, cwd, timeout_s, env=None, **kw):
         if argv[0] == "pytest":
             return RunnerResult(tool="pytest", state=ToolState.OK, returncode=0)
         return RunnerResult(tool="npm", state=ToolState.MISSING)
@@ -850,7 +850,7 @@ def test_detect_tests_walks_the_filesystem_only_once_per_gate_run(tmp_path, monk
     monkeypatch.setattr(tests_runner_mod, "detect_tests", counting)
     monkeypatch.setattr(
         tests_runner_mod, "run_subprocess",
-        lambda argv, cwd, timeout_s, env=None: RunnerResult(
+        lambda argv, cwd, timeout_s, env=None, **kw: RunnerResult(
             tool="pytest", state=ToolState.OK, returncode=0))
     monkeypatch.setitem(pipeline.GATE_RUNNER_KEYS, Gate.PRE_PUSH, ["tests"])
 
@@ -1501,7 +1501,7 @@ def test_dual_suite_deadline_shares_one_origin_with_the_real_executor_wait(
     monkeypatch.setattr(tests_runner_mod, "_detected", fake_detected)
     monkeypatch.setitem(pipeline.GATE_RUNNER_KEYS, Gate.PRE_PUSH, ["tests"])
 
-    def fake_run_subprocess(argv, cwd, timeout_s, env=None):
+    def fake_run_subprocess(argv, cwd, timeout_s, env=None, **kw):
         needed = 0.05 if argv[0] == "pytest" else 2.0
         if timeout_s < needed:
             time.sleep(max(timeout_s, 0))
@@ -2693,4 +2693,28 @@ def test_a_degraded_tool_records_why_on_every_surface(tmp_path, monkeypatch):
     pipeline.run_gate(root, Gate.PRE_PUSH, "range", cfg, ledger, run_id="run-ok")
     finished = [e for e in ledger.events() if e.type is EventType.RUN_FINISHED][-1]
     assert finished.payload["degraded"] == {}
+    ledger.close()
+
+
+# ------------------------------------------------- progress sink on ctx ----
+
+def test_run_gate_hands_every_runner_a_progress_sink(tmp_path, monkeypatch):
+    """The tests runner reports `aramid: tests N/M` while the suite runs
+    ONLY when the ctx carries a sink (runners/tests.py `_run_suite`), and
+    run_gate is the one place that provides it. A RunContext built anywhere
+    else keeps the default None and stays silent."""
+    from aramid.progress import StderrReporter
+    root = _repo(tmp_path)
+    cfg = _cfg(root, tmp_path, monkeypatch)
+    ledger = _ledger(tmp_path)
+    seen = []
+
+    def run(ctx):
+        seen.append(ctx.progress)
+        return RunnerResult("gitleaks", ToolState.OK, raw="[]")
+
+    monkeypatch.setitem(pipeline.RUNNERS, "gitleaks",
+                        SimpleNamespace(run=run, parse=lambda r, c: []))
+    pipeline.run_gate(root, Gate.PRE_COMMIT, "staged", cfg, ledger, run_id="run-prog")
+    assert seen and all(isinstance(s, StderrReporter) for s in seen)
     ledger.close()
