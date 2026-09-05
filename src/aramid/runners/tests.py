@@ -308,7 +308,14 @@ def format_tests_progress(done: int | None, total: int | None, percent: int,
 
 
 def _is_pytest_argv(argv) -> bool:
-    return any(Path(a).stem == "pytest" for a in argv)
+    """`pytest`, `python -m pytest`, `/venv/bin/pytest`, `C:\\...\\pytest.exe`
+    -- judged on the last path segment under EITHER separator, because a
+    `[tests].command` is written for the repo's host and this function is
+    unit-tested on every CI leg (the ubuntu legs read a backslash as an
+    ordinary character and called a Windows pytest "not pytest")."""
+    def last_segment(a: str) -> str:
+        return re.split(r"[\\/]", a)[-1]
+    return any(Path(last_segment(a)).stem == "pytest" for a in argv)
 
 
 def with_count_style(argv):
