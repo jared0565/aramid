@@ -10,6 +10,8 @@ to publish a tag that disagrees with it.
 
 ## [Unreleased]
 
+## [0.13.0] — 2026-09-05
+
 ### Added
 
 - **The gate reports test-suite progress while the suite runs.** A push on
@@ -3751,7 +3753,8 @@ Stated plainly because each one changes how you should deploy this:
 - **PyPI publishing is not set up.** Install from a GitHub Release artifact or
   from git; `pip install aramid` does not work.
 
-[Unreleased]: https://github.com/jared0565/aramid/compare/v0.12.0...HEAD
+[Unreleased]: https://github.com/jared0565/aramid/compare/v0.13.0...HEAD
+[0.13.0]: https://github.com/jared0565/aramid/releases/tag/v0.13.0
 [0.12.0]: https://github.com/jared0565/aramid/releases/tag/v0.12.0
 [0.11.0]: https://github.com/jared0565/aramid/releases/tag/v0.11.0
 [0.10.0]: https://github.com/jared0565/aramid/releases/tag/v0.10.0
