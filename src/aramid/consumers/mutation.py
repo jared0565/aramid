@@ -469,7 +469,7 @@ def consume(item, ctx: DrainContext) -> ConsumerResult:
     started = time.monotonic()
     stats = {"generated": 0, "tested": 0, "killed_s1": 0, "killed_s2": 0,
              "survived": 0, "confirmed": 0, "timeouts": 0, "errors": 0,
-             "unconfirmed_kills": 0, "truncated": False,
+             "unconfirmed_kills": 0, "capped_kills": 0, "truncated": False,
              "retest_candidates": len(retests), "retested": 0,
              "retest_killed": 0, "retest_truncated": False}
     scores: dict[str, dict] = {}
@@ -650,7 +650,15 @@ def consume(item, ctx: DrainContext) -> ConsumerResult:
                         # and no yield (interop round 188).
                         if fp in examined:
                             if confirms_used >= confirm_cap:
+                                # Dropped at the cap: still a stage-1 kill
+                                # for the score, never a claim. Counted on
+                                # its own because `truncated` is shared
+                                # with the budget and the survivor-side
+                                # cap, and this is the one drop that leaves
+                                # a pending_retest finding unclaimed with
+                                # `confirm_cap` as the knob that frees it.
                                 stats["truncated"] = True
+                                stats["capped_kills"] += 1
                                 continue
                             confirms_used += 1
                             s2 = run_subprocess(full_argv, wt, full_timeout,
@@ -787,6 +795,11 @@ def consume(item, ctx: DrainContext) -> ConsumerResult:
         # signal that `retest_cap` or the budget cut the hygiene pass short.
         note += (f"; re-tested {stats['retested']} of {len(retests)} open "
                  f"survivor(s), {stats['retest_killed']} killed")
+    if stats["capped_kills"]:
+        # Names the knob: the kill is real and the finding stays open only
+        # because the cap was spent before the confirm could run.
+        note += (f"; {stats['capped_kills']} kill(s) of a recorded survivor "
+                 f"unconfirmed at confirm_cap={confirm_cap}")
     extra = dict(stats)
     extra["mutation_scores"] = _finalize_scores(scores)
     # How long the configured suite actually took, measured. Recorded so an

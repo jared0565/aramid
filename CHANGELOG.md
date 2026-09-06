@@ -10,6 +10,19 @@ to publish a tag that disagrees with it.
 
 ## [Unreleased]
 
+### Added
+
+- **A stage-1 kill dropped at the confirm cap is counted.** A stage-1 kill
+  of a recorded survivor needs a full-suite confirmation before it can be
+  claimed as a repair; when `confirm_cap` was already spent, the kill was
+  rightly left unclaimed but its only trace was `truncated`, a flag shared
+  with the wall budget and the survivor-side cap. A `pending_retest`
+  finding then sat unclaimed with nothing saying the cap held it rather
+  than the suite. The mutation record now carries `capped_kills`, and the
+  note ends with `; N kill(s) of a recorded survivor unconfirmed at
+  confirm_cap=N` so the knob that frees it is named. The score is
+  unchanged: the kill still counts as `killed_s1`.
+
 ## [0.14.0] — 2026-09-06
 
 ### Added

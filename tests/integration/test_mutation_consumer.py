@@ -1224,6 +1224,61 @@ def test_a_kill_the_full_suite_does_not_reproduce_claims_no_repair(
         "an unconfirmed stage-1 kill was written to the ledger as a repair")
 
 
+def _set_confirm_cap(r, cap: int) -> None:
+    toml = r / "aramid.toml"
+    txt = toml.read_text(encoding="utf-8")
+    assert "confirm_cap = 3\n" in txt
+    toml.write_text(txt.replace("confirm_cap = 3\n", f"confirm_cap = {cap}\n"),
+                    encoding="utf-8")
+
+
+def test_a_stage1_kill_dropped_at_the_confirm_cap_is_counted(tmp_path, monkeypatch):
+    """A stage-1 kill of a RECORDED survivor that finds the confirm cap already
+    spent is rightly not claimed -- but until now its only trace was
+    `truncated`, a flag it shares with the wall budget and the survivor-side
+    cap. A pending_retest finding then sits unclaimed with nothing saying the
+    CAP held it, not the suite. Count it on its own."""
+    r, base, head = _repo(tmp_path, WEAK_TEST)
+    fp = _a_killed_fp(r, base, head, monkeypatch, tmp_path)
+    _seed_open(r, fp)
+    _set_confirm_cap(r, 0)
+    _script_runs(monkeypatch, targeted_rc=1, full_rc=1)
+
+    res = _consume(r, base, head, monkeypatch, tmp_path)
+
+    assert not (res.repaired and fp in set(res.repaired.ids)), "control: unclaimed"
+    assert res.extra["truncated"] is True, "control: the shared flag still fires"
+    assert res.extra["capped_kills"] == 1
+
+
+def test_a_capped_kill_names_the_knob_in_the_note(tmp_path, monkeypatch):
+    r, base, head = _repo(tmp_path, WEAK_TEST)
+    fp = _a_killed_fp(r, base, head, monkeypatch, tmp_path)
+    _seed_open(r, fp)
+    _set_confirm_cap(r, 0)
+    _script_runs(monkeypatch, targeted_rc=1, full_rc=1)
+
+    res = _consume(r, base, head, monkeypatch, tmp_path)
+
+    assert res.note.endswith(
+        "; 1 kill(s) of a recorded survivor unconfirmed at confirm_cap=0"), res.note
+
+
+def test_a_confirmed_kill_is_not_a_capped_kill(tmp_path, monkeypatch):
+    """Control: the same kill with cap to spare is confirmed and claimed, the
+    counter reads 0 and the note carries no cap suffix."""
+    r, base, head = _repo(tmp_path, WEAK_TEST)
+    fp = _a_killed_fp(r, base, head, monkeypatch, tmp_path)
+    _seed_open(r, fp)
+    _script_runs(monkeypatch, targeted_rc=1, full_rc=1)
+
+    res = _consume(r, base, head, monkeypatch, tmp_path)
+
+    assert res.repaired is not None and fp in set(res.repaired.ids)
+    assert res.extra["capped_kills"] == 0
+    assert "confirm_cap" not in res.note
+
+
 # --- mutation's baseline is not the gate's suite ----------------------------
 #
 # `[tests].command` answers "what does the gate run before letting a push
