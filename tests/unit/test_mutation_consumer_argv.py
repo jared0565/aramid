@@ -83,6 +83,21 @@ def test_stage1_direct_hits_stay_inside_the_configured_suite_scope(tmp_path):
     assert mut_consumer._stage1_argv(tmp_path, "other.py", cfg, tmp_path)[-2:] == ["-k", "other"]
 
 
+def test_stage1_keyword_fallback_stays_inside_the_configured_suite_scope(tmp_path):
+    # The 2026-09-06 22:00Z drain: `commands/drain.py` has no `test_drain*.py`
+    # under tests/unit, so stage 1 fell back to `-k drain` -- with NO path,
+    # i.e. over the whole tree: 54 tests, 39 of them integration drains,
+    # over 170 s against the 120 s mutant budget. All five mutants timed
+    # out; none was graded, and none ever would be. The fallback takes the
+    # scope the direct hits already take -- the configured suite's path
+    # arguments, the suite stage 2 confirms against: 15 tests, 4 s.
+    _touch(tmp_path / "tests" / "unit" / "test_other.py")
+    _touch(tmp_path / "tests" / "integration" / "test_drain.py")   # out of scope
+    cfg = SimpleNamespace(mutation={"test_command": ["pytest", "-q", "tests/unit"]})
+    argv = mut_consumer._stage1_argv(tmp_path, "commands/drain.py", cfg, tmp_path)
+    assert argv == [sys.executable, "-m", "pytest", "-q", "tests/unit", "-k", "drain"]
+
+
 def test_stage1_scope_reads_a_path_that_directly_follows_the_command(tmp_path):
     # The 2026-09-06 06:00Z drain's survivor: `_full_argv(...)[1:]` -> `[2:]`
     # was invisible while every pinned command had a flag at index 1. A

@@ -236,18 +236,24 @@ def _stage1_argv(wt: Path, rel: str, cfg=None, root: Path | None = None) -> list
     every mutant a TIMEOUT, none a finding, for as long as the file existed.
     -k matches case-insensitively, so the comparison folds case.
 
-    Direct hits are kept inside the configured suite's scope (the path
-    arguments of `_full_argv`, the scope stage 2 confirms against and
-    `_suite_label` names): `consumers/mutation.py` has ten `test_mutation*`
-    files, four of them integration files that run for minutes, and
-    unfiltered they would send every one of its mutants into the same
-    timeout. No path arguments (a bare `pytest -q`) means the whole tree,
-    as before."""
+    Direct hits AND the keyword fallback are kept inside the configured
+    suite's scope (the path arguments of `_full_argv`, the scope stage 2
+    confirms against and `_suite_label` names): `consumers/mutation.py` has
+    ten `test_mutation*` files, four of them integration files that run for
+    minutes, and unfiltered they would send every one of its mutants into
+    the same timeout. The fallback was scoped a day after the direct hits
+    (2026-09-06 22:00Z drain): `commands/drain.py` has no `test_drain*.py`
+    in the unit scope, so it fell to a bare `-k drain` over the whole tree
+    -- 54 tests, 39 of them integration drains, over 170 s against the 120 s
+    budget -- and all five of its mutants timed out, ungraded, for as long
+    as that stayed true. Scoped, the same keyword selects 15 tests in 4 s.
+    No path arguments (a bare `pytest -q`) means the whole tree, as before."""
     module = Path(rel).stem
     tests_dir = wt / "tests"
+    scope_args = [a for a in _full_argv(cfg, root)[1:]
+                  if not a.startswith("-") and (wt / a).exists()]
+    scope = [wt / a for a in scope_args]
     if tests_dir.exists():
-        scope = [wt / a for a in _full_argv(cfg, root)[1:]
-                 if not a.startswith("-") and (wt / a).exists()]
         hits = sorted(p for p in set(tests_dir.rglob(f"test_{module}.py"))
                       | set(tests_dir.rglob(f"test_{module}_*.py"))
                       if not scope or any(p.is_relative_to(s) for s in scope))
@@ -259,7 +265,7 @@ def _stage1_argv(wt: Path, rel: str, cfg=None, root: Path | None = None) -> list
         if module.lower() in dir_names:
             return _full_argv(cfg, root)
     if _SAFE_STEM.match(module) and module.lower() not in _K_KEYWORDS:
-        return [sys.executable, "-m", "pytest", "-q", "-k", module]
+        return [sys.executable, "-m", "pytest", "-q", *scope_args, "-k", module]
     # Unsafe -k token (pytest keyword / expression-breaking chars): pytest
     # would exit 4 (usage error) and the suite would never run. Full suite
     # is always correct, just slower.

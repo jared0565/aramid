@@ -43,6 +43,20 @@ to publish a tag that disagrees with it.
 
 ### Fixed
 
+- **Mutation stage 1's `-k <stem>` fallback stays inside the configured
+  suite's scope.** Direct hits (`test_<stem>*.py`) were scoped to the path
+  arguments of `[mutation].test_command` in 0.14.0; the keyword fallback
+  was not, and ran a bare `pytest -q -k <stem>` over the whole tree. For
+  `commands/drain.py`, which has no `test_drain*.py` under `tests/unit`,
+  that selected 54 tests, 39 of them integration drains, and ran for over
+  170 s against the 120 s mutant budget: all five of its mutants in the
+  2026-09-06 22:00Z drain timed out, none was graded, and none ever would
+  have been. Scoped (`pytest -q tests/unit -k drain`) the same keyword
+  selects 15 tests in 4 s. Surveyed over every module in this repo after
+  the fix, the largest stage-1 selection is 128 tests; a module whose
+  keyword selects nothing in scope exits 5 and goes straight to the
+  full-suite confirm, the verdict stage 2 would give anyway.
+
 - **A mutation survivor whose module a changed test names is re-tested
   FIRST, on its own budget.** Every re-test of a recorded survivor ran after
   the range's own mutants, so a push that edited any function big enough to
