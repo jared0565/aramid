@@ -43,6 +43,24 @@ to publish a tag that disagrees with it.
 
 ### Fixed
 
+- **A mutation survivor whose module a changed test names is re-tested
+  FIRST, on its own budget.** Every re-test of a recorded survivor ran after
+  the range's own mutants, so a push that edited any function big enough to
+  fill `max_mutants` re-tested nothing -- including the one survivor the
+  push existed to kill, whose test the operator had just written (2026-09-06
+  14:00Z drain: `re-tested 0 of N`, survivor open until a quieter push). The
+  consumer now partitions the candidates: a survivor whose module a changed
+  test in the range maps to (the same stem rule `gap_addressed` uses) runs
+  ahead of the fresh mutants with its own confirm budget (`retest_cap`,
+  one confirm per re-test), and does not spend the range's `max_mutants`.
+  Every other open survivor still waits for the hygiene pass, last, so the
+  range keeps its cap. New `claimed` / `claimed_retested` counts in the
+  run's extra, and a note clause `N of M survivor(s) named by a changed
+  test re-tested first` when there were any. A survivor whose function the
+  range ALSO edits is tested twice (once as a re-test, once for the range's
+  score) but reported once: a second finding under the same id would have
+  been a second detect row in the ledger.
+
 - **A manual `aramid triage` of an old range no longer rewinds the drain's
   catch-up sweep.** The sweep anchored on the last triage row's head, so a
   hand-run triage of an older commit made the next drain re-triage

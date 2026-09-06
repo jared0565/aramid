@@ -259,7 +259,7 @@ Two invariants worth keeping in mind when touching this:
 | `mutant_timeout_s` | int (`float()`'d) | `120` | Per-pytest-invocation timeout (stage 1 and stage 2 alike). |
 | `confirm_cap` | int | `3` | Cap on full-suite confirmation runs per item. |
 | `retest_open_survivors` | bool | `true` | When the item's range changes any test file, regenerate each open or `pending_retest` mutation survivor from its fingerprint and re-run it through the same stage-1 / full-suite confirmation; a confirmed kill is claimed as `mutant_killed`. Survivors bound by `.aramid-suppressions.toml` are skipped; the range's mutation scores are untouched. |
-| `retest_cap` | int | `3` | Re-tests per item, after the range's own mutants and inside the same budget. The note reads `re-tested N of M open survivor(s), K killed`. |
+| `retest_cap` | int | `3` | Re-tests per item. A survivor whose module a changed test in the range maps to (the `gap_addressed` stem rule) is re-tested first, on its own confirm budget (one per re-test) and outside `max_mutants`; every other survivor runs after the range's own mutants, inside the range's budget. The note reads `re-tested N of M open survivor(s), K killed`, plus `C of D survivor(s) named by a changed test re-tested first` when there were any. |
 
 No arming flag exists in `[mutation]`.
 

@@ -1545,6 +1545,98 @@ def test_retest_candidates_include_a_pending_retest_survivor(tmp_path):
     assert got == [("p" * 64, "calc.py", 3)]
 
 
+def _set_max_mutants(r, n: int) -> None:
+    toml = r / "aramid.toml"
+    txt = toml.read_text(encoding="utf-8")
+    assert "max_mutants = 3\n" in txt
+    toml.write_text(txt.replace("max_mutants = 3\n", f"max_mutants = {n}\n"),
+                    encoding="utf-8")
+
+
+def test_a_survivor_named_by_a_changed_test_is_retested_before_fresh_mutants(
+        tmp_path, monkeypatch):
+    """RETEST STARVATION (2026-09-06, the 14:00Z drain). The hygiene pass runs
+    last so it can never starve the range -- and so the range starves IT: a
+    push that edits any function big enough to fill `max_mutants` re-tests
+    nothing, and the one survivor the push existed to kill (the operator
+    wrote its test) stays open until a quieter push happens by. The suite is
+    the mapping, but the NAME is the priority: a survivor whose module a
+    changed test maps to (the gate's own stem rule) is re-tested FIRST, on
+    its own confirm budget, and does not spend the range's mutant cap."""
+    r, head, ids = _with_recorded_survivors(tmp_path, monkeypatch)   # calc.py survivors
+    _set_max_mutants(r, 1)                    # the range's fresh mutants fill this
+    (r / "other.py").write_text("def twice(x):\n    return x * 2\n", encoding="utf-8")
+    (r / "tests" / "test_calc_boundary.py").write_text(KILLER, encoding="utf-8")
+    _git(r, "add", "-A")
+    _git(r, "commit", "-q", "-m", "fix other; add the test calc.py's survivor asked for")
+    head2 = _sha(r)
+
+    res = _consume(r, head, head2, monkeypatch, tmp_path, item_id="q2")
+
+    assert res.state == "ok", res.note
+    assert res.repaired is not None and set(res.repaired.ids) == ids, (
+        f"the survivors the changed test names were starved by the range: {res.note}")
+    assert res.extra["retested"] == len(ids)
+    assert res.extra["retest_killed"] == len(ids)
+    assert res.extra["claimed"] == len(ids)
+    assert res.extra["tested"] == len(ids) + 1, (
+        "a claimed re-test must not spend the range's max_mutants: "
+        f"{res.extra}")
+    assert (f"; {len(ids)} of {len(ids)} survivor(s) named by a changed test "
+            f"re-tested first") in res.note, res.note
+    assert _no_worktrees(r)
+
+
+def test_a_survivor_no_changed_test_names_still_waits_for_the_hygiene_pass(
+        tmp_path, monkeypatch):
+    """The other half of the budget decision: a changed test that maps to
+    NOTHING (this repo's `test_runner_shadow.py` shape) still triggers the
+    hygiene pass, and that pass still runs LAST -- the range keeps its cap,
+    and the starvation this fix removes is only for survivors a changed test
+    actually names."""
+    r, head, ids = _with_recorded_survivors(tmp_path, monkeypatch)
+    _set_max_mutants(r, 1)
+    (r / "other.py").write_text("def twice(x):\n    return x * 2\n", encoding="utf-8")
+    (r / "tests" / "test_boundary_elsewhere.py").write_text(KILLER, encoding="utf-8")
+    _git(r, "add", "-A")
+    _git(r, "commit", "-q", "-m", "an unmapped test")
+    head2 = _sha(r)
+
+    res = _consume(r, head, head2, monkeypatch, tmp_path, item_id="q2")
+
+    assert res.extra["claimed"] == 0
+    assert res.extra["retested"] == 0 and res.extra["retest_truncated"] is True
+    assert res.extra["tested"] == 1, res.extra
+    assert "named by a changed test" not in res.note, res.note
+
+
+def test_a_claimed_survivor_also_in_the_range_is_reported_once(tmp_path, monkeypatch):
+    """The overlap: the push edits the survivor's own function AND adds a
+    test that maps to its module but does not kill it. The claimed pass
+    re-tests the survivor (still alive, re-reported) and the fresh pass then
+    regenerates the same mutant for the range's score. Two runs is the
+    honest price of the score; two FINDINGS for one mutant is not -- the
+    ledger would write two detect rows for one id."""
+    r, head, ids = _with_recorded_survivors(tmp_path, monkeypatch)
+    _set_max_mutants(r, 10)
+    _set_confirm_cap(r, 10)
+    (r / "calc.py").write_text(ADULT.replace("    if age >= 18:",
+                                             "    age = int(age)\n    if age >= 18:"),
+                               encoding="utf-8")
+    (r / "tests" / "test_calc_more.py").write_text(HARMLESS, encoding="utf-8")
+    _git(r, "add", "-A")
+    _git(r, "commit", "-q", "-m", "touch the function; add a harmless mapped test")
+    head2 = _sha(r)
+
+    res = _consume(r, head, head2, monkeypatch, tmp_path, item_id="q2")
+
+    assert res.extra["claimed"] == len(ids) and res.extra["retested"] == len(ids)
+    keys = [(f.file, f.rule, f.line) for f in res.findings]
+    assert len(keys) == len(set(keys)), f"a survivor was reported twice: {keys}"
+    assert res.extra["confirmed"] == len(res.findings), res.extra
+    assert ids <= _ids_of(r, res.findings), "the overlap survivors are still reported"
+
+
 # --------------- a repo-relative command in the drain (interop round 174) ---
 #
 # graphite's `[tests].command` names its dev-venv interpreter by a

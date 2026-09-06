@@ -160,7 +160,9 @@ confirm_cap = 3         # full-suite confirmation runs per item
 # the ordinary way a survivor dies is that someone writes the test, on a module
 # the range never touches, and only the suite can say so. Each re-test costs a
 # stage-1 run plus, usually, one full-suite confirmation (the same price a fresh
-# mutant pays); runs after the range's own mutants and stops at `retest_cap`.
+# mutant pays). A survivor whose module a changed test NAMES (the gate's stem
+# rule) runs FIRST, on its own confirm budget, outside `max_mutants`; every
+# other survivor runs after the range's own mutants. `retest_cap` bounds both.
 retest_open_survivors = true
 retest_cap = 3
 mutation_block_armed = false   # NEW (1b) -- arms surviving-mutant findings; see policy.classify
