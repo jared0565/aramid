@@ -25,16 +25,21 @@ to publish a tag that disagrees with it.
 
 ### Changed
 
-- **The `aramid` CI workflow no longer runs on `rehearsal-*` tags.**
-  RELEASING.md's post-promotion rehearsal pushes a throwaway annotated tag
-  to prove the live hook certifies that shape, and every such push started
-  a second 30-minute matrix on a commit main had already proven. The push
-  trigger now names `branches: ["**"]` beside `tags-ignore:
-  ["rehearsal-*"]`: GitHub runs a push workflow only for the ref kinds it
-  names, so the branch filter is what keeps branch pushes running, and any
-  other tag (the `v*` release tags included, whose parallel matrix
-  `verify-ci` counts) still runs. Proven on a throwaway branch and two
-  throwaway tags before landing.
+- **The `aramid` CI workflow skips its matrix on `rehearsal-*` tags and
+  asserts what the tag relies on instead.** RELEASING.md's post-promotion
+  rehearsal pushes a throwaway annotated tag to prove the live hook
+  certifies that shape, and every such push started a second 30-minute
+  matrix on a commit main had already proven. The trigger still fires for
+  every pushed ref (the Actions log is the record CI exists to keep); the
+  `ci` job is skipped when the ref is a `rehearsal-*` tag, and a new
+  `rehearsal-guard` job runs only there, fetching `origin/main` and failing
+  unless the tagged commit is an ancestor of it. A first cut filtered the
+  tag out of the trigger with `tags-ignore`; the drain's LLM review
+  (3c2491dc) pointed out that left `rehearsal-*` the one namespace with no
+  run at all, for a name anyone can choose, so a commit pushed around the
+  hook under such a tag would be installable with nothing in the log to
+  notice. Proven on throwaway tags: one on main (matrix skipped, guard
+  green), one on a commit off main (guard red).
 
 ## [0.14.0] — 2026-09-06
 

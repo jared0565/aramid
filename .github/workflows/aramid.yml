@@ -29,16 +29,6 @@ name: aramid
 
 on:
   push:
-    # GitHub runs a push workflow only for the ref kinds the trigger names,
-    # so `branches` is load-bearing: `tags-ignore` on its own would have
-    # stopped every branch push. Every branch still runs; every tag still
-    # runs except RELEASING.md's post-promotion `rehearsal-*` tag, which
-    # exists to prove the live hook certifies an annotated tag and was
-    # starting a second 30-minute matrix on a commit main had already
-    # proven. The `v*` release tags keep their parallel matrix, which
-    # release.yml's verify-ci counts.
-    branches: ["**"]
-    tags-ignore: ["rehearsal-*"]
   pull_request:
 
 permissions:
@@ -47,6 +37,14 @@ permissions:
 jobs:
   ci:
     name: ci (${{ matrix.os }}, py${{ matrix.python }})
+    # Every pushed ref still gets a run -- the Actions log is the record CI
+    # exists to keep -- but RELEASING.md's post-promotion `rehearsal-*` tag
+    # names a commit already proven on main, so the matrix is skipped for
+    # it and `rehearsal-guard` below asserts that property instead. Filtering
+    # the ref out of the trigger (as 0852e16 did) left rehearsal-* the one
+    # namespace with no run at all, which a name anyone can choose should
+    # not be (llm-review 3c2491dc).
+    if: ${{ !startsWith(github.ref, 'refs/tags/rehearsal-') }}
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -273,3 +271,25 @@ jobs:
               sys.exit(1)
 
           print(f"OK: {wheel.name} contains all required data files: {required}")
+
+  # The one property a rehearsal tag relies on, asserted in seconds instead of
+  # re-proven by a 30-minute matrix: the tagged commit is already on main, so
+  # the matrix has already run on it. A rehearsal-* tag pointing anywhere
+  # else -- a commit pushed around the hook, or by a token that should not
+  # have one -- goes red here, with a run on the ref to notice.
+  rehearsal-guard:
+    if: ${{ startsWith(github.ref, 'refs/tags/rehearsal-') }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+      - name: Assert the rehearsal tag's commit is on origin/main
+        run: |
+          git fetch --no-tags origin main
+          if git merge-base --is-ancestor "$GITHUB_SHA" origin/main; then
+            echo "$GITHUB_REF_NAME -> $GITHUB_SHA is on origin/main"
+          else
+            echo "::error::$GITHUB_REF_NAME points at $GITHUB_SHA, which is not on origin/main"
+            exit 1
+          fi
