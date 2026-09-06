@@ -29,6 +29,16 @@ name: aramid
 
 on:
   push:
+    # GitHub runs a push workflow only for the ref kinds the trigger names,
+    # so `branches` is load-bearing: `tags-ignore` on its own would have
+    # stopped every branch push. Every branch still runs; every tag still
+    # runs except RELEASING.md's post-promotion `rehearsal-*` tag, which
+    # exists to prove the live hook certifies an annotated tag and was
+    # starting a second 30-minute matrix on a commit main had already
+    # proven. The `v*` release tags keep their parallel matrix, which
+    # release.yml's verify-ci counts.
+    branches: ["**"]
+    tags-ignore: ["rehearsal-*"]
   pull_request:
 
 permissions:

@@ -23,6 +23,19 @@ to publish a tag that disagrees with it.
   confirm_cap=N` so the knob that frees it is named. The score is
   unchanged: the kill still counts as `killed_s1`.
 
+### Changed
+
+- **The `aramid` CI workflow no longer runs on `rehearsal-*` tags.**
+  RELEASING.md's post-promotion rehearsal pushes a throwaway annotated tag
+  to prove the live hook certifies that shape, and every such push started
+  a second 30-minute matrix on a commit main had already proven. The push
+  trigger now names `branches: ["**"]` beside `tags-ignore:
+  ["rehearsal-*"]`: GitHub runs a push workflow only for the ref kinds it
+  names, so the branch filter is what keeps branch pushes running, and any
+  other tag (the `v*` release tags included, whose parallel matrix
+  `verify-ci` counts) still runs. Proven on a throwaway branch and two
+  throwaway tags before landing.
+
 ## [0.14.0] — 2026-09-06
 
 ### Added
