@@ -83,6 +83,17 @@ def test_stage1_direct_hits_stay_inside_the_configured_suite_scope(tmp_path):
     assert mut_consumer._stage1_argv(tmp_path, "other.py", cfg, tmp_path)[-2:] == ["-k", "other"]
 
 
+def test_stage1_scope_reads_a_path_that_directly_follows_the_command(tmp_path):
+    # The 2026-09-06 06:00Z drain's survivor: `_full_argv(...)[1:]` -> `[2:]`
+    # was invisible while every pinned command had a flag at index 1. A
+    # `pytest tests/unit` with no flag puts the scope path there.
+    _touch(tmp_path / "tests" / "unit" / "test_calc.py")
+    _touch(tmp_path / "tests" / "integration" / "test_calc_e2e.py")
+    cfg = SimpleNamespace(mutation={"test_command": ["pytest", "tests/unit"]})
+    argv = mut_consumer._stage1_argv(tmp_path, "calc.py", cfg, tmp_path)
+    assert argv[4:] == [str(Path("tests", "unit", "test_calc.py"))]
+
+
 def test_stage1_falls_back_to_the_full_suite_when_the_stem_names_a_test_directory(tmp_path):
     _touch(tmp_path / "tests" / "unit" / "test_other.py")
     for stem in ("tests.py", "unit.py", "Tests.py"):    # -k matches case-insensitively
