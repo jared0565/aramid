@@ -14,6 +14,7 @@ _has_genuine_block treat an armed mutation BLOCK as genuine on a fresh clone);
 the two one-line rules must agree.
 """
 from pathlib import Path
+from typing import Callable
 
 from aramid import diagnostics, gitutil
 from aramid.fingerprint import normalize_path
@@ -124,7 +125,9 @@ def _has_mapped_test(module_path: str, test_stems) -> bool:
 
 
 def auto_resolve_mutation(ledger, run_id: str, at: str, changed_files, *,
-                          suppressed=frozenset()) -> list[str]:
+                          suppressed=frozenset(),
+                          changed_since: Callable[[str], set | None] | None = None
+                          ) -> list[str]:
     """Optimistically resolve open mutation findings the push addresses, BEFORE
     the block check (mirrors review.auto_resolve_llm's call site), so a dev who
     added a test is not blocked by a stale finding. Module-mapped (spec 1b §4):
@@ -151,7 +154,20 @@ def auto_resolve_mutation(ledger, run_id: str, at: str, changed_files, *,
     `equivalent mutant` entry says "unkillable, adjudicated": there is no gap
     to address and any resolve for it is a false claim (c5326a9c, written
     `fixed` twice by this function on pushes that touched cli.py). The
-    re-test already skips these; the gate now agrees."""
+    re-test already skips these; the gate now agrees.
+
+    `changed_since` -- ONLY CHANGES AFTER THE GRADED HEAD COUNT, corrected
+    2026-09-06. A drain grades an item at its head and records that head on
+    each finding (`ledger.record_run(head=...)`). The 14:00Z drain that day
+    graded a head carrying a test edit and reported three survivors ON it;
+    two seconds into the push of that same head, this function resolved all
+    three as gap_addressed, on the strength of the test edit the drain had
+    already run against. `changed_since(head)` returns the files changed
+    between that head and the push head, or None when it cannot say (the
+    head is unknown, not an ancestor, or git failed) -- None, and a record
+    with no head at all, keep the liberal rule over the whole push. The
+    resolve is still optimistic: it only stops crediting changes the drain
+    had already seen."""
     changed_norm = {normalize_path(c) for c in changed_files}
     changed_test_stems = {Path(c).stem for c in changed_files
                           if gitutil.is_test_file(c)}
@@ -168,8 +184,15 @@ def auto_resolve_mutation(ledger, run_id: str, at: str, changed_files, *,
             path = rec.get("file", "")
             if not path:
                 continue                            # malformed: no file -> skip
-            source_touched = normalize_path(path) in changed_norm
-            test_added = _has_mapped_test(path, changed_test_stems)
+            norm, stems = changed_norm, changed_test_stems
+            graded = rec.get("head")
+            if graded and changed_since is not None:
+                delta = changed_since(graded)
+                if delta is not None:
+                    norm = {normalize_path(c) for c in delta}
+                    stems = {Path(c).stem for c in delta if gitutil.is_test_file(c)}
+            source_touched = normalize_path(path) in norm
+            test_added = _has_mapped_test(path, stems)
             if source_touched or test_added:
                 ledger.append(Event(EventType.FINDING_RESOLVED, run_id, at,
                                     finding_id=fid,

@@ -30,6 +30,7 @@ from aramid.models import Finding, Gate, Severity, Source, Verdict
 
 NOW = "2026-08-10T12:00:00+00:00"
 MUTANT_ID = "w" * 64
+TEST_BODY = "from src.widget import add\n\n\ndef test_add():\n    assert add(1, 2) == 3\n"
 
 
 def _no_runners(monkeypatch):
@@ -61,7 +62,7 @@ def _repo(tmp_path, *, with_upstream: bool):
     return r
 
 
-def _seed_survivor(r):
+def _seed_survivor(r, head=None):
     led = Ledger(r / ".aramid" / "ledger.db")
     try:
         led.record_run("r0", NOW, "drain", set(), set(), [Finding(
@@ -69,9 +70,14 @@ def _seed_survivor(r):
             severity_raw="medium", severity=Severity.MEDIUM,
             verdict=Verdict.WARN, file="src/widget.py", line=2,
             message="mutant survived: a - b", evidence="",
-            gate=Gate.ALL, source=Source.DETERMINISTIC)])
+            gate=Gate.ALL, source=Source.DETERMINISTIC)], head=head)
     finally:
         led.close()
+
+
+def _head(r):
+    return subprocess.run(["git", "rev-parse", "HEAD"], cwd=r, check=True,
+                          capture_output=True, text=True).stdout.strip()
 
 
 def _commit(r, rel, body):
@@ -131,6 +137,51 @@ def test_all_mode_does_not_resolve_when_the_mapped_test_is_outside_the_delta(
     assert _status(r) == "open", (
         "a finding was resolved by a test the push never touched -- the "
         "resolver was handed the scan scope, not the push delta")
+
+
+def test_a_test_the_drain_already_graded_against_does_not_resolve_its_survivor(
+        tmp_path, monkeypatch):
+    """2026-09-06 14:00Z: the drain graded an item at a head carrying a test
+    edit and reported three survivors ON that head. Two seconds into the push
+    of that same head, the gate resolved all three as gap_addressed -- on the
+    strength of the test edit the drain had just graded against. A finding
+    now carries the head it was graded at, and only changes AFTER that head
+    can address it."""
+    _no_runners(monkeypatch)
+    r = _repo(tmp_path, with_upstream=True)
+    _commit(r, "tests/test_widget.py", TEST_BODY)
+    _seed_survivor(r, head=_head(r))      # graded WITH that test present
+
+    cmd_check(r, Gate.PRE_PUSH, "all")
+
+    assert _status(r) == "open", (
+        "a test the drain had already graded against resolved the survivor "
+        "that survived it")
+
+
+def test_a_test_committed_after_the_graded_head_still_resolves(tmp_path, monkeypatch):
+    """Control: the same push, with the test landing AFTER the grading."""
+    _no_runners(monkeypatch)
+    r = _repo(tmp_path, with_upstream=True)
+    _commit(r, "src/other.py", "y = 2\n")
+    _seed_survivor(r, head=_head(r))
+    _commit(r, "tests/test_widget.py", TEST_BODY)
+
+    cmd_check(r, Gate.PRE_PUSH, "all")
+
+    assert _status(r) == "pending_retest"
+
+
+def test_a_survivor_with_no_recorded_head_keeps_the_liberal_rule(tmp_path, monkeypatch):
+    """Rows written before the head was recorded resolve as they always did."""
+    _no_runners(monkeypatch)
+    r = _repo(tmp_path, with_upstream=True)
+    _commit(r, "tests/test_widget.py", TEST_BODY)
+    _seed_survivor(r)
+
+    cmd_check(r, Gate.PRE_PUSH, "all")
+
+    assert _status(r) == "pending_retest"
 
 
 def test_all_mode_with_no_upstream_resolves_nothing(tmp_path, monkeypatch):

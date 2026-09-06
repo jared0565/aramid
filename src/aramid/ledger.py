@@ -568,10 +568,19 @@ class Ledger:
                    examined_by_tool: dict[str, set[str]] | None = None,
                    finished_at: str | None = None,
                    certified=None, refs_moved=None, head_at_exit: str | None = None,
-                   degraded: dict[str, str] | None = None):
+                   degraded: dict[str, str] | None = None,
+                   head: str | None = None):
         state, seen = _materialize(self.events())
         present = {f.id for f in findings}
         payload = {"gate": gate, "tools": sorted(scope_tools)}
+        if head is not None:
+            # The commit these findings were derived AT -- a drain's item
+            # head. Stamped on each detection too, so an open record can say
+            # which changes postdate it: mutation_gate.auto_resolve_mutation
+            # resolves only on changes after this head (2026-09-06: a push
+            # carrying the very commit a drain had graded resolved that
+            # drain's survivors on a test edit it had already run against).
+            payload["head"] = head
         if selected_tools is not None:
             payload["selected"] = sorted(selected_tools)
         if certified is not None:
@@ -601,8 +610,11 @@ class Ledger:
         new_ids = []
         for f in findings:
             if f.id not in state or state[f.id]["status"] in ("fixed", "unreachable", "superseded", "out_of_scope", "pending_retest"):
+                detect = _detect_payload(f)
+                if head is not None:
+                    detect["head"] = head
                 self.append(Event(EventType.FINDING_DETECTED, run_id, at,
-                                  finding_id=f.id, payload=_detect_payload(f)))
+                                  finding_id=f.id, payload=detect))
             elif state[f.id].get("line") != f.line:
                 # RE-ANCHOR. A finding that is merely still present gets no
                 # detect event -- correct, since re-detecting would reset its

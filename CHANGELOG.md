@@ -41,6 +41,39 @@ to publish a tag that disagrees with it.
   notice. Proven on throwaway tags: one on main (matrix skipped, guard
   green), one on a commit off main (guard red).
 
+### Fixed
+
+- **A manual `aramid triage` of an old range no longer rewinds the drain's
+  catch-up sweep.** The sweep anchored on the last triage row's head, so a
+  hand-run triage of an older commit made the next drain re-triage
+  everything since that commit and coalesce it into the queued item; the
+  consumer then spent its mutant budget on the first changed file in the
+  widened range instead of the one the triage was for (2026-09-06 14:58Z).
+  The anchor is now the newest triaged head in history: a row whose head is
+  an ancestor of an already-triaged head moves nothing.
+
+- **The gate no longer resolves a mutation survivor on a change the drain
+  had already graded against.** A drain grades an item at its head and now
+  records that head on every finding it detects. `gap_addressed` used to
+  credit any test edit in the push, so a push carrying the very commit a
+  drain had graded resolved that drain's survivors two seconds into the
+  gate, on a test edit the drain had run against (2026-09-06 14:29Z, three
+  findings). Only files changed between the graded head and HEAD count now;
+  a finding with no recorded head, or a head that is no longer an ancestor
+  of HEAD, keeps the liberal rule. Mutation findings never block, so the
+  only effect is that a survivor stays visible in `ledger filter --status
+  open` until something actually addresses it.
+
+- **A commit that lands while a drain is running is no longer marked
+  drained with it.** The drain pops an item at its head and runs for
+  twenty minutes or more; a commit made meanwhile coalesces into the same
+  item (base kept, head advanced), and the drained mark at the end used to
+  cover the whole item -- the absorbed range was never graded, and the
+  catch-up sweep, anchored past it, never re-triaged it. The drained event
+  now names the head the drain consumed, and whatever coalesced beyond it
+  stays queued as its own remainder for the next drain. Rows without a
+  head (earlier versions) still drain the whole item.
+
 ## [0.14.0] — 2026-09-06
 
 ### Added

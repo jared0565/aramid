@@ -131,6 +131,73 @@ def test_resolve_when_mapped_test_added(tmp_path):
     assert resolved == ["m" * 64]
 
 
+# --- only changes AFTER the graded head count (2026-09-06) --------------
+
+def _seed_at(led, finding, head):
+    led.record_run("r0", NOW, "drain", set(), set(), [finding], head=head)
+
+
+def test_a_finding_records_the_head_it_was_graded_at(tmp_path):
+    led = Ledger(tmp_path / "l.db")
+    try:
+        _seed_at(led, _mut_finding(), "abc123")
+        rec = led.open_findings()["m" * 64]
+    finally:
+        led.close()
+    assert rec["head"] == "abc123"
+
+
+def test_a_change_the_drain_already_graded_against_does_not_resolve(tmp_path):
+    """The push carries the mapped test, but nothing changed since the head
+    the finding was graded at -- the drain already ran that test."""
+    led = Ledger(tmp_path / "l.db")
+    try:
+        _seed_at(led, _mut_finding(), "graded")
+        resolved = mutation_gate.auto_resolve_mutation(
+            led, "r1", NOW, {"tests/test_x.py"},
+            changed_since=lambda head: set() if head == "graded" else None)
+    finally:
+        led.close()
+    assert resolved == []
+
+
+def test_a_change_after_the_graded_head_resolves(tmp_path):
+    led = Ledger(tmp_path / "l.db")
+    try:
+        _seed_at(led, _mut_finding(), "graded")
+        resolved = mutation_gate.auto_resolve_mutation(
+            led, "r1", NOW, {"tests/test_x.py", "src/other.py"},
+            changed_since=lambda head: {"tests/test_x.py"})
+    finally:
+        led.close()
+    assert resolved == ["m" * 64]
+
+
+def test_an_unanswerable_graded_head_keeps_the_liberal_rule(tmp_path):
+    """None from changed_since (rebased away, git failed): resolve on the
+    whole push as before, never block on a question that cannot be asked."""
+    led = Ledger(tmp_path / "l.db")
+    try:
+        _seed_at(led, _mut_finding(), "gone")
+        resolved = mutation_gate.auto_resolve_mutation(
+            led, "r1", NOW, {"tests/test_x.py"}, changed_since=lambda head: None)
+    finally:
+        led.close()
+    assert resolved == ["m" * 64]
+
+
+def test_a_record_without_a_graded_head_keeps_the_liberal_rule(tmp_path):
+    led = Ledger(tmp_path / "l.db")
+    try:
+        _seed(led, _mut_finding())                      # no head recorded
+        resolved = mutation_gate.auto_resolve_mutation(
+            led, "r1", NOW, {"tests/test_x.py"},
+            changed_since=lambda head: set())           # would say "nothing changed"
+    finally:
+        led.close()
+    assert resolved == ["m" * 64]
+
+
 def test_resolve_when_underscore_test_added(tmp_path):
     led = Ledger(tmp_path / "l.db")
     try:

@@ -8,6 +8,7 @@ import pytest
 
 from aramid import queue, registry
 from aramid.commands import drain as drain_mod
+from aramid.commands import triage_cmd
 from aramid.commands.drain import cmd_drain
 from aramid.consumers.base import ConsumerResult
 from aramid.ledger import Ledger
@@ -83,6 +84,41 @@ def _risky_repo(tmp_path, name="r"):
     return r
 
 
+def test_a_commit_made_while_the_drain_runs_is_not_marked_drained_with_it(
+        tmp_path, seam, monkeypatch):
+    """The consumer here commits to the repo mid-run and triages it, the way
+    a developer's post-commit shim does while a 25-minute mutation run is
+    going. The drain must mark drained only the head it consumed; the new
+    commit stays queued for the next drain instead of vanishing."""
+    r = _risky_repo(tmp_path)
+    registry.register(r, "t0")
+    popped_head = _head(r)
+    consumed = []
+
+    class _CommittingConsumer:
+        NAME = "committing"
+
+        @classmethod
+        def consume(cls, item, ctx):
+            consumed.append(item.head)
+            _commit(r, "src/auth_login2.py", "def g(x):\n    exec(x)\n", "landed mid-drain")
+            triage_cmd.cmd_triage(r, "HEAD")
+            return ConsumerResult(consumer=cls.NAME, state="ok", findings=[])
+
+    monkeypatch.setattr(drain_mod, "CONSUMERS", {"committing": _CommittingConsumer})
+
+    assert cmd_drain([], dry_run=False) == 0
+
+    led = Ledger(r / ".aramid" / "ledger.db")
+    try:
+        left = queue.queued_item(queue.materialize_queue(led.events()))
+    finally:
+        led.close()
+    assert consumed == [popped_head], "the drain consumed the head it popped"
+    assert left is not None, "the mid-drain commit was marked drained without being graded"
+    assert (left.base, left.head) == (popped_head, _head(r))
+
+
 def test_drain_sweeps_pops_consumes_records(tmp_path, seam, fake_consumer):
     r = _risky_repo(tmp_path)
     registry.register(r, "t0")
@@ -100,6 +136,37 @@ def test_drain_sweeps_pops_consumes_records(tmp_path, seam, fake_consumer):
                    for rec in state.values())
     finally:
         led.close()
+
+
+def test_a_manual_triage_of_an_old_range_does_not_rewind_the_sweep(
+        tmp_path, seam, fake_consumer):
+    """2026-09-06 14:58Z: `aramid triage <old>..<older-head>` was run by hand
+    to re-grade one commit; the next drain read the LAST triage row as its
+    anchor, triaged old-head..HEAD all over again and coalesced it into the
+    item, so the consumer graded the wrong files. The anchor is the newest
+    triaged head in HISTORY, not in the ledger: a row for an ancestor of an
+    already-triaged head moves nothing."""
+    r = _risky_repo(tmp_path)                                      # c1
+    c1 = _head(r)
+    _commit(r, "src/auth_login2.py", "def g(x):\n    exec(x)\n", "c2")
+    c2 = _head(r)
+    registry.register(r, "t0")
+    cmd_drain([], dry_run=False)                                   # sweep triages c1..c2
+    _commit(r, "src/auth_login3.py", "def h(x):\n    exec(x)\n", "c3")
+    c3 = _head(r)
+    triage_cmd.cmd_triage(r, c1)                                   # manual, old: last row now says c1
+
+    cmd_drain([], dry_run=False)
+
+    led = Ledger(r / ".aramid" / "ledger.db")
+    try:
+        rows = [e.payload for e in led.events() if e.type is EventType.TRIAGE_RECORDED]
+    finally:
+        led.close()
+    assert rows[-1]["head"] == c3
+    assert rows[-1]["base"] == c2, (
+        f"the sweep re-triaged from the manual row's head {c1[:7]} instead of "
+        f"the newest triaged head in history {c2[:7]}")
 
 
 def test_drain_bootstrap_sweeps_head_only(tmp_path, seam, fake_consumer):

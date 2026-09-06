@@ -74,6 +74,33 @@ def test_mark_drained_transitions_state(tmp_path):
     led.close()
 
 
+def test_a_commit_that_lands_mid_drain_stays_queued_as_the_remainder(tmp_path):
+    """The drain pops an item at its head, runs for ~25 min, then marks the id
+    drained. A commit made meanwhile coalesces into the SAME id (base kept,
+    head advanced), so the mark used to swallow the absorbed range: never
+    graded, and the catch-up sweep -- anchored past it -- never re-triaged
+    it (2026-09-06). A drained event now names the head the drain consumed;
+    whatever was absorbed beyond it stays queued as its own remainder."""
+    led = Ledger(tmp_path / "l.db")
+    item = queue.enqueue(led, _iso(NOW), "aaa", "bbb", 50, ["r"])
+    queue.enqueue(led, _iso(NOW + timedelta(minutes=10)), "bbb", "ccc", 41, ["r2"])
+    queue.mark_drained(led, item.id, "run1", _iso(NOW + timedelta(minutes=25)), head="bbb")
+    got = queue.materialize_queue(led.events())[item.id]
+    assert got.state == "queued"
+    assert (got.base, got.head) == ("bbb", "ccc")
+    assert got.deferred == 0, "the remainder was never passed over by a drain"
+    assert queue.queued_item(queue.materialize_queue(led.events())).id == item.id
+    led.close()
+
+
+def test_a_drained_event_naming_the_current_head_ends_the_item(tmp_path):
+    led = Ledger(tmp_path / "l.db")
+    item = queue.enqueue(led, _iso(NOW), "aaa", "bbb", 50, ["r"])
+    queue.mark_drained(led, item.id, "run1", _iso(NOW + timedelta(minutes=25)), head="bbb")
+    assert queue.materialize_queue(led.events())[item.id].state == "drained"
+    led.close()
+
+
 def test_drained_item_does_not_block_new_enqueue(tmp_path):
     led = Ledger(tmp_path / "l.db")
     old = queue.enqueue(led, _iso(NOW), "a", "b", 50, ["r"])

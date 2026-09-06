@@ -68,6 +68,20 @@ def materialize_queue(events: list[Event]) -> dict[str, QueueItem]:
                 deferred_reason=e.payload.get("reason") or prev.deferred_reason)
         elif e.type is EventType.QUEUE_ITEM_DRAINED and e.finding_id in items:
             prev = items[e.finding_id]
+            consumed = e.payload.get("head")
+            if consumed is not None and consumed != prev.head:
+                # The drain popped this item at `consumed` and ran for a
+                # while; a commit made meanwhile coalesced into the SAME id
+                # (base kept, head advanced). Marking the id drained used to
+                # swallow that absorbed range -- never graded, and the
+                # catch-up sweep, anchored past it, never re-triaged it
+                # (2026-09-06). What the drain did not consume stays queued
+                # as its own remainder, freshly so: no drain passed it over.
+                items[e.finding_id] = QueueItem(
+                    id=prev.id, base=consumed, head=prev.head, score=prev.score,
+                    reasons=prev.reasons, state=QUEUED,
+                    created_at=prev.created_at, updated_at=e.at)
+                continue
             items[e.finding_id] = QueueItem(
                 id=prev.id, base=prev.base, head=prev.head, score=prev.score,
                 reasons=prev.reasons, state=DRAINED,
@@ -114,8 +128,15 @@ def enqueue(ledger: Ledger, at: str, base: str | None, head: str,
                      created_at=at, updated_at=at)
 
 
-def mark_drained(ledger: Ledger, item_id: str, run_id: str, at: str) -> None:
-    ledger.append(Event(EventType.QUEUE_ITEM_DRAINED, run_id, at, finding_id=item_id))
+def mark_drained(ledger: Ledger, item_id: str, run_id: str, at: str, *,
+                 head: str | None = None) -> None:
+    """`head` is the head the drain actually consumed. A coalesce that landed
+    while it ran advanced the item past it; `materialize_queue` keeps that
+    remainder queued. Without `head` (older rows, tests) the whole item is
+    drained, whatever it holds."""
+    payload = {"head": head} if head is not None else {}
+    ledger.append(Event(EventType.QUEUE_ITEM_DRAINED, run_id, at, finding_id=item_id,
+                        payload=payload))
 
 
 def mark_deferred(ledger: Ledger, item_id: str, run_id: str, at: str, *,
@@ -160,6 +181,18 @@ def last_triaged_head(ledger: Ledger) -> str | None:
         if e.type is EventType.TRIAGE_RECORDED:
             head = e.payload.get("head")
     return head
+
+
+def triaged_heads_newest_first(ledger: Ledger, limit: int = 50) -> list[str]:
+    """The heads of the newest `limit` triage rows, newest first, for the
+    drain sweep's ancestry-aware anchor (commands.drain._sweep_anchor)."""
+    heads: list[str] = []
+    for e in reversed(ledger.events()):
+        if e.type is EventType.TRIAGE_RECORDED and e.payload.get("head"):
+            heads.append(e.payload["head"])
+            if len(heads) >= limit:
+                break
+    return heads
 
 
 def triaged_paths(ledger: Ledger) -> set[str]:

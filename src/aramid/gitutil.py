@@ -88,6 +88,13 @@ def first_parent(root: Path, rev: str) -> str | None:
     return cp.stdout.strip() if cp.returncode == 0 else None
 
 
+def is_ancestor(root: Path, ancestor: str, descendant: str) -> bool:
+    """True iff `ancestor` is reachable from `descendant` (or equal). An
+    unknown rev reads as False, never raises."""
+    cp = _run(root, "merge-base", "--is-ancestor", ancestor, descendant)
+    return cp.returncode == 0
+
+
 def diff_paths(root: Path, base: str | None, head: str) -> list[str]:
     if base is None:
         cp = _run(root, "diff-tree", "--no-commit-id", "--name-only", "-r", "--root", head)

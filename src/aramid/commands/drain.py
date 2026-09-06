@@ -88,11 +88,30 @@ def _release_lock(p: Path) -> None:
         pass
 
 
+def _sweep_anchor(root: Path, ledger, head: str) -> str | None:
+    """The newest triaged head in HISTORY, not merely in the ledger. A manual
+    `aramid triage <old-range>` writes a row whose head is an ancestor of one
+    already triaged; anchoring on the last row then re-triages everything
+    since that old head and coalesces it into the queued item (2026-09-06
+    14:58Z: the consumer spent its whole mutant budget on the wrong file).
+    Walk newest-first; a head that descends from the best so far replaces
+    it; stop as soon as HEAD itself is seen. In the common case the newest
+    row IS HEAD and git is never asked. Rows beyond `limit` fall back to the
+    newest row, as before."""
+    best = None
+    for h in queue.triaged_heads_newest_first(ledger):
+        if h == head:
+            return head
+        if best is None or gitutil.is_ancestor(root, best, h):
+            best = h
+    return best
+
+
 def _sweep(root: Path, cfg, ledger, at: str) -> None:
     head = gitutil.rev_sha(root, "HEAD")
     if head is None:
         return  # empty repo: nothing to triage
-    last = queue.last_triaged_head(ledger)
+    last = _sweep_anchor(root, ledger, head)
     if last == head:
         return
     if last is None:
@@ -149,7 +168,8 @@ def _consume_item(root: Path, cfg, ledger, item, clock) -> bool:
             # record_run's resolve loop match nothing; FINDING_DETECTED for
             # the pack findings still fires (detection doesn't depend on
             # scope).
-            ledger.record_run(run_id, clock(), "drain", set(), set(), findings)
+            ledger.record_run(run_id, clock(), "drain", set(), set(), findings,
+                              head=item.head)
         # ...and the empty scope above is exactly why this exists. Scope-based
         # resolution INFERS repair from absence, which a narrow ruleset cannot
         # support. A `repaired` claim is the opposite: the consumer re-derived
@@ -194,7 +214,9 @@ def _consume_item(root: Path, cfg, ledger, item, clock) -> bool:
     # letting a bypassed reintroduction escape the backstop. Only mark it
     # drained once every consumer finished cleanly.
     if ok:
-        queue.mark_drained(ledger, item.id, run_id, clock())
+        # Name the head consumed: a commit that landed during this run has
+        # coalesced past it and must stay queued (queue.materialize_queue).
+        queue.mark_drained(ledger, item.id, run_id, clock(), head=item.head)
     return ok
 
 

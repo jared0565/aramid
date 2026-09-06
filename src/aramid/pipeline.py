@@ -362,6 +362,27 @@ def _resolution_scope(root: Path, mode: str, rng: str | None,
         return set()
 
 
+def _changed_since(root: Path) -> Callable[[str], set | None]:
+    """For auto_resolve_mutation: the files changed between a finding's graded
+    head and HEAD, memoised per head (one drain grades many findings at one
+    head). None -- keep the liberal rule -- when the head is not an ancestor
+    of HEAD (rebased away, or a branch never merged) or git cannot answer."""
+    head = gitutil.rev_sha(root, "HEAD")
+    cache: dict[str, set | None] = {}
+
+    def since(graded: str) -> set | None:
+        if graded not in cache:
+            delta = None
+            try:
+                if head is not None and gitutil.is_ancestor(root, graded, head):
+                    delta = set(gitutil.diff_paths(root, graded, head))
+            except Exception:
+                delta = None
+            cache[graded] = delta
+        return cache[graded]
+    return since
+
+
 def _ref_for_builder(mode: str, root: Path, rng: str | None) -> Callable[[str], str]:
     if mode == "staged":
         return lambda f: ":"
@@ -1207,7 +1228,10 @@ def run_gate(root: Path, gate: Gate, mode: str, cfg: config_mod.Config, ledger: 
             mutation_gate.auto_resolve_mutation(
                 ledger, run_id, at, resolve_scope,
                 # An adjudicated equivalent mutant has no gap to address.
-                suppressed={r.id for r in suppress_records})
+                suppressed={r.id for r in suppress_records},
+                # ...and a change the drain already graded against cannot
+                # address the gap it reported (see the resolver's docstring).
+                changed_since=_changed_since(root))
             # 1a-F2: the two synchronous producers resolve too. present_ids
             # skips anything re-fired THIS run (these producers, unlike the
             # drain's, fire in the run being resolved).
