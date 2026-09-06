@@ -64,9 +64,13 @@ push was typed in:
 aramid: tests 1407/2539 (55%) 23m31s elapsed
 ```
 
-A push with nothing new to send does not run the gate at all (`nothing to push --
-git handed the hook an empty ref list`). In a log or CI step the same line is
-written afresh at most every 30 seconds instead of updating in place.
+The line reads `aramid: tests collecting 0m45s` until pytest prints its first
+progress marker (the end of its first line of dots), and its elapsed time ticks
+every 5 seconds even while the count stands still, so a long-running test never
+reads as a hang. A push with nothing new to send does
+not run the gate at all (`nothing to push -- git handed the hook an empty ref
+list`). In a log or CI step the same line is written afresh at most every
+30 seconds instead of updating in place.
 
 ## Documentation
 

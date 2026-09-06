@@ -7,6 +7,9 @@ each line, and hands a one-line summary to a `progress` sink the gate puts
 on the RunContext. No sink -> no tap -> byte-identical to before.
 """
 
+import threading
+import time
+
 from aramid.runners import tests as tests_runner
 from aramid.runners.base import RunContext, RunnerResult, ToolState
 
@@ -126,11 +129,138 @@ def test_with_a_sink_every_marker_becomes_a_progress_line(tmp_path, monkeypatch)
     ctx = RunContext(root=tmp_path, progress=lines.append)
     tests_runner.run_custom(ctx, ["python", "-m", "pytest", "-q"])
     assert lines == [
-        "aramid: tests collecting",
+        "aramid: tests collecting 0s",
         "aramid: tests 69/151 (45%) 7s elapsed",
         "aramid: tests 138/151 (91%) 13s elapsed",
         "aramid: tests 151/151 (100%) 19s elapsed",
     ]
+
+
+# --------------------------------------------------------- the heartbeat ----
+
+# pytest prints a marker only at the end of a 72-dot line, so on this repo the
+# line sat unchanged for up to six minutes through the slow integration tests
+# and read as a hang. A timer re-emits the current line with a fresh elapsed
+# every HEARTBEAT_S seconds, from "collecting" onwards.
+
+def test_collecting_line_carries_the_elapsed_time():
+    assert tests_runner.format_collecting(0.0) == "aramid: tests collecting 0s"
+    assert tests_runner.format_collecting(45.2) == "aramid: tests collecting 45s"
+    assert tests_runner.format_collecting(65.0) == "aramid: tests collecting 1m05s"
+    assert tests_runner.format_collecting(float("inf")) == "aramid: tests collecting 0s"
+
+
+class _Clock:
+    def __init__(self):
+        self.now = 0.0
+
+    def __call__(self):
+        return self.now
+
+
+_REAL_MONOTONIC = time.monotonic     # the tests below patch time.monotonic itself
+
+
+def _wait_for(pred, timeout_s=5.0):
+    deadline = _REAL_MONOTONIC() + timeout_s
+    while not pred():
+        assert _REAL_MONOTONIC() < deadline, "timed out waiting on the heartbeat"
+        time.sleep(0.005)
+
+
+def test_the_heartbeat_re_emits_the_current_line_with_a_fresh_elapsed(tmp_path, monkeypatch):
+    monkeypatch.setattr(tests_runner, "HEARTBEAT_S", 0.01)
+    clock = _Clock()
+    monkeypatch.setattr(tests_runner.time, "monotonic", clock)
+    lines = []
+    lock = threading.Lock()
+
+    def sink(text):
+        with lock:
+            lines.append(text)
+
+    def snapshot():
+        with lock:
+            return list(lines)
+
+    def slow_suite(argv, cwd, timeout_s, env=None, on_stdout_line=None):
+        clock.now = 45.0
+        _wait_for(lambda: "aramid: tests collecting 45s" in snapshot())
+        on_stdout_line("...... [ 69/151]")
+        clock.now = 100.0
+        _wait_for(lambda: "aramid: tests 69/151 (45%) 1m40s elapsed" in snapshot())
+        return RunnerResult(tool="pytest", state=ToolState.OK, raw="", returncode=0)
+
+    monkeypatch.setattr(tests_runner, "run_subprocess", slow_suite)
+    tests_runner.run_custom(RunContext(root=tmp_path, progress=sink), ["pytest", "-q"])
+    seen = snapshot()
+    assert seen[0] == "aramid: tests collecting 0s"
+    # The marker itself landed at 45 s; every later heartbeat carried 1m40s.
+    assert "aramid: tests 69/151 (45%) 45s elapsed" in seen
+    assert seen.index("aramid: tests collecting 45s") < seen.index("aramid: tests 69/151 (45%) 45s elapsed")
+    assert not any(t.startswith("aramid: tests collecting") for t in
+                   seen[seen.index("aramid: tests 69/151 (45%) 45s elapsed"):])
+
+
+def test_the_heartbeat_stops_when_the_suite_returns(tmp_path, monkeypatch):
+    monkeypatch.setattr(tests_runner, "HEARTBEAT_S", 0.01)
+    lines = []
+    lock = threading.Lock()
+
+    def sink(text):
+        with lock:
+            lines.append(text)
+
+    def suite(argv, cwd, timeout_s, env=None, on_stdout_line=None):
+        _wait_for(lambda: len(lines) >= 3)
+        return RunnerResult(tool="pytest", state=ToolState.OK, raw="", returncode=0)
+
+    monkeypatch.setattr(tests_runner, "run_subprocess", suite)
+    tests_runner.run_custom(RunContext(root=tmp_path, progress=sink), ["pytest", "-q"])
+    with lock:
+        settled = len(lines)
+    time.sleep(0.1)     # ten heartbeat intervals
+    with lock:
+        assert len(lines) == settled
+    assert not [t for t in threading.enumerate() if t.name.startswith("aramid-progress")]
+
+
+def test_the_heartbeat_stops_when_the_suite_times_out(tmp_path, monkeypatch):
+    import subprocess
+
+    monkeypatch.setattr(tests_runner, "HEARTBEAT_S", 0.01)
+
+    def hung(argv, cwd, timeout_s, env=None, on_stdout_line=None):
+        raise subprocess.TimeoutExpired(argv, timeout_s)
+
+    monkeypatch.setattr(tests_runner, "run_subprocess", hung)
+    import pytest
+    with pytest.raises(subprocess.TimeoutExpired):
+        tests_runner.run_custom(RunContext(root=tmp_path, progress=lambda s: None), ["pytest"])
+    time.sleep(0.05)
+    assert not [t for t in threading.enumerate() if t.name.startswith("aramid-progress")]
+
+
+def test_a_raising_sink_is_silenced_once_and_the_suite_still_runs(tmp_path, monkeypatch, capsys):
+    monkeypatch.setattr(tests_runner, "HEARTBEAT_S", 0.01)
+    calls = []
+
+    def bad_sink(text):
+        calls.append(text)
+        raise RuntimeError("terminal gone")
+
+    def suite(argv, cwd, timeout_s, env=None, on_stdout_line=None):
+        time.sleep(0.05)
+        on_stdout_line("...... [ 69/151]")
+        return RunnerResult(tool="pytest", state=ToolState.OK, raw="", returncode=0)
+
+    monkeypatch.setattr(tests_runner, "run_subprocess", suite)
+    result = tests_runner.run_custom(RunContext(root=tmp_path, progress=bad_sink), ["pytest"])
+    assert result.state is ToolState.OK
+    assert calls == ["aramid: tests collecting 0s"]
+    err = capsys.readouterr().err
+    assert err.count("aramid: progress reporting stopped: RuntimeError('terminal gone')") == 1
+    assert "Traceback" not in err
 
 
 def test_with_a_sink_the_pytest_argv_carries_the_count_style(tmp_path, monkeypatch):

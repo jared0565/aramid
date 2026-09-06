@@ -10,6 +10,20 @@ to publish a tag that disagrees with it.
 
 ## [Unreleased]
 
+### Added
+
+- **The test-suite progress line ticks.** pytest prints its `[ N/M]` marker
+  only at the end of a 72-dot line, so on a slow stretch (this repo's
+  integration tests: up to six minutes between markers) the line sat
+  unchanged and read as a hang. A heartbeat now re-emits the current line
+  with a fresh elapsed every 5 s, from `aramid: tests collecting 0m45s`
+  onwards, so the clock moves even while the count stands still. The
+  timer is a daemon thread stopped when the suite returns or times out;
+  the tap and the timer write through one lock so a terminal never sees
+  two half lines; a sink that raises is reported once and never called
+  again. Log-mode output is unchanged: the reporter still lands at most
+  one line per 30 s.
+
 ### Changed
 
 - RELEASING.md's post-promotion rehearsal step deletes the throwaway tag

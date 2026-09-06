@@ -120,6 +120,7 @@ import os
 import re
 import shlex
 import sys
+import threading
 import time
 from pathlib import Path
 
@@ -299,15 +300,31 @@ def parse_pytest_progress(line: str) -> tuple[int | None, int | None, int] | Non
     return None
 
 
-def format_tests_progress(done: int | None, total: int | None, percent: int,
-                          elapsed_s: float) -> str:
+def _format_elapsed(elapsed_s: float) -> str:
     # A progress line never raises into the gate: a non-finite or negative
     # elapsed (fuzz reached `int(inf)`, 2026-09-05) reads as 0s.
     secs = int(elapsed_s) if math.isfinite(elapsed_s) and elapsed_s > 0 else 0
-    elapsed = f"{secs // 60}m{secs % 60:02d}s" if secs >= 60 else f"{secs}s"
+    return f"{secs // 60}m{secs % 60:02d}s" if secs >= 60 else f"{secs}s"
+
+
+def format_tests_progress(done: int | None, total: int | None, percent: int,
+                          elapsed_s: float) -> str:
+    elapsed = _format_elapsed(elapsed_s)
     if done is not None and total is not None:
         return f"aramid: tests {done}/{total} ({percent}%) {elapsed} elapsed"
     return f"aramid: tests {percent}% {elapsed} elapsed"
+
+
+def format_collecting(elapsed_s: float) -> str:
+    return f"aramid: tests collecting {_format_elapsed(elapsed_s)}"
+
+
+# pytest prints its marker only at the end of a 72-dot line, so on a slow
+# stretch (this repo's integration tests: up to six minutes between markers)
+# the line sat unchanged and read as a hang. The heartbeat re-emits the
+# current line with a fresh elapsed this often; a log-mode reporter still
+# lands at most one line per its own interval.
+HEARTBEAT_S = 5.0
 
 
 def _is_pytest_argv(argv) -> bool:
@@ -343,20 +360,65 @@ def _run_suite(argv, ctx, timeout_s: float) -> RunnerResult:
     sink = getattr(ctx, "progress", None)
     if sink is None or not _is_pytest_argv(argv):
         return run_subprocess(argv, ctx.root, timeout_s)
-    started = time.monotonic()
-
-    def tap(line: str) -> None:
-        parsed = parse_pytest_progress(line)
-        if parsed is not None:
-            sink(format_tests_progress(*parsed, time.monotonic() - started))
-
-    sink("aramid: tests collecting")
+    heartbeat = _Heartbeat(sink)
     try:
-        return run_subprocess(with_count_style(argv), ctx.root, timeout_s, on_stdout_line=tap)
+        return run_subprocess(with_count_style(argv), ctx.root, timeout_s,
+                              on_stdout_line=heartbeat.tap)
     finally:
+        heartbeat.stop()
         flush = getattr(sink, "flush", None)
         if callable(flush):
             flush()
+
+
+class _Heartbeat:
+    """Keeps the progress line current. The tap records the newest pytest
+    marker and emits it; a daemon timer re-emits whatever is current with a
+    fresh elapsed every HEARTBEAT_S seconds. Both go through one lock, so a
+    TTY reporter never interleaves two half-written lines. A sink that
+    raises is reported once and never called again -- decoration never
+    fails the run and never dumps a thread traceback into the gate."""
+
+    def __init__(self, sink) -> None:
+        self._sink = sink
+        self._lock = threading.Lock()
+        self._stop = threading.Event()
+        self._started = time.monotonic()
+        self._latest: tuple[int | None, int | None, int] | None = None
+        self._silenced = False
+        self._emit(format_collecting(0.0))
+        self._thread = threading.Thread(target=self._run, name="aramid-progress-heartbeat",
+                                        daemon=True)
+        self._thread.start()
+
+    def tap(self, line: str) -> None:
+        parsed = parse_pytest_progress(line)
+        if parsed is not None:
+            self._latest = parsed
+            self._emit()
+
+    def stop(self) -> None:
+        self._stop.set()
+        self._thread.join(timeout=HEARTBEAT_S + 1.0)
+
+    def _run(self) -> None:
+        while not self._stop.wait(HEARTBEAT_S):
+            self._emit()
+
+    def _emit(self, text: str | None = None) -> None:
+        with self._lock:
+            if self._silenced:
+                return
+            if text is None:
+                elapsed = time.monotonic() - self._started
+                latest = self._latest
+                text = (format_collecting(elapsed) if latest is None
+                        else format_tests_progress(*latest, elapsed))
+            try:
+                self._sink(text)
+            except Exception as exc:  # noqa: BLE001 -- decoration never fails the run
+                self._silenced = True
+                print(f"aramid: progress reporting stopped: {exc!r}", file=sys.stderr)
 
 
 def run_custom(ctx, command) -> RunnerResult:
