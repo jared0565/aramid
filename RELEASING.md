@@ -218,9 +218,11 @@ Two things the first run of this step (0.13.0, 2026-09-05) taught:
   not at once.** `aramid.yml` runs on every push, so the tag push starts a
   CI run on the tagged commit; delete the ref before that run's checkout
   and it fails with `couldn't find remote ref` -- harmless (`verify-ci`
-  counts any green run on the commit) but a red mark for nothing. A
-  `git push origin :rehearsal-vX.Y.Z` would run another full pre-push gate
-  for a ref that ships nothing; the API call does not.
+  counts any green run on the commit) but a red mark for nothing. (A
+  `git push origin :rehearsal-vX.Y.Z` would also do: the hook drops
+  deletions from the ref list and skips the gate for a push that only
+  deletes -- `nothing to push`. The API call is used because it leaves the
+  ledger alone and needs no hook at all.)
 - **The release whose hook is being fixed cannot push its own tag through
   the documented step 5.** Its tag is certified by the live hook, which is
   the one with the defect. The managed shim launches
