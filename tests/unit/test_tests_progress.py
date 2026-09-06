@@ -69,6 +69,30 @@ def test_progress_line_at_exactly_one_minute_switches_to_minutes():
         "aramid: tests 69/151 (45%) 59s elapsed"
 
 
+# Unit-scope pins for the two survivors the 2026-09-06 15:30Z drain reported
+# on this file (item 0d8cbd40, the first grading of the heartbeat commit: 10
+# generated, 10 tested, 0 timeouts). The third, `elapsed_s > 0` -> `>= 0`,
+# is equivalent (both read 0.0 as 0s) and is recorded in
+# .aramid-suppressions.toml instead.
+
+def test_exactly_one_second_reads_as_one_second_not_zero():
+    # `elapsed_s > 0` -> `> 1` survives every other elapsed in this file:
+    # int() truncates (0, 1) to 0 either way, and above 1 both branches
+    # agree. 1.0 exactly is the one value that tells them apart.
+    assert tests_runner.format_tests_progress(1, 2, 50, 1.0) == \
+        "aramid: tests 1/2 (50%) 1s elapsed"
+
+
+def test_a_count_needs_both_halves_or_it_reads_as_percent_only():
+    # `done is not None and total is not None` -> `or` would render
+    # "5/None". The marker parser never produces a half count, so only the
+    # function's own contract can pin this.
+    assert tests_runner.format_tests_progress(5, None, 50, 7.0) == \
+        "aramid: tests 50% 7s elapsed"
+    assert tests_runner.format_tests_progress(None, 151, 45, 7.0) == \
+        "aramid: tests 45% 7s elapsed"
+
+
 # ------------------------------------------------------- the pytest argv ----
 
 def test_pytest_shaped_argv_gets_the_count_style():
