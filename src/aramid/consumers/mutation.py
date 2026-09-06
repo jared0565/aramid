@@ -223,13 +223,41 @@ def _is_test_file(rel: str) -> bool:
 
 
 def _stage1_argv(wt: Path, rel: str, cfg=None, root: Path | None = None) -> list[str]:
+    """The fast, targeted run for one mutant of `rel`: the test files named
+    for the module (`test_<stem>.py` and the suffix form `test_<stem>_*.py`,
+    the same shapes `mutation_gate` maps), else `pytest -k <stem>`, else the
+    configured full suite.
+
+    A stem that names a directory under tests/ never becomes a -k token.
+    Under pytest 8+ a directory is a collector and its name is a keyword of
+    every item beneath it, so `-k tests` selects the whole tree: measured
+    2026-09-06 on this repo, 2544 of 2544 tests collected for
+    `runners/tests.py`, a 19-minute run inside the 120 s mutant budget --
+    every mutant a TIMEOUT, none a finding, for as long as the file existed.
+    -k matches case-insensitively, so the comparison folds case.
+
+    Direct hits are kept inside the configured suite's scope (the path
+    arguments of `_full_argv`, the scope stage 2 confirms against and
+    `_suite_label` names): `consumers/mutation.py` has ten `test_mutation*`
+    files, four of them integration files that run for minutes, and
+    unfiltered they would send every one of its mutants into the same
+    timeout. No path arguments (a bare `pytest -q`) means the whole tree,
+    as before."""
     module = Path(rel).stem
     tests_dir = wt / "tests"
     if tests_dir.exists():
-        hits = sorted(tests_dir.rglob(f"test_{module}.py"))
+        scope = [wt / a for a in _full_argv(cfg, root)[1:]
+                 if not a.startswith("-") and (wt / a).exists()]
+        hits = sorted(p for p in set(tests_dir.rglob(f"test_{module}.py"))
+                      | set(tests_dir.rglob(f"test_{module}_*.py"))
+                      if not scope or any(p.is_relative_to(s) for s in scope))
         if hits:
             return [sys.executable, "-m", "pytest", "-q",
                     *(str(p.relative_to(wt)) for p in hits)]
+        dir_names = {tests_dir.name.lower()} | {
+            p.name.lower() for p in tests_dir.rglob("*") if p.is_dir()}
+        if module.lower() in dir_names:
+            return _full_argv(cfg, root)
     if _SAFE_STEM.match(module) and module.lower() not in _K_KEYWORDS:
         return [sys.executable, "-m", "pytest", "-q", "-k", module]
     # Unsafe -k token (pytest keyword / expression-breaking chars): pytest

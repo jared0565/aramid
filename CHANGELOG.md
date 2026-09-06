@@ -24,6 +24,23 @@ to publish a tag that disagrees with it.
   again. Log-mode output is unchanged: the reporter still lands at most
   one line per 30 s.
 
+### Fixed
+
+- **Mutation stage 1 no longer runs `pytest -k <stem>` for a stem that
+  names a test directory, and finds `test_<stem>_*.py`.** Under pytest 8+
+  a directory is a collector whose name is a keyword of every item beneath
+  it, so `-k tests` (the fallback for `src/aramid/runners/tests.py`, which
+  has no `test_tests.py`) selected the whole tree: 2544 of 2544 tests, a
+  19-minute run inside the 120 s mutant budget. Every mutant of that file
+  timed out, and a timeout is not a finding, so two drains (2026-09-05
+  18:00Z, 2026-09-06 02:00Z) graded nineteen mutants of it as nothing at
+  all. Now the suffix form `test_<stem>_*.py` counts as a direct hit, a
+  stem that names a directory under `tests/` uses the configured suite
+  instead of `-k`, and direct hits stay inside the configured suite's
+  scope (without that, the suffix rule would have sent
+  `consumers/mutation.py` and its four integration files into the same
+  timeout).
+
 ### Changed
 
 - RELEASING.md's post-promotion rehearsal step deletes the throwaway tag
