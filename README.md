@@ -56,6 +56,18 @@ Once installed, `git commit` and `git push` trigger the gate automatically via t
 installed hooks. Local hooks are convenience, not enforcement — `--no-verify` exists.
 The authoritative backstop is re-running `aramid check --all --strict --json` in CI.
 
+The pre-push gate runs the repo's own test suite, which on a large tree can take
+many minutes. While it runs, the hook keeps one line current on the terminal the
+push was typed in:
+
+```
+aramid: tests 1407/2539 (55%) 23m31s elapsed
+```
+
+A push with nothing new to send does not run the gate at all (`nothing to push --
+git handed the hook an empty ref list`). In a log or CI step the same line is
+written afresh at most every 30 seconds instead of updating in place.
+
 ## Documentation
 
 - **[User Guide](https://github.com/jared0565/aramid/blob/main/docs/user-guide.md)** — task-oriented walkthrough: install, onboarding, the gate, running checks, the red-team drain, and each consumer.
