@@ -1,5 +1,6 @@
 import ast
 
+from aramid import mutation
 from aramid.consumers import mutation as mut_consumer
 from aramid.mutation import generate_mutants
 
@@ -143,3 +144,18 @@ def test_suite_label_degrades_to_a_phrase_rather_than_an_empty_paren():
     from aramid.consumers.mutation import _suite_label
 
     assert _suite_label(["python"]) == "the configured suite"
+
+
+def test_every_op_the_mutator_emits_is_registered_and_vice_versa():
+    """`mutation.OPS` is what the gate's line_departed resolver trusts an
+    id's op against (an unregistered op is never a candidate). Both
+    directions: an op yielded under a name the tuple lacks is a survivor
+    nobody can ever clear, and a name in the tuple nothing yields is a
+    retired op still admitting candidates."""
+    src = ("def f(x, y):\n"
+           "    if not x:\n"
+           "        return 1\n"
+           "    return x > y and y\n")
+    emitted = {m.op for m in mutation.generate_mutants(src, {1, 2, 3, 4})}
+    assert emitted == set(mutation.OPS)
+    assert len(mutation.OPS) == len(set(mutation.OPS))

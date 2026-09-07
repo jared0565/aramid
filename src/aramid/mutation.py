@@ -49,6 +49,18 @@ def _enclosing(spans, lineno):
     return best
 
 
+# Every op name `_mutations_at` can yield, in one place. A survivor's id is
+# hashed with the op NAME, so the name is part of the finding's identity:
+# the gate's `line_departed` resolver trusts an id's recorded op against this
+# tuple and never treats a survivor of an op the mutator cannot emit as
+# "gone" (nobody can regenerate it; clearing it would be a statement about
+# the mutator, not the file). `generate_mutants` refuses a name outside it,
+# so the tuple cannot lag the code silently -- a renamed op fails every
+# mutation test rather than orphaning every recorded survivor of the old
+# name. Pinned both ways in tests/unit/test_mutation.py.
+OPS = ("cmp-flip", "bool-swap", "int-bound", "not-drop")
+
+
 def _mutations_at(node, func_name):
     """Yield (op, description, mutate_fn); mutate_fn edits the COPY node."""
     if isinstance(node, ast.Compare) and len(node.ops) == 1 \
@@ -91,6 +103,8 @@ def generate_mutants(source: str, target_lines: set[int]) -> list[Mutant]:
         if enc is None:
             continue
         for op, desc, mutate in _mutations_at(node, enc[2]):
+            if op not in OPS:
+                raise ValueError(f"unregistered mutation op {op!r}: add it to mutation.OPS")
             tree_copy = copy.deepcopy(tree)
             mutate(list(ast.walk(tree_copy))[idx])
             try:
