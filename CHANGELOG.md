@@ -64,7 +64,14 @@ to publish a tag that disagrees with it.
   selects 15 tests in 4 s. Surveyed over every module in this repo after
   the fix, the largest stage-1 selection is 128 tests; a module whose
   keyword selects nothing in scope exits 5 and goes straight to the
-  full-suite confirm, the verdict stage 2 would give anyway.
+  full-suite confirm, the verdict stage 2 would give anyway. The scope is
+  now DIRECTORIES only, for both branches: a command that names a launcher
+  script (`python scripts/mutation_tests.py`) had, since 0.14.0, a file for
+  a scope, which silently dropped every direct hit (no test file is
+  relative to a file) and sent every module to `-k`; handed to the scoped
+  fallback it would have been collected by pytest as a test module. A
+  command with no directory argument means the whole tree, as a bare
+  `pytest -q` does.
 
 - **A mutation survivor whose module a changed test names is re-tested
   FIRST, on its own budget.** Every re-test of a recorded survivor ran after

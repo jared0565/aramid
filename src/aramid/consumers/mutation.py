@@ -247,11 +247,15 @@ def _stage1_argv(wt: Path, rel: str, cfg=None, root: Path | None = None) -> list
     -- 54 tests, 39 of them integration drains, over 170 s against the 120 s
     budget -- and all five of its mutants timed out, ungraded, for as long
     as that stayed true. Scoped, the same keyword selects 15 tests in 4 s.
-    No path arguments (a bare `pytest -q`) means the whole tree, as before."""
+    No path arguments (a bare `pytest -q`) means the whole tree, as before.
+    Only DIRECTORIES scope. A consumer whose command is a launcher script
+    (`python scripts/mutation_tests.py`) names a file: as a scope it
+    silently dropped every direct hit (no test file is relative to a file),
+    and handed to the fallback it would be collected as a test module."""
     module = Path(rel).stem
     tests_dir = wt / "tests"
     scope_args = [a for a in _full_argv(cfg, root)[1:]
-                  if not a.startswith("-") and (wt / a).exists()]
+                  if not a.startswith("-") and (wt / a).is_dir()]
     scope = [wt / a for a in scope_args]
     if tests_dir.exists():
         hits = sorted(p for p in set(tests_dir.rglob(f"test_{module}.py"))

@@ -98,6 +98,24 @@ def test_stage1_keyword_fallback_stays_inside_the_configured_suite_scope(tmp_pat
     assert argv == [sys.executable, "-m", "pytest", "-q", "tests/unit", "-k", "drain"]
 
 
+def test_stage1_scope_is_directories_only_so_a_launcher_script_is_not_a_scope(tmp_path):
+    # A consumer whose `[mutation].test_command` is a launcher SCRIPT
+    # (graphite: `python scripts/mutation_tests.py`) names a file, not a
+    # test path. As a scope a file is worse than useless: no test file is
+    # relative to it, so every direct hit was silently dropped and every
+    # module fell to `-k` (latent since the scope arrived in 0.14.0), and
+    # handed to the keyword fallback it would be collected by pytest as a
+    # test module. Only directories scope; a file-only command means the
+    # whole tree, as a bare `pytest -q` does.
+    _touch(tmp_path / "scripts" / "mutation_tests.py")
+    _touch(tmp_path / "tests" / "test_calc.py")
+    cfg = SimpleNamespace(mutation={"test_command": ["python", "scripts/mutation_tests.py"]})
+    assert mut_consumer._stage1_argv(tmp_path, "calc.py", cfg, tmp_path) == [
+        sys.executable, "-m", "pytest", "-q", str(Path("tests", "test_calc.py"))]
+    assert mut_consumer._stage1_argv(tmp_path, "other.py", cfg, tmp_path) == [
+        sys.executable, "-m", "pytest", "-q", "-k", "other"]
+
+
 def test_stage1_scope_reads_a_path_that_directly_follows_the_command(tmp_path):
     # The 2026-09-06 06:00Z drain's survivor: `_full_argv(...)[1:]` -> `[2:]`
     # was invisible while every pinned command had a flag at index 1. A
