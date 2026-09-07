@@ -265,3 +265,17 @@ tool = "mutation"
 rule = "cmp-flip"
 path = "src/aramid/runners/tests.py"
 reason = "EQUIVALENT MUTANT -- unkillable by construction. `elapsed_s > 0` -> `>= 0` in _format_elapsed. The two differ only at elapsed_s == 0.0 (and -0.0), where the true branch gives int(0.0) == 0 and the else branch gives 0: the same `secs` for every input, so the same string. Applied and verified: all of tests/unit/test_tests_progress.py passes identically with and without it. No test can distinguish them, so none should be written."
+
+[[suppress]]
+id = "f6befacb1d9640d51293198e57593e9f2c2a65aab5d0deb65e2e75f92411fe10"
+tool = "mutation"
+rule = "int-bound"
+path = "src/aramid/consumers/mutation.py"
+reason = "DEAD FALLBACK in production, not a test gap. `wall_budget = float(mcfg.get(\"wall_budget_s\", 600))` -> `601` in consume. `mcfg` is `ctx.cfg.mutation`; the only production dispatch is drain._consume_item, whose cfg comes from config.load_config, which merges src/aramid/data/defaults.toml -- verified 2026-09-07 by loading a config from an aramid.toml with no [mutation] section: `wall_budget_s = 600` is supplied. The literal is reachable only by a caller that hands consume a config built without load_config. Same family as d03404351c6c (max_mutants); every `mcfg.get(<knob>, <literal>)` line in consume will surface this way when the function is edited. Retire by removing the literal fallbacks, not by editing this."
+
+[[suppress]]
+id = "d49f5a072f6f510fe123009f4d06b354e3588293d8ccdeb44f1338ac3721b11e"
+tool = "mutation"
+rule = "int-bound"
+path = "src/aramid/consumers/mutation.py"
+reason = "DEAD FALLBACK in production, not a test gap. `mutant_timeout = float(mcfg.get(\"mutant_timeout_s\", 120))` -> `121` in consume. `mcfg` is `ctx.cfg.mutation`; the only production dispatch is drain._consume_item, whose cfg comes from config.load_config, which merges src/aramid/data/defaults.toml -- verified 2026-09-07 by loading a config from an aramid.toml with no [mutation] section: `mutant_timeout_s = 120` is supplied. The literal is reachable only by a caller that hands consume a config built without load_config. Same family as d03404351c6c (max_mutants); every `mcfg.get(<knob>, <literal>)` line in consume will surface this way when the function is edited. Retire by removing the literal fallbacks, not by editing this."
