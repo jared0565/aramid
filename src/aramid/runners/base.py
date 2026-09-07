@@ -287,12 +287,24 @@ def worktree_import_env(wt: Path) -> dict[str, str]:
     Does NOT defeat a PEP 660 *strict* editable install, which installs a
     MetaPathFinder rather than a sys.path entry: no PYTHONPATH entry outranks a
     meta-path hook. That case remains a live limitation.
+
+    AND NO BYTECODE. Python validates a cached .pyc by the source's mtime in
+    whole seconds and its SIZE. Two mutants of one file differ by one
+    operator -- the same size -- and a fast runner writes them within one
+    second, so the second mutant imported the FIRST one's bytecode and was
+    "killed" by a test that never saw it (CI 34158187545, 2026-09-07: the
+    five fast legs failed the two-occurrence claim test, the two slow legs
+    passed). Every subprocess under this env is exercising a tree that is
+    about to be rewritten under it -- a mutant, a base checkout, a fuzz
+    target -- and a worktree starts with no __pycache__; forbidding the
+    write keeps it that way, so nothing stale can exist. Import cost is one
+    compile per module per run, which is noise next to a pytest start.
     """
     parts = [str(wt / "src"), str(wt)]
     existing = os.environ.get("PYTHONPATH", "")
     if existing:
         parts.append(existing)
-    return {"PYTHONPATH": os.pathsep.join(parts)}
+    return {"PYTHONPATH": os.pathsep.join(parts), "PYTHONDONTWRITEBYTECODE": "1"}
 
 
 def _tapped_communicate(proc: subprocess.Popen, timeout_s: float, on_stdout_line):

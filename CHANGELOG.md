@@ -80,6 +80,18 @@ to publish a tag that disagrees with it.
   gate's common answer, costs 6 ms instead of 6 s. Same result as the full
   scan; a record with no op still gets it.
 
+- **A mutant never runs the previous mutant's bytecode.** Python validates
+  a cached `.pyc` by the source's mtime in whole seconds and its size. Two
+  mutants of one file differ by one operator, so they are the same size,
+  and a fast machine writes them within one second: the second mutant
+  imported the first one's bytecode and was "killed" by a test that never
+  saw it. Latent since the consumer's first mutant; surfaced by the
+  every-occurrence re-test above, which runs two same-size mutants back to
+  back, on the five fast CI legs (the two slow ones passed). Every
+  subprocess that exercises a worktree -- a mutant, a red-proof base
+  checkout, a fuzz target -- now runs with bytecode writing disabled, so a
+  worktree that starts without a `__pycache__` never gains one.
+
 - **A spent phase budget in the mutation consumer ends that phase, not the
   run.** The claimed re-test pass (survivors a changed test names) runs on
   its own `retest_cap` budget precisely so the range keeps `max_mutants`

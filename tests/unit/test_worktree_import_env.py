@@ -21,6 +21,7 @@ by pytest's own cwd insertion -- the package sits at `<root>/src/<pkg>`, not
 `<root>/<pkg>` -- which is precisely why the installed copy wins outright when
 the env is missing.
 """
+import os
 import sys
 
 from aramid.runners.base import run_subprocess, worktree_import_env
@@ -94,3 +95,47 @@ def test_both_layouts_are_covered(tmp_path):
     parts = env["PYTHONPATH"].split(";" if sys.platform == "win32" else ":")
     assert str(tmp_path / "src") in parts
     assert str(tmp_path) in parts
+
+
+# --- the second mutant must run its OWN code, not the first one's bytecode --
+
+_ADULT = ("def is_adult(age):\n"
+          "    if age >= 18:\n"
+          "        return True\n"
+          "    return False\n")
+_TWO = _ADULT + "\n\ndef is_adult_again(age):\n    if age >= 18:\n        return True\n    return False\n"
+
+
+def _same_size_mutants():
+    a = _TWO.replace("age >= 18", "age > 18", 1)                  # is_adult broken
+    i = _TWO.rindex("age >= 18")
+    b = _TWO[:i] + "age > 18" + _TWO[i + len("age >= 18"):]      # is_adult_again broken
+    assert len(a) == len(b) and a != b
+    return a, b
+
+
+def _probe(wt):
+    res = run_subprocess(
+        [sys.executable, "-c", "import calc; print(calc.is_adult(18), calc.is_adult_again(18))"],
+        wt, _TIMEOUT_S, env=worktree_import_env(wt))
+    return res.raw.strip()
+
+
+def test_a_subprocess_under_the_env_never_leaves_bytecode_behind(tmp_path):
+    """Python validates a cached .pyc by the source's mtime (whole seconds)
+    and SIZE. Two mutants of one file differ by one operator, so they are
+    the same size, and a fast runner writes them within one second -- the
+    second mutant then imports the FIRST one's bytecode, and a survivor is
+    "killed" by a test that never saw it (CI 34158187545, 2026-09-07: five
+    fast legs failed the two-occurrence claim test, the two slow legs
+    passed). The env forbids writing bytecode, so nothing stale can exist:
+    the worktree starts without a __pycache__ and never gains one."""
+    a, b = _same_size_mutants()
+    calc = tmp_path / "calc.py"
+    calc.write_text(a, encoding="utf-8")
+    assert _probe(tmp_path) == "False True"
+    st = calc.stat()
+    calc.write_text(b, encoding="utf-8")
+    os.utime(calc, (st.st_atime, st.st_mtime))      # same second, same size: the CI case, forced
+    assert _probe(tmp_path) == "True False", "the second mutant ran the first one's bytecode"
+    assert not (tmp_path / "__pycache__").exists(), "bytecode was written under the env"
