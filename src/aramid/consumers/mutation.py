@@ -341,13 +341,25 @@ def _full_argv(cfg=None, root: Path | None = None) -> list[str]:
 
 def _survivor_mutant(rel: str, line: int, fid: str, original: str):
     """Regenerate the recorded survivor `fid` from `original` (the file at
-    the item's head), or None when nothing at `line` fingerprints to it any
-    more -- the line's content moved or changed, which is `gap_addressed` /
+    the item's head), or None when nothing in the file fingerprints to it
+    any more -- the line's content changed, which is `gap_addressed` /
     `file_departed`'s case, not this one. Generation is deterministic and
     the fingerprint is keyed on the line's CONTENT, so a match is the same
-    mutant an earlier drain tested, not a lookalike."""
+    mutant an earlier drain tested, not a lookalike.
+
+    The recorded line is asked first: generation is per function, so a
+    shift inside the function still lands, and that is the common case
+    (15 of 17 on this repo's ledger, 2026-09-07). When it misses, the
+    whole file is asked -- a survivor whose function code was inserted
+    ABOVE still exists further down, and until this it regenerated
+    nothing: the re-test could neither kill it nor re-report it, so it
+    sat `pending_retest` with no path out. The scan is bounded by the
+    file's mutants and runs only on a miss."""
     lines = original.splitlines()
     for m in mutation.generate_mutants(original, {line}):
+        if _mutant_fp(rel, m.op, m.line, lines) == fid:
+            return m
+    for m in mutation.generate_mutants(original, set(range(1, len(lines) + 1))):
         if _mutant_fp(rel, m.op, m.line, lines) == fid:
             return m
     return None

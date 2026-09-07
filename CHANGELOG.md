@@ -10,6 +10,20 @@ to publish a tag that disagrees with it.
 
 ## [Unreleased]
 
+### Fixed
+
+- **A recorded mutation survivor whose line moved out of its function is
+  regenerated from the whole file.** The re-test regenerated a survivor at
+  its recorded line only; generation is per function, so a shift inside the
+  function still landed, but code inserted above the function put the
+  recorded line in some other function and the survivor regenerated
+  nothing: the re-test could neither kill it nor re-report it, and it sat
+  `pending_retest` with no path out. Measured on this repo's ledger
+  2026-09-07: 17 recorded survivors, 15 regenerating at their line, 2
+  moved and both still present further down their file. When the recorded
+  line misses, the whole file is asked; content that no longer exists
+  anywhere still regenerates nothing.
+
 ## [0.15.0] — 2026-09-07
 
 ### Added
