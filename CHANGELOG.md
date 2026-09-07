@@ -47,6 +47,33 @@ to publish a tag that disagrees with it.
   function on line 1 holds a mutant; drain survivor 4031dcd0). Content that
   no longer exists anywhere still regenerates nothing.
 
+- **A mutation survivor whose line was rewritten no longer sits in
+  `pending_retest` forever: the pre-push gate resolves it as
+  `line_departed`.** A survivor is regenerated from its id -- (op, path,
+  line content) -- and content that no longer exists in the file
+  regenerates nothing, so the drain's re-test could neither kill nor
+  re-report it, `gap_addressed` had already parked it `pending_retest`
+  (the rewrite touched the source), and `file_departed` needs the whole
+  file gone. Two such on this repo's own ledger (2026-09-07, both on a
+  `range(1, ...)` line an edit replaced), re-tested to nothing every
+  drain. The gate now reads each open or `pending_retest` survivor's file
+  and asks the re-test's own question -- the same regeneration function,
+  so "gone" here and "regenerates nothing" there are one predicate -- and
+  writes `fixed` when nothing in the file fingerprints to the id. An
+  absent file is left to `file_departed`, a path that escapes the repo is
+  refused before any read, and an unreadable file keeps the finding open.
+  `aramid resolvers` grades the new resolver like the others.
+
+- **Regenerating a survivor hashes for its line before generating
+  anything.** Generation deep-copies and unparses the whole module per
+  mutant (37 ms each; 169 mutants, 6.3 s for this repo's largest module),
+  and the whole-file scan above paid for every mutant to keep the few that
+  match. The id is a hash of the op and the line's content, and the record
+  carries the op, so the candidate lines are now found from the hashes
+  alone and only their functions are generated -- a rewritten line, the
+  gate's common answer, costs 6 ms instead of 6 s. Same result as the full
+  scan; a record with no op still gets it.
+
 - **A spent phase budget in the mutation consumer ends that phase, not the
   run.** The claimed re-test pass (survivors a changed test names) runs on
   its own `retest_cap` budget precisely so the range keeps `max_mutants`

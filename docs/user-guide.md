@@ -651,6 +651,8 @@ retest_cap = 3                 # ...at most this many per item, after the range'
 
 A survivor the pre-push gate resolved on intent (the push touched its module, or a test named for it) is recorded as `pending_retest`, not `fixed`: it no longer blocks, but nothing has proved it dead. The re-test is what closes it (`mutant_killed` → `fixed`), a later run that regenerates the same mutant re-opens it, and triage scores a push that changes a test named for a recorded survivor's module high enough to be queued (`survivor-retest`), so the push carrying the evidence is the one that reaches the consumer. A survivor bound by `.aramid-suppressions.toml` (an equivalent mutant) is never resolved by the gate at all.
 
+A survivor is regenerated from its id — (op, path, line content) — so it is found wherever that line now sits in the file, every occurrence of it, and is claimed killed only when every occurrence dies. A line that was rewritten regenerates nothing, and the re-test could neither kill nor re-report it; the pre-push gate closes that one itself (`line_departed` → `fixed`), having read the file and found no line the id could come from. The rewritten line's own mutants are graded fresh, under new ids, by the next drain over the range that rewrote it.
+
 Requirement: a pytest test stack must be detected — a real `test_*.py`, `*_test.py`, or `conftest.py` file; a bare `tests/` directory by itself no longer counts — otherwise it OK-skips permanently and harmlessly (`"no python test stack (mutation skipped)"`) rather than pinning the queue item forever.
 
 ### js_mutation (JS/TS)

@@ -83,3 +83,50 @@ def test_a_survivor_on_the_first_line_of_the_file_is_still_found():
     fid = mut_consumer._mutant_fp("calc.py", m.op, m.line, lines)
     # the scan must include line 1, not start at 2
     assert _at(mut_consumer._survivor_mutants("calc.py", fid, one_liner)) == [(m.op, 1)]
+
+
+def _spy_generation(monkeypatch):
+    """Record the line sets `generate_mutants` is asked for; keep its answer."""
+    calls = []
+    real = mutation.generate_mutants
+
+    def spy(source, target_lines):
+        calls.append(set(target_lines))
+        return real(source, target_lines)
+    monkeypatch.setattr(mut_consumer.mutation, "generate_mutants", spy)
+    return calls
+
+
+def test_a_departed_line_costs_no_generation(monkeypatch):
+    """Generation deep-copies and unparses the whole module PER MUTANT --
+    measured 37 ms each, 169 mutants / 6.3 s for consumers/mutation.py
+    (2026-09-07). The id is a hash of (op, path, line content), and the
+    record carries the op, so which lines could match is known from the
+    hashes alone: a line that hashes nowhere is answered without generating
+    anything. That is the common answer at the gate (every open survivor,
+    every push) and the whole answer for a line that was rewritten."""
+    m, fid = _recorded()
+    calls = _spy_generation(monkeypatch)
+    rewritten = ADULT.replace("age >= 18", "age >= 21")
+    assert mut_consumer._survivor_mutants("calc.py", fid, rewritten, op=m.op) == []
+    assert calls == []
+
+
+def test_only_the_lines_that_hash_to_the_id_are_generated(monkeypatch):
+    """The prefilter narrows generation to the candidate lines; the result
+    is the same every-occurrence answer the whole-file scan gave."""
+    m, fid = _recorded()
+    calls = _spy_generation(monkeypatch)
+    twin = ("def pad():\n    return 0\n\n\n"
+            "def other(age):\n    if age >= 18:\n        return 1\n    return 0\n\n\n") + ADULT
+    assert _at(mut_consumer._survivor_mutants("calc.py", fid, twin, op=m.op)) == [(m.op, 6), (m.op, 12)]
+    assert calls == [{6, 12}]
+
+
+def test_without_a_recorded_op_the_whole_file_is_generated(monkeypatch):
+    """No op to hash with -> nothing to narrow by; the slow answer is still
+    the right one, never a miss."""
+    m, fid = _recorded()
+    calls = _spy_generation(monkeypatch)
+    assert _at(mut_consumer._survivor_mutants("calc.py", fid, ADULT)) == [(m.op, m.line)]
+    assert calls == [set(range(1, len(ADULT.splitlines()) + 1))]

@@ -139,6 +139,10 @@ _SPECS = (
     _Spec("file_departed", "mutation", _by_tool("mutation")),
     _Spec("file_departed", "tdd", _by_tool("tdd")),
     _Spec("file_departed", "red-proof", _by_tool("red-proof")),
+    # A survivor whose LINE left its file (mutation_gate
+    # .auto_resolve_line_departed): like file_departed, "cleared none" is
+    # its normal day.
+    _Spec("line_departed", "mutation", _by_tool("mutation")),
     # `resolve_repaired` carries the CLAIMING producer's tool, and both
     # mutation consumers claim `mutant_killed` -- one row each, or the python
     # one's kills are graded nowhere (they were, for sixteen days).

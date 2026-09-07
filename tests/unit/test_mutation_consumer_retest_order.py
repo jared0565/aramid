@@ -31,7 +31,7 @@ def _ledger(tmp_path, retested_runs):
 
 def _order(led, tmp_path):
     try:
-        return [fid[0] for fid, _, _ in mut_consumer._retest_candidates(led, tmp_path)]
+        return [fid[0] for fid, *_ in mut_consumer._retest_candidates(led, tmp_path)]
     finally:
         led.close()
 

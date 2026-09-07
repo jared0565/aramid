@@ -18,7 +18,7 @@ from typing import Callable
 
 from aramid import diagnostics, gitutil
 from aramid.fingerprint import normalize_path
-from aramid.ledger import note_yield
+from aramid.ledger import _resolved_root, note_yield
 from aramid.models import Event, EventType, Finding, Gate, Severity, Source, Verdict
 
 TOOL = "mutation"
@@ -206,3 +206,96 @@ def auto_resolve_mutation(ledger, run_id: str, at: str, changed_files, *,
     note_yield(ledger, run_id, at, resolver="gap_addressed", tool=TOOL,
                considered=considered, resolved=len(resolved))
     return resolved
+
+
+def auto_resolve_line_departed(ledger, run_id: str, at: str, *, root) -> list[str]:
+    """Resolve mutation survivors whose LINE has left the file: nothing in
+    the file at `root` fingerprints to the id any more.
+
+    THE HOLE THIS CLOSES. A survivor's id is (op, path, line content), and
+    the drain's re-test regenerates it from that -- every occurrence, from
+    the file at the item's head. Content that no longer exists in the file
+    regenerates nothing, so the re-test can neither kill the survivor nor
+    re-report it, and no other resolver reaches it: `gap_addressed` only
+    moves it to `pending_retest` when the push touches the source (which a
+    rewrite does), and `file_departed` needs the whole file gone. Two live
+    instances on this repo's ledger, 2026-09-07 -- 4031dcd0 and f1c1930d,
+    both on a `range(1, ...)` line an edit replaced with `enumerate` --
+    `pending_retest` forever, re-tested to nothing every drain. The
+    rewritten line's own mutants are graded fresh, under new ids, by the
+    drain over the range that rewrote it; the old id carries nothing that
+    grading will not re-derive.
+
+    NOT OPTIMISTIC. `gap_addressed` credits a fix it has not seen; this
+    reads the file and asks the re-test's own question (`_survivor_mutants`,
+    the same function, so "gone" here and "regenerates nothing" there are
+    one predicate), which is why it may write a bare `fixed` where
+    gap_addressed may only write `pending_retest`. Both `open` and
+    `pending_retest` rows are candidates -- the stranded state IS
+    pending_retest. Suppressed ids are not skipped: an adjudicated
+    equivalent mutant on a line that is gone is gone.
+
+    SAFE DIRECTION. `root` None is a no-op; an absent file is left to
+    `file_departed` (departure needs its containment rules, and "no file"
+    is not "no line"); a stored path that escapes the root is refused
+    before any read -- `root / "C:/Windows/win.ini"` IS win.ini, whose
+    content holds no such line and would read as departed; an unreadable
+    file, a malformed record, or a regeneration error keeps the finding
+    open. Never raises.
+
+    COST. One read per distinct file, and `_survivor_mutants` with the
+    recorded op hashes the lines before generating anything: a present line
+    costs its function's mutants, a departed one costs the hashes alone
+    (6 ms on this repo's largest module). Yield is recorded so `aramid
+    resolvers` grades it."""
+    base = _resolved_root(root)
+    if base is None:
+        return []
+    from aramid.consumers.mutation import _survivor_mutants     # circular at module level
+    resolved: list[str] = []
+    considered = 0
+    skipped = 0
+    sources: dict[str, str | None] = {}
+    try:
+        state = ledger.open_findings()
+    except Exception:
+        state = {}
+    for fid, rec in state.items():
+        try:
+            if rec.get("tool") != TOOL or rec.get("status") not in ("open", "pending_retest"):
+                continue
+            rel = str(rec.get("file") or "")
+            op = str(rec.get("rule") or "")
+            if not rel or not op:
+                continue
+            if rel not in sources:
+                sources[rel] = _read_contained(base, rel)
+            source = sources[rel]
+            if source is None:
+                continue                       # absent, escaped, or unreadable
+            considered += 1
+            if _survivor_mutants(rel, fid, source, op):
+                continue                       # still there, somewhere in the file
+            ledger.append(Event(EventType.FINDING_RESOLVED, run_id, at, finding_id=fid,
+                                payload={"auto_resolved": "line_departed"}))
+            resolved.append(fid)
+        except Exception:
+            skipped += 1
+            continue
+    diagnostics.note_skipped("line-departed", skipped)
+    note_yield(ledger, run_id, at, resolver="line_departed", tool=TOOL,
+               considered=considered, resolved=len(resolved))
+    return resolved
+
+
+def _read_contained(base: Path, rel: str) -> str | None:
+    """The file's text, or None when it is absent, unreadable, or not inside
+    `base` once resolved (an absolute `rel` discards base outright and `..`
+    is never normalised away -- see `ledger._departed`)."""
+    try:
+        target = (base / rel).resolve()
+        if not target.is_relative_to(base) or not target.is_file():
+            return None
+        return target.read_text(encoding="utf-8")
+    except (OSError, ValueError, UnicodeDecodeError):
+        return None

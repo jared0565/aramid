@@ -1,6 +1,7 @@
 from types import SimpleNamespace
 
 from aramid import mutation_gate
+from aramid.fingerprint import compute_fingerprint
 from aramid.ledger import Ledger
 from aramid.models import (Event, EventType, Finding, Gate, Severity, Source,
                            Verdict)
@@ -544,3 +545,123 @@ def test_a_legacy_gap_addressed_event_still_reads_fixed(tmp_path):
     finally:
         led.close()
     assert rec["status"] == "fixed"
+
+
+# --- line_departed: a survivor whose LINE left the file --------------------
+#
+# The re-test regenerates a survivor by its fingerprint -- (op, path, line
+# content) -- from the file at the item's head. Content that no longer exists
+# anywhere in the file regenerates nothing, so the re-test can neither kill
+# nor re-report it, and neither of the other resolvers can reach it either:
+# `gap_addressed` only moves it to `pending_retest` (the source was touched)
+# and `file_departed` needs the whole file gone. Two live instances on this
+# repo's ledger, 2026-09-07: 4031dcd0 and f1c1930d, both on a `range(1, ...)`
+# line that an edit replaced -- `pending_retest` forever, re-tested to nothing
+# every drain. The gate answers the question the re-test cannot: is there
+# still a line this id could be regenerated from?
+
+ADULT = ("def is_adult(age):\n"
+         "    if age >= 18:\n"
+         "        return True\n"
+         "    return False\n")
+X = "src/pkg/x.py"
+
+
+def _line_fid(content="    if age >= 18:", op="cmp-flip", rel=X):
+    return compute_fingerprint("mutation", op, rel, content, 0)
+
+
+def _write(root, rel, text):
+    p = root / rel
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text(text, encoding="utf-8")
+
+
+def _line_departed(tmp_path, source, *, status_pending=False, root="same"):
+    fid = _line_fid()
+    if source is not None:
+        _write(tmp_path, X, source)
+    led = Ledger(tmp_path / "l.db")
+    try:
+        _seed(led, _mut_finding(fid=fid, file=X, line=2, op="cmp-flip"))
+        if status_pending:
+            led.append(Event(EventType.FINDING_RESOLVED, "r0", NOW, finding_id=fid,
+                             payload={"auto_resolved": "gap_addressed", "pending_retest": True}))
+        resolved = mutation_gate.auto_resolve_line_departed(
+            led, "r1", NOW, root=(tmp_path if root == "same" else root))
+        rec = led.open_findings()[fid]
+        evs = [e for e in led.events() if e.type is EventType.FINDING_RESOLVED
+               and e.finding_id == fid and e.payload.get("auto_resolved") == "line_departed"]
+    finally:
+        led.close()
+    return fid, resolved, rec, evs
+
+
+def test_a_survivor_whose_line_was_rewritten_resolves_as_line_departed(tmp_path):
+    fid, resolved, rec, evs = _line_departed(tmp_path, ADULT.replace("age >= 18", "age >= 21"))
+    assert resolved == [fid]
+    assert rec["status"] == "fixed"
+    assert len(evs) == 1 and evs[0].payload == {"auto_resolved": "line_departed"}
+
+
+def test_a_pending_retest_survivor_whose_line_was_rewritten_resolves_too(tmp_path):
+    """The stranded state IS pending_retest: the gate's own gap_addressed put
+    it there when the push rewrote the line, and the re-test then found
+    nothing to regenerate. Reading `open` only would leave the hole open."""
+    fid, resolved, rec, evs = _line_departed(tmp_path, ADULT.replace("age >= 18", "age >= 21"),
+                                             status_pending=True)
+    assert resolved == [fid]
+    assert rec["status"] == "fixed" and len(evs) == 1
+
+
+def test_a_survivor_whose_line_is_still_in_the_file_is_left_alone(tmp_path):
+    """Moved, not gone: the recorded line 2 now sits in another function and
+    the content lives on line 6. The id is content-keyed, and so is this."""
+    moved = "def other(x):\n    return x\n\n\n" + ADULT
+    fid, resolved, rec, evs = _line_departed(tmp_path, moved)
+    assert resolved == [] and rec["status"] == "open" and evs == []
+
+
+def test_a_survivor_whose_file_is_gone_is_file_departeds_case_not_this(tmp_path):
+    """No file, no line -- but "departed" would be a guess here, and
+    `file_departed` already answers it with its own containment rules."""
+    fid, resolved, rec, evs = _line_departed(tmp_path, None)
+    assert resolved == [] and rec["status"] == "open" and evs == []
+
+
+def test_line_departed_is_a_no_op_without_a_root(tmp_path):
+    fid, resolved, rec, evs = _line_departed(tmp_path, ADULT.replace("age >= 18", "age >= 21"),
+                                             root=None)
+    assert resolved == [] and rec["status"] == "open" and evs == []
+
+
+def test_line_departed_never_reads_outside_the_repo(tmp_path):
+    """A stored path that escapes the root joins to some unrelated file --
+    `root / "C:/Windows/win.ini"` IS win.ini -- whose content of course holds
+    no such line. Reading it would resolve the finding on a file that was
+    never in the repository; the escape is refused before any read."""
+    fid = _line_fid(rel="../outside.py")
+    _write(tmp_path.parent, "outside.py", ADULT.replace("age >= 18", "age >= 21"))
+    led = Ledger(tmp_path / "l.db")
+    try:
+        _seed(led, _mut_finding(fid=fid, file="../outside.py", line=2, op="cmp-flip"))
+        resolved = mutation_gate.auto_resolve_line_departed(led, "r1", NOW, root=tmp_path)
+        rec = led.open_findings()[fid]
+    finally:
+        led.close()
+    assert resolved == [] and rec["status"] == "open"
+
+
+def test_line_departed_records_its_yield(tmp_path):
+    """`aramid resolvers` grades what a resolver walked against what it
+    cleared; a resolver that writes no yield row is graded NEVER RAN."""
+    fid, resolved, rec, evs = _line_departed(tmp_path, ADULT)
+    led = Ledger(tmp_path / "l.db")
+    try:
+        rows = [e for e in led.events() if e.type is EventType.RESOLVER_YIELD
+                and e.payload.get("resolver") == "line_departed"]
+    finally:
+        led.close()
+    assert len(rows) == 1
+    assert rows[0].payload["tool"] == "mutation"
+    assert rows[0].payload["considered"] == 1 and rows[0].payload["resolved"] == 0

@@ -279,11 +279,12 @@ def test_the_render_names_the_defect_and_the_numbers_behind_it(led):
     # that does not exist ships with thirteen green tests behind it.
     assert ("  NEVER RAN      gap_addressed         mutation     "
             "0 runs   [2 open, 2 ever]") in out
-    # Three rows are keyed to the `mutation` producer -- `gap_addressed`,
-    # `file_departed` and `mutant_killed` -- so seeding one producer flags
-    # exactly three resolvers. (Two of eleven until the python `mutant_killed`
-    # pair was registered; that count moving is the fix, not a regression.)
-    assert "3 of 12 resolvers flagged" in out
+    # Four rows are keyed to the `mutation` producer -- `gap_addressed`,
+    # `file_departed`, `line_departed` and `mutant_killed` -- so seeding one
+    # producer flags exactly four resolvers. (Two of eleven until the python
+    # `mutant_killed` pair was registered, three of twelve until
+    # `line_departed` was; that count moving is the fix, not a regression.)
+    assert "4 of 13 resolvers flagged" in out
 
 
 def test_a_clean_report_says_so_rather_than_printing_nothing(led):

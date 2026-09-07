@@ -1733,7 +1733,7 @@ def _mut_repo(tmp_path):
     subprocess.run(["git", "config", "user.email", "t@t"], cwd=r, check=True)
     subprocess.run(["git", "config", "user.name", "t"], cwd=r, check=True)
     (r / "src").mkdir()
-    (r / "src" / "real.py").write_text("x = 1\n", encoding="utf-8")
+    (r / "src" / "real.py").write_text(MUT_FN, encoding="utf-8")
     subprocess.run(["git", "add", "."], cwd=r, check=True)
     subprocess.run(["git", "commit", "-q", "-m", "c1"], cwd=r, check=True)
     # ghost.py EXISTS but is deliberately left UNTRACKED -- written after the
@@ -1747,19 +1747,35 @@ def _mut_repo(tmp_path):
     #                file and auto_resolve_mutation's own rule stays quiet.
     # A TRACKED ghost.py satisfies the first and breaks the second.
     (r / "src" / "pkg").mkdir()
-    (r / "src" / "pkg" / "ghost.py").write_text("x = 1\n", encoding="utf-8")
+    (r / "src" / "pkg" / "ghost.py").write_text(MUT_FN, encoding="utf-8")
     return r
 
 
-def _seed_mut(led, fid="g" * 64, file="src/pkg/ghost.py"):
+# A function, because a module-level line yields no mutant; and the seeded
+# survivor is the REAL id of its line 2 -- `_survivor_mutants` regenerates it
+# from the file, which is what keeps `line_departed` from clearing the
+# controls below. A made-up id is a survivor whose line is in no file.
+MUT_FN = "def f(x):\n    return x > 1\n"
+MUT_LINE = "    return x > 1"
+
+
+def _mut_fid(file, content=MUT_LINE, op="cmp-flip"):
+    from aramid.fingerprint import compute_fingerprint
+    return compute_fingerprint("mutation", op, file, content, 0)
+
+
+def _seed_mut(led, fid=None, file="src/pkg/ghost.py", line=2, op="cmp-flip"):
     # ghost.py is present-but-untracked (see _mut_repo), so neither
-    # auto_resolve_mutation nor the departed-file route can resolve this.
-    f = Finding(id=fid, tool="mutation", rule="flip_comparison",
+    # auto_resolve_mutation nor the departed-file route can resolve this, and
+    # its line 2 is in the file, so neither can line_departed.
+    fid = fid or _mut_fid(file, op=op)
+    f = Finding(id=fid, tool="mutation", rule=op,
                 severity_raw="medium", severity=Severity.MEDIUM,
-                verdict=Verdict.WARN, file=file, line=7,
-                message="mutant survived: flip_comparison", evidence="",
+                verdict=Verdict.WARN, file=file, line=line,
+                message=f"mutant survived: {op}", evidence="",
                 gate=Gate.ALL, source=Source.DETERMINISTIC)
     led.record_run("r0", _MUT_NOW, "drain", set(), set(), [f])
+    return fid
 
 
 def test_pre_push_surfaces_mutation_finding(tmp_path, monkeypatch):
@@ -1799,7 +1815,7 @@ def test_mutation_findings_absent_at_pre_commit(tmp_path, monkeypatch):
         # that the run RESOLVED, which is a different -- and much worse --
         # outcome than the gate declining to surface it. This test passed for
         # exactly that wrong reason while ghost.py did not exist on disk.
-        assert led.open_findings()["g" * 64]["status"] == "open"
+        assert led.open_findings()[_mut_fid("src/pkg/ghost.py")]["status"] == "open"
     finally:
         led.close()
 
@@ -1816,9 +1832,9 @@ def test_all_mode_does_not_resolve_tracked_mutation(tmp_path, monkeypatch):
     cfg = config.load_config(r)
     led = Ledger(r / ".aramid" / "ledger.db")
     try:
-        _seed_mut(led, fid="t" * 64, file="src/real.py")   # TRACKED source
+        fid = _seed_mut(led, file="src/real.py")   # TRACKED source
         pipeline.run_gate(r, Gate.PRE_PUSH, "all", cfg, led)
-        assert led.open_findings()["t" * 64]["status"] == "open"  # NOT resolved
+        assert led.open_findings()[fid]["status"] == "open"  # NOT resolved
     finally:
         led.close()
 
@@ -1949,7 +1965,38 @@ def test_gate_resolves_a_mutation_finding_whose_file_left_the_repo(tmp_path, mon
         # otherwise "resolves everything" would satisfy the assertion above.
         _seed_mut(led)
         pipeline.run_gate(r, Gate.PRE_PUSH, "all", cfg, led)
-        assert led.open_findings()["g" * 64]["status"] == "open"
+        assert led.open_findings()[_mut_fid("src/pkg/ghost.py")]["status"] == "open"
+    finally:
+        led.close()
+
+
+def test_gate_resolves_a_mutation_survivor_whose_line_left_the_file(tmp_path, monkeypatch):
+    """THE WIRING for `mutation_gate.auto_resolve_line_departed`, unit-tested
+    next door. A survivor is regenerated from (op, path, line content); once
+    the line is rewritten nothing regenerates it, the re-test can neither
+    kill nor re-report it, and neither other resolver reaches it --
+    `gap_addressed` only parks it `pending_retest` and `file_departed` needs
+    the file gone. Two such on aramid's own ledger, 2026-09-07 (4031dcd0,
+    f1c1930d). Like the departed-file call it sits OUTSIDE the range nest:
+    whether a line is in a file does not depend on the push delta."""
+    r = _mut_repo(tmp_path)
+    monkeypatch.setattr(pipeline, "GATE_RUNNER_KEYS",
+                        {**pipeline.GATE_RUNNER_KEYS, Gate.PRE_PUSH: []})
+    cfg = config.load_config(r)
+    led = Ledger(r / ".aramid" / "ledger.db")
+    # The id of a line ghost.py no longer holds -- `x > 2` was rewritten to
+    # `x > 1` -- against the default seed, whose line IS there (non-vacuity).
+    gone = _mut_fid("src/pkg/ghost.py", content="    return x > 2")
+    try:
+        _seed_mut(led, fid=gone)
+        present = _seed_mut(led)
+        pipeline.run_gate(r, Gate.PRE_PUSH, "all", cfg, led)
+        state = led.open_findings()
+        assert state[gone]["status"] == "fixed"
+        assert state[present]["status"] == "open"
+        ev = [e for e in led.events() if e.type is EventType.FINDING_RESOLVED
+              and e.finding_id == gone]
+        assert [e.payload for e in ev] == [{"auto_resolved": "line_departed"}]
     finally:
         led.close()
 
@@ -1997,9 +2044,11 @@ def test_range_mode_without_upstream_does_not_resolve_mutation(tmp_path, monkeyp
     cfg = _cfg(root, tmp_path, monkeypatch)
     led = _ledger(tmp_path)
     monkeypatch.setitem(pipeline.GATE_RUNNER_KEYS, Gate.PRE_PUSH, [])
-    fid = "m" * 64
+    (root / "b.py").write_text(MUT_FN, encoding="utf-8")
+    _git(root, "add", "b.py")
+    _git(root, "commit", "-m", "a function to survive in")
     try:
-        _seed_mut(led, fid=fid, file="a.py")   # TRACKED, and in the full-tree scope
+        fid = _seed_mut(led, file="b.py")   # TRACKED, and in the full-tree scope
         pipeline.run_gate(root, Gate.PRE_PUSH, "range", cfg, led)
         assert led.open_findings()[fid]["status"] == "open"
     finally:

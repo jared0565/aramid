@@ -1600,6 +1600,25 @@ def test_a_survivor_with_two_occurrences_is_claimed_only_when_both_die(tmp_path,
     assert res.extra["tested"] == 2, "both occurrences ran"
 
 
+def test_the_re_test_regenerates_with_the_recorded_op(tmp_path, monkeypatch):
+    """The prefilter in `_survivor_mutants` needs the op the finding was
+    recorded with; handed None it generates the whole file (6 s on this
+    repo's biggest module, per survivor, per drain)."""
+    r, head2, fid = _two_occurrence_survivor(tmp_path, monkeypatch)
+    head3 = _commit_file(r, "tests/test_calc_more.py", KILLER_BOTH)
+    seen = []
+    real = mut_consumer._survivor_mutants
+
+    def spy(rel, fid_, original, op=None):
+        seen.append((fid_, op))
+        return real(rel, fid_, original, op)
+    monkeypatch.setattr(mut_consumer, "_survivor_mutants", spy)
+
+    _consume(r, head2, head3, monkeypatch, tmp_path, item_id="q2")
+
+    assert seen == [(fid, mutation.generate_mutants(TWO, {2})[0].op)]
+
+
 def test_a_survivor_with_two_occurrences_is_claimed_when_both_die(tmp_path, monkeypatch):
     r, head2, fid = _two_occurrence_survivor(tmp_path, monkeypatch)
     head3 = _commit_file(r, "tests/test_calc_more.py", KILLER_BOTH)
@@ -1670,7 +1689,8 @@ def test_retest_candidates_include_a_pending_retest_survivor(tmp_path):
         got = mut_consumer._retest_candidates(led, root)
     finally:
         led.close()
-    assert got == [("p" * 64, "calc.py", 3)]
+    assert got == [("p" * 64, "calc.py", 3, "int-bound")], \
+        "the candidate carries the recorded op: the re-test hashes with it"
 
 
 def _set_max_mutants(r, n: int) -> None:

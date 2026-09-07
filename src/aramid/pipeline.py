@@ -1197,6 +1197,16 @@ def run_gate(root: Path, gate: Gate, mode: str, cfg: config_mod.Config, ledger: 
             ledger_mod.resolve_departed(ledger, run_id, at, root=root,
                                         tool=_producer,
                                         present_ids=_departed_present)
+        # Departed-LINE resolution, mutation only, and here for the same
+        # reason: whether a survivor's line is still in its file does not
+        # depend on the push delta. A survivor is regenerated from (op,
+        # path, line content); once the line is rewritten the drain's
+        # re-test regenerates nothing and can neither kill nor re-report
+        # it, gap_addressed has already parked it `pending_retest` (the
+        # rewrite touched the source), and file_departed needs the whole
+        # file gone -- so it sat there forever. The gate reads the file and
+        # asks the re-test's own question. See the resolver's docstring.
+        mutation_gate.auto_resolve_line_departed(ledger, run_id, at, root=root)
         # RESOLUTION SCOPE IS NOT SCAN SCOPE. These resolvers need the push's
         # genuine delta; `scope_files` is whatever was SCANNED, and the two
         # coincide only under mode "range" with an upstream.
