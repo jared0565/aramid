@@ -140,8 +140,9 @@ def test_never_ran_resolver_reads_red(tmp_path):
     assert ("gap_addressed", "mutation", "NEVER RAN") in h.resolver_defects
     assert health.criteria(h)["resolvers_ok"] is False
     assert health.resolver_defect_lines(h) == [
-        "  resolver defects: 3 (run `aramid resolvers`)",
-        "    file_departed/mutation, gap_addressed/mutation, mutant_killed/mutation"]
+        "  resolver defects: 4 (run `aramid resolvers`)",
+        "    file_departed/mutation, gap_addressed/mutation, line_departed/mutation, "
+        "mutant_killed/mutation"]
     lg.close()
 
 
@@ -149,7 +150,7 @@ def test_blind_resolver_reads_red(tmp_path):
     lg = Ledger(tmp_path / "l.db")
     lg.record_run("r0", NOW, "pre-push", set(), set(),
                   [_f("b" * 64, tool="mutation", rule="bool-swap")])
-    for resolver in ("gap_addressed", "file_departed", "mutant_killed"):
+    for resolver in ("gap_addressed", "file_departed", "line_departed", "mutant_killed"):
         ledger_mod.note_yield(lg, "r1", NOW, resolver=resolver, tool="mutation",
                               considered=0, resolved=0)
     h = health.snapshot(None, lg)
