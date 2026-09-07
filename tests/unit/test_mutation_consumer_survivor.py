@@ -44,3 +44,29 @@ def test_a_survivor_whose_line_was_rewritten_regenerates_nowhere():
     m, fid = _recorded()
     rewritten = ADULT.replace("age >= 18", "age >= 21")
     assert mut_consumer._survivor_mutant("calc.py", m.line, fid, rewritten) is None
+
+
+def test_a_whole_file_match_is_taken_only_when_it_is_unique():
+    """The id is (tool, op, path, LINE CONTENT) with the occurrence pinned to
+    0, so two identical mutable lines in different functions fingerprint
+    identically. A whole-file rescan that returned the first positional
+    match could regenerate an unrelated lookalike, and a confirmed kill of
+    the lookalike would be claimed as `mutant_killed` for a test gap that
+    was never closed (llm-review 77f29313, 2026-09-07 14:02Z). Ambiguous
+    means None: the finding stays with the gate's resolvers, as before."""
+    m, fid = _recorded()
+    twin = ("def pad():\n    return 0\n\n\n"
+            "def other(age):\n    if age >= 18:\n        return 1\n    return 0\n\n\n") + ADULT
+    assert mut_consumer._survivor_mutant("calc.py", m.line, fid, twin) is None
+
+
+def test_a_survivor_on_the_first_line_of_the_file_is_still_found():
+    """A one-line function on line 1 is legal Python and holds a mutant; the
+    rescan must start at line 1, not 2 (drain survivor 4031dcd0, 14:27Z)."""
+    one_liner = "def is_adult(age): return age >= 18\n"
+    lines = one_liner.splitlines()
+    m = mutation.generate_mutants(one_liner, {1})[0]
+    fid = mut_consumer._mutant_fp("calc.py", m.op, m.line, lines)
+    # recorded line misses (points past the file) -> rescan must include line 1
+    found = mut_consumer._survivor_mutant("calc.py", 5, fid, one_liner)
+    assert found is not None and (found.op, found.line) == (m.op, 1)

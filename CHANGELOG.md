@@ -21,8 +21,14 @@ to publish a tag that disagrees with it.
   `pending_retest` with no path out. Measured on this repo's ledger
   2026-09-07: 17 recorded survivors, 15 regenerating at their line, 2
   moved and both still present further down their file. When the recorded
-  line misses, the whole file is asked; content that no longer exists
-  anywhere still regenerates nothing.
+  line misses, the whole file is asked, and a match is taken only when it
+  is UNIQUE: the id is (tool, op, path, line content) with the occurrence
+  pinned to 0, so two identical mutable lines in different functions
+  fingerprint identically, and the first positional match could be an
+  unrelated lookalike whose confirmed kill would then be claimed as
+  `mutant_killed` for a gap that was never closed (this repo's own
+  llm-review caught that in the first cut, 2026-09-07 14:02Z). Ambiguous,
+  and content that no longer exists anywhere, still regenerate nothing.
 
 ## [0.15.0] — 2026-09-07
 

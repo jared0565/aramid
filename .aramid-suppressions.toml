@@ -279,3 +279,10 @@ tool = "mutation"
 rule = "int-bound"
 path = "src/aramid/consumers/mutation.py"
 reason = "DEAD FALLBACK in production, not a test gap. `mutant_timeout = float(mcfg.get(\"mutant_timeout_s\", 120))` -> `121` in consume. `mcfg` is `ctx.cfg.mutation`; the only production dispatch is drain._consume_item, whose cfg comes from config.load_config, which merges src/aramid/data/defaults.toml -- verified 2026-09-07 by loading a config from an aramid.toml with no [mutation] section: `mutant_timeout_s = 120` is supplied. The literal is reachable only by a caller that hands consume a config built without load_config. Same family as d03404351c6c (max_mutants); every `mcfg.get(<knob>, <literal>)` line in consume will surface this way when the function is edited. Retire by removing the literal fallbacks, not by editing this."
+
+[[suppress]]
+id = "d05c1a697c8dd0971d9b773cd4522aa909014daebf2c2f4941c0af7d46757ae1"
+tool = "mutation"
+rule = "int-bound"
+path = "src/aramid/commands/check.py"
+reason = "KILLED OUTSIDE THE MUTATION SCOPE, not a test gap. `exit_code = 2 if result.degraded else 0` -> `else 1` in cmd_check, the fresh-ledger grandfather path. [mutation].test_command is `pytest -q tests/unit`; cmd_check has no unit-scope caller (graph: every caller is in tests/integration, decision_grade). Applied and verified 2026-09-07: tests/integration/test_check.py::test_fresh_ledger_prepush_warn_only_finding_does_not_block and ::test_fresh_ledger_downgrade_is_recorded_in_the_json_report both FAIL with the mutant and pass without it (first attempt applied nothing -- CRLF file, LF anchor -- and read green; the second changed one line). Retire by asserting the fresh-ledger exit code in unit scope, not by editing this."

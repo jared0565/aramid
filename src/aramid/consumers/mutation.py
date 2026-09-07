@@ -343,9 +343,8 @@ def _survivor_mutant(rel: str, line: int, fid: str, original: str):
     """Regenerate the recorded survivor `fid` from `original` (the file at
     the item's head), or None when nothing in the file fingerprints to it
     any more -- the line's content changed, which is `gap_addressed` /
-    `file_departed`'s case, not this one. Generation is deterministic and
-    the fingerprint is keyed on the line's CONTENT, so a match is the same
-    mutant an earlier drain tested, not a lookalike.
+    `file_departed`'s case, not this one -- or when more than one thing
+    does.
 
     The recorded line is asked first: generation is per function, so a
     shift inside the function still lands, and that is the common case
@@ -353,16 +352,23 @@ def _survivor_mutant(rel: str, line: int, fid: str, original: str):
     whole file is asked -- a survivor whose function code was inserted
     ABOVE still exists further down, and until this it regenerated
     nothing: the re-test could neither kill it nor re-report it, so it
-    sat `pending_retest` with no path out. The scan is bounded by the
-    file's mutants and runs only on a miss."""
+    sat `pending_retest` with no path out.
+
+    A whole-file match is taken ONLY WHEN UNIQUE. The id is (tool, op,
+    path, line content) with the occurrence pinned to 0, so two identical
+    mutable lines in different functions fingerprint identically; the
+    first positional match could be an unrelated lookalike, and a
+    confirmed kill of the lookalike would be claimed as `mutant_killed`
+    for a test gap that was never closed (llm-review 77f29313). Ambiguous
+    regenerates nothing, which is what the miss did before. The scan is
+    bounded by the file's mutants and runs only on a miss."""
     lines = original.splitlines()
     for m in mutation.generate_mutants(original, {line}):
         if _mutant_fp(rel, m.op, m.line, lines) == fid:
             return m
-    for m in mutation.generate_mutants(original, set(range(1, len(lines) + 1))):
-        if _mutant_fp(rel, m.op, m.line, lines) == fid:
-            return m
-    return None
+    matches = [m for m in mutation.generate_mutants(original, set(range(1, len(lines) + 1)))
+               if _mutant_fp(rel, m.op, m.line, lines) == fid]
+    return matches[0] if len(matches) == 1 else None
 
 
 def _retest_candidates(ledger, root: Path) -> list[tuple[str, str, int]]:
