@@ -23,6 +23,7 @@ from aramid import detectors, gitutil, mutation, mutation_gate
 from aramid.consumers import base
 from aramid.consumers.base import ConsumerResult, DrainContext
 from aramid.fingerprint import compute_fingerprint
+from aramid.models import EventType
 from aramid.normalizer import RawFinding
 from aramid.runners import tests as tests_runner
 from aramid.runners.base import ToolState, run_subprocess, worktree_import_env
@@ -393,6 +394,14 @@ def _retest_candidates(ledger, root: Path) -> list[tuple[str, str, int]]:
     candidates and an unreadable suppressions file yields no suppressions,
     the permissive answer in each direction, and neither can write a false
     claim -- only spend time.
+
+    ORDER: least recently re-tested first, never re-tested before any of
+    those, oldest first within a tie. "Oldest first" alone starved the pile
+    by its own front: the 2026-09-07 14:00Z drain re-tested 3 of 12 -- the
+    three oldest -- and a re-confirmed survivor keeps its place at the
+    head, so with `retest_cap` 3 the same three would run every drain and
+    the other nine never get a turn. Each run's `retested_ids` (in its
+    consumer row, written by the drain from the extra) is the memory.
     """
     try:
         state = ledger.open_findings()
@@ -402,6 +411,7 @@ def _retest_candidates(ledger, root: Path) -> list[tuple[str, str, int]]:
         suppressed = {r.id for r in config_mod.load_suppressions(root)[0]}
     except Exception:
         suppressed = set()
+    last_retested = _last_retested(ledger)
     out: list[tuple[str, str, int]] = []
     for fid, rec in state.items():
         if rec.get("tool") != "mutation" or rec.get("status") not in ("open", "pending_retest"):
@@ -409,7 +419,27 @@ def _retest_candidates(ledger, root: Path) -> list[tuple[str, str, int]]:
         if fid in suppressed or not rec.get("file") or not rec.get("line"):
             continue
         out.append((fid, str(rec["file"]), int(rec["line"])))
+    order = {fid: i for i, (fid, _, _) in enumerate(out)}
+    out.sort(key=lambda c: (last_retested.get(c[0], -1), order[c[0]]))
     return out
+
+
+def _last_retested(ledger) -> dict[str, int]:
+    """id -> sequence number of the newest mutation consumer row that
+    re-tested it (larger = more recent); absent = never re-tested. Reads
+    `retested_ids` off every mutation `consumer_run_finished` row; rows
+    from wheels that did not write the key contribute nothing, so the
+    order degrades to oldest-first, as before. Never raises."""
+    seq: dict[str, int] = {}
+    try:
+        for i, e in enumerate(ledger.events()):
+            if (e.type is EventType.CONSUMER_RUN_FINISHED
+                    and e.payload.get("consumer") == NAME):
+                for fid in e.payload.get("retested_ids") or ():
+                    seq[str(fid)] = i
+    except Exception:
+        return {}
+    return seq
 
 
 def consume(item, ctx: DrainContext) -> ConsumerResult:
@@ -508,7 +538,8 @@ def consume(item, ctx: DrainContext) -> ConsumerResult:
              "truncated": False,
              "retest_candidates": len(retests), "retested": 0,
              "retest_killed": 0, "retest_truncated": False,
-             "claimed": len(claimed), "claimed_retested": 0}
+             "claimed": len(claimed), "claimed_retested": 0,
+             "retested_ids": []}
     scores: dict[str, dict] = {}
     examined = _recorded_survivor_ids(ctx.ledger)
     repaired_ids: set = set()
@@ -666,6 +697,7 @@ def consume(item, ctx: DrainContext) -> ConsumerResult:
                 budget["tested"] += 1
                 if survivor is not None:
                     stats["retested"] += 1
+                    stats["retested_ids"].append(survivor)
                 tested_fps.add(_mutant_fp(rel, m.op, m.line, lines))
                 try:
                     src_path.write_text(m.source, encoding="utf-8")

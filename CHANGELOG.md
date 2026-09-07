@@ -12,6 +12,16 @@ to publish a tag that disagrees with it.
 
 ### Fixed
 
+- **The mutation re-test pass rotates: least recently re-tested survivor
+  first.** Candidates ran oldest-first, and a re-confirmed survivor keeps
+  its place at the head of that order, so with `retest_cap` 3 the same
+  three ran every drain and the rest of the pile never got a turn (this
+  repo, 2026-09-07 14:00Z: re-tested 3 of 12, the three oldest). Each run
+  now records the ids it re-tested (`retested_ids` in the mutation row) and
+  the next run puts never-re-tested survivors first, then the least
+  recently re-tested; rows from earlier wheels carry no key and simply do
+  not count, so the order degrades to oldest-first where nothing is known.
+
 - **A recorded mutation survivor whose line moved out of its function is
   regenerated from the whole file.** The re-test regenerated a survivor at
   its recorded line only; generation is per function, so a shift inside the
