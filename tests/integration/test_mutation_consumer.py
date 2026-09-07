@@ -1224,6 +1224,36 @@ def test_a_kill_the_full_suite_does_not_reproduce_claims_no_repair(
         "an unconfirmed stage-1 kill was written to the ledger as a repair")
 
 
+def test_a_stage1_run_that_selects_nothing_is_counted_as_unselected(tmp_path, monkeypatch):
+    """pytest exit 5 -- nothing collected -- is booked as a putative survivor
+    so the full suite decides, and the confirm's verdict is what the score
+    reads. But `survived` at item level counted it as "passed stage 1" when
+    no test ran at all, and a module with no test file in the configured
+    scope reads exactly like a module whose tests are weak (graphite, round
+    199). Count the exit-5 runs on their own and say so in the note."""
+    r, base, head = _repo(tmp_path, WEAK_TEST)
+    _script_runs(monkeypatch, targeted_rc=5, full_rc=0)
+
+    res = _consume(r, base, head, monkeypatch, tmp_path)
+
+    n = res.extra["tested"]
+    assert n >= 2, res.extra
+    assert res.extra["unselected_s1"] == n, res.extra
+    assert res.extra["survived"] == n, "still a putative survivor: the confirm decides"
+    assert res.extra["confirmed"] == n
+    assert f"; stage 1 selected no test for {n} mutant(s)" in res.note, res.note
+
+
+def test_a_stage1_run_that_passes_is_not_unselected(tmp_path, monkeypatch):
+    r, base, head = _repo(tmp_path, WEAK_TEST)
+    _script_runs(monkeypatch, targeted_rc=0, full_rc=0)
+
+    res = _consume(r, base, head, monkeypatch, tmp_path)
+
+    assert res.extra["unselected_s1"] == 0, res.extra
+    assert "selected no test" not in res.note, res.note
+
+
 def _set_confirm_cap(r, cap: int) -> None:
     toml = r / "aramid.toml"
     txt = toml.read_text(encoding="utf-8")

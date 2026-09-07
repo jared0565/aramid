@@ -12,6 +12,15 @@ to publish a tag that disagrees with it.
 
 ### Added
 
+- **Mutation counts the stage-1 runs that selected nothing.** pytest exit
+  5 at stage 1 (no test collected for the module's keyword inside the
+  configured scope) is booked as a putative survivor so the full suite
+  decides, and the confirm's verdict is what the score reads -- but at item
+  level it counted as "passed stage 1" when no test ran, so a module with
+  no test file in scope read exactly like one whose tests are weak
+  (graphite, interop round 199). New `unselected_s1` in the run's extra,
+  and a note clause `stage 1 selected no test for N mutant(s)`; the fix
+  such a note points at is a `tests/.../test_<stem>.py`.
 - **A stage-1 kill dropped at the confirm cap is counted.** A stage-1 kill
   of a recorded survivor needs a full-suite confirmation before it can be
   claimed as a repair; when `confirm_cap` was already spent, the kill was

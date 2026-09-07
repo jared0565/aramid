@@ -482,7 +482,8 @@ def consume(item, ctx: DrainContext) -> ConsumerResult:
     started = time.monotonic()
     stats = {"generated": 0, "tested": 0, "killed_s1": 0, "killed_s2": 0,
              "survived": 0, "confirmed": 0, "timeouts": 0, "errors": 0,
-             "unconfirmed_kills": 0, "capped_kills": 0, "truncated": False,
+             "unconfirmed_kills": 0, "capped_kills": 0, "unselected_s1": 0,
+             "truncated": False,
              "retest_candidates": len(retests), "retested": 0,
              "retest_killed": 0, "retest_truncated": False,
              "claimed": len(claimed), "claimed_retested": 0}
@@ -716,7 +717,15 @@ def consume(item, ctx: DrainContext) -> ConsumerResult:
                     # below moves the mutant out of it again, otherwise a
                     # confirm that never reached a verdict read downstream as
                     # a survivor, and a full-suite kill as both (round 174).
+                    # Exit 5 is ALSO counted on its own: no test ran, so
+                    # "passed stage 1" is true only vacuously, and a module
+                    # with no test file in the configured scope otherwise
+                    # reads exactly like one whose tests are weak (round
+                    # 199). The confirm still decides; this only says why
+                    # it had to.
                     stats["survived"] += 1
+                    if s1.returncode == 5:
+                        stats["unselected_s1"] += 1
                     t = t_of(m.func)
                     t["survived_s1"] += 1
                     if budget["confirmed"] >= budget["confirms"]:
@@ -858,6 +867,12 @@ def consume(item, ctx: DrainContext) -> ConsumerResult:
         # `retest_cap` or the wall budget, never `max_mutants`.
         note += (f"; {stats['claimed_retested']} of {stats['claimed']} "
                  f"survivor(s) named by a changed test re-tested first")
+    if stats["unselected_s1"]:
+        # The module has no test file inside the configured suite's scope
+        # and its keyword selected nothing: every such mutant went straight
+        # to a full-suite confirm. The fix is a `tests/.../test_<stem>.py`.
+        note += (f"; stage 1 selected no test for {stats['unselected_s1']} "
+                 f"mutant(s)")
     if stats["capped_kills"]:
         # Names the knob: the kill is real and the finding stays open only
         # because the cap was spent before the confirm could run.
