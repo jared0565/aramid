@@ -56,3 +56,30 @@ def test_the_rotation_reads_every_prior_run_not_only_the_last(tmp_path):
     assert _order(_ledger(r1, [["a" * 64, "b" * 64], ["c" * 64]]), r1) == ["a", "b", "c"]
     # run 1 re-tested c; run 2 re-tested a: b never, then c, then a.
     assert _order(_ledger(r2, [["c" * 64], ["a" * 64]]), r2) == ["b", "c", "a"]
+
+
+def test_a_suppressed_survivor_is_not_a_candidate(tmp_path):
+    """An `equivalent mutant` entry in the tracked suppressions file says
+    unkillable; re-testing it would spend a confirm per drain forever. The
+    drain survivor 238b671e (18:00Z) read the wrong half of
+    `load_suppressions` and got an empty set: pinned here at unit scope."""
+    led = _ledger(tmp_path, [])
+    (tmp_path / ".aramid-suppressions.toml").write_text(
+        '[[suppress]]\nid = "' + "b" * 64 + '"\ntool = "mutation"\nrule = "int-bound"\n'
+        'path = "calc.py"\nreason = "equivalent mutant"\n', encoding="utf-8")
+    assert _order(led, tmp_path) == ["a", "c"]
+
+
+def test_only_open_or_pending_mutation_findings_are_candidates(tmp_path):
+    """Drain survivor c052d9ad (18:00Z): `tool != mutation OR status not in
+    (open, pending_retest)` -> `and` let a fixed mutation survivor and an
+    open finding of another tool through. Both shapes, pinned."""
+    from aramid.models import Event, EventType, Finding, Gate, Severity, Verdict
+    led = _ledger(tmp_path, [])
+    other = Finding(id="d" * 64, tool="semgrep", rule="x", severity_raw="medium",
+                    severity=Severity.MEDIUM, verdict=Verdict.WARN, file="calc.py",
+                    line=9, message="not a mutant", evidence="", gate=Gate.ALL)
+    led.record_run("r2", "2026-09-01T00:01:00+00:00", "drain", {"semgrep"}, {"calc.py"}, [other])
+    led.append(Event(EventType.FINDING_RESOLVED, "r3", "2026-09-01T00:02:00+00:00",
+                     finding_id="c" * 64, payload={"auto_resolved": "mutant_killed"}))
+    assert _order(led, tmp_path) == ["a", "b"]

@@ -15,6 +15,7 @@ import subprocess
 import pytest
 
 from aramid import config as config_mod
+from aramid import mutation
 from aramid.consumers import mutation as mut_consumer
 from aramid.consumers.base import DrainContext
 from aramid.ledger import Ledger
@@ -1543,12 +1544,109 @@ def test_a_survivor_whose_line_changed_is_left_to_the_gate_resolvers():
     m = mutation.generate_mutants(ADULT, {2})[0]
     fid = mut_consumer._mutant_fp("calc.py", m.op, m.line, lines)
 
-    assert mut_consumer._survivor_mutant("calc.py", m.line, fid, ADULT) is not None
+    assert mut_consumer._survivor_mutants("calc.py", fid, ADULT)
     shifted = "# a comment shifts every line\n" + ADULT
-    found = mut_consumer._survivor_mutant("calc.py", m.line, fid, shifted)
-    assert found is not None and found.line == m.line + 1, "same mutant, one line down"
+    found = mut_consumer._survivor_mutants("calc.py", fid, shifted)
+    assert [x.line for x in found] == [m.line + 1], "same mutant, one line down"
     rewritten = ADULT.replace("age >= 18", "age >= 21")
-    assert mut_consumer._survivor_mutant("calc.py", m.line, fid, rewritten) is None
+    assert mut_consumer._survivor_mutants("calc.py", fid, rewritten) == []
+
+
+TWO = (ADULT + "\n\n"
+       "def is_adult_again(age):\n"
+       "    if age >= 18:\n"
+       "        return True\n"
+       "    return False\n")
+KILLER_BOTH = ("from calc import is_adult, is_adult_again\n"
+               "def test_both():\n"
+               "    for f in (is_adult, is_adult_again):\n"
+               "        assert f(18) is True and f(17) is False and f(19) is True\n")
+
+
+def _two_occurrence_survivor(tmp_path, monkeypatch):
+    """calc.py holds the same mutable line in two functions; one recorded
+    survivor id names both occurrences (the id pins occurrence 0)."""
+    from aramid.models import Finding, Gate, Severity, Verdict
+    r, base, head = _repo(tmp_path, WEAK_TEST)
+    head2 = _commit_file(r, "calc.py", TWO)
+    lines = TWO.splitlines()
+    m = mutation.generate_mutants(TWO, {2})[0]
+    fid = mut_consumer._mutant_fp("calc.py", m.op, m.line, lines)
+    led = Ledger(r / ".aramid" / "ledger.db")
+    try:
+        led.record_run("seed", "2026-09-01T00:00:00+00:00", "drain", {"mutation"}, {"calc.py"},
+                       [Finding(id=fid, tool="mutation", rule=m.op, severity_raw="medium",
+                                severity=Severity.MEDIUM, verdict=Verdict.WARN, file="calc.py",
+                                line=m.line, message="mutant survived", evidence="", gate=Gate.ALL)])
+    finally:
+        led.close()
+    return r, head2, fid
+
+
+def test_a_survivor_with_two_occurrences_is_claimed_only_when_both_die(tmp_path, monkeypatch):
+    """A test that kills the occurrence in `is_adult` and not the one in
+    `is_adult_again`: no claim, and the id is re-reported. Before, the
+    first positional match alone was re-tested and its kill claimed
+    `mutant_killed` for a gap that still existed (llm-review 77f29313 and
+    a9d2fc25)."""
+    r, head2, fid = _two_occurrence_survivor(tmp_path, monkeypatch)
+    head3 = _commit_file(r, "tests/test_calc_more.py", KILLER)     # is_adult only
+
+    res = _consume(r, head2, head3, monkeypatch, tmp_path, item_id="q2")
+
+    assert res.repaired is not None and fid not in set(res.repaired.ids), res.note
+    assert fid in _ids_of(r, res.findings), "the surviving occurrence re-reports the id"
+    assert res.extra["retested"] == 1 and res.extra["retested_ids"] == [fid]
+    assert res.extra["tested"] == 2, "both occurrences ran"
+
+
+def test_a_survivor_with_two_occurrences_is_claimed_when_both_die(tmp_path, monkeypatch):
+    r, head2, fid = _two_occurrence_survivor(tmp_path, monkeypatch)
+    head3 = _commit_file(r, "tests/test_calc_more.py", KILLER_BOTH)
+
+    res = _consume(r, head2, head3, monkeypatch, tmp_path, item_id="q2")
+
+    assert res.repaired is not None and set(res.repaired.ids) == {fid}, res.note
+    assert fid not in _ids_of(r, res.findings)
+    assert res.extra["retest_killed"] == 1
+
+
+def test_a_survivor_cut_short_between_its_occurrences_is_not_claimed(tmp_path, monkeypatch):
+    """`retest_cap` 1 buys one mutant; the first occurrence dies and the
+    second never runs. Half-tested is untested: no claim."""
+    r, head2, fid = _two_occurrence_survivor(tmp_path, monkeypatch)
+    toml = r / "aramid.toml"
+    toml.write_text(toml.read_text(encoding="utf-8") + "retest_cap = 1\n", encoding="utf-8")
+    head3 = _commit_file(r, "tests/test_calc_more.py", KILLER_BOTH)
+
+    res = _consume(r, head2, head3, monkeypatch, tmp_path, item_id="q2")
+
+    assert res.repaired is not None and fid not in set(res.repaired.ids), res.note
+    assert res.extra["tested"] == 1 and res.extra["retest_truncated"] is True
+
+
+def test_a_claimed_survivor_cut_short_by_its_cap_does_not_end_the_range(tmp_path, monkeypatch):
+    """The claimed pass runs on its own budget precisely so the range keeps
+    its own. A survivor with two occurrences and `retest_cap` 1 exhausts the
+    claimed budget INSIDE `_mutate`, and until this that set the run-wide
+    stop: the range's fresh mutants never ran. `retest_cap` ends the
+    claimed pass, nothing else."""
+    r, head2, fid = _two_occurrence_survivor(tmp_path, monkeypatch)
+    toml = r / "aramid.toml"
+    toml.write_text(toml.read_text(encoding="utf-8") + "retest_cap = 1\n", encoding="utf-8")
+    (r / "other.py").write_text("def twice(x):\n    return x * 2\n", encoding="utf-8")
+    (r / "tests" / "test_calc_more.py").write_text(KILLER_BOTH, encoding="utf-8")
+    _git(r, "add", "-A")
+    _git(r, "commit", "-q", "-m", "a killer for both, and a fresh function in range")
+    head3 = _sha(r)
+
+    res = _consume(r, head2, head3, monkeypatch, tmp_path, item_id="q2")
+
+    assert res.extra["retested"] == 1 and res.extra["retest_truncated"] is True
+    assert res.extra["generated"] >= 1, "the range's own mutants were generated"
+    assert res.extra["tested"] == 1 + res.extra["generated"], \
+        "one claimed occurrence, then every fresh mutant of the range"
+    assert res.extra["truncated"] is False, "the range was never cut"
 
 
 def test_retest_candidates_include_a_pending_retest_survivor(tmp_path):

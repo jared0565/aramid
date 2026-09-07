@@ -340,36 +340,31 @@ def _full_argv(cfg=None, root: Path | None = None) -> list[str]:
     return [sys.executable, "-m", "pytest", "-q"]
 
 
-def _survivor_mutant(rel: str, line: int, fid: str, original: str):
+def _survivor_mutants(rel: str, fid: str, original: str) -> list:
     """Regenerate the recorded survivor `fid` from `original` (the file at
-    the item's head), or None when nothing in the file fingerprints to it
-    any more -- the line's content changed, which is `gap_addressed` /
-    `file_departed`'s case, not this one -- or when more than one thing
-    does.
+    the item's head): EVERY occurrence of it, in file order; empty when
+    nothing in the file fingerprints to it any more -- the line's content
+    changed, which is `gap_addressed` / `file_departed`'s case, not this
+    one.
 
-    The recorded line is asked first: generation is per function, so a
-    shift inside the function still lands, and that is the common case
-    (15 of 17 on this repo's ledger, 2026-09-07). When it misses, the
-    whole file is asked -- a survivor whose function code was inserted
-    ABOVE still exists further down, and until this it regenerated
-    nothing: the re-test could neither kill it nor re-report it, so it
-    sat `pending_retest` with no path out.
-
-    A whole-file match is taken ONLY WHEN UNIQUE. The id is (tool, op,
-    path, line content) with the occurrence pinned to 0, so two identical
-    mutable lines in different functions fingerprint identically; the
-    first positional match could be an unrelated lookalike, and a
-    confirmed kill of the lookalike would be claimed as `mutant_killed`
-    for a test gap that was never closed (llm-review 77f29313). Ambiguous
-    regenerates nothing, which is what the miss did before. The scan is
-    bounded by the file's mutants and runs only on a miss."""
+    The whole file, not the recorded line. Regenerating at the recorded
+    line alone had two failures. A survivor whose function had code
+    inserted ABOVE it still existed further down the file and regenerated
+    nothing, so the re-test could neither kill nor re-report it and it sat
+    `pending_retest` with no path out (2 of 17 on this repo's ledger,
+    2026-09-07). And the id is (tool, op, path, line content) with the
+    occurrence pinned to 0, so identical mutable lines fingerprint
+    identically, in one function or across the file: EVERY occurrence is
+    the finding, and taking the first positional match let a confirmed
+    kill of one occurrence be claimed as `mutant_killed` while another
+    survived -- a false repair in an append-only ledger (llm-review
+    77f29313, then a9d2fc25 for the per-function path). The caller tests
+    them all and claims only when all of them die; a surviving one
+    re-reports the id, which blocks the claim on its own. The scan is
+    bounded by the file's own mutants: one fingerprint per mutant."""
     lines = original.splitlines()
-    for m in mutation.generate_mutants(original, {line}):
-        if _mutant_fp(rel, m.op, m.line, lines) == fid:
-            return m
-    matches = [m for m in mutation.generate_mutants(original, set(range(1, len(lines) + 1)))
-               if _mutant_fp(rel, m.op, m.line, lines) == fid]
-    return matches[0] if len(matches) == 1 else None
+    return [m for m in mutation.generate_mutants(original, {n for n, _ in enumerate(lines, 1)})
+            if _mutant_fp(rel, m.op, m.line, lines) == fid]
 
 
 def _retest_candidates(ledger, root: Path) -> list[tuple[str, str, int]]:
@@ -662,16 +657,23 @@ def consume(item, ctx: DrainContext) -> ConsumerResult:
             the range's per-target mutation scores alone (a score is a
             statement about THIS range's mutants, and a survivor from an
             untouched module is not one of them). `budget` is the phase's
-            mutant and confirm allowance; the wall clock is everyone's."""
+            mutant and confirm allowance; the wall clock is everyone's.
+
+            Returns False when the phase is over -- its mutant budget is
+            spent, or the wall clock ran out -- so the caller stops asking.
+            A spent budget ends ITS phase only: the claimed pass's
+            `retest_cap` must not end the range, or a survivor with two
+            occurrences and a cap of 1 would silence every fresh mutant of
+            the push that named it (which is what a run-wide `done` did)."""
             nonlocal done
             src_path = wt / rel
             if not src_path.exists():
-                return
+                return True
             try:
                 original = src_path.read_text(encoding="utf-8")
             except OSError:
                 stats["errors"] += 1
-                return
+                return True
             lines = original.splitlines()
             if survivor is None:
                 muts = mutation.generate_mutants(original, target_lines)
@@ -682,20 +684,39 @@ def consume(item, ctx: DrainContext) -> ConsumerResult:
                 for m in muts:
                     t_of(m.func)["generated"] += 1
             else:
-                m = _survivor_mutant(rel, next(iter(target_lines)), survivor, original)
-                muts = [m] if m is not None else []
+                muts = _survivor_mutants(rel, survivor, original)
+                kills_here, counted = 0, False
 
                 def t_of(func):
                     return _new_target()      # a throwaway: scores untouched
+            more = True
             for m in muts:
-                if budget["tested"] >= budget["mutants"] \
-                        or time.monotonic() - started > wall_budget:
+                if time.monotonic() - started > wall_budget:
+                    # Everyone's clock: the run is over.
                     stats["truncated"] = True
                     done = True
+                    more = False
+                    break
+                if budget["tested"] >= budget["mutants"]:
+                    # The PHASE's cap. A re-test cut here -- `retest_cap`
+                    # for the claimed pass, the range's `max_mutants` for
+                    # the hygiene pass that shares its budget -- is the
+                    # shortfall `retest_truncated` exists to report, and a
+                    # survivor cut between its occurrences is half-tested:
+                    # the atomic claim below withholds. The range's own cut
+                    # is `truncated`, as it always was.
+                    if survivor is not None:
+                        stats["retest_truncated"] = True
+                    else:
+                        stats["truncated"] = True
+                    more = False
                     break
                 stats["tested"] += 1
                 budget["tested"] += 1
-                if survivor is not None:
+                if survivor is not None and not counted:
+                    # one re-test per SURVIVOR, however many occurrences it
+                    # has, and only once one of them actually runs.
+                    counted = True
                     stats["retested"] += 1
                     stats["retested_ids"].append(survivor)
                 tested_fps.add(_mutant_fp(rel, m.op, m.line, lines))
@@ -749,7 +770,10 @@ def consume(item, ctx: DrainContext) -> ConsumerResult:
                             s2 = run_subprocess(full_argv, wt, full_timeout,
                                                 env=worktree_import_env(wt))
                             if s2.state is ToolState.OK and s2.returncode in (1, 2):
-                                repaired_ids.add(fp)
+                                if survivor is None:
+                                    repaired_ids.add(fp)
+                                else:
+                                    kills_here += 1
                             else:
                                 # Timeout, pass, or a non-verdict outcome: the
                                 # narrow selection produced that exit code,
@@ -820,7 +844,10 @@ def consume(item, ctx: DrainContext) -> ConsumerResult:
                         t["killed_fps"].append(fp)
                         # Already a full-suite verdict -- this IS the
                         # confirmation the stage-1 branch has to go and buy.
-                        repaired_ids.add(fp)
+                        if survivor is None:
+                            repaired_ids.add(fp)
+                        else:
+                            kills_here += 1
                     else:
                         # Non-verdict full-suite outcome (internal/usage error,
                         # crash): the putative survivor is NOT reported -- a
@@ -839,6 +866,17 @@ def consume(item, ctx: DrainContext) -> ConsumerResult:
                     except OSError:
                         stats["errors"] += 1
                         t_of(m.func)["errors"] += 1
+            if survivor is not None:
+                # ATOMIC. The id names every occurrence, so the claim needs
+                # every occurrence confirmed killed -- one survivor
+                # re-reports the id and blocks the claim by itself, but a
+                # run cut short between occurrences (budget, cap) would
+                # not, and half-tested is untested.
+                if muts and kills_here == len(muts):
+                    repaired_ids.add(survivor)
+                else:
+                    repaired_ids.discard(survivor)
+            return more
 
         # The CLAIMED re-tests run FIRST. Running every re-test last so the
         # range could never be starved meant the range starved THEM: a push
@@ -850,19 +888,22 @@ def consume(item, ctx: DrainContext) -> ConsumerResult:
         # its function is ALSO in the range, the fresh pass below tests the
         # same mutant again for the range's score -- one extra run, bounded
         # by `retest_cap`, and the honest count for that range.
+        # `retest_cap` counts SURVIVORS; a survivor with several occurrences
+        # spends several of the pass's mutants and confirms for its one turn.
         for fid, rel, line in claimed:
             if done or stats["retested"] >= retest_cap:
                 stats["retest_truncated"] = True
                 break
             before, before_retested = len(repaired_ids), stats["retested"]
-            _mutate(rel, {line}, claimed_budget, survivor=fid)
+            more = _mutate(rel, {line}, claimed_budget, survivor=fid)
             stats["retest_killed"] += len(repaired_ids) - before
             stats["claimed_retested"] += stats["retested"] - before_retested
+            if not more:
+                break
 
         for rel in files:
-            if done:
+            if done or not _mutate(rel, changed[rel], range_budget):
                 break
-            _mutate(rel, changed[rel], range_budget)
 
         # The hygiene pass -- every other open survivor -- runs LAST so it
         # can never starve the range of its budget, and only over survivors
@@ -877,8 +918,10 @@ def consume(item, ctx: DrainContext) -> ConsumerResult:
                 stats["retest_truncated"] = True
                 break
             before = len(repaired_ids)
-            _mutate(rel, {line}, range_budget, survivor=fid)
+            more = _mutate(rel, {line}, range_budget, survivor=fid)
             stats["retest_killed"] += len(repaired_ids) - before
+            if not more:
+                break
     finally:
         try:
             gitutil._run(ctx.root, "worktree", "remove", "--force", str(wt))

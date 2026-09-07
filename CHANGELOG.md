@@ -22,23 +22,39 @@ to publish a tag that disagrees with it.
   recently re-tested; rows from earlier wheels carry no key and simply do
   not count, so the order degrades to oldest-first where nothing is known.
 
-- **A recorded mutation survivor whose line moved out of its function is
-  regenerated from the whole file.** The re-test regenerated a survivor at
-  its recorded line only; generation is per function, so a shift inside the
-  function still landed, but code inserted above the function put the
-  recorded line in some other function and the survivor regenerated
-  nothing: the re-test could neither kill it nor re-report it, and it sat
-  `pending_retest` with no path out. Measured on this repo's ledger
-  2026-09-07: 17 recorded survivors, 15 regenerating at their line, 2
-  moved and both still present further down their file. When the recorded
-  line misses, the whole file is asked, and a match is taken only when it
-  is UNIQUE: the id is (tool, op, path, line content) with the occurrence
-  pinned to 0, so two identical mutable lines in different functions
-  fingerprint identically, and the first positional match could be an
-  unrelated lookalike whose confirmed kill would then be claimed as
-  `mutant_killed` for a gap that was never closed (this repo's own
-  llm-review caught that in the first cut, 2026-09-07 14:02Z). Ambiguous,
-  and content that no longer exists anywhere, still regenerate nothing.
+- **A recorded mutation survivor is regenerated from the whole file, every
+  occurrence of it, and claimed killed only when every occurrence dies.**
+  The re-test regenerated a survivor at its recorded line only; generation
+  is per function, so a shift inside the function still landed, but code
+  inserted above the function put the recorded line in some other function
+  and the survivor regenerated nothing: the re-test could neither kill it
+  nor re-report it, and it sat `pending_retest` with no path out. Measured
+  on this repo's ledger 2026-09-07: 17 recorded survivors, 15 regenerating
+  at their line, 2 moved and both still present further down their file.
+  The whole file is now asked, always, and every match is tested: the id
+  is (tool, op, path, line content) with the occurrence pinned to 0, so
+  identical mutable lines fingerprint identically, in one function or
+  across the file, and every one of them IS the finding. Taking the first
+  positional match -- as the recorded-line path did, and as a whole-file
+  scan would -- let a confirmed kill of one occurrence be claimed as
+  `mutant_killed` while another survived, a false repair in an append-only
+  ledger (this repo's own llm-review caught it in the first cut, 2026-09-07
+  14:02Z, and again in the per-function path, 18:03Z). The claim is atomic:
+  a surviving occurrence re-reports the id, and a re-test cut short between
+  occurrences by `retest_cap` or the budget claims nothing and reports
+  `retest_truncated`. One survivor counts as one re-test however many
+  occurrences it has, and the whole-file scan starts at line 1 (a one-line
+  function on line 1 holds a mutant; drain survivor 4031dcd0). Content that
+  no longer exists anywhere still regenerates nothing.
+
+- **A spent phase budget in the mutation consumer ends that phase, not the
+  run.** The claimed re-test pass (survivors a changed test names) runs on
+  its own `retest_cap` budget precisely so the range keeps `max_mutants`
+  for itself, but exhausting either budget set one run-wide stop: a claimed
+  survivor with two occurrences and `retest_cap` 1 silenced every fresh
+  mutant of the push that named it. Exposed by the every-occurrence change
+  above and pinned with it; before it a claimed survivor was always one
+  mutant and the stop was never reached from that pass.
 
 ## [0.15.0] — 2026-09-07
 

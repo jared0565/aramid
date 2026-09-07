@@ -1,5 +1,5 @@
 """Unit-scope pins for regenerating a recorded survivor from its fingerprint
-(`consumers.mutation._survivor_mutant`). Pure: no repo, no subprocess."""
+(`consumers.mutation._survivor_mutants`). Pure: no repo, no subprocess."""
 from aramid import mutation
 from aramid.consumers import mutation as mut_consumer
 
@@ -15,10 +15,13 @@ def _recorded():
     return m, mut_consumer._mutant_fp("calc.py", m.op, m.line, lines)
 
 
-def test_a_survivor_still_inside_its_function_regenerates_at_the_recorded_line():
+def _at(found):
+    return [(m.op, m.line) for m in found]
+
+
+def test_a_survivor_still_inside_its_function_regenerates_where_it_was():
     m, fid = _recorded()
-    found = mut_consumer._survivor_mutant("calc.py", m.line, fid, ADULT)
-    assert found is not None and (found.op, found.line) == (m.op, m.line)
+    assert _at(mut_consumer._survivor_mutants("calc.py", fid, ADULT)) == [(m.op, m.line)]
 
 
 def test_a_survivor_that_moved_out_of_its_function_still_regenerates():
@@ -28,36 +31,47 @@ def test_a_survivor_that_moved_out_of_its_function_still_regenerates():
     re-detected line). Two had moved out of their function -- code inserted
     above them -- and both still existed further down the file, yet the
     re-test regenerated nothing and could neither kill nor re-report them.
-    The fingerprint is keyed on content, not on a number: when the recorded
-    line misses, the whole file is asked."""
+    The fingerprint is keyed on content, not on a number: the whole file
+    is asked, and the recorded line is not consulted at all."""
     m, fid = _recorded()
-    moved = "def other(x):\n    return x\n\n\n" + ADULT     # recorded line now sits in other()
-    found = mut_consumer._survivor_mutant("calc.py", m.line, fid, moved)
-    assert found is not None, "the survivor still exists four lines down"
-    assert (found.op, found.line) == (m.op, m.line + 4)
+    moved = "def other(x):\n    return x\n\n\n" + ADULT     # the recorded line now sits in other()
+    assert _at(mut_consumer._survivor_mutants("calc.py", fid, moved)) == [(m.op, m.line + 4)]
 
 
 def test_a_survivor_whose_line_was_rewritten_regenerates_nowhere():
-    """The other direction must hold: content that no longer exists anywhere
-    fingerprints to nothing, so a rewritten line is not matched to a
-    lookalike elsewhere. That case belongs to the gate's resolvers."""
+    """Content that no longer exists anywhere fingerprints to nothing, so a
+    rewritten line is not matched to a lookalike elsewhere. That case
+    belongs to the gate's resolvers."""
     m, fid = _recorded()
     rewritten = ADULT.replace("age >= 18", "age >= 21")
-    assert mut_consumer._survivor_mutant("calc.py", m.line, fid, rewritten) is None
+    assert mut_consumer._survivor_mutants("calc.py", fid, rewritten) == []
 
 
-def test_a_whole_file_match_is_taken_only_when_it_is_unique():
+def test_every_occurrence_of_the_content_is_returned_across_functions():
     """The id is (tool, op, path, LINE CONTENT) with the occurrence pinned to
-    0, so two identical mutable lines in different functions fingerprint
-    identically. A whole-file rescan that returned the first positional
-    match could regenerate an unrelated lookalike, and a confirmed kill of
-    the lookalike would be claimed as `mutant_killed` for a test gap that
-    was never closed (llm-review 77f29313, 2026-09-07 14:02Z). Ambiguous
-    means None: the finding stays with the gate's resolvers, as before."""
+    0, so identical mutable lines in different functions ARE one finding.
+    Returning the first positional match let a confirmed kill of one
+    occurrence be claimed for the id while another survived (llm-review
+    77f29313, 2026-09-07 14:02Z). Every occurrence is returned; the caller
+    tests them all and claims only when all die."""
     m, fid = _recorded()
     twin = ("def pad():\n    return 0\n\n\n"
             "def other(age):\n    if age >= 18:\n        return 1\n    return 0\n\n\n") + ADULT
-    assert mut_consumer._survivor_mutant("calc.py", m.line, fid, twin) is None
+    assert _at(mut_consumer._survivor_mutants("calc.py", fid, twin)) == [(m.op, 6), (m.op, 12)]
+
+
+def test_every_occurrence_inside_one_function_is_returned_too():
+    """Same rule inside one function (llm-review a9d2fc25, 18:03Z): the
+    per-function path that used to run first also took the first positional
+    match, which is why the recorded line is no longer consulted."""
+    m, fid = _recorded()
+    dup = ("def is_adult(age):\n"
+           "    if age >= 18:\n"
+           "        return True\n"
+           "    if age >= 18:\n"
+           "        return True\n"
+           "    return False\n")
+    assert _at(mut_consumer._survivor_mutants("calc.py", fid, dup)) == [(m.op, 2), (m.op, 4)]
 
 
 def test_a_survivor_on_the_first_line_of_the_file_is_still_found():
@@ -67,6 +81,5 @@ def test_a_survivor_on_the_first_line_of_the_file_is_still_found():
     lines = one_liner.splitlines()
     m = mutation.generate_mutants(one_liner, {1})[0]
     fid = mut_consumer._mutant_fp("calc.py", m.op, m.line, lines)
-    # recorded line misses (points past the file) -> rescan must include line 1
-    found = mut_consumer._survivor_mutant("calc.py", 5, fid, one_liner)
-    assert found is not None and (found.op, found.line) == (m.op, 1)
+    # the scan must include line 1, not start at 2
+    assert _at(mut_consumer._survivor_mutants("calc.py", fid, one_liner)) == [(m.op, 1)]
