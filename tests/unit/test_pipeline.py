@@ -1984,19 +1984,42 @@ def test_gate_resolves_a_mutation_survivor_whose_line_left_the_file(tmp_path, mo
                         {**pipeline.GATE_RUNNER_KEYS, Gate.PRE_PUSH: []})
     cfg = config.load_config(r)
     led = Ledger(r / ".aramid" / "ledger.db")
-    # The id of a line ghost.py no longer holds -- `x > 2` was rewritten to
-    # `x > 1` -- against the default seed, whose line IS there (non-vacuity).
-    gone = _mut_fid("src/pkg/ghost.py", content="    return x > 2")
+    # The id of a line real.py (TRACKED, at HEAD) no longer holds -- `x > 2`
+    # was rewritten to `x > 1` -- against a seed on the same file whose line
+    # IS there (non-vacuity), and one on the present-but-UNTRACKED ghost.py,
+    # which is not at HEAD and so is never read (llm-review 88a4fab2: the
+    # first cut read the working tree, and an uncommitted edit cleared a
+    # blocking finding for good).
+    gone = _mut_fid("src/real.py", content="    return x > 2")
     try:
-        _seed_mut(led, fid=gone)
-        present = _seed_mut(led)
+        _seed_mut(led, fid=gone, file="src/real.py")
+        present = _seed_mut(led, file="src/real.py")
+        untracked = _seed_mut(led, fid=_mut_fid("src/pkg/ghost.py", content="    return x > 2"))
         pipeline.run_gate(r, Gate.PRE_PUSH, "all", cfg, led)
         state = led.open_findings()
         assert state[gone]["status"] == "fixed"
         assert state[present]["status"] == "open"
+        assert state[untracked]["status"] == "open"
         ev = [e for e in led.events() if e.type is EventType.FINDING_RESOLVED
               and e.finding_id == gone]
         assert [e.payload for e in ev] == [{"auto_resolved": "line_departed"}]
+    finally:
+        led.close()
+
+
+def test_an_uncommitted_rewrite_does_not_clear_a_survivor_at_the_gate(tmp_path, monkeypatch):
+    """The bypass 88a4fab2 named, at gate level: rewrite the line on disk,
+    push, revert. HEAD still holds the line, so nothing resolves."""
+    r = _mut_repo(tmp_path)
+    monkeypatch.setattr(pipeline, "GATE_RUNNER_KEYS",
+                        {**pipeline.GATE_RUNNER_KEYS, Gate.PRE_PUSH: []})
+    cfg = config.load_config(r)
+    led = Ledger(r / ".aramid" / "ledger.db")
+    (r / "src" / "real.py").write_text(MUT_FN.replace("x > 1", "x > 2"), encoding="utf-8")
+    try:
+        fid = _seed_mut(led, file="src/real.py")
+        pipeline.run_gate(r, Gate.PRE_PUSH, "all", cfg, led)
+        assert led.open_findings()[fid]["status"] == "open"
     finally:
         led.close()
 

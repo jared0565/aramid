@@ -149,3 +149,19 @@ def test_diff_new_lines_root_commit_and_deletion(tmp_path):
     _git(r, "commit", "-m", "c3")
     head2 = gitutil.rev_sha(r, "HEAD")
     assert "a.py" not in gitutil.diff_new_lines(r, base, head2)
+
+
+def test_blob_at_tells_an_empty_file_from_a_missing_one(tmp_path):
+    """`read_blob` answers "" for both, and a resolver that reads "" as
+    "no lines" would treat "git could not say" as a departed file. `blob_at`
+    answers None when git has no blob: missing, untracked, or a path that
+    escapes the tree."""
+    r = _repo(tmp_path)
+    _commit(r, "empty.py", "", "empty")
+    _commit(r, "full.py", "x = 1\n", "full")
+    (r / "untracked.py").write_text("y = 2\n", encoding="utf-8")
+    assert gitutil.blob_at(r, "HEAD", "empty.py") == ""
+    assert gitutil.blob_at(r, "HEAD", "full.py") == "x = 1\n"
+    assert gitutil.blob_at(r, "HEAD", "missing.py") is None
+    assert gitutil.blob_at(r, "HEAD", "untracked.py") is None
+    assert gitutil.blob_at(r, "HEAD", "../outside.py") is None

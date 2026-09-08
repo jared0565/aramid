@@ -378,12 +378,23 @@ def _survivor_mutants(rel: str, fid: str, original: str, op: str | None = None) 
     if op is None:
         hits = {n for n, _ in enumerate(lines, 1)}
     else:
-        hits = {n for n, lc in enumerate(lines, 1)
-                if compute_fingerprint("mutation", op, rel, lc, 0) == fid}
+        hits = _survivor_lines(rel, fid, lines, op)
         if not hits:
             return []
     return [m for m in mutation.generate_mutants(original, hits)
             if _mutant_fp(rel, m.op, m.line, lines) == fid]
+
+
+def _survivor_lines(rel: str, fid: str, lines: list[str], op: str) -> set[int]:
+    """The 1-based lines of `lines` whose content, under `op`, fingerprints
+    to `fid` -- every line the survivor could be regenerated from, found
+    from the hashes alone. Empty means the CONTENT is gone from the file,
+    which is what the gate's `line_departed` asks; it deliberately does not
+    ask whether a hit can be regenerated (an unparseable file cannot
+    regenerate anything and is not thereby departed -- llm-review
+    ea21b2a8)."""
+    return {n for n, lc in enumerate(lines, 1)
+            if compute_fingerprint("mutation", op, rel, lc, 0) == fid}
 
 
 def _retest_candidates(ledger, root: Path) -> list[tuple[str, str, int, str | None]]:

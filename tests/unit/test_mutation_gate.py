@@ -577,10 +577,41 @@ def _write(root, rel, text):
     p.write_text(text, encoding="utf-8")
 
 
-def _line_departed(tmp_path, source, *, status_pending=False, root="same"):
+def _git(root, *args):
+    import subprocess
+    subprocess.run(["git", *args], cwd=root, check=True, capture_output=True)
+
+
+def _repo(tmp_path):
+    """An initialised repo with one commit, so HEAD exists."""
+    _git(tmp_path, "init", "-q", "-b", "main")
+    _git(tmp_path, "config", "user.email", "t@t")
+    _git(tmp_path, "config", "user.name", "t")
+    (tmp_path / ".keep").write_text("", encoding="utf-8")
+    _git(tmp_path, "add", ".keep")
+    _git(tmp_path, "commit", "-q", "-m", "c0")
+    return tmp_path
+
+
+def _commit(root, rel, text):
+    _write(root, rel, text)
+    _git(root, "add", rel)
+    _git(root, "commit", "-q", "-m", f"commit {rel}")
+
+
+def _line_departed(tmp_path, source, *, status_pending=False, root="same",
+                   worktree=None, untracked=False):
+    """`source` is what HEAD holds for X (None: X is not in the repo at all);
+    `worktree` overrides what sits on disk after the commit, uncommitted;
+    `untracked` writes `source` to disk without committing it."""
     fid = _line_fid()
-    if source is not None:
+    _repo(tmp_path)
+    if source is not None and untracked:
         _write(tmp_path, X, source)
+    elif source is not None:
+        _commit(tmp_path, X, source)
+    if worktree is not None:
+        _write(tmp_path, X, worktree)
     led = Ledger(tmp_path / "l.db")
     try:
         _seed(led, _mut_finding(fid=fid, file=X, line=2, op="cmp-flip"))
@@ -622,6 +653,40 @@ def test_a_survivor_whose_line_is_still_in_the_file_is_left_alone(tmp_path):
     assert resolved == [] and rec["status"] == "open" and evs == []
 
 
+def test_a_survivor_whose_line_is_present_in_an_unparseable_file_is_left_alone(tmp_path):
+    """llm-review ea21b2a8 (2026-09-07 22:03Z): `generate_mutants` swallows
+    SyntaxError and returns [], so a file that does not parse -- conflict
+    markers, a mid-edit save -- regenerated nothing and read as departed:
+    EVERY survivor in that file written `fixed` at once. Departure is a
+    statement about the line's CONTENT, and the hashes answer that without
+    parsing anything; a line that is there but cannot be regenerated is
+    left alone, exactly like an unknown op."""
+    broken = ADULT + "\n\ndef oops(:\n    pass\n"
+    fid, resolved, rec, evs = _line_departed(tmp_path, broken)
+    assert resolved == [] and rec["status"] == "open" and evs == []
+
+
+def test_an_uncommitted_rewrite_does_not_resolve_the_survivor(tmp_path):
+    """llm-review 88a4fab2 (22:03Z): the resolver read the WORKING TREE, so
+    a survivor's line rewritten on disk and never committed cleared a
+    finding -- permanently, `fixed` -- at pre-push, with `mutation_block_armed`
+    a gate bypass (edit, push, revert). The file is read at HEAD, the
+    revision being pushed: what is not committed is not there. A COMMITTED
+    rewrite that is later reverted is re-detected under the same
+    content-keyed id by the drain over the revert."""
+    fid, resolved, rec, evs = _line_departed(
+        tmp_path, ADULT, worktree=ADULT.replace("age >= 18", "age >= 21"))
+    assert resolved == [] and rec["status"] == "open" and evs == []
+
+
+def test_an_untracked_file_is_not_read(tmp_path):
+    """Not at HEAD, so nothing to ask -- the same rule as above, not a
+    departure (file_departed has its own view of a present file)."""
+    fid, resolved, rec, evs = _line_departed(
+        tmp_path, ADULT.replace("age >= 18", "age >= 21"), untracked=True)
+    assert resolved == [] and rec["status"] == "open" and evs == []
+
+
 def test_a_survivor_whose_file_is_gone_is_file_departeds_case_not_this(tmp_path):
     """No file, no line -- but "departed" would be a guess here, and
     `file_departed` already answers it with its own containment rules."""
@@ -641,6 +706,7 @@ def test_line_departed_never_reads_outside_the_repo(tmp_path):
     no such line. Reading it would resolve the finding on a file that was
     never in the repository; the escape is refused before any read."""
     fid = _line_fid(rel="../outside.py")
+    _repo(tmp_path)
     _write(tmp_path.parent, "outside.py", ADULT.replace("age >= 18", "age >= 21"))
     led = Ledger(tmp_path / "l.db")
     try:
@@ -675,7 +741,8 @@ def test_a_survivor_of_an_op_the_mutator_cannot_emit_is_not_a_candidate(tmp_path
     every survivor of a renamed op at the next push. Left open, and not
     counted as considered (the yield row must not say it was examined)."""
     fid = _line_fid(op="flip-arith")
-    _write(tmp_path, X, ADULT)
+    _repo(tmp_path)
+    _commit(tmp_path, X, ADULT)
     led = Ledger(tmp_path / "l.db")
     try:
         _seed(led, _mut_finding(fid=fid, file=X, line=2, op="flip-arith"))

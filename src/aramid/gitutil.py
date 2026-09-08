@@ -31,6 +31,19 @@ def read_blob(root: Path, ref: str, rel_path: str) -> str:
     cp = _run(root, "show", spec)
     return cp.stdout if cp.returncode == 0 else ""
 
+
+def blob_at(root: Path, ref: str, rel_path: str) -> str | None:
+    """The file's text at `ref`, or None when git has no such blob -- the
+    path is not tracked at that revision, escapes the tree, or git itself
+    failed. Unlike `read_blob`, an EMPTY file and a missing one differ: a
+    resolver that treats "" as "no lines" must not be handed "" for "git
+    could not say"."""
+    try:
+        cp = _run(root, "show", f"{ref}:{rel_path}")
+    except (OSError, ValueError):
+        return None
+    return cp.stdout if cp.returncode == 0 else None
+
 def resolve_range(root: Path):
     if _run(root, "rev-parse", "@{u}").returncode == 0:
         return "@{u}..HEAD"

@@ -227,21 +227,37 @@ def auto_resolve_line_departed(ledger, run_id: str, at: str, *, root) -> list[st
     grading will not re-derive.
 
     NOT OPTIMISTIC. `gap_addressed` credits a fix it has not seen; this
-    reads the file and asks the re-test's own question (`_survivor_mutants`,
-    the same function, so "gone" here and "regenerates nothing" there are
-    one predicate), which is why it may write a bare `fixed` where
+    reads the file and asks the re-test's own question -- is there a line
+    this id could be regenerated from (`_survivor_lines`, the re-test's
+    own prefilter) -- which is why it may write a bare `fixed` where
     gap_addressed may only write `pending_retest`. Both `open` and
     `pending_retest` rows are candidates -- the stranded state IS
     pending_retest. Suppressed ids are not skipped: an adjudicated
     equivalent mutant on a line that is gone is gone.
 
-    SAFE DIRECTION. `root` None is a no-op; an absent file is left to
-    `file_departed` (departure needs its containment rules, and "no file"
-    is not "no line"); a stored path that escapes the root is refused
-    before any read -- `root / "C:/Windows/win.ini"` IS win.ini, whose
-    content holds no such line and would read as departed; an unreadable
-    file, a malformed record, or a regeneration error keeps the finding
-    open. Never raises.
+    THE FILE AT HEAD, NOT ON DISK (llm-review 88a4fab2, 2026-09-07). The
+    first cut read the working tree, so a survivor's line rewritten on
+    disk and never committed cleared a finding -- permanently, `fixed` --
+    at pre-push; with `mutation_block_armed` that is a gate bypass (edit,
+    push, revert), and the accidental form is a push carrying an unrelated
+    uncommitted edit. HEAD is the revision being pushed: what is not
+    committed is not there, an untracked file is never read, and a
+    COMMITTED rewrite later reverted is re-detected under the same
+    content-keyed id by the drain over the revert.
+
+    BY THE HASHES ALONE (llm-review ea21b2a8, same day). Departure is a
+    statement about the line's CONTENT. The first cut asked
+    `_survivor_mutants`, which reaches `generate_mutants`, which swallows
+    SyntaxError and returns [] -- so a file that did not parse (conflict
+    markers, a mid-edit save) regenerated nothing and read as departed,
+    and EVERY survivor in it was written `fixed` at once. The hashes need
+    no parse: a line that is there but cannot be regenerated is left
+    alone, like an unknown op.
+
+    SAFE DIRECTION. `root` None is a no-op; a path git has no blob for at
+    HEAD -- absent, untracked, or escaping the tree -- is skipped (an
+    absent file is `file_departed`'s case, and "no file" is not "no
+    line"); a malformed record keeps the finding open. Never raises.
 
     AN OP THE MUTATOR CANNOT EMIT IS NOT A CANDIDATE. The id is hashed with
     the op NAME. A survivor recorded under a name `mutation.OPS` lacks --
@@ -258,7 +274,7 @@ def auto_resolve_line_departed(ledger, run_id: str, at: str, *, root) -> list[st
     base = _resolved_root(root)
     if base is None:
         return []
-    from aramid.consumers.mutation import _survivor_mutants     # circular at module level
+    from aramid.consumers.mutation import _survivor_lines     # circular at module level
     from aramid.mutation import OPS
     resolved: list[str] = []
     considered = 0
@@ -277,12 +293,12 @@ def auto_resolve_line_departed(ledger, run_id: str, at: str, *, root) -> list[st
             if not rel or op not in OPS:
                 continue
             if rel not in sources:
-                sources[rel] = _read_contained(base, rel)
+                sources[rel] = gitutil.blob_at(base, "HEAD", rel)
             source = sources[rel]
             if source is None:
-                continue                       # absent, escaped, or unreadable
+                continue                       # not at HEAD: absent, untracked, or escaped
             considered += 1
-            if _survivor_mutants(rel, fid, source, op):
+            if _survivor_lines(rel, fid, source.splitlines(), op):
                 continue                       # still there, somewhere in the file
             ledger.append(Event(EventType.FINDING_RESOLVED, run_id, at, finding_id=fid,
                                 payload={"auto_resolved": "line_departed"}))
@@ -296,14 +312,3 @@ def auto_resolve_line_departed(ledger, run_id: str, at: str, *, root) -> list[st
     return resolved
 
 
-def _read_contained(base: Path, rel: str) -> str | None:
-    """The file's text, or None when it is absent, unreadable, or not inside
-    `base` once resolved (an absolute `rel` discards base outright and `..`
-    is never normalised away -- see `ledger._departed`)."""
-    try:
-        target = (base / rel).resolve()
-        if not target.is_relative_to(base) or not target.is_file():
-            return None
-        return target.read_text(encoding="utf-8")
-    except (OSError, ValueError, UnicodeDecodeError):
-        return None
