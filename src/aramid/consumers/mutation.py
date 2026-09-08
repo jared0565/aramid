@@ -502,6 +502,26 @@ def _knobs(mcfg) -> dict:
     }
 
 
+def _source_files(changed) -> list[str]:
+    """The changed files the range mutates: python sources, never tests."""
+    return sorted(f for f in changed if f.endswith(".py") and not _is_test_file(f))
+
+
+def _retest_wanted(knobs, changed) -> bool:
+    """A changed TEST is the one event that can newly kill a recorded
+    survivor on a module this range never touched -- see
+    `_retest_candidates`. Only then, and only with the knob on."""
+    return bool(knobs["retest_open_survivors"]) and any(_is_test_file(f) for f in changed)
+
+
+def _claimed(retests, changed) -> list:
+    """The survivors a changed test in the range NAMES: those whose module
+    path the gate's own stem rule maps a changed test to. They are the
+    push's most likely purpose and run first, on their own budget."""
+    test_stems = {Path(f).stem for f in changed if _is_test_file(f)}
+    return [c for c in retests if mutation_gate._has_mapped_test(c[1], test_stems)]
+
+
 def consume(item, ctx: DrainContext) -> ConsumerResult:
     mcfg = getattr(ctx.cfg, "mutation", None) or {}
     if not mcfg.get("enabled", True):
@@ -513,24 +533,17 @@ def consume(item, ctx: DrainContext) -> ConsumerResult:
     confirm_cap = knobs["confirm_cap"]
 
     changed = gitutil.diff_new_lines(ctx.root, item.base, item.head)
-    files = sorted(f for f in changed
-                   if f.endswith(".py") and not _is_test_file(f))
+    files = _source_files(changed)
     if ctx.cfg is not None:
         files = config_mod.filter_paths(files, ctx.cfg)
-    # A changed TEST is the one event that can newly kill a recorded survivor
-    # on a module this range never touched -- see `_retest_candidates`. Only
-    # then is an item with no python source in range worth a worktree.
+    # Only a changed test makes an item with no python source in range
+    # worth a worktree (`_retest_wanted`); the survivors it names run
+    # FIRST, ahead of the range's own mutants, on their own budget
+    # (`_claimed`). The rest wait for the hygiene pass, last.
     retest_cap = knobs["retest_cap"]
     retests = (_retest_candidates(ctx.ledger, ctx.root)
-               if knobs["retest_open_survivors"]
-               and any(_is_test_file(f) for f in changed) else [])
-    # A survivor whose MODULE a changed test maps to (the gate's own stem
-    # rule) is the push's most likely purpose -- someone wrote the test the
-    # finding asked for -- and is re-tested FIRST, ahead of the range's own
-    # mutants, on its own budget. The rest wait for the hygiene pass, last.
-    test_stems = {Path(f).stem for f in changed if _is_test_file(f)}
-    claimed = [c for c in retests
-               if mutation_gate._has_mapped_test(c[1], test_stems)]
+               if _retest_wanted(knobs, changed) else [])
+    claimed = _claimed(retests, changed)
     if not files and not retests:
         return ConsumerResult(consumer=NAME, state="ok",
                               note="no python files in range")

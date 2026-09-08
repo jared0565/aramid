@@ -72,3 +72,38 @@ def test_the_baseline_budget_derives_from_the_mutant_timeout_when_unset():
     timeouts unless the repo sets it (this repo does, 900)."""
     assert mut_consumer._knobs({"mutant_timeout_s": 50})["baseline_timeout_s"] == 200.0
     assert mut_consumer._knobs({"baseline_timeout_s": 900})["baseline_timeout_s"] == 900.0
+
+
+# --- the three range decisions the prologue makes, pinned ----------------
+#
+# The 2026-09-08 18:00Z drain reported three survivors on lines only the
+# integration suite drives, once the six knob literals stopped absorbing the
+# budget ahead of them: the source-file filter (`and` -> `or` admitted every
+# changed file), the re-test enable (`and` -> `or` re-tested with the knob
+# off, or with no test changed), and the claimed partition (`c[1]` -> `c[2]`
+# handed a LINE NUMBER to the stem rule, so nothing was ever claimed). Each
+# is a pure function of the range now.
+
+def test_only_changed_python_sources_are_mutated():
+    changed = {"src/b.py": {2}, "tests/unit/test_a.py": {1}, "docs/x.md": {1},
+               "src/a.py": {1}, "src/a_test.py": {1}, "src/test_b.py": {1}}
+    assert mut_consumer._source_files(changed) == ["src/a.py", "src/b.py"]
+
+
+def test_re_tests_run_only_when_enabled_and_a_test_changed():
+    with_test = {"src/a.py": {1}, "tests/unit/test_a.py": {1}}
+    no_test = {"src/a.py": {1}}
+    assert mut_consumer._retest_wanted({"retest_open_survivors": True}, with_test) is True
+    assert mut_consumer._retest_wanted({"retest_open_survivors": True}, no_test) is False
+    assert mut_consumer._retest_wanted({"retest_open_survivors": False}, with_test) is False
+
+
+def test_a_survivor_is_claimed_by_its_module_path_not_its_line():
+    """(fid, rel, line, op): the stem rule is asked about `rel`. Asked about
+    the line number instead (`c[2]`) it maps nothing, and the claimed pass
+    -- the reason a test-only push is worth a worktree -- never runs."""
+    survivors = [("a" * 64, "src/pkg/widget.py", 7, "cmp-flip"),
+                 ("b" * 64, "src/pkg/other.py", 7, "cmp-flip")]
+    changed = {"tests/unit/test_widget.py": {1}}
+    assert mut_consumer._claimed(survivors, changed) == [survivors[0]]
+    assert mut_consumer._claimed(survivors, {"src/pkg/widget.py": {3}}) == []

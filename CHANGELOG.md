@@ -105,6 +105,15 @@ to publish a tag that disagrees with it.
   entries stay until the resolver above clears their findings, after which
   the stale-suppression report names them for deletion.
 
+- **The mutation consumer's three range decisions are pinned.** Which
+  changed files are mutated (python sources, never tests), whether a
+  re-test pass runs at all (only with the knob on AND a test in the range),
+  and which survivors a changed test names (by their module path) were
+  inline in `consume` and driven only by the integration suite; once the
+  knob literals stopped absorbing the drain's budget ahead of them, all
+  three surfaced as survivors. Each is a pure function of the range now,
+  with a unit pin that kills the drain's mutant.
+
 - **A mutant never runs the previous mutant's bytecode.** Python validates
   a cached `.pyc` by the source's mtime in whole seconds and its size. Two
   mutants of one file differ by one operator, so they are the same size,
