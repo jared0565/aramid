@@ -875,6 +875,19 @@ def _overrides_from_ledger(ledger: Ledger) -> list[OverrideRecord]:
 
 # -------------------------------------------------------------------- run ----
 
+def _certified_revs(certified) -> tuple[str, ...]:
+    """The revisions a pre-push gate run certifies, for resolvers that read
+    file content: every pushed ref's local sha as git handed it to the
+    hook, then HEAD as pinned at the start -- deduplicated, in that order.
+    HEAD alone when there is no certification (a hand-run gate)."""
+    if certified is None:
+        return ("HEAD",)
+    revs = [r.local_sha for r in certified.refs if r.local_sha]
+    if certified.head_at_start:
+        revs.append(certified.head_at_start)
+    return tuple(dict.fromkeys(revs)) or ("HEAD",)
+
+
 def run_gate(root: Path, gate: Gate, mode: str, cfg: config_mod.Config, ledger: Ledger,
              accept_degraded: str | None = None, *,
              clock: Callable[[], str] = _default_clock,
@@ -1204,9 +1217,12 @@ def run_gate(root: Path, gate: Gate, mode: str, cfg: config_mod.Config, ledger: 
         # re-test regenerates nothing and can neither kill nor re-report
         # it, gap_addressed has already parked it `pending_retest` (the
         # rewrite touched the source), and file_departed needs the whole
-        # file gone -- so it sat there forever. The gate reads the file and
-        # asks the re-test's own question. See the resolver's docstring.
-        mutation_gate.auto_resolve_line_departed(ledger, run_id, at, root=root)
+        # file gone -- so it sat there forever. The gate reads the file at
+        # every revision it certifies -- the pushed refs and HEAD, from the
+        # same pins the drift check uses -- and asks the re-test's own
+        # question. See the resolver's docstring.
+        mutation_gate.auto_resolve_line_departed(
+            ledger, run_id, at, root=root, revs=_certified_revs(certified))
         # RESOLUTION SCOPE IS NOT SCAN SCOPE. These resolvers need the push's
         # genuine delta; `scope_files` is whatever was SCANNED, and the two
         # coincide only under mode "range" with an upstream.

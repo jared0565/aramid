@@ -2007,6 +2007,36 @@ def test_gate_resolves_a_mutation_survivor_whose_line_left_the_file(tmp_path, mo
         led.close()
 
 
+def test_the_gate_resolves_against_the_certified_refs_not_head_alone(tmp_path, monkeypatch):
+    """THE WIRING for llm-review 64df2b3d: `run_gate` hands the resolver the
+    revisions it certifies -- the pushed refs' local shas and HEAD -- not
+    the literal "HEAD". real.py's line is at c1 (the ref being pushed) and
+    rewritten at c2 (HEAD): reading HEAD alone resolves it, reading every
+    certified revision does not."""
+    from aramid import pushrefs
+    r = _mut_repo(tmp_path)
+    c1 = subprocess.run(["git", "rev-parse", "HEAD"], cwd=r, check=True,
+                        capture_output=True, text=True).stdout.strip()
+    (r / "src" / "real.py").write_text(MUT_FN.replace("x > 1", "x > 2"), encoding="utf-8")
+    subprocess.run(["git", "commit", "-q", "-am", "c2 rewrites the line"], cwd=r, check=True)
+    c2 = subprocess.run(["git", "rev-parse", "HEAD"], cwd=r, check=True,
+                        capture_output=True, text=True).stdout.strip()
+    assert c1 != c2
+    monkeypatch.setattr(pipeline, "GATE_RUNNER_KEYS",
+                        {**pipeline.GATE_RUNNER_KEYS, Gate.PRE_PUSH: []})
+    cfg = config.load_config(r)
+    led = Ledger(r / ".aramid" / "ledger.db")
+    cert = pushrefs.Certification(
+        refs=(pushrefs.PushRef("refs/heads/feature", c1, "refs/heads/feature", "0" * 40),),
+        head_at_start=c2, hook=True)
+    try:
+        fid = _seed_mut(led, file="src/real.py")
+        pipeline.run_gate(r, Gate.PRE_PUSH, "all", cfg, led, certified=cert)
+        assert led.open_findings()[fid]["status"] == "open"
+    finally:
+        led.close()
+
+
 def test_an_uncommitted_rewrite_does_not_clear_a_survivor_at_the_gate(tmp_path, monkeypatch):
     """The bypass 88a4fab2 named, at gate level: rewrite the line on disk,
     push, revert. HEAD still holds the line, so nothing resolves."""

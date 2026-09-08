@@ -754,3 +754,111 @@ def test_a_survivor_of_an_op_the_mutator_cannot_emit_is_not_a_candidate(tmp_path
         led.close()
     assert resolved == [] and rec["status"] == "open"
     assert len(rows) == 1 and rows[0].payload["considered"] == 0
+
+
+def test_line_departed_says_nothing_when_no_record_is_malformed(tmp_path, capsys):
+    """Kills `skipped = 0` -> 1: the clean path must stay quiet (drain
+    survivor ca648b99, 2026-09-08 10:33Z)."""
+    _line_departed(tmp_path, ADULT)
+    assert "line-departed" not in capsys.readouterr().err
+
+
+def test_line_departed_reports_exactly_one_failed_record(tmp_path, capsys, monkeypatch):
+    """One record whose read blows up is one skip -- not two, not none --
+    and the others are still judged. No record SHAPE can raise inside that
+    loop (every field is `str()`-ed or `.get()`-ed), so the read itself is
+    made to."""
+    real = mutation_gate.gitutil.blob_at
+
+    def flaky(root, ref, rel):
+        if rel == "src/pkg/y.py":
+            raise OSError("simulated git failure")
+        return real(root, ref, rel)
+    monkeypatch.setattr(mutation_gate.gitutil, "blob_at", flaky)
+    _repo(tmp_path)
+    _commit(tmp_path, X, ADULT)
+    _commit(tmp_path, "src/pkg/y.py", ADULT)
+    fid_x, fid_y = _line_fid(), _line_fid(rel="src/pkg/y.py")
+    led = Ledger(tmp_path / "l.db")
+    try:
+        _seed(led, _mut_finding(fid=fid_x, file=X, line=2, op="cmp-flip"))
+        _seed(led, _mut_finding(fid=fid_y, file="src/pkg/y.py", line=2, op="cmp-flip"))
+        resolved = mutation_gate.auto_resolve_line_departed(led, "r1", NOW, root=tmp_path)
+        rows = [e for e in led.events() if e.type is EventType.RESOLVER_YIELD
+                and e.payload.get("resolver") == "line_departed"]
+    finally:
+        led.close()
+    assert resolved == []
+    assert "line-departed: skipped 1 malformed record" in capsys.readouterr().err
+    assert rows[0].payload["considered"] == 1, "the record that could be read was judged"
+
+
+def test_a_js_mutation_survivor_is_not_a_candidate(tmp_path):
+    """Kills `!= TOOL or status not in` -> `and` (drain survivor 8ba95552).
+    js-mutation records the SAME op names, and its ids are hashed with its
+    own tool name, so no line of any file fingerprints to one under
+    "mutation": admitted, it would be resolved as departed on sight."""
+    from aramid.fingerprint import compute_fingerprint
+    fid = compute_fingerprint("js-mutation", "cmp-flip", X, "    if age >= 18:", 0)
+    _repo(tmp_path)
+    _commit(tmp_path, X, ADULT)
+    led = Ledger(tmp_path / "l.db")
+    try:
+        f = _mut_finding(fid=fid, file=X, line=2, op="cmp-flip")
+        _seed(led, Finding(**{**f.__dict__, "tool": "js-mutation"}))
+        resolved = mutation_gate.auto_resolve_line_departed(led, "r1", NOW, root=tmp_path)
+        rec = led.open_findings()[fid]
+    finally:
+        led.close()
+    assert resolved == [] and rec["status"] == "open"
+
+
+def _two_revisions(tmp_path):
+    """c1 holds the line; c2 (HEAD) rewrote it. Returns c1's sha."""
+    import subprocess
+    _repo(tmp_path)
+    _commit(tmp_path, X, ADULT)
+    c1 = subprocess.run(["git", "rev-parse", "HEAD"], cwd=tmp_path, check=True,
+                        capture_output=True, text=True).stdout.strip()
+    _commit(tmp_path, X, ADULT.replace("age >= 18", "age >= 21"))
+    return c1
+
+
+def _resolve_at(tmp_path, name, revs):
+    fid = _line_fid()
+    led = Ledger(tmp_path / f"{name}.db")
+    try:
+        _seed(led, _mut_finding(fid=fid, file=X, line=2, op="cmp-flip"))
+        resolved = mutation_gate.auto_resolve_line_departed(
+            led, "r1", NOW, root=tmp_path, revs=revs)
+        status = led.open_findings()[fid]["status"]
+    finally:
+        led.close()
+    return resolved, status
+
+
+def test_a_line_present_at_any_certified_revision_is_not_departed(tmp_path):
+    """llm-review 64df2b3d (2026-09-08 10:02Z): the pre-push hook is handed
+    the refs being pushed, and HEAD is only the common case of them. The
+    gate certifies those refs AND HEAD; the resolver reads every certified
+    revision and calls the line departed only when none of them holds it.
+    Reading HEAD alone cleared a survivor on evidence from a revision that
+    was not shipping."""
+    c1 = _two_revisions(tmp_path)
+    assert _resolve_at(tmp_path, "head", ("HEAD",)) == ([_line_fid()], "fixed"), "control"
+    assert _resolve_at(tmp_path, "ref", (c1,)) == ([], "open")
+    assert _resolve_at(tmp_path, "both", (c1, "HEAD")) == ([], "open")
+
+
+def test_a_file_at_no_certified_revision_is_skipped(tmp_path):
+    c1 = _two_revisions(tmp_path)
+    fid = _line_fid(rel="src/pkg/never.py")
+    led = Ledger(tmp_path / "l.db")
+    try:
+        _seed(led, _mut_finding(fid=fid, file="src/pkg/never.py", line=2, op="cmp-flip"))
+        resolved = mutation_gate.auto_resolve_line_departed(
+            led, "r1", NOW, root=tmp_path, revs=(c1, "HEAD"))
+        rec = led.open_findings()[fid]
+    finally:
+        led.close()
+    assert resolved == [] and rec["status"] == "open"

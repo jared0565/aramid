@@ -208,9 +208,10 @@ def auto_resolve_mutation(ledger, run_id: str, at: str, changed_files, *,
     return resolved
 
 
-def auto_resolve_line_departed(ledger, run_id: str, at: str, *, root) -> list[str]:
+def auto_resolve_line_departed(ledger, run_id: str, at: str, *, root,
+                               revs: tuple[str, ...] = ("HEAD",)) -> list[str]:
     """Resolve mutation survivors whose LINE has left the file: nothing in
-    the file at `root` fingerprints to the id any more.
+    the file, at any revision in `revs`, fingerprints to the id any more.
 
     THE HOLE THIS CLOSES. A survivor's id is (op, path, line content), and
     the drain's re-test regenerates it from that -- every occurrence, from
@@ -235,15 +236,24 @@ def auto_resolve_line_departed(ledger, run_id: str, at: str, *, root) -> list[st
     pending_retest. Suppressed ids are not skipped: an adjudicated
     equivalent mutant on a line that is gone is gone.
 
-    THE FILE AT HEAD, NOT ON DISK (llm-review 88a4fab2, 2026-09-07). The
-    first cut read the working tree, so a survivor's line rewritten on
-    disk and never committed cleared a finding -- permanently, `fixed` --
-    at pre-push; with `mutation_block_armed` that is a gate bypass (edit,
-    push, revert), and the accidental form is a push carrying an unrelated
-    uncommitted edit. HEAD is the revision being pushed: what is not
-    committed is not there, an untracked file is never read, and a
-    COMMITTED rewrite later reverted is re-detected under the same
-    content-keyed id by the drain over the revert.
+    THE FILE AT THE CERTIFIED REVISIONS, NOT ON DISK (llm-review 88a4fab2,
+    2026-09-07). The first cut read the working tree, so a survivor's line
+    rewritten on disk and never committed cleared a finding -- permanently,
+    `fixed` -- at pre-push; with `mutation_block_armed` that is a gate
+    bypass (edit, push, revert), and the accidental form is a push carrying
+    an unrelated uncommitted edit. What is not committed is not there, an
+    untracked file is never read, and a COMMITTED rewrite later reverted is
+    re-detected under the same content-keyed id by the drain over the
+    revert.
+
+    `revs` ARE THE REVISIONS THE GATE CERTIFIES (llm-review 64df2b3d,
+    2026-09-08): the pushed refs' local shas as git handed them to the
+    hook, plus HEAD -- `pipeline.run_gate` derives them from its
+    `certified` pins. HEAD alone is only the common case of a push, and
+    reading it for a push of some other ref cleared a survivor on evidence
+    from a revision that was not shipping. The line is departed only when
+    NO certified revision holds it; a file at none of them is skipped.
+    Without a certification (a hand-run gate) `revs` is HEAD.
 
     BY THE HASHES ALONE (llm-review ea21b2a8, same day). Departure is a
     statement about the line's CONTENT. The first cut asked
@@ -279,7 +289,7 @@ def auto_resolve_line_departed(ledger, run_id: str, at: str, *, root) -> list[st
     resolved: list[str] = []
     considered = 0
     skipped = 0
-    sources: dict[str, str | None] = {}
+    sources: dict[str, list[str]] = {}
     try:
         state = ledger.open_findings()
     except Exception:
@@ -293,13 +303,14 @@ def auto_resolve_line_departed(ledger, run_id: str, at: str, *, root) -> list[st
             if not rel or op not in OPS:
                 continue
             if rel not in sources:
-                sources[rel] = gitutil.blob_at(base, "HEAD", rel)
-            source = sources[rel]
-            if source is None:
-                continue                       # not at HEAD: absent, untracked, or escaped
+                blobs = (gitutil.blob_at(base, rev, rel) for rev in revs)
+                sources[rel] = [b for b in blobs if b is not None]
+            known = sources[rel]
+            if not known:
+                continue                       # at no certified revision: absent, untracked, or escaped
             considered += 1
-            if _survivor_lines(rel, fid, source.splitlines(), op):
-                continue                       # still there, somewhere in the file
+            if any(_survivor_lines(rel, fid, src.splitlines(), op) for src in known):
+                continue                       # still there, in some certified revision
             ledger.append(Event(EventType.FINDING_RESOLVED, run_id, at, finding_id=fid,
                                 payload={"auto_resolved": "line_departed"}))
             resolved.append(fid)

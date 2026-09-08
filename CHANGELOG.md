@@ -57,8 +57,10 @@ to publish a tag that disagrees with it.
   file gone. Two such on this repo's own ledger (2026-09-07, both on a
   `range(1, ...)` line an edit replaced), re-tested to nothing every
   drain. The gate now reads each open or `pending_retest` survivor's file
-  AT HEAD -- the revision being pushed, through git, never the working
-  tree -- and writes `fixed` when no line in it fingerprints to the id.
+  at every revision it certifies -- the pushed refs as git handed them to
+  the hook, plus HEAD, through git, never the working tree -- and writes
+  `fixed` when no line in any of them fingerprints to the id (HEAD alone
+  is only the common case of a push, and a hand-run gate reads just that).
   Two reviews of the first cut shaped that sentence. It read the working
   tree, so a survivor's line rewritten on disk and never committed cleared
   a blocking finding for good (a gate bypass with `mutation_block_armed`:

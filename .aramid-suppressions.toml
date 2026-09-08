@@ -286,3 +286,10 @@ tool = "mutation"
 rule = "int-bound"
 path = "src/aramid/commands/check.py"
 reason = "KILLED OUTSIDE THE MUTATION SCOPE, not a test gap. `exit_code = 2 if result.degraded else 0` -> `else 1` in cmd_check, the fresh-ledger grandfather path. [mutation].test_command is `pytest -q tests/unit`; cmd_check has no unit-scope caller (graph: every caller is in tests/integration, decision_grade). Applied and verified 2026-09-07: tests/integration/test_check.py::test_fresh_ledger_prepush_warn_only_finding_does_not_block and ::test_fresh_ledger_downgrade_is_recorded_in_the_json_report both FAIL with the mutant and pass without it (first attempt applied nothing -- CRLF file, LF anchor -- and read green; the second changed one line). Retire by asserting the fresh-ledger exit code in unit scope, not by editing this."
+
+[[suppress]]
+id = "ea21b2a8ab723e9a31fbbec9e415e4b463e9386a44b15af598db955603f4ea78"
+tool = "llm-review"
+rule = "llm/logic"
+path = "src/aramid/mutation.py"
+reason = "FIXED, in the resolver, not at the evidence line. The finding was correct (2026-09-07 22:03Z): `auto_resolve_line_departed` asked `_survivor_mutants`, which reaches `generate_mutants`, which swallows SyntaxError and returns [] -- so an unparseable file read as departed and every survivor in it was written `fixed`. Fixed in 5eba4d3: the resolver decides by the line hashes alone (`consumers.mutation._survivor_lines`) and never calls generation; pinned by tests/unit/test_mutation_gate.py::test_a_survivor_whose_line_is_present_in_an_unparseable_file_is_left_alone. The evidence anchor -- `generate_mutants` returning [] on a SyntaxError -- is the generator's documented behaviour for the drain (an unparseable head has no mutants) and is unchanged by design, which is why `evidence_gone` cannot close this and the reviewer could not refute it from the fix's own packet. Retire by deleting this entry once the finding ages out; do not edit the generator to satisfy it."
