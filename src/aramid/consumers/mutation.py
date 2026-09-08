@@ -471,14 +471,46 @@ def _last_retested(ledger) -> dict[str, int]:
     return seq
 
 
+def _knobs(mcfg) -> dict:
+    """The `[mutation]` knobs `consume` runs on, each from `mcfg` or else
+    from the PACKAGED default table -- one source, no literal.
+
+    `consume` used to read every knob as `mcfg.get(<knob>, <literal>)`. The
+    literal duplicated `src/aramid/data/defaults.toml` and production could
+    never reach it (every production config comes through `load_config`,
+    which merges that table first), so each one surfaced as an `int-bound`
+    survivor whenever the function was edited -- d0340435 (20), f6befacb
+    (600), d49f5a07 (120), suppressed as DEAD FALLBACK with "retire by
+    removing the literal fallbacks". Retired here: a config built without
+    `load_config` (a hand-made test config) still gets the same defaults
+    the packaged table gives everyone else, and there is nothing left to
+    mutate. `baseline_timeout_s` has no packaged default: four mutant
+    timeouts unless the repo sets it (this repo does; see aramid.toml)."""
+    packaged = config_mod._read_data_toml("defaults.toml")["mutation"]
+
+    def knob(name):
+        return mcfg[name] if name in mcfg else packaged[name]
+    mutant_timeout = float(knob("mutant_timeout_s"))
+    return {
+        "max_mutants": int(knob("max_mutants")),
+        "wall_budget_s": float(knob("wall_budget_s")),
+        "mutant_timeout_s": mutant_timeout,
+        "confirm_cap": int(knob("confirm_cap")),
+        "retest_cap": int(knob("retest_cap")),
+        "retest_open_survivors": bool(knob("retest_open_survivors")),
+        "baseline_timeout_s": float(mcfg.get("baseline_timeout_s", mutant_timeout * 4)),
+    }
+
+
 def consume(item, ctx: DrainContext) -> ConsumerResult:
     mcfg = getattr(ctx.cfg, "mutation", None) or {}
     if not mcfg.get("enabled", True):
         return ConsumerResult(consumer=NAME, state="ok", note="disabled")
-    max_mutants = int(mcfg.get("max_mutants", 20))
-    wall_budget = float(mcfg.get("wall_budget_s", 600))
-    mutant_timeout = float(mcfg.get("mutant_timeout_s", 120))
-    confirm_cap = int(mcfg.get("confirm_cap", 3))
+    knobs = _knobs(mcfg)
+    max_mutants = knobs["max_mutants"]
+    wall_budget = knobs["wall_budget_s"]
+    mutant_timeout = knobs["mutant_timeout_s"]
+    confirm_cap = knobs["confirm_cap"]
 
     changed = gitutil.diff_new_lines(ctx.root, item.base, item.head)
     files = sorted(f for f in changed
@@ -488,9 +520,9 @@ def consume(item, ctx: DrainContext) -> ConsumerResult:
     # A changed TEST is the one event that can newly kill a recorded survivor
     # on a module this range never touched -- see `_retest_candidates`. Only
     # then is an item with no python source in range worth a worktree.
-    retest_cap = int(mcfg.get("retest_cap", 3))
+    retest_cap = knobs["retest_cap"]
     retests = (_retest_candidates(ctx.ledger, ctx.root)
-               if mcfg.get("retest_open_survivors", True)
+               if knobs["retest_open_survivors"]
                and any(_is_test_file(f) for f in changed) else [])
     # A survivor whose MODULE a changed test maps to (the gate's own stem
     # rule) is the push's most likely purpose -- someone wrote the test the
@@ -520,7 +552,7 @@ def consume(item, ctx: DrainContext) -> ConsumerResult:
     # one. `mutant_timeout_s * 4` stays the default so nothing changes for
     # repos it already fits; `baseline_timeout_s` is the number an operator
     # sets when it doesn't, and the timeout note names it.
-    baseline_budget = float(mcfg.get("baseline_timeout_s", mutant_timeout * 4))
+    baseline_budget = knobs["baseline_timeout_s"]
 
     if base.note_count_any_item(
             ctx.ledger, NAME,

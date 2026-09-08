@@ -93,6 +93,18 @@ to publish a tag that disagrees with it.
   gate's common answer, costs 6 ms instead of 6 s. Same result as the full
   scan; a record with no op still gets it.
 
+- **The mutation consumer's knobs have one source of defaults.** `consume`
+  read every knob as `mcfg.get(<knob>, <literal>)`, duplicating the packaged
+  default in a literal production could never reach (every production
+  config comes through `load_config`, which merges `defaults.toml` first),
+  and each literal surfaced as an `int-bound` survivor whenever the
+  function was edited -- three of them suppressed as dead fallbacks with
+  "retire by removing the literal". Retired: one reader falls back to the
+  packaged table itself, so a hand-built config gets the same defaults as
+  everyone else and there is nothing left to mutate. The three suppression
+  entries stay until the resolver above clears their findings, after which
+  the stale-suppression report names them for deletion.
+
 - **A mutant never runs the previous mutant's bytecode.** Python validates
   a cached `.pyc` by the source's mtime in whole seconds and its size. Two
   mutants of one file differ by one operator, so they are the same size,
