@@ -248,16 +248,12 @@ rule = "llm/a05"
 path = "src/aramid/reporter.py"
 reason = "THE PATH IS THE ANSWER THE FIELD EXISTS TO GIVE. `tools` in the JSON payload records WHICH BINARY backed each analyzer -- added after a PATH-first ruff produced 1 finding where the pinned one produced 3 and nothing in the output said which had run. A redacted location class cannot distinguish two ruffs on the same machine. The payload is local output read by consumers on this machine (graphite reads `check --json`), and in CI the paths are an ephemeral runner's. The proposed verbose-flag gating is a reasonable future shape; it is not a fix for a disclosure, because no credential or private content is in a tool path. Re-read at the cited line 2026-08-28 (the line has since moved to the `\"tools\":` key; the id follows the content, not the number)."
 
-# --- 2026-09-06: two survivors from the day's drains that no test should
-# be written for. Both verified by APPLYING the mutant (scratchpad
-# prove_kills_config.py, arms 3 and 6), not by reading the code.
-
-[[suppress]]
-id = "d03404351c6ca24b3d67c4541bf02f22ff8d7f286c9133c2b100d1235bf0f58e"
-tool = "mutation"
-rule = "int-bound"
-path = "src/aramid/consumers/mutation.py"
-reason = "DEAD FALLBACK in production, not a test gap. `max_mutants = int(mcfg.get(\"max_mutants\", 20))` -> `21` in consume. `mcfg` is `ctx.cfg.mutation`; the only production dispatch is drain._consume_item, whose cfg comes from config.load_config, which merges src/aramid/data/defaults.toml -- and that file always supplies `max_mutants = 20`. The literal is reachable only by a caller that hands consume a config built without load_config. Applied and verified: `pytest tests/unit -k mutation tests/integration/test_mutation_consumer.py` passes identically with and without it. Retire by removing the literal fallback, not by editing this."
+# --- 2026-09-06: a survivor from the day's drains that no test should be
+# written for, verified by APPLYING the mutant (scratchpad
+# prove_kills_config.py, arm 6), not by reading the code. Three DEAD
+# FALLBACK siblings (d0340435, f6befacb, d49f5a07, the knob literals in
+# consume) were retired 2026-09-09: b9fa1c0 removed the literals and
+# 0.16.0's line_departed resolved all three at its first gate.
 
 [[suppress]]
 id = "9f5934778de9e4668259f4e5626e1226237a575b8f55b9dc75ab487425a41b4f"
@@ -265,20 +261,6 @@ tool = "mutation"
 rule = "cmp-flip"
 path = "src/aramid/runners/tests.py"
 reason = "EQUIVALENT MUTANT -- unkillable by construction. `elapsed_s > 0` -> `>= 0` in _format_elapsed. The two differ only at elapsed_s == 0.0 (and -0.0), where the true branch gives int(0.0) == 0 and the else branch gives 0: the same `secs` for every input, so the same string. Applied and verified: all of tests/unit/test_tests_progress.py passes identically with and without it. No test can distinguish them, so none should be written."
-
-[[suppress]]
-id = "f6befacb1d9640d51293198e57593e9f2c2a65aab5d0deb65e2e75f92411fe10"
-tool = "mutation"
-rule = "int-bound"
-path = "src/aramid/consumers/mutation.py"
-reason = "DEAD FALLBACK in production, not a test gap. `wall_budget = float(mcfg.get(\"wall_budget_s\", 600))` -> `601` in consume. `mcfg` is `ctx.cfg.mutation`; the only production dispatch is drain._consume_item, whose cfg comes from config.load_config, which merges src/aramid/data/defaults.toml -- verified 2026-09-07 by loading a config from an aramid.toml with no [mutation] section: `wall_budget_s = 600` is supplied. The literal is reachable only by a caller that hands consume a config built without load_config. Same family as d03404351c6c (max_mutants); every `mcfg.get(<knob>, <literal>)` line in consume will surface this way when the function is edited. Retire by removing the literal fallbacks, not by editing this."
-
-[[suppress]]
-id = "d49f5a072f6f510fe123009f4d06b354e3588293d8ccdeb44f1338ac3721b11e"
-tool = "mutation"
-rule = "int-bound"
-path = "src/aramid/consumers/mutation.py"
-reason = "DEAD FALLBACK in production, not a test gap. `mutant_timeout = float(mcfg.get(\"mutant_timeout_s\", 120))` -> `121` in consume. `mcfg` is `ctx.cfg.mutation`; the only production dispatch is drain._consume_item, whose cfg comes from config.load_config, which merges src/aramid/data/defaults.toml -- verified 2026-09-07 by loading a config from an aramid.toml with no [mutation] section: `mutant_timeout_s = 120` is supplied. The literal is reachable only by a caller that hands consume a config built without load_config. Same family as d03404351c6c (max_mutants); every `mcfg.get(<knob>, <literal>)` line in consume will surface this way when the function is edited. Retire by removing the literal fallbacks, not by editing this."
 
 [[suppress]]
 id = "d05c1a697c8dd0971d9b773cd4522aa909014daebf2c2f4941c0af7d46757ae1"
