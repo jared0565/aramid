@@ -10,6 +10,19 @@ to publish a tag that disagrees with it.
 
 ## [Unreleased]
 
+### Fixed
+
+- **The mutation consumer's idle check and its three give-ups are pure
+  helpers with unit pins.** `consume` decided "nothing to run" inline
+  (`not files and not retests`) and made its three give-up decisions inline
+  (timeout, missing command, persistently failing baseline, each `count >=
+  3`). The 2026-09-08 22:00Z drain reported the first two as unit-unkilled
+  survivors: `and` -> `or` would have skipped mutation whenever EITHER side
+  was empty, and `>=` -> `>` would have given up one attempt late. Both are
+  `_nothing_to_run` and `_give_up_note` now, pinned on both sides of every
+  threshold with the documented three strikes seeded literally -- so a moved
+  threshold constant is a red test too. Behaviour unchanged.
+
 ## [0.16.0] — 2026-09-08
 
 ### Fixed

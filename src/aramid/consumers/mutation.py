@@ -522,6 +522,48 @@ def _claimed(retests, changed) -> list:
     return [c for c in retests if mutation_gate._has_mapped_test(c[1], test_stems)]
 
 
+def _nothing_to_run(files, retests) -> bool:
+    """No python source in range AND no survivor worth re-testing: the one
+    case a worktree is not worth cutting."""
+    return not files and not retests
+
+
+def _give_up_note(ledger, item, suite: str, baseline_budget: float, argv0: str):
+    """The note `consume` returns instead of running, or None. Three
+    give-ups, each keyed on a load-bearing note prefix and a threshold met
+    (`>=`) rather than exceeded -- the first two are REPO-scoped
+    (`note_count_any_item`), the third is scoped to this item at this head.
+    Every one stays `ok`: `degraded` stops the drain marking the item
+    drained, which would pin the queue and re-run every other consumer on
+    it forever. Loud in `status`, not in the drain state."""
+    if base.note_count_any_item(
+            ledger, NAME, timeout_note_prefix(baseline_budget, suite)) >= _TIMEOUT_GIVE_UP:
+        # REPO-scoped and permanent until the config changes -- see
+        # `timeout_note_prefix`.
+        return (f"mutation giving up: {suite} does not fit the "
+                f"{baseline_budget:.0f}s baseline budget after "
+                f"{_TIMEOUT_GIVE_UP} attempts -- raise "
+                f"[mutation].baseline_timeout_s, or point "
+                f"[mutation].test_command at a narrower suite")
+    if base.note_count_any_item(
+            ledger, NAME, missing_note_prefix(argv0)) >= _MISSING_GIVE_UP:
+        # Repo-scoped, permanent until the command changes -- the prefix
+        # carries argv[0], so editing the config is what releases it.
+        return (f"mutation giving up: {argv0} not found after "
+                f"{_MISSING_GIVE_UP} attempts -- fix [mutation].test_command "
+                f"or [tests].command")
+    if base.prior_note_count(ledger, NAME, item.id,
+                             failing_note_prefix(item.head)) >= _BASELINE_GIVE_UP:
+        # A permanently-red suite must stop pinning the queue item: after 3
+        # honest DEGRADED retries AT THIS HEAD this becomes a permanent-skip.
+        # Head-scoped (review I2): queue coalescing advances item.head under
+        # a stable item.id, and new commits always deserve a fresh baseline
+        # try -- only the same code state failing 3x gives up. Keys on the
+        # literal note below -- both strings load-bearing.
+        return "mutation giving up: baseline persistently failing"
+    return None
+
+
 def consume(item, ctx: DrainContext) -> ConsumerResult:
     mcfg = getattr(ctx.cfg, "mutation", None) or {}
     if not mcfg.get("enabled", True):
@@ -544,7 +586,7 @@ def consume(item, ctx: DrainContext) -> ConsumerResult:
     retests = (_retest_candidates(ctx.ledger, ctx.root)
                if _retest_wanted(knobs, changed) else [])
     claimed = _claimed(retests, changed)
-    if not files and not retests:
+    if _nothing_to_run(files, retests):
         return ConsumerResult(consumer=NAME, state="ok",
                               note="no python files in range")
     if "pytest" not in detectors.detect_tests(ctx.root):
@@ -567,43 +609,9 @@ def consume(item, ctx: DrainContext) -> ConsumerResult:
     # sets when it doesn't, and the timeout note names it.
     baseline_budget = knobs["baseline_timeout_s"]
 
-    if base.note_count_any_item(
-            ctx.ledger, NAME,
-            timeout_note_prefix(baseline_budget, suite)) >= _TIMEOUT_GIVE_UP:
-        # REPO-scoped and permanent until the config changes -- see
-        # `timeout_note_prefix`. Stays `ok` for the same reason the
-        # failing-baseline give-up does: `degraded` stops the drain marking the
-        # item drained, which would pin the queue and re-run every other
-        # consumer on it forever. Loud in `status`, not in the drain state.
-        return ConsumerResult(
-            consumer=NAME, state="ok",
-            note=(f"mutation giving up: {suite} does not fit the "
-                  f"{baseline_budget:.0f}s baseline budget after "
-                  f"{_TIMEOUT_GIVE_UP} attempts -- raise "
-                  f"[mutation].baseline_timeout_s, or point "
-                  f"[mutation].test_command at a narrower suite"))
-
-    if base.note_count_any_item(
-            ctx.ledger, NAME, missing_note_prefix(full_argv[0])) >= _MISSING_GIVE_UP:
-        # Repo-scoped, permanent until the command changes -- the prefix
-        # carries argv[0], so editing the config is what releases it. `ok`
-        # for the same reason as the two give-ups around it.
-        return ConsumerResult(
-            consumer=NAME, state="ok",
-            note=(f"mutation giving up: {full_argv[0]} not found after "
-                  f"{_MISSING_GIVE_UP} attempts -- fix [mutation].test_command "
-                  f"or [tests].command"))
-
-    if base.prior_note_count(ctx.ledger, NAME, item.id,
-                             failing_note_prefix(item.head)) >= _BASELINE_GIVE_UP:
-        # A permanently-red suite must stop pinning the queue item: after 3
-        # honest DEGRADED retries AT THIS HEAD this becomes a permanent-skip.
-        # Head-scoped (review I2): queue coalescing advances item.head under
-        # a stable item.id, and new commits always deserve a fresh baseline
-        # try -- only the same code state failing 3x gives up. Keys on the
-        # literal note below -- both strings load-bearing.
-        return ConsumerResult(consumer=NAME, state="ok",
-                              note="mutation giving up: baseline persistently failing")
+    give_up = _give_up_note(ctx.ledger, item, suite, baseline_budget, full_argv[0])
+    if give_up is not None:
+        return ConsumerResult(consumer=NAME, state="ok", note=give_up)
 
     started = time.monotonic()
     stats = {"generated": 0, "tested": 0, "killed_s1": 0, "killed_s2": 0,

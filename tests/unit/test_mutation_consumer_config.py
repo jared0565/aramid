@@ -107,3 +107,72 @@ def test_a_survivor_is_claimed_by_its_module_path_not_its_line():
     changed = {"tests/unit/test_widget.py": {1}}
     assert mut_consumer._claimed(survivors, changed) == [survivors[0]]
     assert mut_consumer._claimed(survivors, {"src/pkg/widget.py": {3}}) == []
+
+
+# --- the idle check and the three give-ups, pinned at the boundary ---------
+#
+# The 2026-09-08 22:00Z drain reported two more `consume` survivors the unit
+# suite never reached: the idle check (`and` -> `or` returned "no python
+# files in range" whenever EITHER side was empty, so a range with sources
+# but no re-tests was never mutated) and the timeout give-up (`>=` -> `>`
+# gave up one attempt late). Both are pure functions now; the give-ups are
+# pinned on both sides of every threshold with the documented THREE
+# strikes seeded literally, so a moved constant is a red test too.
+
+def test_nothing_to_run_only_when_both_sources_and_re_tests_are_empty():
+    cand = ("a" * 64, "src/pkg/x.py", 3, "cmp-flip")
+    assert mut_consumer._nothing_to_run([], []) is True
+    assert mut_consumer._nothing_to_run(["src/pkg/x.py"], []) is False
+    assert mut_consumer._nothing_to_run([], [cand]) is False
+    assert mut_consumer._nothing_to_run(["src/pkg/x.py"], [cand]) is False
+
+
+def _ledger_with_notes(tmp_path, notes):
+    """A real ledger holding one CONSUMER_RUN_FINISHED per (item_id, note)."""
+    from aramid.ledger import Event, EventType, Ledger
+    led = Ledger(tmp_path / "ledger.db")
+    for i, (item_id, note) in enumerate(notes):
+        led.append(Event(EventType.CONSUMER_RUN_FINISHED, f"run{i}",
+                         f"2026-09-08T00:00:{i:02d}Z", None,
+                         {"consumer": mut_consumer.NAME, "item_id": item_id, "note": note}))
+    return led
+
+
+def _item(head="h" * 40, item_id="item-1"):
+    return SimpleNamespace(id=item_id, head=head)
+
+
+def test_timeout_give_up_fires_at_exactly_the_threshold_across_items(tmp_path):
+    prefix = mut_consumer.timeout_note_prefix(480.0, "pytest -q")
+    n = 3  # the documented three strikes, not the constant
+    below = _ledger_with_notes(tmp_path / "b", [(f"i{k}", prefix + " x") for k in range(n - 1)])
+    at = _ledger_with_notes(tmp_path / "a", [(f"i{k}", prefix + " x") for k in range(n)])
+    assert mut_consumer._give_up_note(below, _item(), "pytest -q", 480.0, "python") is None
+    note = mut_consumer._give_up_note(at, _item(), "pytest -q", 480.0, "python")
+    assert note is not None and note.startswith("mutation giving up: pytest -q does not fit")
+    assert f"{n} attempts" in note and "baseline_timeout_s" in note
+
+
+def test_missing_command_give_up_fires_at_exactly_the_threshold(tmp_path):
+    prefix = mut_consumer.missing_note_prefix("python")
+    n = 3
+    below = _ledger_with_notes(tmp_path / "b", [(f"i{k}", prefix + " x") for k in range(n - 1)])
+    at = _ledger_with_notes(tmp_path / "a", [(f"i{k}", prefix + " x") for k in range(n)])
+    assert mut_consumer._give_up_note(below, _item(), "pytest -q", 480.0, "python") is None
+    note = mut_consumer._give_up_note(at, _item(), "pytest -q", 480.0, "python")
+    assert note == ("mutation giving up: python not found after "
+                    f"{n} attempts -- fix [mutation].test_command or [tests].command")
+
+
+def test_failing_baseline_give_up_is_scoped_to_this_item_and_head(tmp_path):
+    head = "c" * 40
+    prefix = mut_consumer.failing_note_prefix(head)
+    n = 3
+    below = _ledger_with_notes(tmp_path / "b", [("item-1", prefix + " x")] * (n - 1))
+    other_item = _ledger_with_notes(tmp_path / "o", [("item-9", prefix + " x")] * n)
+    at = _ledger_with_notes(tmp_path / "a", [("item-1", prefix + " x")] * n)
+    args = ("pytest -q", 480.0, "python")
+    assert mut_consumer._give_up_note(below, _item(head), *args) is None
+    assert mut_consumer._give_up_note(other_item, _item(head), *args) is None
+    assert mut_consumer._give_up_note(at, _item(head), *args) == \
+        "mutation giving up: baseline persistently failing"
