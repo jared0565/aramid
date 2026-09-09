@@ -93,7 +93,7 @@ jobs:
         run: pip install -e .[dev]
 
       - name: Install pinned gitleaks binary onto PATH
-        uses: gacts/gitleaks@c9a0338361dc45a01aa7ebaaa5330179f3c62873 # v1.3.2
+        uses: gacts/gitleaks@4fd785dcdaf557fda64e05b0ae033b8f7d82fb81 # v1.3.3
         with:
           version: 8.28.0
           run: false # install only -- aramid's own gate invokes gitleaks itself
