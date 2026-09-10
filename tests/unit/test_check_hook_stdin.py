@@ -95,6 +95,12 @@ def test_an_engine_error_before_the_gate_exits_three(tmp_path, monkeypatch, caps
 
     assert rc == 3
     assert "engine error" in capsys.readouterr().err
+    # --strict remaps DEGRADED (2) to 1; an engine error is already a hard
+    # failure (3 blocks in the pre-push shim and fails CI) and keeps its
+    # own code so the two stay distinguishable. The docs used to promise
+    # a 3 -> 1 remap that no path could reach (the handlers return 3
+    # before the remap runs); the code was right, the docs were not.
+    assert cmd_check(root, Gate.PRE_COMMIT, "staged", strict=True) == 3
 
 
 def test_an_empty_ref_list_under_the_marker_exits_zero_and_runs_nothing(
@@ -145,3 +151,17 @@ def test_strict_turns_a_degraded_gate_into_a_failure(tmp_path, monkeypatch):
 
     assert cmd_check(root, Gate.PRE_COMMIT, "staged", strict=False) == 2
     assert cmd_check(root, Gate.PRE_COMMIT, "staged", strict=True) == 1
+
+
+def test_strict_leaves_a_clean_gate_at_zero(tmp_path, monkeypatch):
+    # The remap fires on exactly the degraded code: a clean run under
+    # --strict is still a 0 (a remap keyed on `!= 2` would fail every
+    # green CI run).
+    root, sha, calls = _arm(tmp_path, monkeypatch)
+    led = Ledger(root / ".aramid" / "ledger.db")
+    led.write_baseline("seed", "2026-01-01T00:00:00+00:00", set())
+    led.close()
+    monkeypatch.setitem(pipeline.GATE_RUNNER_KEYS, Gate.PRE_COMMIT, ["fake"])
+
+    assert cmd_check(root, Gate.PRE_COMMIT, "staged", strict=True) == 0
+    assert calls == ["ran"]

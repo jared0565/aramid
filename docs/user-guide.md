@@ -205,7 +205,7 @@ A degraded tool is listed with its reason -- `skipped (degraded tools):` then ` 
 
 Layered on top of that base contract:
 
-- `check --strict` remaps `2`/`3` → `1` (CI mode — no soft states).
+- `check --strict` remaps `2` → `1` (CI mode — no soft states); `3` is already a hard failure and passes through unchanged.
 - The **pre-commit hook shim** remaps `{2,3} → 0` (always fail-open).
 - The **pre-push hook shim** remaps `2 → 0`; `1` and `3` pass through and block (fail-closed).
 - Any malformed CLI invocation (`aramid` with no command, an unknown subcommand, a bad flag) is remapped to exit `3` at the top level, so a broken invocation reads the same as a genuinely crashed engine, never a bare argparse `2`.
@@ -248,7 +248,7 @@ aramid check --gate all --no-record --json
 aramid check --strict --json
 ```
 
-- `--strict` — remaps exit codes `2`/`3` to `1` (treat degraded/error as failure; no soft-pass in CI).
+- `--strict` — remaps exit code `2` to `1` (treat degraded as failure; no soft-pass in CI). `3` (engine error) is already a failure and keeps its code.
 - `--json` — renders the machine-readable report instead of the console report. Beyond `findings`, it carries `exit_code` (the final one, after `--strict` and the fresh-ledger rule), `degraded` and `degraded_reasons` (the `{tool: reason}` map behind it), `new_ids`, `stale_overrides`, `tools` (which binary backed each probed key), `tools_ran` (what actually ran), `scope_widened`, and — since 0.7.1 — `fresh_ledger_baseline` / `grandfathered` (see the fresh-ledger rule above), and `run_id` / `recorded` (`recorded: false` means the run was `--no-record`: a real report against a snapshot, with no ledger row to match it against). Every finding carries `escalated_by_ratchet` and `verdict_before_ratchet`.
 - `--accept-degraded --reason "why"` — accept a degraded run instead of blocking on it: the gate exits `0`, writes an `infrastructure_bypass` ledger row carrying the reason, prints `degraded, ACCEPTED: <reason>` and carries `accepted_reason` in `--json`, so the pass is never mistaken for a clean one. `--strict` does not remap an accepted run, and the CI-parity shim needs no exit-code arm for it (until 0.12.0 the accepted run exited `2`, which `--strict` turned into `1` -- under `[hooks].pre_push_match_ci` the hatch refused the push with its acceptance on record). A genuine BLOCK finding still exits `1`; `--reason` defaults to `"no reason given"` if `--accept-degraded` is passed without one. The same signal can be supplied via the `ARAMID_ACCEPT_DEGRADED` environment variable, which hooks inherit from the parent git process automatically.
 
@@ -767,7 +767,7 @@ In CI there's no git hook context, so invoke the gate directly. Use `--all` for 
 aramid check --gate pre-push --all --strict --json
 ```
 
-`--strict` remaps exit codes `2` (degraded) and `3` (engine error) to `1`, so CI never soft-passes on a tool that merely failed to run — a missing tool is treated the same as a real finding. `--json` renders the report as JSON instead of the console format for your CI system to parse.
+`--strict` remaps exit code `2` (degraded) to `1`, so CI never soft-passes on a tool that merely failed to run — a missing tool is treated the same as a real finding. An engine error stays `3`: it is already a hard failure, and keeping the code lets CI tell a crash from a finding. `--json` renders the report as JSON instead of the console format for your CI system to parse.
 
 ---
 

@@ -242,7 +242,13 @@ def cmd_check(root, gate: Gate, mode: str, strict: bool = False, as_json: bool =
             print("aramid: pre-push: " + pushrefs.render(result.refs_moved), file=sys.stderr)
             exit_code = 1
 
-        if strict and exit_code in (2, 3):
+        if strict and exit_code == 2:
+            # --strict: no soft states. DEGRADED becomes a failure. An
+            # engine error never reaches here -- both handlers return 3
+            # directly, above and below -- and is already a hard failure
+            # (3 blocks in the pre-push shim and fails CI), so it keeps its
+            # own code. This read `(2, 3)` from the first commit; the `3`
+            # was unreachable and surfaced as an equivalent mutant.
             exit_code = 1
 
         # Render the FINAL exit code (post fresh-clone downgrade, post

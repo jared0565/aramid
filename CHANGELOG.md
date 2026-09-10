@@ -29,6 +29,17 @@ to publish a tag that disagrees with it.
   did not kill it. A worktree derivation of all seven pending re-tests
   (regenerate, apply, stage 1, full unit suite) found it the one false
   claim; the other six die at stage 1. Unit twin added, both mutants red.
+- **`--strict` remaps `2` to `1`, and the docs now say so.** The remap
+  read `exit_code in (2, 3)` since the first commit and three places in
+  the user guide promised a `3` -> `1` remap, but no path reaches it: the
+  pipeline's result is only ever 0/1/2 and both engine-error handlers
+  return 3 before the remap runs. The 06:00Z drain confirmed the `3 -> 4`
+  mutant as a survivor of the full unit suite because it is EQUIVALENT.
+  The dead member is gone, the docs describe the code (an engine error is
+  already a hard failure and keeps its code so CI can tell a crash from a
+  finding), and two unit pins hold both edges: an engine error exits 3
+  under `--strict` too; a clean gate under `--strict` is still 0. Every
+  mutant the generator emits for the line is red. Behaviour unchanged.
 
 ## [0.16.0] — 2026-09-08
 
