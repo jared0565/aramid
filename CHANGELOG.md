@@ -61,6 +61,17 @@ to publish a tag that disagrees with it.
   lines now, each proven red against every mutant the generator emits
   for its line (nine mutants, each failing a named pin), and the
   re-derivation kills all 19 at stage 1. Behaviour unchanged.
+- **A `fixed` row no longer carries the previous transition's reason.**
+  A mutation survivor the gate flipped to `pending_retest` ("gap addressed
+  by a push -- awaiting a verified re-test") and a drain then resolved
+  `mutant_killed` still read that text beside `status: fixed` in
+  `ledger filter --json` (interop round 206, graphite, 2026-09-10; four
+  such rows in this repo's own ledger). The events were unambiguous; the
+  row alone said the re-test was still pending. The materializer now
+  removes the reason on a resolution that carries none, the rule the
+  override-invalidation branch already applied -- the resolver's name
+  stays on the `finding_resolved` event. Rows are materialized on read,
+  so every existing ledger reads correctly with no migration.
 
 ## [0.16.0] — 2026-09-08
 

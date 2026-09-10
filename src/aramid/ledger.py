@@ -492,6 +492,15 @@ def _materialize(events):
                                                      "verified re-test")
                 else:
                     state[e.finding_id]["status"] = "fixed"
+                    # A resolution justifies itself by its own event
+                    # (`auto_resolved` names the resolver; the log keeps
+                    # it). The PREVIOUS transition's reason must not
+                    # outlive it: "awaiting a verified re-test" beside
+                    # `fixed` told a reader of the row alone that the
+                    # re-test was still pending (interop round 206).
+                    # Same rule as the override-invalidation branch
+                    # below: removed, not left in place.
+                    state[e.finding_id].pop("reason", None)
         elif e.type.value == "finding_overridden":
             if e.finding_id in state:
                 state[e.finding_id]["status"] = "overridden"

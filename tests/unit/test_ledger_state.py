@@ -275,3 +275,26 @@ def test_a_pending_retest_finding_reopens_when_re_detected(tmp_path):
     assert led.open_findings()["mut1"]["status"] == "pending_retest"
     led.record_run("r3", "t3", "drain", {"mutation"}, {"a.py"}, [_f("mut1", tool="mutation")])
     assert led.open_findings()["mut1"]["status"] == "open"
+
+
+def test_a_verified_re_test_leaves_no_pending_reason_on_the_fixed_row(tmp_path):
+    """Interop round 206 (graphite, 2026-09-10): a row that went
+    `pending_retest` -- reason "gap addressed by a push -- awaiting a
+    verified re-test" -- and was then resolved `mutant_killed` still READ
+    that text beside `status: fixed`. The events were unambiguous; the row
+    alone said the re-test was still pending. `reason` is a transition's
+    justification and never detection data, so a resolution that carries
+    none leaves none behind -- the rule the override-invalidation branch
+    already applies. The resolver's name stays in the log."""
+    led = Ledger(tmp_path / "l.db")
+    led.record_run("r1", "t", "drain", {"mutation"}, {"a.py"}, [_f("mut1", tool="mutation")])
+    led.append(Event(EventType.FINDING_RESOLVED, "r2", "t2", finding_id="mut1",
+                     payload={"auto_resolved": "gap_addressed", "pending_retest": True}))
+    assert led.open_findings()["mut1"]["reason"].startswith("gap addressed by a push")
+
+    led.append(Event(EventType.FINDING_RESOLVED, "r3", "t3", finding_id="mut1",
+                     payload={"auto_resolved": "mutant_killed"}))
+
+    rec = led.open_findings()["mut1"]
+    assert rec["status"] == "fixed"
+    assert "reason" not in rec
