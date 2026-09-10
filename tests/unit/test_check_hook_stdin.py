@@ -10,6 +10,11 @@ integration suite kills and the unit suite did not:
 - `hook_text or ""` -> `hook_text and ""`, which turns every real push
   into "nothing to push" and skips the gate;
 - `return 0` -> `return 1` on the empty-ref-list exit.
+The 2026-09-10 worktree derivation of the pending re-tests added a
+fourth, 9e7dc6eb: `exit_code in (2, 3)` -> `(3, 3)` on the --strict
+remap, which lets a DEGRADED gate (one tool missing) pass CI's
+`--all --strict` run; tests/integration/test_check.py pins it, the
+unit suite did not.
 
 Same harness as the integration file: a scratch repo whose only pre-push
 runner is a fake, so the whole pipeline runs in about a second.
@@ -120,3 +125,23 @@ def test_refs_under_the_marker_reach_the_gate(tmp_path, monkeypatch):
     started = _events(root, EventType.RUN_STARTED)[-1].payload
     assert started["hook"] is True
     assert started["refs"] and started["refs"][0]["local_sha"] == sha
+
+
+def test_strict_turns_a_degraded_gate_into_a_failure(tmp_path, monkeypatch):
+    # A missing tool degrades the gate to exit 2; `--strict` (what CI runs)
+    # must make that a 1, and a non-strict run must leave it a 2. Both arms
+    # in one test: a remap that fires on the wrong code, or never, fails
+    # one of them.
+    root = _repo(tmp_path)
+    monkeypatch.setattr(config_mod, "_user_config_path",
+                        lambda: tmp_path / "no-user-config.toml")
+    led = Ledger(root / ".aramid" / "ledger.db")   # pre-baselined: the
+    led.write_baseline("seed", "2026-01-01T00:00:00+00:00", set())  # fresh-
+    led.close()                                     # clone rule stays out
+    monkeypatch.setitem(pipeline.RUNNERS, "fake", SimpleNamespace(
+        run=lambda ctx: RunnerResult(tool="fake", state=ToolState.MISSING),
+        parse=lambda result, ctx: []))
+    monkeypatch.setitem(pipeline.GATE_RUNNER_KEYS, Gate.PRE_COMMIT, ["fake"])
+
+    assert cmd_check(root, Gate.PRE_COMMIT, "staged", strict=False) == 2
+    assert cmd_check(root, Gate.PRE_COMMIT, "staged", strict=True) == 1

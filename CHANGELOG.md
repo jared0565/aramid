@@ -22,6 +22,13 @@ to publish a tag that disagrees with it.
   `_nothing_to_run` and `_give_up_note` now, pinned on both sides of every
   threshold with the documented three strikes seeded literally -- so a moved
   threshold constant is a red test too. Behaviour unchanged.
+- **`--strict` turning a degraded gate into a failure is pinned at unit
+  scope.** The remap `exit_code in (2, 3)` -> 1 had an integration pin
+  only; the drain confirms against the unit suite, so its int-bound mutant
+  (9e7dc6eb) sat `pending_retest` on the strength of a mapped test that
+  did not kill it. A worktree derivation of all seven pending re-tests
+  (regenerate, apply, stage 1, full unit suite) found it the one false
+  claim; the other six die at stage 1. Unit twin added, both mutants red.
 
 ## [0.16.0] — 2026-09-08
 
