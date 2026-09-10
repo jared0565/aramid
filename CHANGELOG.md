@@ -40,6 +40,27 @@ to publish a tag that disagrees with it.
   finding), and two unit pins hold both edges: an engine error exits 3
   under `--strict` too; a clean gate under `--strict` is still 0. Every
   mutant the generator emits for the line is red. Behaviour unchanged.
+- **Six exit-code decisions in `cmd_check` are pinned at unit scope; the
+  d05c1a697 suppression is retired.** The 2026-09-10 10:00Z drain -- the
+  first over the `--strict` fix -- reported two survivors of the full unit
+  suite in `cmd_check`: `if not record` -> `if record` (the "running
+  against a snapshot of the ledger" notice on every recording run and
+  never on a snapshot run) and `gate is PRE_PUSH and not has_baseline()`
+  -> `or` (every pre-push fresh, every pre-commit writing a baseline). A
+  third, the fresh-ledger downgrade's `else 0` -> `else 1` (the first push
+  of every fresh clone blocked on legacy warnings), had sat in
+  `.aramid-suppressions.toml` since 2026-09-07 as "killed outside the
+  mutation scope". A detached-worktree derivation of all 19 mutants the
+  generator emits for the function, with those three pinned, found three
+  more the unit suite never killed: the downgrade's `and` -> `or` (a
+  genuine secret grandfathered on a fresh clone's first push), the
+  refs-moved `1` -> `2` (a moved ref reported DEGRADED, which the non-CI
+  shim maps to 0) and the mid-run engine error's `3` -> `4`. Every one
+  had an integration pin only; the drain confirms against the unit suite.
+  Seven unit twins in `tests/unit/test_check_hook_stdin.py` hold the six
+  lines now, each proven red against every mutant the generator emits
+  for its line (nine mutants, each failing a named pin), and the
+  re-derivation kills all 19 at stage 1. Behaviour unchanged.
 
 ## [0.16.0] — 2026-09-08
 

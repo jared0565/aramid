@@ -53,6 +53,13 @@ rule = "generic-api-key"
 path = "tests/unit/test_pipeline.py"
 reason = "Test fixture `secret`, the same malformed placeholder, driving the pipeline's scrub path. Malformed 16-char sequential value."
 
+[[suppress]]
+id = "12fc48e2052b8a84f55258e328a5cf291ea1ca55886a0050f7d0dd98497cc55a"
+tool = "gitleaks"
+rule = "generic-api-key"
+path = "tests/unit/test_check_hook_stdin.py"
+reason = "Test fixture: the same malformed 16-char sequential placeholder as tests/integration/test_check.py, now in its unit twin (a RawFinding fed to a fake runner so the fresh-ledger rule sees a genuine BLOCK). Not a credential."
+
 # --- The one that is well-formed, and why it is still safe ------------------
 # One fixture IS 20 characters and structurally valid, so it got the closest
 # look. tests/integration/test_gitleaks_live.py:18 documents it as
@@ -261,13 +268,6 @@ tool = "mutation"
 rule = "cmp-flip"
 path = "src/aramid/runners/tests.py"
 reason = "EQUIVALENT MUTANT -- unkillable by construction. `elapsed_s > 0` -> `>= 0` in _format_elapsed. The two differ only at elapsed_s == 0.0 (and -0.0), where the true branch gives int(0.0) == 0 and the else branch gives 0: the same `secs` for every input, so the same string. Applied and verified: all of tests/unit/test_tests_progress.py passes identically with and without it. No test can distinguish them, so none should be written."
-
-[[suppress]]
-id = "d05c1a697c8dd0971d9b773cd4522aa909014daebf2c2f4941c0af7d46757ae1"
-tool = "mutation"
-rule = "int-bound"
-path = "src/aramid/commands/check.py"
-reason = "KILLED OUTSIDE THE MUTATION SCOPE, not a test gap. `exit_code = 2 if result.degraded else 0` -> `else 1` in cmd_check, the fresh-ledger grandfather path. [mutation].test_command is `pytest -q tests/unit`; cmd_check has no unit-scope caller (graph: every caller is in tests/integration, decision_grade). Applied and verified 2026-09-07: tests/integration/test_check.py::test_fresh_ledger_prepush_warn_only_finding_does_not_block and ::test_fresh_ledger_downgrade_is_recorded_in_the_json_report both FAIL with the mutant and pass without it (first attempt applied nothing -- CRLF file, LF anchor -- and read green; the second changed one line). Retire by asserting the fresh-ledger exit code in unit scope, not by editing this."
 
 [[suppress]]
 id = "ea21b2a8ab723e9a31fbbec9e415e4b463e9386a44b15af598db955603f4ea78"
