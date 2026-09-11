@@ -45,6 +45,29 @@ to publish a tag that disagrees with it.
   pins hold the three lines now (`tests/unit/test_drain_no_repos.py`,
   `tests/unit/test_drain_pending_retest.py`), each proven red against
   every mutant the generator emits for its line. Behaviour unchanged.
+- **Every decision in `cmd_drain` is pinned at unit scope.** The same
+  drain row said 13 of its 33 `drain.py` mutants were never tested and 14
+  stage-1 survivors were never confirmed (the confirm cap), so the three
+  it reported were a sample: a detached-worktree derivation of all 29
+  mutants the generator emits for `cmd_drain`, against the unit suite the
+  drain confirms with, found every one of them a survivor bar three --
+  the function was held by integration tests alone (`tests/integration/
+  test_drain.py`, which the drain never runs). Among them: a real drain
+  never taking the lock and a dry-run taking it; a held lock exiting 0;
+  the dry-run line printing `pending_retests=1` for a repo with no
+  ledger, or the pending count next to a queued item; an item at exactly
+  `min_score` left queued; a 31-day-old item kept when no `[drain]`
+  names the expiry; the item limit no longer stopping the loop unless
+  the wall clock had also run out; a deferral reason of "drain budget"
+  for an item-limit stop; the drain counting two items per item; a
+  degraded consumer exiting 3, or 0; the autolearn rollup running for
+  a repo that disabled it. `tests/unit/test_drain_cmd.py` drives
+  `cmd_drain` itself -- an empty-commit repo, a hand-written queue item
+  and triage row, a fake consumer, the lock and registry on tmp_path,
+  both clocks injected -- and holds thirteen arms; re-derived, 28 of
+  the 29 are red at stage 1. The 29th, the item limit's `default=10` ->
+  `11`, is equivalent: that default is read only when there is nothing
+  to drain, and the limit is never used then. Behaviour unchanged.
 
 ## [0.16.1] — 2026-09-11
 
