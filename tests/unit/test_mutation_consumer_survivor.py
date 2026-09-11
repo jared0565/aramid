@@ -130,3 +130,33 @@ def test_without_a_recorded_op_the_whole_file_is_generated(monkeypatch):
     calls = _spy_generation(monkeypatch)
     assert _at(mut_consumer._survivor_mutants("calc.py", fid, ADULT)) == [(m.op, m.line)]
     assert calls == [set(range(1, len(ADULT.splitlines()) + 1))]
+
+
+# ------------------------------------------- the whole survivor, or nothing --
+# A survivor id names EVERY line with that content, and the claim is atomic:
+# all occurrences must die. Starting one whose occurrences outnumber the slots
+# left buys stage-1 runs and full-suite confirms for a claim that cannot be
+# made (2026-09-11 10:00Z drain on this repo: two `return 0` lines, one slot
+# left, one confirm wasted, the row left pending).
+
+def _budget(mutants, confirms, tested=0, confirmed=0):
+    return {"mutants": mutants, "confirms": confirms, "tested": tested, "confirmed": confirmed}
+
+
+def test_a_survivor_fits_when_every_occurrence_has_a_mutant_and_a_confirm_slot():
+    assert mut_consumer._fits_retest_budget(2, _budget(3, 3))
+    assert mut_consumer._fits_retest_budget(2, _budget(3, 3, tested=1, confirmed=1))
+    assert mut_consumer._fits_retest_budget(1, _budget(1, 1))
+
+
+def test_a_survivor_with_more_occurrences_than_slots_does_not_fit():
+    assert not mut_consumer._fits_retest_budget(2, _budget(3, 3, tested=2, confirmed=2))
+    assert not mut_consumer._fits_retest_budget(2, _budget(1, 3)), "one mutant slot"
+    assert not mut_consumer._fits_retest_budget(2, _budget(3, 1)), "one confirm slot"
+    assert not mut_consumer._fits_retest_budget(1, _budget(1, 1, tested=1, confirmed=1))
+
+
+def test_a_survivor_that_regenerates_nothing_always_fits():
+    # Nothing to run, nothing to skip: `gap_addressed` / `file_departed` own
+    # the departed case, and the caller must still see it (no claim).
+    assert mut_consumer._fits_retest_budget(0, _budget(1, 1, tested=1, confirmed=1))

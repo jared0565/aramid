@@ -401,6 +401,25 @@ RETEST_STATUSES = ("open", "pending_retest")
 PENDING_ONLY = ("pending_retest",)
 
 
+def _fits_retest_budget(need: int, budget: dict) -> bool:
+    """Whether ALL `need` occurrences of one recorded survivor can still run
+    under `budget` -- a mutant slot and a confirm slot each (a stage-1 kill
+    of a recorded id needs a full-suite confirm before it is a claim, and a
+    stage-1 survival needs one before it is a finding).
+
+    The claim is atomic: an id names every line with that content, and the
+    caller claims only when every occurrence dies. Starting a survivor that
+    cannot finish therefore buys runs for a claim that cannot be made --
+    2026-09-11 10:00Z drain on this repo: two `return 0` lines under one id,
+    one slot left in the claimed pass, the first occurrence's stage-1 run
+    and full-suite confirm spent (five minutes) and the row left pending.
+    Zero occurrences always fit: nothing to run, and the caller must still
+    see the empty regeneration (`gap_addressed` / `file_departed` own it)."""
+    room = min(budget["mutants"] - budget["tested"],
+               budget["confirms"] - budget["confirmed"])
+    return need <= max(room, 0)
+
+
 def _retest_candidates(ledger, root: Path,
                        statuses: tuple[str, ...] = RETEST_STATUSES,
                        ) -> list[tuple[str, str, int, str | None]]:
@@ -661,7 +680,7 @@ def consume(item, ctx: DrainContext) -> ConsumerResult:
              "unconfirmed_kills": 0, "capped_kills": 0, "unselected_s1": 0,
              "truncated": False,
              "retest_candidates": len(retests), "retested": 0,
-             "retest_killed": 0, "retest_truncated": False,
+             "retest_killed": 0, "retest_truncated": False, "retest_skipped": 0,
              "claimed": len(claimed), "claimed_retested": 0,
              "retested_ids": []}
     scores: dict[str, dict] = {}
@@ -762,6 +781,11 @@ def consume(item, ctx: DrainContext) -> ConsumerResult:
         done = False
         tested_fps: set[str] = set()
         reported_fps: set[str] = set()
+        # Survivors a pass skipped because their occurrences outnumber the
+        # slots it had left (`_fits_retest_budget`); a later pass with room
+        # (the hygiene pass runs on the range's budget) removes them again
+        # when it runs them, so what remains at the end was never tested.
+        skipped_fps: set[str] = set()
         # Two budgets, not one. The RANGE budget is the item's, as it always
         # was: `max_mutants` stage-1 runs and `confirm_cap` full-suite runs,
         # shared by the range's fresh mutants and the hygiene pass after
@@ -818,6 +842,17 @@ def consume(item, ctx: DrainContext) -> ConsumerResult:
 
                 def t_of(func):
                     return _new_target()      # a throwaway: scores untouched
+                if not _fits_retest_budget(len(muts), budget):
+                    # Whole or nothing: the claim below needs every
+                    # occurrence, so a survivor this pass cannot finish is
+                    # not started -- no stage-1 run, no confirm, no count.
+                    # `retest_truncated` still says the pass fell short;
+                    # `more` stays True because a smaller survivor after
+                    # this one may fit, and the hygiene pass (the range's
+                    # budget) may fit this one.
+                    stats["retest_truncated"] = True
+                    skipped_fps.add(survivor)
+                    return True
             more = True
             for m in muts:
                 if time.monotonic() - started > wall_budget:
@@ -848,6 +883,7 @@ def consume(item, ctx: DrainContext) -> ConsumerResult:
                     counted = True
                     stats["retested"] += 1
                     stats["retested_ids"].append(survivor)
+                    skipped_fps.discard(survivor)
                 tested_fps.add(_mutant_fp(rel, m.op, m.line, lines))
                 try:
                     src_path.write_text(m.source, encoding="utf-8")
@@ -1018,7 +1054,10 @@ def consume(item, ctx: DrainContext) -> ConsumerResult:
         # same mutant again for the range's score -- one extra run, bounded
         # by `retest_cap`, and the honest count for that range.
         # `retest_cap` counts SURVIVORS; a survivor with several occurrences
-        # spends several of the pass's mutants and confirms for its one turn.
+        # spends several of the pass's mutants and confirms for its one turn,
+        # and one whose occurrences outnumber the slots left is skipped
+        # UNSPENT (`_fits_retest_budget`): the claim is atomic, so a start
+        # it cannot finish would buy runs for nothing.
         for fid, rel, line, op in claimed:
             if done or stats["retested"] >= retest_cap:
                 stats["retest_truncated"] = True
@@ -1104,6 +1143,14 @@ def consume(item, ctx: DrainContext) -> ConsumerResult:
         # because the cap was spent before the confirm could run.
         note += (f"; {stats['capped_kills']} kill(s) of a recorded survivor "
                  f"unconfirmed at confirm_cap={confirm_cap}")
+    stats["retest_skipped"] = len(skipped_fps)
+    if stats["retest_skipped"]:
+        # Never started: every occurrence of the id must die for a claim,
+        # and no pass had that many slots left. Nothing was spent on it and
+        # nothing re-reports it; a quieter item (the empty-queue re-test)
+        # or a higher `retest_cap` gives it room.
+        note += (f"; {stats['retest_skipped']} survivor(s) not re-tested: "
+                 f"occurrences exceed the remaining re-test budget")
     extra = dict(stats)
     extra["mutation_scores"] = _finalize_scores(scores)
     # How long the configured suite actually took, measured. Recorded so an

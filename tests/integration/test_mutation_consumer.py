@@ -1631,9 +1631,42 @@ def test_a_survivor_with_two_occurrences_is_claimed_when_both_die(tmp_path, monk
     assert res.extra["retest_killed"] == 1
 
 
-def test_a_survivor_cut_short_between_its_occurrences_is_not_claimed(tmp_path, monkeypatch):
-    """`retest_cap` 1 buys one mutant; the first occurrence dies and the
-    second never runs. Half-tested is untested: no claim."""
+def test_a_survivor_that_does_not_fit_the_budget_is_skipped_unspent(tmp_path, monkeypatch):
+    """`retest_cap` 1 buys one mutant and one confirm; the survivor has two
+    occurrences and the claim is atomic, so running the first would buy a
+    stage-1 run and a full-suite confirm for a claim that cannot be made.
+    Before: the first occurrence died, the second never ran, the row stayed
+    pending and one confirm was wasted (2026-09-11 10:00Z drain on aramid's
+    own ledger). Now it is skipped before the first run, said so, and left
+    for a pass with room. `max_mutants = 1` keeps the hygiene pass (range
+    budget) from having that room here."""
+    r, head2, fid = _two_occurrence_survivor(tmp_path, monkeypatch)
+    toml = r / "aramid.toml"
+    toml.write_text(toml.read_text(encoding="utf-8").replace("max_mutants = 3", "max_mutants = 1")
+                    + "retest_cap = 1\n", encoding="utf-8")
+    head3 = _commit_file(r, "tests/test_calc_more.py", KILLER_BOTH)
+
+    res = _consume(r, head2, head3, monkeypatch, tmp_path, item_id="q2")
+
+    assert res.state == "ok", res.note
+    assert res.repaired is not None and fid not in set(res.repaired.ids), res.note
+    assert fid in res.repaired.examined, "read, not proved"
+    assert res.extra["tested"] == 0, "nothing spent on a claim that could not be made"
+    assert res.extra["retested"] == 0 and res.extra["retested_ids"] == []
+    assert res.extra["retest_truncated"] is True
+    assert res.extra["retest_skipped"] == 1
+    assert "; 1 survivor(s) not re-tested: occurrences exceed the remaining re-test budget" in res.note
+    assert fid not in _ids_of(r, res.findings), "nothing ran, so nothing re-reports"
+    assert _no_worktrees(r)
+
+
+def test_a_survivor_skipped_by_the_claimed_pass_runs_in_the_hygiene_pass_when_that_has_room(
+        tmp_path, monkeypatch):
+    """The claimed pass (budget `retest_cap` = 1) cannot fit two occurrences
+    and skips the survivor unspent; the hygiene pass runs on the RANGE
+    budget (`max_mutants` 3, `confirm_cap` 3), which can, and the same
+    survivor is then tested whole and claimed -- the skip cost nothing and
+    withheld nothing the run could prove."""
     r, head2, fid = _two_occurrence_survivor(tmp_path, monkeypatch)
     toml = r / "aramid.toml"
     toml.write_text(toml.read_text(encoding="utf-8") + "retest_cap = 1\n", encoding="utf-8")
@@ -1641,8 +1674,13 @@ def test_a_survivor_cut_short_between_its_occurrences_is_not_claimed(tmp_path, m
 
     res = _consume(r, head2, head3, monkeypatch, tmp_path, item_id="q2")
 
-    assert res.repaired is not None and fid not in set(res.repaired.ids), res.note
-    assert res.extra["tested"] == 1 and res.extra["retest_truncated"] is True
+    assert res.state == "ok", res.note
+    assert res.repaired is not None and set(res.repaired.ids) == {fid}, res.note
+    assert res.extra["tested"] == 2 and res.extra["retested"] == 1
+    assert res.extra["retest_killed"] == 1
+    assert res.extra["retest_skipped"] == 0, "skipped once, then run: not a skip in the end"
+    assert res.extra["retest_truncated"] is True, "the claimed pass still reports its shortfall"
+    assert "not re-tested" not in res.note
 
 
 def test_a_claimed_survivor_cut_short_by_its_cap_does_not_end_the_range(tmp_path, monkeypatch):
@@ -1662,11 +1700,16 @@ def test_a_claimed_survivor_cut_short_by_its_cap_does_not_end_the_range(tmp_path
 
     res = _consume(r, head2, head3, monkeypatch, tmp_path, item_id="q2")
 
-    assert res.extra["retested"] == 1 and res.extra["retest_truncated"] is True
+    assert res.extra["retest_truncated"] is True, "the claimed pass reports its shortfall"
     assert res.extra["generated"] >= 1, "the range's own mutants were generated"
-    assert res.extra["tested"] == 1 + res.extra["generated"], \
-        "one claimed occurrence, then every fresh mutant of the range"
     assert res.extra["truncated"] is False, "the range was never cut"
+    # The claimed pass could not fit the survivor and spent nothing on it;
+    # the range ran whole; the hygiene pass, on the range's remaining budget,
+    # then ran the survivor whole and claimed it.
+    assert res.extra["tested"] == res.extra["generated"] + 2, \
+        "every fresh mutant of the range, then both occurrences of the survivor"
+    assert res.extra["retested"] == 1 and res.extra["retest_killed"] == 1
+    assert res.repaired is not None and set(res.repaired.ids) == {fid}, res.note
 
 
 def test_retest_candidates_include_a_pending_retest_survivor(tmp_path):

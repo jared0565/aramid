@@ -10,6 +10,31 @@ to publish a tag that disagrees with it.
 
 ## [Unreleased]
 
+### Changed
+
+- **A re-test that cannot finish is not started.** A mutation finding id
+  is (op, path, line content), so two identical lines in one file share
+  an id and a re-test must kill every occurrence before the atomic
+  `mutant_killed` claim. The claimed pass budgets `retest_cap` mutants
+  and confirms across up to `retest_cap` named survivors, so a
+  multi-occurrence survivor named last was started, its first occurrence
+  bought a stage-1 run and a full-suite confirm, the second hit the cap,
+  and the claim was withheld: five minutes for a row left pending
+  (2026-09-11 10:00Z drain on this repo, two `return 0` lines under one
+  id). The consumer now checks, before a survivor's first run, that all
+  of its occurrences fit the mutant AND confirm slots the pass has left
+  (`_fits_retest_budget`); one that does not is skipped unspent and the
+  pass moves on -- a smaller survivor after it may fit, and the hygiene
+  pass, on the range's budget, may fit this one (it is not counted as
+  re-tested until a pass actually runs it). `retest_truncated` still
+  reports the shortfall; the row gains `retest_skipped` and the note
+  `S survivor(s) not re-tested: occurrences exceed the remaining re-test
+  budget`. Nothing re-reports a skipped survivor and nothing claims it.
+  Three unit pins on the decision, two consumer arms on a real repo (a
+  two-occurrence survivor under `retest_cap = 1` is skipped with nothing
+  spent; with room in the hygiene pass it is then tested whole and
+  claimed); every mutant the generator emits for the new lines is red.
+
 ## [0.17.0] — 2026-09-11
 
 ### Added
