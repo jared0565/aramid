@@ -169,6 +169,90 @@ def test_a_manual_triage_of_an_old_range_does_not_rewind_the_sweep(
         f"the newest triaged head in history {c2[:7]}")
 
 
+
+# ------------------------------------------ the empty-queue re-test item ---
+# Consumers run only on a popped item, so a repo with nothing queued never
+# re-tested the survivors the gate flipped to `pending_retest`. The drain now
+# synthesizes an item for exactly that repo, and nothing else.
+
+def _quiet_repo_with_pending_rows(tmp_path, pending, open_=0):
+    """A repo whose HEAD scores below `min_score` (nothing queued by the
+    sweep) and whose ledger holds `pending` re-testable pending_retest
+    mutation survivors plus `open_` open ones."""
+    from aramid.models import Finding, Gate, Severity, Verdict
+    r = _repo(tmp_path)
+    _commit(r, "docs/readme.md", "hi\n", "benign HEAD")
+    (r / ".aramid").mkdir()
+    led = Ledger(r / ".aramid" / "ledger.db")
+    try:
+        ids = [f"{i:064x}" for i in range(pending + open_)]
+        led.record_run("r1", "2026-09-01T00:00:00+00:00", "drain", {"mutation"}, {"calc.py"},
+                       [Finding(id=fid, tool="mutation", rule="int-bound", severity_raw="medium",
+                                severity=Severity.MEDIUM, verdict=Verdict.WARN, file="calc.py",
+                                line=i + 2, message="mutant survived", evidence="", gate=Gate.ALL)
+                        for i, fid in enumerate(ids)])
+        for n, fid in enumerate(ids[:pending]):
+            led.append(Event(EventType.FINDING_RESOLVED, "gate", f"2026-09-01T00:01:{n:02d}+00:00",
+                             finding_id=fid,
+                             payload={"auto_resolved": "gap_addressed", "pending_retest": True}))
+    finally:
+        led.close()
+    return r
+
+
+def test_an_empty_queue_with_pending_rows_drains_a_re_test_item(tmp_path, seam, fake_consumer):
+    r = _quiet_repo_with_pending_rows(tmp_path, pending=2, open_=1)
+    registry.register(r, "t0")
+
+    rc = cmd_drain([], dry_run=False)
+
+    assert rc == 0
+    assert len(fake_consumer.calls) == 1, "the sweep queued nothing; the re-test item was popped"
+    item = fake_consumer.calls[0]
+    assert item.base == item.head, "an empty range: only the re-test pass has work"
+    assert queue.is_pending_retest_item(item)
+    assert "2 " in item.reasons[0]
+    led = Ledger(r / ".aramid" / "ledger.db")
+    try:
+        events = led.events()
+        assert any(e.type is EventType.QUEUE_ITEM_DRAINED for e in events)
+        assert queue.queued_item(queue.materialize_queue(events)) is None
+    finally:
+        led.close()
+
+
+def test_open_survivors_alone_leave_an_empty_queue_alone(tmp_path, seam, fake_consumer):
+    r = _quiet_repo_with_pending_rows(tmp_path, pending=0, open_=2)
+    registry.register(r, "t0")
+
+    rc = cmd_drain([], dry_run=False)
+
+    assert rc == 0
+    assert fake_consumer.calls == []
+
+
+def test_dry_run_previews_the_pending_re_tests_and_writes_nothing(
+        tmp_path, seam, fake_consumer, capsys):
+    r = _quiet_repo_with_pending_rows(tmp_path, pending=2)
+    registry.register(r, "t0")
+    led = Ledger(r / ".aramid" / "ledger.db")
+    try:
+        before = len(led.events())
+    finally:
+        led.close()
+
+    rc = cmd_drain([], dry_run=True)
+
+    assert rc == 0
+    assert "pending_retests=2" in capsys.readouterr().out
+    assert fake_consumer.calls == []
+    led = Ledger(r / ".aramid" / "ledger.db")
+    try:
+        assert len(led.events()) == before
+    finally:
+        led.close()
+
+
 def test_drain_bootstrap_sweeps_head_only(tmp_path, seam, fake_consumer):
     """Spec section 2 bootstrap rule: no triage history -> triage HEAD only,
     never the whole past."""

@@ -18,6 +18,24 @@ QUEUED = "queued"
 DRAINED = "drained"
 EXPIRED = "expired"
 
+# The reason prefix of an item the DRAIN synthesizes for a repo whose queue is
+# empty while `pending_retest` mutation survivors wait: the drain writes it,
+# the mutation consumer reads it (`is_pending_retest_item`), nothing else
+# parses it. One constant, so the two sides cannot drift apart.
+PENDING_RETEST_REASON = "pending-retest"
+
+
+def pending_retest_reason(pending: int) -> str:
+    return (f"{PENDING_RETEST_REASON}: {pending} mutation survivor(s) awaiting a "
+            "verified re-test; the queue was empty")
+
+
+def is_pending_retest_item(item) -> bool:
+    """True for an item the drain synthesized to re-test pending survivors:
+    its range is empty (base == head) and only the re-test pass has work."""
+    return any(str(r).startswith(PENDING_RETEST_REASON + ":")
+               for r in (getattr(item, "reasons", None) or ()))
+
 
 @dataclass(frozen=True)
 class QueueItem:

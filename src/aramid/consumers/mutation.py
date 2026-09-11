@@ -19,7 +19,7 @@ import time
 from pathlib import Path
 
 from aramid import config as config_mod
-from aramid import detectors, gitutil, mutation, mutation_gate
+from aramid import detectors, gitutil, mutation, mutation_gate, queue
 from aramid.consumers import base
 from aramid.consumers.base import ConsumerResult, DrainContext
 from aramid.fingerprint import compute_fingerprint
@@ -397,10 +397,17 @@ def _survivor_lines(rel: str, fid: str, lines: list[str], op: str) -> set[int]:
             if compute_fingerprint("mutation", op, rel, lc, 0) == fid}
 
 
-def _retest_candidates(ledger, root: Path) -> list[tuple[str, str, int, str | None]]:
+RETEST_STATUSES = ("open", "pending_retest")
+PENDING_ONLY = ("pending_retest",)
+
+
+def _retest_candidates(ledger, root: Path,
+                       statuses: tuple[str, ...] = RETEST_STATUSES,
+                       ) -> list[tuple[str, str, int, str | None]]:
     """(id, file, line) of every mutation survivor worth re-testing -- open,
     or `pending_retest` (the gate's optimistic resolve, waiting for exactly
-    this proof) -- oldest first.
+    this proof); `statuses` narrows that to the pending rows alone for the
+    drain's empty-queue item (`_retest_statuses`) -- oldest first.
 
     WHY RE-TEST AT ALL. `consume` mutates the python SOURCE in an item's
     range, so a survivor recorded at head N is re-tested only when its own
@@ -439,7 +446,7 @@ def _retest_candidates(ledger, root: Path) -> list[tuple[str, str, int, str | No
     last_retested = _last_retested(ledger)
     out: list[tuple[str, str, int, str | None]] = []
     for fid, rec in state.items():
-        if rec.get("tool") != "mutation" or rec.get("status") not in ("open", "pending_retest"):
+        if rec.get("tool") != "mutation" or rec.get("status") not in statuses:
             continue
         if fid in suppressed or not rec.get("file") or not rec.get("line"):
             continue
@@ -507,11 +514,44 @@ def _source_files(changed) -> list[str]:
     return sorted(f for f in changed if f.endswith(".py") and not _is_test_file(f))
 
 
+def pending_retests(ledger, root: Path) -> list[tuple[str, str, int, str | None]]:
+    """The `pending_retest` survivors alone, under the same eligibility as
+    every re-test (unsuppressed, a file and line to regenerate from). The
+    drain asks this before synthesizing an empty-queue item, so an item is
+    never cut for rows the consumer would then skip."""
+    return _retest_candidates(ledger, root, statuses=PENDING_ONLY)
+
+
+def retests_enabled(cfg) -> bool:
+    """The consumer is on and the re-test knob is on -- read the way
+    `consume` reads them, so the drain and the consumer cannot disagree."""
+    mcfg = getattr(cfg, "mutation", None) or {}
+    return bool(mcfg.get("enabled", True)) and bool(_knobs(mcfg)["retest_open_survivors"])
+
+
 def _retest_wanted(knobs, changed) -> bool:
     """A changed TEST is the one event that can newly kill a recorded
     survivor on a module this range never touched -- see
     `_retest_candidates`. Only then, and only with the knob on."""
     return bool(knobs["retest_open_survivors"]) and any(_is_test_file(f) for f in changed)
+
+
+def _retest_statuses(knobs, changed, item) -> tuple[str, ...]:
+    """WHICH recorded survivors this item re-tests. A changed test: every
+    open or pending survivor, as before (the changed test may kill any of
+    them). The drain's empty-queue item (`queue.is_pending_retest_item`):
+    the `pending_retest` rows ONLY -- they exist to be verified and nothing
+    else would ever verify them, while an open survivor is a finding
+    awaiting a fix, and re-testing it four times a day on an idle repo
+    costs a full-suite run each and proves nothing new. Anything else:
+    nothing. Empty means no worktree is cut for re-tests."""
+    if not knobs["retest_open_survivors"]:
+        return ()
+    if _retest_wanted(knobs, changed):
+        return RETEST_STATUSES
+    if queue.is_pending_retest_item(item):
+        return PENDING_ONLY
+    return ()
 
 
 def _claimed(retests, changed) -> list:
@@ -578,13 +618,15 @@ def consume(item, ctx: DrainContext) -> ConsumerResult:
     files = _source_files(changed)
     if ctx.cfg is not None:
         files = config_mod.filter_paths(files, ctx.cfg)
-    # Only a changed test makes an item with no python source in range
-    # worth a worktree (`_retest_wanted`); the survivors it names run
-    # FIRST, ahead of the range's own mutants, on their own budget
-    # (`_claimed`). The rest wait for the hygiene pass, last.
+    # Two items with no python source in range are still worth a worktree:
+    # one whose changed TEST may kill a recorded survivor (the survivors it
+    # names run FIRST, ahead of the range's own mutants, on their own
+    # budget -- `_claimed`; the rest wait for the hygiene pass, last), and
+    # the drain's empty-queue item, which re-tests the pending rows alone
+    # in that hygiene pass (`_retest_statuses`).
     retest_cap = knobs["retest_cap"]
-    retests = (_retest_candidates(ctx.ledger, ctx.root)
-               if _retest_wanted(knobs, changed) else [])
+    statuses = _retest_statuses(knobs, changed, item)
+    retests = _retest_candidates(ctx.ledger, ctx.root, statuses=statuses) if statuses else []
     claimed = _claimed(retests, changed)
     if _nothing_to_run(files, retests):
         return ConsumerResult(consumer=NAME, state="ok",

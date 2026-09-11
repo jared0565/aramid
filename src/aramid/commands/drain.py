@@ -20,7 +20,7 @@ from typing import Callable
 from aramid import __version__
 from aramid import autolearn
 from aramid import config as config_mod
-from aramid import fleet
+from aramid import fleet, health
 from aramid import gitutil, leftovers, policy, queue, redact, registry, triage
 from aramid import ledger as ledger_mod
 from aramid.consumers.base import CONSUMERS, ConsumerResult, DrainContext
@@ -119,6 +119,41 @@ def _sweep(root: Path, cfg, ledger, at: str) -> None:
         triage.run_triage(root, cfg, ledger, gitutil.first_parent(root, head), head, at)
     else:
         triage.run_triage(root, cfg, ledger, last, head, at)
+
+
+def _pending_retest_item(root: Path, cfg, ledger, at: str) -> queue.QueueItem | None:
+    """The EMPTY-QUEUE re-test item. Consumers run only on a popped item,
+    so a repo with nothing queued never re-tested the mutation survivors
+    the gate had flipped to `pending_retest` on a push: the gate said "a
+    push addressed this gap" and, with no further commit, nothing ever
+    verified it (2026-09-10: three rows sat pending after a drain and
+    closed only by a hand-run `triage HEAD` + `drain --repo .`).
+
+    Called only when the queue is empty. Enqueues one item -- base == head
+    == HEAD, so every consumer sees an empty range and only the mutation
+    consumer's re-test pass has work; scored at `min_score` so the
+    drain's own filter admits it; one reason carrying the marker the
+    consumer keys on. Not when: the consumer or its re-test knob is off;
+    no pending row is re-testable under the consumer's own eligibility
+    (suppressed, or nothing to regenerate from -- an item for those would
+    cut a worktree to re-test nothing); or the mutation consumer has
+    STOOD DOWN here (a give-up returns `ok` and would again, every four
+    hours, forever). Rows a re-test kills go `fixed`; rows that survive
+    are re-reported open and stop triggering; rows a timeout or the cap
+    left pending get the next drain. Never raises past the caller's
+    per-repo isolation."""
+    if not _mutation.retests_enabled(cfg):
+        return None
+    pending = _mutation.pending_retests(ledger, root)
+    if not pending:
+        return None
+    if any(f.name == _mutation.NAME for f in health.stood_down(ledger)):
+        return None
+    head = gitutil.rev_sha(root, "HEAD")
+    if head is None:
+        return None
+    return queue.enqueue(ledger, at, head, head, int(cfg.triage.get("min_score", 40)),
+                         [queue.pending_retest_reason(len(pending))])
 
 
 def _sweep_leftovers(root: Path, *, dry_run: bool) -> leftovers.Sweep:
@@ -259,11 +294,18 @@ def cmd_drain(targets: list, *, dry_run: bool = False, max_items: int | None = N
                         ledger = Ledger(root / ".aramid" / "ledger.db")
                         try:
                             item = queue.queued_item(queue.materialize_queue(ledger.events()))
+                            pending = (len(_mutation.pending_retests(ledger, root))
+                                       if item is None and _mutation.retests_enabled(cfg) else 0)
                         finally:
                             ledger.close()
                     else:
-                        item = None
+                        item, pending = None, 0
                     line = f"aramid drain (dry-run): {root} queued={item.score if item else 'none'}"
+                    if pending:
+                        # What the real drain would synthesize (an empty-queue
+                        # re-test item); the stood-down guard is not applied
+                        # here, so this is the upper bound.
+                        line += f" pending_retests={pending}"
                     if item is not None and item.deferred:
                         # Why the last drain did not open it (round 177).
                         line += f" deferred={item.deferred} ({item.deferred_reason})"
@@ -277,6 +319,8 @@ def cmd_drain(targets: list, *, dry_run: bool = False, max_items: int | None = N
                     queue.expire_stale(ledger, clock(),
                                        int(cfg.drain.get("item_expiry_days", 30)))
                     item = queue.queued_item(queue.materialize_queue(ledger.events()))
+                    if item is None:
+                        item = _pending_retest_item(root, cfg, ledger, clock())
                 finally:
                     ledger.close()
                 if item is not None and item.score >= int(cfg.triage.get("min_score", 40)):

@@ -10,6 +10,26 @@ to publish a tag that disagrees with it.
 
 ## [Unreleased]
 
+### Added
+
+- **A drain over an empty queue still re-tests the pending survivors.**
+  Consumers run only on a popped queue item, so a repo with nothing queued
+  never verified the mutation survivors the pre-push gate had flipped to
+  `pending_retest` on a push: the gate said "a push addressed this gap"
+  and, with no further commit, nothing ever proved it (2026-09-10, this
+  repo: three rows sat pending after the 22:00Z drain and closed only by a
+  hand-run `triage HEAD` + `drain --repo .`). The drain now synthesizes
+  one item for such a repo -- an empty range, `base == head == HEAD`,
+  scored at `[triage].min_score`, one reason carrying a `pending-retest:`
+  marker -- and the mutation consumer re-tests exactly the pending rows on
+  it, up to `retest_cap`, in its hygiene pass; every other consumer sees an
+  empty range and no-ops. Open survivors are deliberately not re-tested this
+  way (a finding awaiting a fix, a full-suite run each, nothing new). No
+  item when the consumer or `retest_open_survivors` is off, when no pending
+  row is re-testable under the consumer's own eligibility, or when the
+  mutation consumer has stood down in that repo. `aramid drain --dry-run`
+  prints `pending_retests=N` on the repo line when it would.
+
 ## [0.16.1] — 2026-09-11
 
 ### Fixed

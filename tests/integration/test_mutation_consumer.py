@@ -19,6 +19,7 @@ from aramid import mutation
 from aramid.consumers import mutation as mut_consumer
 from aramid.consumers.base import DrainContext
 from aramid.ledger import Ledger
+from aramid import queue
 from aramid.queue import QueueItem
 from aramid.runners import tests as tests_runner
 
@@ -73,12 +74,12 @@ def _repo(tmp_path, test_body, extra_files=()):
     return r, base, _sha(r)
 
 
-def _consume(r, base, head, monkeypatch, tmp_path, item_id="q1"):
+def _consume(r, base, head, monkeypatch, tmp_path, item_id="q1", reasons=("t",)):
     monkeypatch.setattr(config_mod, "_user_config_path",
                          lambda: tmp_path / "no-user.toml")
     cfg = config_mod.load_config(r)
     led = Ledger(r / ".aramid" / "ledger.db")
-    item = QueueItem(id=item_id, base=base, head=head, score=55, reasons=("t",),
+    item = QueueItem(id=item_id, base=base, head=head, score=55, reasons=tuple(reasons),
                      state="queued", created_at="t", updated_at="t")
     try:
         return mut_consumer.consume(item, DrainContext(root=r, cfg=cfg,
@@ -2026,4 +2027,48 @@ def test_a_stage1_kill_of_a_recorded_survivor_is_claimed_whatever_its_status(
     assert res.extra["retest_killed"] == len(ids), res.extra
     assert res.repaired is not None and set(res.repaired.ids) == ids, (res.repaired, ids)
     assert f"re-tested {len(ids)} of {len(ids)} open survivor(s), {len(ids)} killed" in res.note
+    assert _no_worktrees(r)
+
+
+# ------------------------------------------ the empty-queue re-test item ---
+
+def test_the_drains_empty_queue_item_re_tests_the_pending_rows_and_claims_the_kill(
+        tmp_path, monkeypatch):
+    """The killer test landed on an earlier push; the gate flipped the
+    survivors to `pending_retest`; the queue then emptied. The drain
+    synthesizes an item with an EMPTY range (base == head) carrying the
+    `pending-retest:` marker, and the consumer re-tests exactly those rows
+    at HEAD -- where the killer test now lives -- and claims the kill."""
+    r, head, ids = _with_recorded_survivors(tmp_path, monkeypatch)
+    _mark_pending_retest(r, ids)
+    head2 = _commit_file(r, "tests/test_calc.py", KILLER)
+
+    res = _consume(r, head2, head2, monkeypatch, tmp_path, item_id="q2",
+                   reasons=(queue.pending_retest_reason(len(ids)),))
+
+    assert res.state == "ok", res.note
+    assert res.extra["generated"] == 0 and res.extra["tested"] == len(ids), res.extra
+    assert res.extra["retested"] == len(ids)
+    assert res.extra["retest_killed"] == len(ids), res.extra
+    assert res.extra["claimed"] == 0, "no changed test in the range: nothing is named"
+    assert res.repaired is not None and set(res.repaired.ids) == ids, (res.repaired, ids)
+    assert f"re-tested {len(ids)} of {len(ids)} open survivor(s), {len(ids)} killed" in res.note
+    assert _no_worktrees(r)
+
+
+def test_the_empty_queue_item_leaves_open_survivors_alone(tmp_path, monkeypatch):
+    """Control for the test above: the same item over the same repo, with
+    the survivors still OPEN (never flipped), re-tests nothing and cuts no
+    worktree -- an open survivor is a finding awaiting a fix, not a claim
+    awaiting proof, and re-testing it every drain would cost a full-suite
+    run each for nothing new."""
+    r, head, ids = _with_recorded_survivors(tmp_path, monkeypatch)
+    head2 = _commit_file(r, "tests/test_calc.py", KILLER)
+
+    res = _consume(r, head2, head2, monkeypatch, tmp_path, item_id="q2",
+                   reasons=(queue.pending_retest_reason(len(ids)),))
+
+    assert res.state == "ok", res.note
+    assert res.note == "no python files in range"
+    assert res.repaired is None
     assert _no_worktrees(r)
