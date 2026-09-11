@@ -181,3 +181,22 @@ def test_mutation_disabled_or_re_tests_off_means_no_item(tmp_path):
         assert queue.queued_item(queue.materialize_queue(led.events())) is None
     finally:
         led.close()
+
+
+def test_the_item_scores_min_score_and_defaults_to_the_loops_own_40(tmp_path):
+    # The drain loop admits `item.score >= [triage].min_score`, defaulting to
+    # 40 when the config names none. The synthesized item must clear that
+    # same bar from the same source, or a repo with no `[triage]` table
+    # would enqueue a row its own drain then refuses to pop.
+    r = _repo(tmp_path)
+    led = _ledger(r, pending=(A,))
+    try:
+        cfg = SimpleNamespace(mutation={"enabled": True}, triage={"min_score": 55})
+        item = drain_mod._pending_retest_item(r, cfg, led, "2026-09-02T00:00:00+00:00")
+        assert item is not None and item.score == 55, "the configured min_score is what it scores"
+        queue.mark_drained(led, item.id, "d1", "2026-09-02T00:01:00+00:00", head=item.head)
+        bare = SimpleNamespace(mutation={"enabled": True}, triage={})
+        item = drain_mod._pending_retest_item(r, bare, led, "2026-09-02T00:02:00+00:00")
+    finally:
+        led.close()
+    assert item is not None and item.score == 40, "no [triage].min_score: the loop's own default"

@@ -29,6 +29,22 @@ to publish a tag that disagrees with it.
   row is re-testable under the consumer's own eligibility, or when the
   mutation consumer has stood down in that repo. `aramid drain --dry-run`
   prints `pending_retests=N` on the repo line when it would.
+- **The empty-queue item's score and `cmd_drain`'s empty-registry exit are
+  pinned at unit scope.** The 2026-09-11 06:00Z drain -- the first over
+  the feature above -- reported three survivors of the full unit suite in
+  `src/aramid/commands/drain.py`: the synthesized item's `min_score`
+  default `40` -> `41` (a repo with no `[triage]` table would enqueue a
+  row its own drain then refuses to pop), and in `cmd_drain` the
+  nothing-registered check `if not repos` -> `if repos` (a machine with
+  no repos would take the lock and run every hook for nothing while a
+  machine with repos would print the notice and drain none) and its
+  `return 0` -> `1` (the scheduler paged four times a day for a machine
+  with nothing to do). Neither path had a unit test at all: the
+  registry-empty branch had no test anywhere, and the item's score was
+  only ever checked against a config that named `min_score`. Two unit
+  pins hold the three lines now (`tests/unit/test_drain_no_repos.py`,
+  `tests/unit/test_drain_pending_retest.py`), each proven red against
+  every mutant the generator emits for its line. Behaviour unchanged.
 
 ## [0.16.1] — 2026-09-11
 
