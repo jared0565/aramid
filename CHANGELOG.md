@@ -10,6 +10,8 @@ to publish a tag that disagrees with it.
 
 ## [Unreleased]
 
+## [0.17.2] — 2026-09-13
+
 ### Added
 
 - **The mutation consumer's `consume` is pinned at unit scope.** The
@@ -4221,7 +4223,8 @@ Stated plainly because each one changes how you should deploy this:
 - **PyPI publishing is not set up.** Install from a GitHub Release artifact or
   from git; `pip install aramid` does not work.
 
-[Unreleased]: https://github.com/jared0565/aramid/compare/v0.17.1...HEAD
+[Unreleased]: https://github.com/jared0565/aramid/compare/v0.17.2...HEAD
+[0.17.2]: https://github.com/jared0565/aramid/releases/tag/v0.17.2
 [0.17.1]: https://github.com/jared0565/aramid/releases/tag/v0.17.1
 [0.17.0]: https://github.com/jared0565/aramid/releases/tag/v0.17.0
 [0.16.1]: https://github.com/jared0565/aramid/releases/tag/v0.16.1
