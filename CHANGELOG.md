@@ -10,6 +10,37 @@ to publish a tag that disagrees with it.
 
 ## [Unreleased]
 
+### Added
+
+- **Every drain consumer's `consume` is pinned at unit scope.** After
+  0.17.2 did it for the mutation consumer, the graph (decision grade)
+  showed the same shape in the other four: `consume` in the dast, fuzz,
+  js_mutation and regression_pack consumers was reached only from
+  `tests/integration`, so the 114 mutants the generator emits for their
+  bodies (14, 49, 49 and 2) were unit-suite survivors by construction,
+  waiting for the first edit that touched those lines. Four new unit
+  files, one per consumer, on the seams the integration files already
+  use and nothing more: a fake probe for dast (the URL, paths and 10 s
+  default timeout it is handed; every skip and invalid-target note; the
+  head-scoped unreachable and crash notes, the 120-char cut and the
+  three-strikes give-up on either family; findings at line 0 with the
+  synthetic file; claims for probed-and-silent ids only), a fake driver
+  for fuzz that reads the spec it is handed (targets, the 50-case and
+  120 s defaults, the 300 s wall budget as the smaller bound, the
+  max_functions cut with the exact-fit and one-slot-left edges, the
+  timed-out position note, broken-driver notes with 100 chars of
+  stderr, every counter from a verdict, and claims only for
+  well-formed (file, function) pairs that were fuzzed clean), an oracle
+  for js_mutation keyed by which mutant the worktree holds (every
+  structural skip, the three give-ups, worktree and link failures with
+  their cuts, baseline timeout / red / crashed, every mutant verdict
+  counter including the restore that fails, the 20-mutant cap with the
+  exact fit, the wall budget strictly after it is spent, and the
+  confirm-on-the-restored-tree claim with both refusals), and the
+  semgrep argv, degrade and parse for regression_pack. Proof against the
+  generator in a detached worktree: 114 of 114 red at stage 1, no
+  survivors, no source change.
+
 ## [0.17.2] — 2026-09-13
 
 ### Added
