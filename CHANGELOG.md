@@ -10,6 +10,38 @@ to publish a tag that disagrees with it.
 
 ## [Unreleased]
 
+### Added
+
+- **The mutation consumer's `consume` is pinned at unit scope.** The
+  drain confirms a mutant against the unit suite alone, and the only
+  unit test that reached `consume` was the disabled-section early
+  return: the 109 mutants the generator emits for its body were held
+  by the integration file the drain never runs, so every one of them
+  was a survivor waiting to be reported three at a time.
+  `tests/unit/test_mutation_consumer_consume.py` drives `consume` on a
+  real tmp repo with a real ledger and `run_subprocess` replaced by an
+  oracle that reads which mutant the worktree holds and answers from a
+  script, so a run of fourteen mutants with every verdict takes a
+  second and every counter is asserted to the digit: eighteen arms
+  cover the stage-1 and full-suite verdict table (kill by rc 1 and 2,
+  confirmed survivor, timeout at either stage, the runner raising, rc
+  5 counted as `unselected_s1`, usage error, a crash at either stage,
+  the confirm cap, a restore that fails), per-target scores and
+  fingerprints, `max_mutants`, the wall budget between mutants and a
+  baseline that ate it, every baseline outcome (missing command, no
+  tests collected, timeout, red with its log, crashed at rc 0), the
+  three-strikes give-up, a worktree that cannot be added, the claimed
+  pass (stage-1 kill confirmed, full-suite kill, unconfirmed kills by
+  crash and timeout, a still-surviving re-report, `retest_cap` cuts),
+  the hygiene pass, a recorded survivor met in the range with and
+  without a confirm slot, and a two-occurrence survivor skipped
+  unspent. Proof against the generator: 107 of 109 mutants red at
+  stage 1 on the first run; of the two survivors one was the claim
+  increment for a full-suite kill of a re-test (now pinned) and one
+  was a dead `retest_skipped` initializer the end-of-run count
+  overwrote on every path -- removed, and the row keeps its shape.
+  Second run: 108 of 108 red.
+
 ## [0.17.1] — 2026-09-12
 
 ### Changed

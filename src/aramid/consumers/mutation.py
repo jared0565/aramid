@@ -680,7 +680,7 @@ def consume(item, ctx: DrainContext) -> ConsumerResult:
              "unconfirmed_kills": 0, "capped_kills": 0, "unselected_s1": 0,
              "truncated": False,
              "retest_candidates": len(retests), "retested": 0,
-             "retest_killed": 0, "retest_truncated": False, "retest_skipped": 0,
+             "retest_killed": 0, "retest_truncated": False,
              "claimed": len(claimed), "claimed_retested": 0,
              "retested_ids": []}
     scores: dict[str, dict] = {}
@@ -1143,6 +1143,10 @@ def consume(item, ctx: DrainContext) -> ConsumerResult:
         # because the cap was spent before the confirm could run.
         note += (f"; {stats['capped_kills']} kill(s) of a recorded survivor "
                  f"unconfirmed at confirm_cap={confirm_cap}")
+    # The key is written HERE, once, from what stayed skipped after every
+    # pass had its turn -- an initializer above would be dead (a survivor
+    # skipped by the claimed pass and run by the hygiene pass is removed
+    # from the set again, so the count is not knowable earlier).
     stats["retest_skipped"] = len(skipped_fps)
     if stats["retest_skipped"]:
         # Never started: every occurrence of the id must die for a claim,
