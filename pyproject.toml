@@ -85,7 +85,10 @@ Issues = "https://github.com/jared0565/aramid/issues"
 # skip: a packaging test that quietly does not run looks exactly like one that
 # passed. CI installed it as a separate step, which covered CI and left a fresh
 # dev environment unable to run that test at all.
-dev = ["pytest>=8", "pyyaml>=6", "packaging>=23", "build>=1"]
+# `pytest-cov` feeds scripts/latent_mutants.py: the CI leg that counts the
+# generator mutants the unit suite never executes runs the suite under
+# coverage first, and a dev environment must be able to reproduce that count.
+dev = ["pytest>=8", "pyyaml>=6", "packaging>=23", "build>=1", "pytest-cov>=5"]
 
 [project.scripts]
 aramid = "aramid.cli:main"

@@ -11,6 +11,10 @@ __pycache__/
 # builds a wheel gets a dirty tree and can commit artifacts by accident.
 build/
 dist/
+# Coverage data and the unit-suite coverage JSON scripts/latent_mutants.py
+# reads; a local measurement must not dirty the tree.
+.coverage
+cov-unit.json
 
 # Graphite
 **/.cache/graphite/

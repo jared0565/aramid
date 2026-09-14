@@ -115,6 +115,25 @@ to publish a tag that disagrees with it.
   `_init_one` 6, `_skip_discover_dir` 1, `_find_repos` 5, `_discover` 1;
   the 29th, `_write_aramid_md`'s `count=1`, survived the whole unit suite
   as the equivalent it was and is gone with the keyword.
+- **`scripts/latent_mutants.py` counts the generator mutants the unit
+  suite never executes, and one CI leg runs it** (burn-down task 10, first
+  half). The drain confirms a survivor against tests/unit alone, so a
+  mutant on a line only tests/integration reaches is a survivor waiting
+  to be drawn -- the burn-down's 300 pins were measured this way. From a
+  unit-suite coverage JSON (`python -m pytest tests/unit --cov=aramid
+  --cov-report=json:cov-unit.json`) the script counts them per file with
+  the tree's own generator, attributing each mutant to the innermost
+  statement containing its line so a continuation-line literal is not
+  excused; `measure --verbose` names every one, `check --baseline` exits
+  1 naming each file above its committed count and reports each below it
+  (lower with `write-baseline`, never raise). The `ubuntu-latest / 3.12`
+  leg re-runs the unit suite under coverage after the full suite and
+  prints the count, guarded structurally by
+  `tests/unit/test_latent_mutants_workflow.py` (one leg the matrix has,
+  after the full suite, fed by a coverage run over tests/unit that writes
+  the file the count reads). `pytest-cov` joins the `dev` extra. The
+  baseline that turns the count into a ratchet is written from the leg's
+  own measurement in the entry that follows.
 
 ## [0.17.4] — 2026-09-14
 
