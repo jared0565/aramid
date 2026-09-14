@@ -88,3 +88,18 @@ def test_consume_regex(source, end):
 ])
 def test_consume_number(source, result):
     assert jm._consume_number(source, 0) == result
+
+
+@pytest.mark.parametrize("consume", [jm._consume_string, jm._consume_template,
+                                     jm._consume_regex, jm._consume_number])
+def test_every_consumer_refuses_an_index_outside_the_source(consume):
+    """`i` is AT the opening character: -1 and len(source) are caller errors
+    and raise ValueError (a contract exception to the fuzz driver, where an
+    IndexError is a crash -- the 22Z drain of 2026-09-14 fuzzed
+    `_consume_template` at i = -2**63); 0 and the last index are in
+    contract and return."""
+    for i in (-1, 3, -2**63):
+        with pytest.raises(ValueError, match="outside a source of length 3"):
+            consume("`x`", i)
+    assert consume("`x`", 0) is not None
+    assert consume("`x`", 2) is not None

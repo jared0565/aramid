@@ -283,6 +283,21 @@ to publish a tag that disagrees with it.
   survivor (`i + 1 < len(seg)` -> `i + 2` on the `-c VALUE` guard) is
   the equivalent documented above.
 
+### Fixed
+
+- **The JS lexer's four consumers refuse an index outside the source**
+  instead of reading past it. The 22:00Z drain of 2026-09-14 fuzzed
+  `_consume_template` at `i = -2**63` and recorded an IndexError (crash
+  finding 37680967). `i` is the position of the opening character, so an
+  index outside the source is a caller error: each of `_consume_string`,
+  `_consume_template`, `_consume_regex` and `_consume_number` now raises
+  ValueError through one shared guard -- a contract exception to the fuzz
+  driver, which counts it and records nothing, the same shape as the
+  bypass scanner's start guard. Pinned in `tests/unit/test_jsmutate_lexer.py`
+  for all four at -1, the length and -2**63 (2 of 2 generator mutants
+  red; the four consumers re-swept in memory, the one documented
+  equivalent unchanged).
+
 ## [0.17.4] — 2026-09-14
 
 ### Added

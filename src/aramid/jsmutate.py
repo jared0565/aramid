@@ -73,9 +73,20 @@ def _prev_is_value(prev: str) -> bool:
     return False   # any operator / punctuation -> not a value -> regex follows
 
 
+def _at(source: str, i: int) -> None:
+    """The four consumers take `i` AT their opening character. An index
+    outside the source is a caller error, raised as the contract violation
+    it is: the fuzz driver counts a ValueError as contract and an
+    IndexError as a crash (22Z drain, 2026-09-14: `_consume_template` at
+    i = -2**63 read `source[i]`)."""
+    if not 0 <= i < len(source):
+        raise ValueError(f"index {i} outside a source of length {len(source)}")
+
+
 def _consume_string(source: str, i: int) -> int:
     """i at an opening ' or ". Return index just past the closing quote (or at
     the newline / EOF for an unterminated string)."""
+    _at(source, i)
     q = source[i]
     i += 1
     n = len(source)
@@ -110,6 +121,7 @@ def _consume_template(source: str, i: int) -> int:
     mis-parsed `/` inside an interpolation swallows a `}` and mis-affects code
     after the template close (worst case: one spurious advisory survivor in a
     throwaway worktree)."""
+    _at(source, i)
     i += 1
     n = len(source)
     depth = 0
@@ -177,6 +189,7 @@ def _consume_regex(source: str, i: int) -> int:
     """i at a `/` known to open a regex. Return index just past the closing
     `/` and any flags. Handles [char classes] (where `/` is literal) and
     backslash escapes."""
+    _at(source, i)
     i += 1
     n = len(source)
     in_class = False
@@ -235,6 +248,7 @@ def _skip_region(source: str, i: int, prev: str):
 def _consume_number(source: str, i: int) -> tuple[int, bool, int]:
     """Return (end_index, is_plain_int, value). Non-decimal-integer forms
     (hex/bin/oct/float/exponent/bigint) return is_plain_int=False."""
+    _at(source, i)
     n = len(source)
     if source[i] == "0" and i + 1 < n and source[i + 1] in "xXbBoO":
         j = i + 2
