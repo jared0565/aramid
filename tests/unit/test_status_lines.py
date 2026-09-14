@@ -197,3 +197,27 @@ def test_status_exits_0_on_a_fresh_repo(tmp_path, capsys):
     assert status.cmd_status(tmp_path) == 0
     out, err = capsys.readouterr()
     assert err == "" and out.startswith("aramid status")
+
+
+# ------------------------------------------------------- _last_drain_line --
+
+def test_last_drain_line_names_the_newest_consumer_run_and_its_count(tmp_path):
+    """Never drained reads `never`; otherwise the NEWEST consumer_run_finished
+    event's time, consumer and finding count -- the count read with a 0
+    default, so a payload without one reads `0 finding(s)`, not 1. The line
+    was reached only through tests/integration (the ratchet leg counted its
+    default latent after step 4)."""
+    led = _ledger(tmp_path)
+    try:
+        assert status._last_drain_line(led) == "last drain: never"
+        led.append(Event(EventType.CONSUMER_RUN_FINISHED, "d1", _iso(2),
+                         payload={"consumer": "mutation", "finding_count": 2}))
+        at = _iso(1)
+        led.append(Event(EventType.CONSUMER_RUN_FINISHED, "d2", at, payload={"consumer": "fuzz"}))
+        assert status._last_drain_line(led) == f"last drain: {at} (fuzz, 0 finding(s))"
+        at = _iso(0)
+        led.append(Event(EventType.CONSUMER_RUN_FINISHED, "d3", at,
+                         payload={"consumer": "mutation", "finding_count": 3}))
+        assert status._last_drain_line(led) == f"last drain: {at} (mutation, 3 finding(s))"
+    finally:
+        led.close()

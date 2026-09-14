@@ -243,7 +243,10 @@ to publish a tag that disagrees with it.
   `// 3601`: a whole 100 hours reads `100h`, not 99). The queue line's
   `getattr(q, "deferred", 0)` -- a dead default and an equivalent mutant --
   is `q.deferred` now. Proof against the generator: 89 of 89 red at
-  stage 1.
+  stage 1. The last-drain line (`_last_drain_line`, missed by the step's
+  list and counted latent by the ratchet leg) has its own arm -- never,
+  the newest consumer run, a payload without a count reading 0 -- 1 of
+  1 red.
 - **The last forty-two latent mutants -- singletons across twenty-one
   modules -- are pinned at unit scope** (burn-down task 9, step 5). Each
   sat on a line only tests/integration reached, or a POSIX branch this
