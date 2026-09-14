@@ -153,6 +153,37 @@ to publish a tag that disagrees with it.
   distributions run every exit). Proof against the generator: 26 of 26
   red at stage 1 for the script, 7 of 7 for `win_sh_path`, 3 of 3 for
   `_installed_direct_url`.
+- **The fuzz generator's container hints, the JS lexer's escapes and the
+  fuzz driver's entrypoint are pinned at unit scope** (burn-down task 9,
+  step 1). `_is_supported` accepted `dict[int]` and vouched for
+  `tuple[int, Weird]` on its first member under `and` -> `or`;
+  `gen_value` read a variadic tuple's element type from `args[1]`
+  (Ellipsis) and advanced the nesting depth by two; the JS lexer's
+  backslash escapes advanced three characters instead of two in a string,
+  a template's static text and a regex; and `fuzzdriver.main` was reached
+  only through a subprocess, which cannot carry a mutant verdict back --
+  all survivors by construction. `tests/unit/test_fuzzgen.py` (+20 arms,
+  a fixed-choice rng so every generated value is a spelled-out shape),
+  `tests/unit/test_jsmutate_lexer.py` (55 arms calling the four consumers
+  directly, every return an exact index -- twenty-four of them from applying
+  every generator mutant of the four functions in memory: each loop's bound
+  at EOF, a two-character identifier, a backtick inside an interpolated
+  string, and the regex-vs-division reads a mis-tokenised operator exposes) and `tests/unit/test_fuzzdriver.py`
+  (+7: the JSON verdict and exit 0, a bad spec's stderr and exit 1, a
+  missing and an uncallable function each counted once, and -- from a
+  stage-1-only pass over every mutant of `run_spec` -- the fifty-case
+  default, the caps on an import error, a crash message and its args, and
+  the unsupported, crash and contract counters, each exact). `_consume_template`'s
+  redundant bounds guard before `${` -- an equivalent mutant and nothing
+  else -- is `source.startswith("${", i)` now, and `gen_value`'s `hint is
+  None or hint is NoneType` (whose `and` falls through to the same None)
+  is `hint in (None, NoneType)`, and `run_spec`'s `fn is None or not
+  callable(fn)` is `not callable(fn)`; the one equivalent left, the same-shaped
+  guard before a fraction in an interpolation, is documented in the
+  commit. Proof against
+  the generator: 148 of 149 red at stage 1; the one survivor (`i + 1 <
+  n` -> `i + 2 < n` before the fraction guard) is the equivalent
+  documented above and stays.
 
 ## [0.17.4] — 2026-09-14
 

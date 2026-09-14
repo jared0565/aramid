@@ -70,7 +70,7 @@ def supported_params(fn):
 
 
 def gen_value(hint, rng: random.Random, depth: int = 0):
-    if hint is None or hint is NoneType:
+    if hint in (None, NoneType):
         return None
     if hint is bool:
         return rng.random() < 0.5

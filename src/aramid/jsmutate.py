@@ -124,7 +124,7 @@ def _consume_template(source: str, i: int) -> int:
                 continue
             if c == "`":
                 return i + 1
-            if c == "$" and i + 1 < n and source[i + 1] == "{":
+            if source.startswith("${", i):
                 depth += 1
                 prev = ""
                 i += 2

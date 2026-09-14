@@ -69,7 +69,7 @@ def run_spec(spec: dict) -> dict:
             continue
         for func_name in target.get("functions", []):
             fn = getattr(module, func_name, None)
-            if fn is None or not callable(fn):
+            if not callable(fn):
                 unfuzzable += 1
                 continue
             params = fuzzgen.supported_params(fn)
