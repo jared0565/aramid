@@ -87,6 +87,34 @@ to publish a tag that disagrees with it.
   9, `_baked_interpreter` 2, `probe_interpreter` 2, `_gitleaks_platform_key`
   2, `_fix_gitleaks` 5, `_autolearn_probe_line` 3, `probe_enforcement` 2,
   `probe_relocated_shims` 3, `cmd_doctor` 16.
+- **`aramid init`'s onboarding steps are pinned at unit scope** (burn-down
+  task 8). 28 of the module's generator mutants sat on lines the unit
+  suite never executed: both refusals' `return 3`, the scope-subpath and
+  scope-root comparisons that decide what `aramid.toml` records and
+  which tree the stack detector walks, the history scan's skipped, empty
+  and suppressed exits and its per-commit ref lookup, the shim
+  validation's two composites (a missing shim `or` would have read
+  anyway; a foreign trampoline with no relocated sibling), the two
+  agent-surface notices' three rules, and the `--discover` walk's depth
+  bound, skip list and worst-exit fold -- tests/integration/test_init.py
+  covers them and the drain never runs that directory.
+  `tests/unit/test_init_onboarding.py` (22 arms) runs the module on real
+  tmp repos with the tool runs answered (toolchain present, history scan
+  degraded, baseline gate empty): the onboarding date surviving a
+  regeneration, each notice for every action inside and outside a work
+  tree, the history scan's four exits with the ledger inspected and the
+  suppression count printed, the shim validation after a real install
+  and in each of its three broken states, both refusals byte for byte,
+  the summary block whole for a root and a subdirectory target (the
+  stub's `scope_subpath`, the stack walked under the target), a re-init
+  that leaves `aramid.toml` and the baseline alone, and discovery to
+  depth three past tooling directories. Proof against the generator:
+  28 of 28 red at stage 1 -- `_existing_onboarded` 1,
+  `render_agent_settings_notice` 3, `render_agent_mcp_notice` 3,
+  `_historical_ref_for` 1, `_scan_history` 5, `_validate_hook_shim` 2,
+  `_init_one` 6, `_skip_discover_dir` 1, `_find_repos` 5, `_discover` 1;
+  the 29th, `_write_aramid_md`'s `count=1`, survived the whole unit suite
+  as the equivalent it was and is gone with the keyword.
 
 ## [0.17.4] — 2026-09-14
 

@@ -182,7 +182,7 @@ def _write_aramid_md(root: Path, stack: set[str], pkg_mgr: str | None) -> None:
     # only the recorded onboarding date survives it.
     previous = _existing_onboarded(path)
     if previous is not None:
-        rendered = _ONBOARDED_RE.sub(f"- **Onboarded:** {previous}", rendered, count=1)
+        rendered = _ONBOARDED_RE.sub(f"- **Onboarded:** {previous}", rendered)
     path.write_text(rendered, encoding="utf-8")
 
 
