@@ -10,6 +10,32 @@ to publish a tag that disagrees with it.
 
 ## [Unreleased]
 
+### Added
+
+- **`aramid ledger`'s four mutating subcommands and its read side are
+  pinned at unit scope** (latent mutant burn-down, task 4 of
+  `docs/superpowers/plans/2026-09-14-latent-mutant-burndown.md`). Every
+  one of `mark-rotated`, `mark-not-a-secret`, `mark-unreachable` and
+  `resolve --out-of-scope` writes a permanent row into an append-only
+  ledger, and not one line of them was executed by the unit suite --
+  the suite the drain confirms a mutant against -- so their 41
+  generator mutants (every refusal's `return 3`, every `!=` on a
+  status guard, `or` -> `and` on the reason default) were survivors by
+  construction, with twelve more across `list`, `show`, `filter`'s two
+  exits, `_render_row`'s moved-tier marker and the two refuse-or-answer
+  helpers. `tests/unit/test_ledger_cmd_marks.py` (53 arms) and
+  `tests/unit/test_ledger_cmd_list.py` (18 arms) run them on a real tmp
+  ledger seeded with every status the materializer knows, the event
+  clock and run id injected: each success appends exactly one Event,
+  asserted whole; each refusal line is asserted byte for byte (all
+  eleven `mark-unreachable` and `mark-not-a-secret` tails, the three
+  `resolve` scope verdicts); `list`, `show` and `filter --json` output
+  is asserted whole. Proof against the generator: 67 of 67 red at
+  stage 1, the file whole; the proof also surfaced three latent
+  survivors on lines the suite executed without asserting -- the
+  suppression marker's source, the two-space JSON indent and the
+  no-match text exit -- all pinned.
+
 ## [0.17.4] — 2026-09-14
 
 ### Added
