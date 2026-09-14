@@ -184,6 +184,17 @@ to publish a tag that disagrees with it.
   the generator: 148 of 149 red at stage 1; the one survivor (`i + 1 <
   n` -> `i + 2 < n` before the fraction guard) is the equivalent
   documented above and stays.
+- **`aramid fleet`, `aramid notices` and the fleet report renderer are
+  pinned at unit scope** (burn-down task 9, step 2). All 18 of
+  `commands/fleet_cmd.py`'s generator mutants -- the `list` default, each
+  subcommand's comparison, the `or ""` on a missing id, every `return 0`
+  and `return 3`, the JSON indent -- plus the report's row-window wording
+  at zero and one day, its name-column floor, the no-rows cell, the
+  streak's `versions: none`, and the tolerant reader's two skip counters
+  were survivors by construction. `tests/unit/test_fleet_cmd_report.py` (13 arms)
+  asserts the report whole, the verdict JSON verbatim, every notices line
+  and exit on the isolated store, and one reader pass over every skipped
+  row shape. Proof against the generator: 34 of 34 red at stage 1.
 
 ## [0.17.4] — 2026-09-14
 
