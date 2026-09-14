@@ -151,7 +151,7 @@ def _is_binary(content: str) -> bool:
 
 
 def build_packet(root: Path, cfg, item) -> Packet | None:
-    max_bytes = int(cfg.llm.get("packet_max_bytes", 120000))
+    max_bytes = int(cfg.llm["packet_max_bytes"])  # defaults.toml carries the 120000
     files = gitutil.diff_paths(root, item.base, item.head)
     files = config_mod.filter_paths(files, cfg)
     if not files:
@@ -289,8 +289,8 @@ def parse_review_response(text: str) -> list[dict] | None:
             continue
         if entry["owasp"] not in OWASP_SLUGS:
             entry = {**entry, "owasp": "logic"}   # unknown slug -> generic bucket
-        if len(entry["evidence"]) > 400:
-            entry = {**entry, "evidence": entry["evidence"][:400]}
+        # the cap is a slice: below it the slice is a no-op, so no comparison
+        entry = {**entry, "evidence": entry["evidence"][:400]}
         out.append(entry)
     return out
 

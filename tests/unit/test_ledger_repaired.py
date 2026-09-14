@@ -228,3 +228,29 @@ def test_an_empty_claim_still_records_what_was_examined(led):
     assert led.open_findings()[FID]["status"] == "open"
     y = [e for e in led.events() if e.type is EventType.RESOLVER_YIELD][-1]
     assert (y.payload["considered"], y.payload["resolved"]) == (1, 0)
+
+
+# ------------------------------------------- a torn row is counted, once ---
+
+def test_a_row_that_cannot_be_resolved_is_skipped_and_counted_once(led, monkeypatch, capsys):
+    """The drain confirms a mutant against the unit suite alone, and the
+    `skipped += 1` under the per-row guard was reached only through
+    tests/integration -- a claim whose event cannot be appended costs one
+    counted skip, never the run, and the rest of the claim still resolves."""
+    _seed(led, _finding(), _finding(fid=OTHER))
+    real_append = led.append
+
+    def append(event):
+        if event.finding_id == FID:
+            raise RuntimeError("torn row")
+        return real_append(event)
+    monkeypatch.setattr(led, "append", append)
+
+    out = ledger_mod.resolve_repaired(led, "r1", NOW, tool="mutation",
+                                      reason="mutant_killed", ids={FID, OTHER},
+                                      present_ids=set())
+
+    assert out == [OTHER]
+    assert capsys.readouterr().err == "aramid: mutation-repaired-resolve: skipped 1 malformed record\n"
+    state = led.open_findings()
+    assert (state[FID]["status"], state[OTHER]["status"]) == ("open", "fixed")

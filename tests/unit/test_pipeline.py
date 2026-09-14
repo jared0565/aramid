@@ -2902,3 +2902,38 @@ def test_range_mode_with_an_upstream_hands_the_score_gate_the_push_delta(
     assert handed[0] is not None and "b.py" in set(handed[0])
     assert handed[1] is None
     ledger.close()
+
+
+def test_changed_since_answers_none_for_a_head_that_is_not_an_ancestor(tmp_path):
+    """The drain confirms a mutant against the unit suite alone, and
+    `head is not None and is_ancestor(...)` was reached only through
+    tests/integration: a graded head off the current line (rebased away)
+    must keep the liberal rule, never a diff against an unrelated commit."""
+    r = tmp_path / "r"
+    r.mkdir()
+
+    def git(*a):
+        return subprocess.run(["git", *a], cwd=r, check=True, capture_output=True,
+                              text=True).stdout.strip()
+    git("init", "-q", "-b", "main")
+    git("config", "user.email", "t@t")
+    git("config", "user.name", "t")
+    (r / "a.py").write_text("x = 1\n", encoding="utf-8")
+    git("add", "a.py")
+    git("commit", "-q", "-m", "base")
+    base = git("rev-parse", "HEAD")
+    git("checkout", "-q", "-b", "side")
+    (r / "side.py").write_text("y = 1\n", encoding="utf-8")
+    git("add", "side.py")
+    git("commit", "-q", "-m", "side")
+    side = git("rev-parse", "HEAD")
+    git("checkout", "-q", "main")
+    (r / "a.py").write_text("x = 2\n", encoding="utf-8")
+    git("add", "a.py")
+    git("commit", "-q", "-m", "head")
+
+    since = pipeline._changed_since(r)
+    assert since(base) == {"a.py"}
+    assert since(side) is None, "not an ancestor of HEAD"
+    assert since("0" * 40) is None
+    assert since(base) == {"a.py"}, "memoised"

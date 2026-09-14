@@ -866,3 +866,14 @@ def test_parse_pip_audit_locates_a_project_mode_finding_in_the_pyproject(tmp_pat
     assert len(findings) == 1
     assert findings[0].file == "pyproject.toml"
     assert findings[0].line == 6  # the `"django==3.2.0",` entry
+
+
+def test_locate_dependency_falls_back_to_requirements_line_one(tmp_path):
+    """The drain confirms a mutant against the unit suite alone, and the
+    no-sources fallback `("requirements.txt", 1)` was reached only through
+    tests/integration."""
+    assert deps._locate_dependency(tmp_path, "requests") == ("requirements.txt", 1)
+    (tmp_path / "requirements.txt").write_text("flask\nRequests==2.0\n", encoding="utf-8")
+    assert deps._locate_dependency(tmp_path, "requests") == ("requirements.txt", 2)
+    assert deps._locate_dependency(tmp_path, "urllib3") == ("requirements.txt", 1), \
+        "named nowhere: line 1 of the first source"

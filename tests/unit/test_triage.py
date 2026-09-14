@@ -395,3 +395,40 @@ def test_a_test_only_push_that_maps_to_a_survivor_reaches_min_score(tmp_path, mo
         led.close()
     assert result.score >= 40, result
     assert any("survivor-retest" in r for r in result.reasons)
+
+
+def test_survivor_signal_is_silent_when_no_changed_path_reaches_a_survivor(tmp_path):
+    """The drain confirms a mutant against the unit suite alone, and the
+    `if not hit` exit -- a recorded survivor the push does not touch -- was
+    reached only through tests/integration."""
+    led = _survivor_ledger(tmp_path)
+    try:
+        assert triage.survivor_signal(led, ["src/pkg/other.py", "tests/test_other.py"]) == (0, [])
+        assert triage.survivor_signal(led, []) == (0, [])
+        pts, why = triage.survivor_signal(led, ["src/pkg/x.py"])
+        assert (pts, why) == (triage.SURVIVOR_WEIGHT,
+                              ["survivor-retest: 1 module(s) with a recorded survivor incl. "
+                               "src/pkg/x.py"])
+    finally:
+        led.close()
+
+
+def test_survivor_signal_needs_an_open_survivor_with_a_file_and_is_silent_on_a_torn_ledger(
+        tmp_path, monkeypatch):
+    """A resolved survivor on a changed path is no signal (the status test
+    and the file test are joined by `and`; the derive drew `or`), and a
+    ledger that cannot be read scores 0 with no reason, not 1."""
+    from aramid.models import Event, EventType
+    led = _survivor_ledger(tmp_path)
+    try:
+        led.append(Event(EventType.FINDING_RESOLVED, "r3", "2026-08-30T00:02:00+00:00",
+                         finding_id="s" * 64, payload={"auto_resolved": "gap_addressed"}))
+        assert led.open_findings()["s" * 64]["status"] == "fixed"
+        assert triage.survivor_signal(led, ["src/pkg/x.py"]) == (0, [])
+
+        def torn():
+            raise RuntimeError("torn")
+        monkeypatch.setattr(led, "open_findings", torn)
+        assert triage.survivor_signal(led, ["src/pkg/x.py"]) == (0, [])
+    finally:
+        led.close()

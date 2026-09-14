@@ -223,3 +223,58 @@ def test_write_frame_flushes_to_a_real_pipe():
     finally:
         os.close(r)
         wrapper.close()
+
+
+def test_a_tool_that_rejects_its_params_answers_32602_with_its_own_message():
+    """The drain confirms a mutant against the unit suite alone, and the
+    `_InvalidParams` -> -32602 mapping was reached only through
+    tests/integration."""
+    from aramid.mcp_errors import InvalidParams
+
+    def handler(root, arguments):
+        raise InvalidParams("status must be one of open, fixed")
+    tools = {"aramid_ledger_filter": {"description": "d", "inputSchema": {}, "handler": handler}}
+    out = mcp.handle_message(_req(9, "tools/call", {"name": "aramid_ledger_filter",
+                                                     "arguments": {"status": "x"}}), tools)
+    assert out == {"jsonrpc": "2.0", "id": 9, "error": {
+        "code": -32602, "message": "status must be one of open, fixed"}}
+
+
+def test_serve_answers_a_parse_error_and_a_non_object_frame_with_their_codes(monkeypatch):
+    """The drain confirms a mutant against the unit suite alone, and `serve`'s
+    -32700 / -32600 frames were reached only through tests/integration's
+    subprocess client, which cannot carry a mutant verdict back. The protocol
+    channel and stdin are both in-memory here."""
+    frames = io.StringIO()
+    monkeypatch.setattr(mcp, "_protect_stdout", lambda: frames)
+    stdin = b'{"jsonrpc": "2.0", "id": 1, "method": "ping"}\n{not json\n[1, 2]\n\xff\xfe\n'
+    monkeypatch.setattr(mcp.sys, "stdin", io.TextIOWrapper(io.BytesIO(stdin)))
+
+    assert mcp.serve({}) == 0
+    assert [json.loads(line) for line in frames.getvalue().splitlines()] == [
+        {"jsonrpc": "2.0", "id": 1, "result": {}},
+        {"jsonrpc": "2.0", "id": None, "error": {"code": -32700, "message": "Parse error"}},
+        {"jsonrpc": "2.0", "id": None, "error": {"code": -32600, "message": "Invalid Request"}},
+        {"jsonrpc": "2.0", "id": None, "error": {"code": -32700, "message": "Parse error"}}]
+
+
+def test_protect_stdout_dups_fd_1_for_frames_and_points_fd_1_at_stderr(monkeypatch):
+    """The three fd numbers are the whole contract: the protocol channel is a
+    dup of fd 1, fd 1 is then fd 2, and sys.stdout follows it -- so a stray
+    print (ours or a subprocess's) lands on stderr, never in a frame. Faked
+    at the os calls: the real ones are reached only through the subprocess
+    client in tests/integration."""
+    calls = []
+    sink = io.BytesIO()
+    monkeypatch.setattr(mcp.os, "dup", lambda fd: calls.append(("dup", fd)) or 99)
+    monkeypatch.setattr(mcp.os, "dup2", lambda src, dst: calls.append(("dup2", src, dst)))
+    monkeypatch.setattr(mcp.os, "fdopen", lambda fd, mode: calls.append(("fdopen", fd, mode)) or sink)
+    err = io.StringIO()
+    monkeypatch.setattr(mcp.sys, "stderr", err)
+    monkeypatch.setattr(mcp.sys, "stdout", io.StringIO())
+
+    out = mcp._protect_stdout()
+    assert calls == [("dup", 1), ("dup2", 2, 1), ("fdopen", 99, "wb")]
+    assert mcp.sys.stdout is err
+    out.write("frame \u00e9\n")
+    assert sink.getvalue() == b"frame \xc3\xa9\n", "UTF-8, LF, written through"

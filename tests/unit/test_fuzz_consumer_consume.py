@@ -476,3 +476,22 @@ def test_a_pair_is_file_then_function(tmp_path, monkeypatch):
     res, _ = _run(r, base, head, monkeypatch, {}, Driver({"fuzzed": [["f", "lib.py"]]}))
 
     assert res.repaired is None
+
+
+def test_candidate_functions_on_unparseable_source_is_empty_with_zero_skips():
+    """The drain confirms a mutant against the unit suite alone, and the
+    SyntaxError exit's `[], 0, 0` was reached only through tests/integration."""
+    assert fc._candidate_functions("def broken(:\n", {1}, []) == ([], 0, 0)
+    assert fc._candidate_functions("def ok(a: int):\n    return a\n", {1, 2}, []) \
+        == (["ok"], 0, 0)
+
+
+def test_candidate_functions_span_is_the_def_through_its_last_line_only():
+    """A change inside the body (not on the def line) selects the function
+    -- the span is `lineno..end_lineno` (the derive drew `end_lineno or
+    lineno` -> `and`, which shrinks it to the def line); a change on the line
+    right after the function does not (`end + 1` -> `end + 2` would)."""
+    src = "def f(a: int):\n    return a\n\ndef g(b: int):\n    return b\n"
+    assert fc._candidate_functions(src, {2}, []) == (["f"], 0, 0)
+    assert fc._candidate_functions(src, {3}, []) == ([], 0, 0)
+    assert fc._candidate_functions(src, {5}, []) == (["g"], 0, 0)

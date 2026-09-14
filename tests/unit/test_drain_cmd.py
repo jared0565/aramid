@@ -351,3 +351,46 @@ def test_the_autolearn_rollup_runs_for_a_drained_repo_and_not_when_disabled(
 
     assert cmd_drain([], dry_run=False, clock=CLOCK) == 0
     assert saved == [NOW], "disabled: no rollup, and no error either"
+
+
+# --- two helpers the Windows drain never reaches at unit scope ------------
+
+def test_pid_alive_off_windows_probes_with_signal_zero(monkeypatch):
+    """The drain confirms a mutant against the unit suite alone, and it runs
+    on Windows: the POSIX `os.kill(pid, 0)` probe was never executed there."""
+    monkeypatch.setattr(drain_mod.sys, "platform", "linux")
+    calls = []
+    monkeypatch.setattr(drain_mod.os, "kill", lambda pid, sig: calls.append((pid, sig)))
+    assert drain_mod._pid_alive(4242) is True
+    assert calls == [(4242, 0)]
+
+    def gone(pid, sig):
+        raise ProcessLookupError(pid)
+    monkeypatch.setattr(drain_mod.os, "kill", gone)
+    assert drain_mod._pid_alive(4242) is False
+
+
+def test_sweep_anchor_prefers_the_newest_head_that_descends_from_the_rest(tmp_path,
+                                                                          monkeypatch):
+    """`best is None or is_ancestor(best, h)`: the first row seeds the anchor
+    without asking git; a later (older) row replaces it only when it
+    descends from it. Reached only through tests/integration before."""
+    from aramid.ledger import Ledger
+    from aramid.models import Event, EventType
+    led = Ledger(tmp_path / "l.db")
+    try:
+        for i, head in enumerate(["h1", "h2", "h3"]):
+            led.append(Event(EventType.TRIAGE_RECORDED, f"r{i}", f"2026-09-14T0{i}:00:00+00:00",
+                             payload={"head": head, "base": None, "score": 1, "reasons": []}))
+        asked = []
+
+        def is_ancestor(root, ancestor, descendant):
+            asked.append((ancestor, descendant))
+            return (ancestor, descendant) == ("h3", "h2")     # h2 descends from h3
+        monkeypatch.setattr(drain_mod.gitutil, "is_ancestor", is_ancestor)
+
+        assert drain_mod._sweep_anchor(tmp_path, led, "HEAD") == "h2"
+        assert asked == [("h3", "h2"), ("h2", "h1")], "the newest row seeds without a git call"
+        assert drain_mod._sweep_anchor(tmp_path, led, "h2") == "h2", "HEAD itself: stop there"
+    finally:
+        led.close()

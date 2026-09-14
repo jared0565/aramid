@@ -165,3 +165,37 @@ def test_blob_at_tells_an_empty_file_from_a_missing_one(tmp_path):
     assert gitutil.blob_at(r, "HEAD", "missing.py") is None
     assert gitutil.blob_at(r, "HEAD", "untracked.py") is None
     assert gitutil.blob_at(r, "HEAD", "../outside.py") is None
+
+
+def test_resolve_range_falls_back_to_origin_head_merge_base(tmp_path):
+    """The drain confirms a mutant against the unit suite alone, and the
+    merge-base fallback (`mb.returncode == 0`) plus `range_commits`' own
+    return-code test were reached only through tests/integration."""
+    r = _repo(tmp_path)
+    _commit(r, "a.py", "x = 1\n", "base")
+    base = subprocess.run(["git", "rev-parse", "HEAD"], cwd=r, check=True,
+                          capture_output=True, text=True).stdout.strip()
+    assert gitutil.resolve_range(r) is None, "no upstream, no origin/HEAD"
+
+    _git(r, "update-ref", "refs/remotes/origin/main", "HEAD")
+    _git(r, "symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/main")
+    _commit(r, "a.py", "x = 2\n", "head")
+    assert gitutil.resolve_range(r) == f"{base}..HEAD"
+
+    _git(r, "update-ref", "refs/remotes/origin/main", "HEAD")
+    assert gitutil.resolve_range(r) == f"{gitutil.rev_sha(r, 'HEAD')}..HEAD"
+
+    _git(r, "remote", "add", "origin", str(r))
+    _git(r, "branch", "--set-upstream-to=origin/main")
+    assert gitutil.resolve_range(r) == "@{u}..HEAD"
+
+
+def test_range_commits_lists_the_range_or_head_and_is_empty_for_a_bad_spec(tmp_path):
+    r = _repo(tmp_path)
+    _commit(r, "a.py", "x = 1\n", "one")
+    first = gitutil.rev_sha(r, "HEAD")
+    _commit(r, "a.py", "x = 2\n", "two")
+    second = gitutil.rev_sha(r, "HEAD")
+    assert gitutil.range_commits(r, None) == [second, first]
+    assert gitutil.range_commits(r, f"{first}..HEAD") == [second]
+    assert gitutil.range_commits(r, "nope..HEAD") == []

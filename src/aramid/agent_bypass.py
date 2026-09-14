@@ -99,11 +99,13 @@ def _scan_one_git(seg: list[str], start: int) -> Bypass | None:
                 configs.append(seg[i + 1])
             i += 2
             continue
-        if tok.startswith("-c") and len(tok) > 2 and not tok.startswith("--"):
+        # a bare "-c" was taken by the branch above, so anything left that
+        # starts with "-c" carries its value attached
+        if tok.startswith("-c") and not tok.startswith("--"):
             configs.append(tok[2:])
             i += 1
             continue
-        if tok.split("=", 1)[0] in ("--git-dir", "--work-tree",
+        if tok.partition("=")[0] in ("--git-dir", "--work-tree",
                                     "--exec-path", "--namespace"):
             i += 1 if "=" in tok else 2
             continue
@@ -116,7 +118,7 @@ def _scan_one_git(seg: list[str], start: int) -> Bypass | None:
     if subcommand not in ("commit", "push"):
         return None
     for cfg in configs:
-        if cfg.split("=", 1)[0].lower() == "core.hookspath":
+        if cfg.partition("=")[0].lower() == "core.hookspath":
             return Bypass("hooks-path", subcommand, cfg)
     skip = _ARG_FLAGS[subcommand]
     j = i

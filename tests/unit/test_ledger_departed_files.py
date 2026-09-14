@@ -374,3 +374,64 @@ def test_without_root_the_old_behaviour_is_unchanged(tmp_path):
         assert led.open_findings()["a" * 64]["status"] == "open"
     finally:
         led.close()
+
+
+def test_a_row_whose_departure_cannot_be_checked_is_skipped_and_counted_once(
+        tmp_path, monkeypatch, capsys):
+    """The drain confirms a mutant against the unit suite alone, and the
+    `skipped += 1` under resolve_departed's per-row guard was reached only
+    through tests/integration -- one row the filesystem check cannot answer
+    costs one counted skip; the row beside it still resolves."""
+    from aramid import ledger as ledger_mod
+    real = ledger_mod._departed
+
+    def departed(fingerprint, file, *, base):
+        if file == "torn.py":
+            raise OSError("cannot stat")
+        return real(fingerprint, file, base=base)
+    monkeypatch.setattr(ledger_mod, "_departed", departed)
+
+    led = Ledger(tmp_path / "l.db")
+    try:
+        _seed(led, _finding(fid="a" * 64, file="torn.py"), _finding(fid="b" * 64, file="gone.py"))
+        out = resolve_departed(led, "r1", NOW.isoformat(), root=tmp_path, tool="ruff",
+                               present_ids=set())
+        assert out == ["b" * 64]
+        assert capsys.readouterr().err == \
+            "aramid: ruff-departed-resolve: skipped 1 malformed record\n"
+        state = led.open_findings()
+        assert (state["a" * 64]["status"], state["b" * 64]["status"]) == ("open", "fixed")
+    finally:
+        led.close()
+
+
+def _yields(led):
+    from aramid.models import EventType
+    return [(e.payload["resolver"], e.payload["tool"], e.payload["considered"],
+             e.payload["resolved"]) for e in led.events()
+            if e.type == EventType.RESOLVER_YIELD]
+
+
+def test_resolve_departed_reports_what_it_walked_in_its_yield_event(tmp_path):
+    """The yield event is the only record of a resolver that looked and
+    declined: without a root it says 0 of 0; with two candidate rows, one of
+    them departed, it says 1 of 2 -- every counter exact (the derive drew
+    `considered = 0` -> 1 and `+= 1` -> 2 past the arms above)."""
+    led = Ledger(tmp_path / "l.db")
+    try:
+        _seed(led, _finding(fid="a" * 64, file="gone.py"), _finding(fid="b" * 64, file="here.py"),
+              _finding(fid="c" * 64, file="other.py", tool="semgrep"))
+        (tmp_path / "here.py").write_text("x = 1\n", encoding="utf-8")
+        assert resolve_departed(led, "r1", NOW.isoformat(), root=None, tool="ruff",
+                                present_ids=set()) == []
+        assert _yields(led) == [("file_departed", "ruff", 0, 0)]
+        assert resolve_departed(led, "r2", NOW.isoformat(), root=tmp_path, tool="ruff",
+                                present_ids={"b" * 64}) == ["a" * 64]
+        assert _yields(led)[-1] == ("file_departed", "ruff", 1, 1), \
+            "the re-fired row is not walked; the other producer's row is not walked"
+        assert resolve_departed(led, "r3", NOW.isoformat(), root=tmp_path, tool="ruff",
+                                present_ids=set()) == []
+        assert _yields(led)[-1] == ("file_departed", "ruff", 1, 0), \
+            "the departed row is fixed now; the present one is walked and declined"
+    finally:
+        led.close()

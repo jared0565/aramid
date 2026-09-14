@@ -254,3 +254,36 @@ def test_status_line_and_criterion_move_together(tmp_path):
         "  consumers stood down:",
         "    dast: stood down after 3 run(s), 9s spent -- dast giving up: x"]
     lg.close()
+
+
+def test_snapshot_reads_an_unreadable_open_set_as_zero_open(tmp_path, monkeypatch):
+    """The drain confirms a mutant against the unit suite alone, and the
+    `open_n = 0` fallback under a torn open-findings read was reached only
+    through tests/integration."""
+    lg = Ledger(tmp_path / "l.db")
+    try:
+        _run(lg, "r1", {"semgrep"})
+        lg.record_run("r2", datetime.now(timezone.utc).isoformat(), "pre-push",
+                      {"semgrep"}, set(), [_f("a" * 64)])
+        assert health.snapshot(None, lg).open == 1
+
+        def torn():
+            raise RuntimeError("torn")
+        monkeypatch.setattr(lg, "open_findings", torn)
+        assert health.snapshot(None, lg).open == 0
+    finally:
+        lg.close()
+
+
+def test_snapshot_without_a_ledger_reads_zero_open_and_carries_the_run_id(tmp_path):
+    """No ledger (the engine-error path) is zero open, not one; a result's
+    run id is carried through `str(... or "") or None` -- present when set,
+    None when empty (the derive drew both `or`s -> `and`, which loses it)."""
+    assert health.snapshot(None, None).open == 0
+    lg = Ledger(tmp_path / "l.db")
+    try:
+        _run(lg, "r1", {"semgrep"})
+        assert health.snapshot(None, lg, result=_result(run_id="run-9")).run_id == "run-9"
+        assert health.snapshot(None, lg, result=_result(run_id="")).run_id is None
+    finally:
+        lg.close()

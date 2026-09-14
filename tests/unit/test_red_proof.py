@@ -367,3 +367,50 @@ def test_gate_allows_genuine_new_test_def_end_to_end(monkeypatch, tmp_path):
         _ctx(["tests/test_foo.py"], root=tmp_path), _cfg())
     assert [f.file for f in findings] == ["tests/test_foo.py"]
     assert len(runs) == 1
+
+
+def test_auto_resolve_red_proof_counts_a_row_it_cannot_resolve_once(tmp_path, monkeypatch,
+                                                                    capsys):
+    """The drain confirms a mutant against the unit suite alone, and the
+    `skipped += 1` under the per-row guard was reached only through
+    tests/integration: a row whose event cannot be appended costs one counted
+    skip, and the row beside it still resolves."""
+    led = Ledger(tmp_path / "l.db")
+    try:
+        _seed(led, _rp_finding())
+        _seed(led, _rp_finding(fid="a" * 64, file="tests/test_bar.py"))
+        real_append = led.append
+
+        def append(event):
+            if event.finding_id == "e" * 64:
+                raise RuntimeError("torn row")
+            return real_append(event)
+        monkeypatch.setattr(led, "append", append)
+
+        resolved = red_proof.auto_resolve_red_proof(
+            led, "r1", NOW, {"tests/test_foo.py", "tests/test_bar.py"}, present_ids=set())
+        state = led.open_findings()
+    finally:
+        led.close()
+    assert resolved == ["a" * 64]
+    assert capsys.readouterr().err == "aramid: red-proof-resolve: skipped 1 malformed record\n"
+    assert (state["e" * 64]["status"], state["a" * 64]["status"]) == ("open", "fixed")
+
+
+def test_auto_resolve_red_proof_reports_what_it_walked_in_its_yield_event(tmp_path):
+    """Two open red-proof rows, one of them proven red this run: the yield
+    event says 1 of 2, exact (the derive drew `considered = 0` -> 1 and
+    `+= 1` -> 2 past the arm above)."""
+    from aramid.models import EventType
+    led = Ledger(tmp_path / "l.db")
+    try:
+        _seed(led, _rp_finding())
+        _seed(led, _rp_finding(fid="a" * 64, file="tests/test_bar.py"))
+        assert red_proof.auto_resolve_red_proof(
+            led, "r1", NOW, {"tests/test_bar.py"}, present_ids=set()) == ["a" * 64]
+        yields = [(e.payload["resolver"], e.payload["tool"], e.payload["considered"],
+                   e.payload["resolved"]) for e in led.events()
+                  if e.type == EventType.RESOLVER_YIELD]
+        assert yields[-1] == ("red_proven", "red-proof", 2, 1)
+    finally:
+        led.close()

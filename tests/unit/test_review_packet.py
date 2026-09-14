@@ -138,3 +138,61 @@ def test_dependents_extracted_from_triage(tmp_path):
     (r / "graph-out" / "graph.json").write_text(_json.dumps(graph), encoding="utf-8")
     assert triage.dependents(r, ["src/aramid/queue.py"]) == ["drain"]
     assert triage.dependents(r, ["src/other.py"]) == []
+
+
+def test_packet_lists_at_most_fifty_dependents(tmp_path, monkeypatch):
+    """The drain confirms a mutant against the unit suite alone, and the
+    `deps[:50]` cap was reached only by tests/integration/test_review*.py."""
+    r = _repo(tmp_path)
+    _commit(r, "src/a.py", "x = 1\n", "base")
+    base = _sha(r)
+    _commit(r, "src/a.py", "x = 2\n", "head")
+    deps = [f"src/dep_{i:02d}.py" for i in range(51)]
+    monkeypatch.setattr(review.triage, "dependents", lambda root, files: deps)
+
+    pkt = review.build_packet(r, _cfg(), _item(base, _sha(r)))
+    listed = [ln[2:] for ln in pkt.text.splitlines() if ln.startswith("- src/dep_")]
+    assert listed == deps[:50]
+    assert "src/dep_50.py" not in pkt.text
+
+
+def test_packet_cap_boundaries_and_the_sections_it_never_writes(tmp_path):
+    """Both byte-cap comparisons at their boundary, and the file sections a
+    packet must not carry. A diff of exactly the cap is truncated (`>=`); a
+    file section landing exactly on the cap is kept (`>`, not `>=`); an
+    emptied file and a binary one get no section (`not content or binary`);
+    a section header carries the 12-character head prefix."""
+    r = _repo(tmp_path)
+    _commit(r, "src/a.py", "x = 1\n" * 50, "c1")
+    base = _sha(r)
+    _commit(r, "src/a.py", "", "c2")
+    head = _sha(r)
+    diff = review.gitutil.diff_text(r, base, head, paths=["src/a.py"])
+    n = len(diff.encode("utf-8"))
+    assert n > 100
+    pkt = review.build_packet(r, _cfg(packet_max_bytes=n), _item(base, head))
+    assert pkt.truncated is True and "TRUNCATED" in pkt.text
+    pkt = review.build_packet(r, _cfg(packet_max_bytes=n + 1), _item(base, head))
+    assert pkt.truncated is False and "--- FILE:" not in pkt.text, "an emptied file has no section"
+
+    base = head
+    (r / "src" / "blob.bin").write_bytes(b"\x00\x01binary")
+    _git(r, "add", "src/blob.bin")
+    _commit(r, "src/b.py", "y = 2\n", "c3")
+    head = _sha(r)
+    item = _item(base, head)
+    pkt = review.build_packet(r, _cfg(), item)
+    assert f"--- FILE: src/b.py (at {head[:12]}) ---\ny = 2\n" in pkt.text
+    assert "blob.bin (at" not in pkt.text, "a binary file has no section"
+
+    files = ["src/b.py", "src/blob.bin"]
+    diff = review.gitutil.diff_text(r, base, head, paths=files)
+    header = ["=== ARAMID REVIEW PACKET ===", f"repo: {r.name}", f"range: {item.range_str}",
+              "triage reasons: risky"]
+    used = len("\n".join([*header, review._BEGIN, "--- DIFF ---", diff]).encode("utf-8"))
+    section = len(f"--- FILE: src/b.py (at {head[:12]}) ---\ny = 2\n".encode("utf-8"))
+    pkt = review.build_packet(r, _cfg(packet_max_bytes=used + section), item)
+    assert pkt.truncated is False and "--- FILE: src/b.py" in pkt.text, \
+        "a section that lands exactly on the cap is kept"
+    pkt = review.build_packet(r, _cfg(packet_max_bytes=used + section - 1), item)
+    assert pkt.truncated is True and "--- FILE: src/b.py" not in pkt.text

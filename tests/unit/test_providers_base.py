@@ -44,3 +44,20 @@ def test_run_provider_subprocess_timeout_returns_none():
         [sys.executable, "-c", "import time; time.sleep(30)"],
         "x", timeout_s=1.0)
     assert got is None
+
+
+def test_tree_kill_uses_taskkill_on_windows_with_a_30s_timeout_and_nothing_elsewhere(monkeypatch):
+    """The provider ladder's own tree kill: the Windows branch only. Faked
+    at the subprocess so the branch runs on every CI leg (the ratchet's
+    count must not depend on the leg it runs on); off Windows the
+    function is a no-op, the runner's killpg path being the one that
+    reaps a provider there."""
+    calls = []
+    monkeypatch.setattr(base.sys, "platform", "win32")
+    monkeypatch.setattr(base.subprocess, "run",
+                        lambda argv, **kw: calls.append((argv, kw.get("timeout"))))
+    base._tree_kill(4242)
+    assert calls == [(["taskkill", "/PID", "4242", "/T", "/F"], 30)]
+    monkeypatch.setattr(base.sys, "platform", "linux")
+    base._tree_kill(4242)
+    assert len(calls) == 1

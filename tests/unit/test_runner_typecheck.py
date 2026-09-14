@@ -321,3 +321,16 @@ def test_run_mypy_with_nothing_inside_its_scope_is_the_clean_no_op(tmp_path, mon
 
     assert calls == []
     assert result.state is ToolState.OK and result.examined == frozenset()
+
+
+def test_in_mypy_scope_a_glob_entry_matches_the_path_itself_or_beneath_it():
+    """The drain confirms a mutant against the unit suite alone, and the
+    glob arm's `fnmatch(norm, entry) or fnmatch(norm, entry + "/*")` was
+    reached only through tests/integration: a pattern that names the file
+    is in scope without also matching a directory beneath it."""
+    scope = (["src[12]", "lib/*.py"], [])
+    assert typecheck.in_mypy_scope("lib/x.py", scope) is True         # the pattern itself
+    assert typecheck.in_mypy_scope("src1/a.py", scope) is True        # beneath a glob directory
+    assert typecheck.in_mypy_scope("src2/b/c.py", scope) is True
+    assert typecheck.in_mypy_scope("src3/a.py", scope) is False
+    assert typecheck.in_mypy_scope("other/a.py", scope) is False

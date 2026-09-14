@@ -150,3 +150,47 @@ def test_prompt_contains_contract_and_packet():
     for token in ("STRICT JSON", "evidence", "a01", "UNTRUSTED", "PACKETBODY",
                   "empty", "critical"):
         assert token in prompt
+
+
+# --- the rejections and caps the integration reviewer reached first --------
+#
+# The drain confirms a mutant against the unit suite alone; a head file that
+# cannot be read, a quote that spans two lines (verbatim in the squashed
+# content, anchored to no single line), the dependents cap of 50 and the
+# evidence cap of 400 were exercised only by tests/integration/test_review*.py.
+
+def test_verify_rejects_a_candidate_whose_head_file_cannot_be_read(tmp_path, monkeypatch):
+    def read(root, ref, f):
+        raise RuntimeError(f"no blob for {f}")
+    monkeypatch.setattr(review.gitutil, "read_for_fingerprint", read)
+    pkt = _pkt("return db.get(order_id)\n")
+    assert review.verify_findings([_cand()], pkt, tmp_path, "h") == ([], 1)
+
+
+def test_verify_rejects_a_quote_that_no_single_head_line_anchors(tmp_path, monkeypatch):
+    file_content = "x = 1\nreturn db.get(\n    order_id)\n"
+    monkeypatch.setattr(review.gitutil, "read_for_fingerprint",
+                        lambda root, ref, f: file_content)
+    pkt = _pkt(file_content)
+    # Verbatim once whitespace is squashed, so it passes both content checks
+    # -- but its first line, "return db.get( order_id)", is on no line.
+    cand = _cand(evidence="return db.get( order_id)")
+    assert review.verify_findings([cand], pkt, tmp_path, "h") == ([], 1)
+
+
+def test_parse_caps_evidence_at_400_characters():
+    long = "x" * 401
+    got = review.parse_review_response(json.dumps({"findings": [_cand(evidence=long)]}))
+    assert got[0]["evidence"] == "x" * 400
+    exact = "y" * 400
+    got = review.parse_review_response(json.dumps({"findings": [_cand(evidence=exact)]}))
+    assert got[0]["evidence"] == exact
+
+
+def test_parse_drops_an_entry_whose_required_field_is_not_a_non_empty_string():
+    """`isinstance(v, str) and v` -- both halves: an int title and an empty
+    evidence each drop the entry (the derive drew `and` -> `or`, which keeps
+    both)."""
+    body = json.dumps({"findings": [_cand(title=7), _cand(evidence=""), _cand()]})
+    got = review.parse_review_response(body)
+    assert [g["title"] for g in got] == ["IDOR on order endpoint"]

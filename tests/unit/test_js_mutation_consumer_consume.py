@@ -17,6 +17,7 @@ import json
 import subprocess
 from pathlib import Path
 from types import SimpleNamespace
+import pytest
 
 from aramid import jsmutate
 from aramid.consumers import js_mutation as jsc
@@ -522,3 +523,76 @@ def test_a_recorded_survivor_that_survives_again_is_re_reported_not_claimed(
     assert [f.file for f in res.findings] == ["calc.js"]
     assert res.repaired is not None and res.repaired.ids == ()
     assert [lab for lab, _, _ in oracle.calls] == ["BASE", "f1"]
+
+
+# --- the node_modules link, both platform branches faked at the os call ---
+#
+# The drain confirms a mutant against the unit suite alone; the consumer
+# tests above rebind `_link_node_modules` whole, so its six generator mutants
+# -- the "no node_modules" exit, the platform test, the junction's return
+# code, the `or ''` and the 200-character cap on its error, the symlink call
+# -- and the unlink guard's `and` were never executed at unit scope.
+
+class _CP:
+    def __init__(self, returncode=0, stderr=""):
+        self.returncode, self.stdout, self.stderr = returncode, "", stderr
+
+
+def test_link_node_modules_is_false_without_a_source_tree(tmp_path):
+    (tmp_path / "src").mkdir()
+    (tmp_path / "wt").mkdir()
+    assert jsc._link_node_modules(tmp_path / "src", tmp_path / "wt") is False
+    assert not (tmp_path / "wt" / "node_modules").exists()
+
+
+def test_link_node_modules_on_windows_makes_a_junction_and_reports_its_failure(tmp_path,
+                                                                                monkeypatch):
+    src, wt = tmp_path / "src", tmp_path / "wt"
+    (src / "node_modules").mkdir(parents=True)
+    wt.mkdir()
+    monkeypatch.setattr(jsc.sys, "platform", "win32")
+    calls = []
+    monkeypatch.setattr(jsc.subprocess, "run", lambda argv, **kw: calls.append(argv) or _CP(0))
+    assert jsc._link_node_modules(src, wt) is True
+    assert calls == [["cmd", "/c", "mklink", "/J", str(wt / "node_modules"),
+                      str(src / "node_modules")]]
+
+    monkeypatch.setattr(jsc.subprocess, "run",
+                        lambda argv, **kw: _CP(1, "  Access is denied.\n" + "x" * 300))
+    with pytest.raises(OSError) as exc:
+        jsc._link_node_modules(src, wt)
+    assert str(exc.value) == "mklink /J failed: " + ("Access is denied.\n" + "x" * 300)[:200]
+
+    monkeypatch.setattr(jsc.subprocess, "run", lambda argv, **kw: _CP(1, None))
+    with pytest.raises(OSError, match=r"^mklink /J failed: $"):
+        jsc._link_node_modules(src, wt)
+
+
+def test_link_node_modules_off_windows_symlinks_the_directory(tmp_path, monkeypatch):
+    src, wt = tmp_path / "src", tmp_path / "wt"
+    (src / "node_modules").mkdir(parents=True)
+    wt.mkdir()
+    monkeypatch.setattr(jsc.sys, "platform", "linux")
+    calls = []
+    monkeypatch.setattr(jsc.os, "symlink",
+                        lambda s, d, target_is_directory=False:
+                        calls.append((s, d, target_is_directory)))
+    monkeypatch.setattr(jsc.subprocess, "run",
+                        lambda *a, **kw: (_ for _ in ()).throw(AssertionError("no mklink")))
+    assert jsc._link_node_modules(src, wt) is True
+    assert calls == [(src / "node_modules", wt / "node_modules", True)]
+
+
+def test_unlink_node_modules_removes_only_a_present_link_and_never_raises(tmp_path):
+    wt = tmp_path / "wt"
+    wt.mkdir()
+    jsc._unlink_node_modules(wt)                        # nothing there: nothing to do
+    assert not (wt / "node_modules").exists()
+
+    (wt / "node_modules").mkdir()                       # a reparse point on Windows, a dir here
+    jsc._unlink_node_modules(wt)
+    assert not (wt / "node_modules").exists()
+
+    (wt / "node_modules").write_text("a file, oddly\n", encoding="utf-8")
+    jsc._unlink_node_modules(wt)
+    assert not (wt / "node_modules").exists()

@@ -257,3 +257,46 @@ def test_auto_resolve_tdd_keeps_sibling_subpackages_apart(tmp_path):
         led.close()
     assert resolved == []
     assert state["f" * 64]["status"] == "open"
+
+
+def test_auto_resolve_tdd_counts_a_row_it_cannot_resolve_once(tmp_path, monkeypatch, capsys):
+    """The drain confirms a mutant against the unit suite alone, and the
+    `skipped += 1` under the per-row guard was reached only through
+    tests/integration: a row whose event cannot be appended costs one counted
+    skip, and the row beside it still resolves."""
+    led = Ledger(tmp_path / "l.db")
+    try:
+        _seed(led, _tdd_finding())
+        _seed(led, _tdd_finding(fid="a" * 64, file="b.py"))
+        real_append = led.append
+
+        def append(event):
+            if event.finding_id == "f" * 64:
+                raise RuntimeError("torn row")
+            return real_append(event)
+        monkeypatch.setattr(led, "append", append)
+
+        resolved = tdd.auto_resolve_tdd(led, "r1", NOW, {"a.py", "b.py"}, present_ids=set())
+        state = led.open_findings()
+    finally:
+        led.close()
+    assert resolved == ["a" * 64]
+    assert capsys.readouterr().err == "aramid: tdd-resolve: skipped 1 malformed record\n"
+    assert (state["f" * 64]["status"], state["a" * 64]["status"]) == ("open", "fixed")
+
+
+def test_auto_resolve_tdd_reports_what_it_walked_in_its_yield_event(tmp_path):
+    """Two open tdd rows, one of them addressed by the changed files: the
+    yield event says 1 of 2, exact (the derive drew `considered = 0` -> 1
+    and `+= 1` -> 2 past the arm above)."""
+    led = Ledger(tmp_path / "l.db")
+    try:
+        _seed(led, _tdd_finding())
+        _seed(led, _tdd_finding(fid="a" * 64, file="b.py"))
+        assert tdd.auto_resolve_tdd(led, "r1", NOW, {"b.py"}, present_ids=set()) == ["a" * 64]
+        yields = [(e.payload["resolver"], e.payload["tool"], e.payload["considered"],
+                   e.payload["resolved"]) for e in led.events()
+                  if e.type == EventType.RESOLVER_YIELD]
+        assert yields[-1] == ("test_added", "tdd", 2, 1)
+    finally:
+        led.close()

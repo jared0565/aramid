@@ -161,3 +161,30 @@ def test_scan_one_git_out_of_contract_start_fails_open():
     assert _scan_one_git([], 0) is None
     assert _scan_one_git(["git"], 5) is None
     assert _scan_one_git(["git", "commit", "-n"], -1) is None
+
+
+def test_a_global_option_with_a_separate_argument_is_skipped_whole():
+    """The drain confirms a mutant against the unit suite alone, and
+    `i += 1 if "=" in tok else 2` -- the two-token form of --git-dir and
+    friends -- was reached only through tests/integration: skipping one
+    token too many would read the subcommand as the option's value."""
+    assert find_bypass("git --git-dir /x/.git commit --no-verify") == \
+        Bypass("no-verify", "commit", "--no-verify")
+    assert find_bypass("git --work-tree=/x commit -n") == Bypass("no-verify", "commit", "-n")
+    assert find_bypass("git --git-dir --no-verify status") is None, \
+        "the option's own value is not a flag, and status is not gated"
+
+
+def test_every_token_walk_advances_by_exactly_the_tokens_it_consumed():
+    """Each `i += 1` / `j += 2` of the scanner, pinned by a command where one
+    step too many would skip the subcommand or the bypass flag: an unknown
+    global option before `commit`, an `-m msg` pair before `--no-verify`, and
+    a bare flag before it (the derive drew each increment one higher)."""
+    assert find_bypass("git --no-pager commit --no-verify") == Bypass(
+        "no-verify", "commit", "--no-verify")
+    assert find_bypass("git commit -m fix --no-verify") == Bypass(
+        "no-verify", "commit", "--no-verify")
+    assert find_bypass("git commit --amend --no-verify") == Bypass(
+        "no-verify", "commit", "--no-verify")
+    assert find_bypass("git push -o ci.skip origin main --no-verify") == Bypass(
+        "no-verify", "push", "--no-verify")

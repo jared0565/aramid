@@ -266,3 +266,20 @@ def test_a_mutation_score_finding_id_does_not_move_with_the_changed_file_scope(
                              changed_files={"src/unrelated.py"}), "transition")
 
     assert unscoped.id == scoped.id
+
+
+def test_a_regression_row_that_cannot_be_materialized_is_counted_once(tmp_path, monkeypatch,
+                                                                       capsys):
+    """The drain confirms a mutant against the unit suite alone, and the
+    `skipped += 1` under the per-regression guard was reached only through
+    tests/integration: a row with no usable target costs one counted skip,
+    and the row beside it still becomes a finding."""
+    rows = [SimpleNamespace(target=None, kind="rate", detail="torn"),
+            SimpleNamespace(target="src/calc.py::is_adult", kind="rate", detail="1.00 -> 0.33")]
+    monkeypatch.setattr(mutation_score_gate.mutation_score, "latest_regressions",
+                        lambda events: rows)
+    got = _findings(_rate_ledger(tmp_path), _cfg(armed=False))
+    assert [(f.rule, f.file, f.message) for f in got] == [
+        ("rate", "src/calc.py",
+         "mutation-score rate regression in is_adult: 1.00 -> 0.33")]
+    assert capsys.readouterr().err == "aramid: mutation-score-gate: skipped 1 malformed record\n"

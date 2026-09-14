@@ -244,6 +244,41 @@ to publish a tag that disagrees with it.
   `getattr(q, "deferred", 0)` -- a dead default and an equivalent mutant --
   is `q.deferred` now. Proof against the generator: 89 of 89 red at
   stage 1.
+- **The last forty-two latent mutants -- singletons across twenty-one
+  modules -- are pinned at unit scope** (burn-down task 9, step 5). Each
+  sat on a line only tests/integration reached, or a POSIX branch this
+  Windows machine never runs: the five resolvers' per-row `skipped += 1`
+  and `generate_mutants`' `unparseable += 1`; `verify_findings`'
+  unreadable-head and no-anchor refusals, the 400-character evidence cap
+  and the fifty-dependent packet cap; `health.snapshot`'s torn-read zero,
+  `survivor_signal`'s silence, `pipeline.since`'s ancestry guard,
+  `in_mypy_scope`'s glob arm, `_locate_dependency`'s fallback,
+  `_candidate_functions`' unparseable exit, the two-token `--git-dir DIR`
+  skip; `resolve_range`'s merge-base fallback and `range_commits`' exit
+  test; `hooks_template`'s config read and path comparison; `mcp.serve`'s
+  -32700 / -32600 frames, the -32602 mapping and `_protect_stdout`'s three
+  fd numbers; and the POSIX `killpg`, `kill(pid, 0)` and `symlink` calls
+  beside the Windows junction's argv, failure message and guards, and the
+  drain sweep anchor's seed, and the provider ladder's Windows-only
+  `taskkill` (the one branch a Linux leg would count that this machine
+  does not). Thirty-two arms appended to each module's own
+  stage-1 file (every os, subprocess and git seam faked at the call with
+  its arguments asserted) plus `tests/unit/test_hooks_template_cmd.py`.
+  `build_packet`'s `packet_max_bytes` default (`.get(..., 120000)`) was
+  dead -- defaults.toml always supplies the key -- and is gone.
+  A stage-1-only pass over every generator mutant of the twenty-nine
+  functions then found thirty more unpinned on lines the suite already
+  executed (ten arms more) -- the packet's byte-cap boundaries and the sections it must
+  not write, the three resolvers' yield-event counters asserted as exact
+  rows, the health run id, the survivor signal's `and`, the fuzz
+  candidate span, the bypass scanner's token walk -- pinned; four
+  equivalents among them are gone at source (the evidence cap's
+  comparison before a no-op slice, the scanner's dead length guard and
+  two `split("=", 1)` -> `partition`), and one is documented in the
+  commit (the scanner's `-c VALUE` bound).
+  Proof against the generator: 190 of 191 red at stage 1; the one
+  survivor (`i + 1 < len(seg)` -> `i + 2` on the `-c VALUE` guard) is
+  the equivalent documented above.
 
 ## [0.17.4] — 2026-09-14
 

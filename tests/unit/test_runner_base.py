@@ -1,5 +1,7 @@
 import sys
 import time
+from aramid.runners import base
+from types import SimpleNamespace
 from aramid.runners.base import (CONTENT_UNREADABLE, run_subprocess, ToolState,
                                   scanned_line_reader)
 
@@ -213,3 +215,25 @@ def test_a_raising_tap_is_switched_off_and_never_fails_the_run(tmp_path, capsys)
     assert calls == ["line 0"]
     assert capsys.readouterr().err == \
         "aramid: progress reporting stopped: RuntimeError('reporter bug')\n"
+
+
+def test_kill_tree_off_windows_kills_the_process_group_with_sigkill(monkeypatch):
+    """The drain confirms a mutant against the unit suite alone, and it runs
+    on Windows: the POSIX branch's `os.killpg(pgid, 9)` was never executed
+    there. The two os calls are recorded, so the branch runs on every leg."""
+    calls = []
+    monkeypatch.setattr(base, "_WIN", False)
+    monkeypatch.setattr(base.os, "getpgid", lambda pid: calls.append(("getpgid", pid)) or 4242,
+                        raising=False)
+    monkeypatch.setattr(base.os, "killpg", lambda pgid, sig: calls.append(("killpg", pgid, sig)),
+                        raising=False)
+    proc = SimpleNamespace(pid=77, kill=lambda: calls.append(("kill",)))
+    base._kill_tree(proc)
+    assert calls == [("getpgid", 77), ("killpg", 4242, 9)]
+
+    def refuse(pid):
+        raise ProcessLookupError(pid)
+    monkeypatch.setattr(base.os, "getpgid", refuse, raising=False)
+    calls.clear()
+    base._kill_tree(proc)
+    assert calls == [("kill",)], "no group: the process itself is killed"

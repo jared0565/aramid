@@ -159,3 +159,26 @@ def test_every_op_the_mutator_emits_is_registered_and_vice_versa():
     emitted = {m.op for m in mutation.generate_mutants(src, {1, 2, 3, 4})}
     assert emitted == set(mutation.OPS)
     assert len(mutation.OPS) == len(set(mutation.OPS))
+
+
+def test_a_mutant_the_unparser_rejects_is_counted_and_skipped(monkeypatch, capsys):
+    """The drain confirms a mutant against the unit suite alone, and
+    `unparseable += 1` was reached only through tests/integration: one
+    mutated tree `ast.unparse` cannot render costs one counted skip, and
+    the other mutants of the line are still generated."""
+    src = "def f(a, b):\n    return a == b and a > 0\n"
+    baseline = generate_mutants(src, {2})
+    assert len(baseline) >= 2
+    real = mutation.ast.unparse
+    calls = []
+
+    def unparse(tree):
+        calls.append(tree)
+        if len(calls) == 1:
+            raise ValueError("cannot render")
+        return real(tree)
+    monkeypatch.setattr(mutation.ast, "unparse", unparse)
+
+    got = generate_mutants(src, {2})
+    assert len(got) == len(baseline) - 1
+    assert capsys.readouterr().err == "aramid: mutation: skipped 1 unparseable mutant\n"
