@@ -30,6 +30,28 @@ to publish a tag that disagrees with it.
   error silent, a clean command silent before the repo is resolved,
   every malformed payload silent, and every path returning 0. Proof
   against the generator: 14 of 14 red at stage 1.
+- **`cli.main`'s dispatch chain is pinned at unit scope** (burn-down
+  task 2). The most edited function in the tree (27 commits in 60
+  days) was executed by the unit suite on zero lines: its 43 generator
+  mutants -- `==` -> `!=` on every command match, `or` -> `and` on the
+  `--accept-degraded` reason default and the `notices` subcommand
+  default, `3 -> 4` on every engine-error exit -- were survivors by
+  construction, together with the two `_check_mode` gate branches and
+  the redirected-stream check in `_force_utf8_on_redirect` that only
+  `main` reaches. `tests/unit/test_cli_main.py` (44 tests, 59 arms) rebinds every
+  `cmd_*` name to a recorder and asserts the exact call per command,
+  positional-versus-keyword shape included: the eight check
+  gate/mode combinations, the reason default, `record=False` only
+  when asked, the drain target forms, every ledger and pack
+  subcommand with the two missing-subcommand messages byte for byte,
+  all nine `arm` surfaces, `hooks`' lazy import, `--version` winning
+  over a command, `--help` 0 / bad flag 3 / no command 3 / non-int
+  parser exit 3, the unknown-command tail reached through an injected
+  orphan subparser, and the utf-8 reconfigure on a redirected stream
+  but not on a tty. Proof against the generator: 45 of 46 red at stage
+  1; the one survivor (`else 1` -> `else 2` on a non-int parser exit
+  code) is the equivalent already suppressed as c5326a9c, since both
+  values map to exit 3.
 
 ## [0.17.3] — 2026-09-13
 
