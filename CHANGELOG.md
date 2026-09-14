@@ -10,6 +10,27 @@ to publish a tag that disagrees with it.
 
 ## [Unreleased]
 
+### Added
+
+- **The agent hook's block decision is pinned at unit scope** (latent
+  mutant burn-down, task 1 of
+  `docs/superpowers/plans/2026-09-14-latent-mutant-burndown.md`).
+  `commands/agent_hook.py` is the PreToolUse screen that turns a
+  `--no-verify` or a `-c core.hooksPath=` wrapper into a deny while the
+  agent surface is armed, and not one line of its dispatcher, repo
+  guard, session-start emitter or screen was executed by the unit
+  suite: its 14 generator mutants -- including `==` -> `!=` on the
+  event match and every fail-open `return 0` -- were survivors by
+  construction, which for this module means a bypass, not a test gap.
+  `tests/unit/test_agent_hook_dispatch.py` (13 arms) runs it on a real
+  tmp git repo with a two-line `aramid.toml` and the payload on a
+  replaced stdin: the deny and advisory objects byte for byte, the
+  hooks-path wording, the posture block equal to `_session_context`,
+  an unknown event silent even with a bypass on stdin, an internal
+  error silent, a clean command silent before the repo is resolved,
+  every malformed payload silent, and every path returning 0. Proof
+  against the generator: 14 of 14 red at stage 1.
+
 ## [0.17.3] — 2026-09-13
 
 ### Added
