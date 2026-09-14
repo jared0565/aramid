@@ -260,7 +260,7 @@ def _queue_lines(ledger: Ledger) -> list[str]:
     # Why the last drain did not open it, when it did not (round 177): a
     # starved repo's `status` used to read like one nothing had looked at.
     deferral = (f", deferred {q.deferred}x: {q.deferred_reason}"
-                if getattr(q, "deferred", 0) else "")
+                if q.deferred else "")
     lines = [f"queue: {len(queued)} queued (score {q.score}, {age_h}h old{deferral}) | "
              f"{drained_n} drained | {expired_n} expired"]
     lines.extend(f"  {reason}" for reason in q.reasons)

@@ -219,6 +219,31 @@ to publish a tag that disagrees with it.
   50 of 51 red at stage 1; the one survivor (the inner `else: return 3`
   -> `return 4` on a schtasks failure) is the equivalent documented
   above.
+- **`aramid uninstall`, every `aramid arm` refusal, `aramid status`'s line
+  renderers, `aramid autolearn`, `aramid rebaseline`, `aramid resolvers`
+  and `aramid update-rules` are pinned at unit scope** (burn-down task 9,
+  step 4). Survivors by construction: uninstall's refusal, each surface's
+  "left untouched" line, the gitignore rewrite guard and the summary;
+  arm's `return 3` after `_write_armed` refuses, for eight of the nine
+  flags; status's aging increment, the bake day's `+ 1`, the per-rule hit
+  increment and its (-count, rule) sort key, the first queued item and
+  both engine-error exits; autolearn's no-ledger skip, two counter
+  defaults, its exit and the `or` on the mode line's disabled test (a
+  non-table `[llm.autolearn]` read as unreadable instead of off); and
+  every `return` of the three small commands. `tests/unit/test_uninstall_cmd.py`
+  (4), `test_arm_refusals.py` (19), `test_status_lines.py` (9),
+  `test_autolearn_cmd_report.py` (9), `test_rebaseline_cmd.py` (2),
+  `test_resolvers_cmd.py` (2) and `test_update_rules_cmd.py` (1), each
+  line whole -- thirteen of the arms from a stage-1-only pass over every
+  generator mutant of the seven modules, which found the counter defaults
+  (`.get(key, 0)`), the aging window's `>` and the queue line's counts
+  unpinned on lines the suite already executed, and the formal derive
+  two more (the empty-queue counts under `or` -> `and`: one expired item
+  alone now reads `0 drained | 1 expired`; the age divisor `// 3600` ->
+  `// 3601`: a whole 100 hours reads `100h`, not 99). The queue line's
+  `getattr(q, "deferred", 0)` -- a dead default and an equivalent mutant --
+  is `q.deferred` now. Proof against the generator: 89 of 89 red at
+  stage 1.
 
 ## [0.17.4] — 2026-09-14
 
