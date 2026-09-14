@@ -218,7 +218,7 @@ def _cron_schedule(root, action: str) -> int:
         return 0
 
     cfg = config_mod.load_config(Path(root))
-    hours = int(cfg.drain.get("interval_hours", 4))
+    hours = int(cfg.drain["interval_hours"])  # defaults.toml carries the 4
     line = render_cron_line(Path(sys.executable), hours)
     # Strip-then-append, so re-installing REPLACES aramid's entry instead of
     # accumulating a duplicate on every run.
@@ -243,7 +243,7 @@ def cmd_schedule(root, action: str) -> int:
     try:
         if action == "install":
             cfg = config_mod.load_config(Path(root))
-            hours = int(cfg.drain.get("interval_hours", 4))
+            hours = int(cfg.drain["interval_hours"])  # defaults.toml carries the 4
             start = datetime.now().replace(microsecond=0).isoformat()
             xml = render_task_xml(Path(sys.executable), hours, start)
             with tempfile.NamedTemporaryFile("w", suffix=".xml", delete=False,

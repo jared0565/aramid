@@ -346,3 +346,126 @@ def test_cron_line_is_always_exactly_one_line():
     line = schedule.render_cron_line(PurePosixPath("/opt/py%3/my venv/bin/python"), 4)
 
     assert len(line.splitlines()) == 1, line
+
+
+# --- cmd_schedule's exits, each platform branch faked at the subprocess -----
+#
+# The drain confirms a mutant against the unit suite alone, and it runs on
+# Windows: the schtasks `remove` and `status` branches, the "crontab not on
+# PATH" refusal and every `return 3` but install's were never executed.
+# `sys.platform` is set per arm and `subprocess.run` answers with a canned
+# CompletedProcess, so each branch runs on every CI leg.
+
+class _CP:
+    def __init__(self, returncode=0, stdout="", stderr=""):
+        self.returncode, self.stdout, self.stderr = returncode, stdout, stderr
+
+
+def _windows(monkeypatch, reply):
+    """Route to the schtasks branch; `reply(argv)` is the canned answer."""
+    calls = []
+    monkeypatch.setattr(sys, "platform", "win32")
+
+    def run(argv, **kw):
+        calls.append(argv)
+        return reply(argv)
+    monkeypatch.setattr(schedule.subprocess, "run", run)
+    return calls
+
+
+def test_schedule_refuses_an_unknown_action_before_touching_any_scheduler(
+        monkeypatch, tmp_path, capsys):
+    calls = _windows(monkeypatch, lambda argv: _CP())
+    assert schedule.cmd_schedule(tmp_path, "reinstall") == 3
+    assert capsys.readouterr() == ("", "aramid: schedule: unknown action 'reinstall'\n")
+    assert calls == []
+
+
+def test_schedule_on_windows_removes_and_reports_the_task(monkeypatch, tmp_path, capsys):
+    calls = _windows(monkeypatch, lambda argv: _CP())
+    assert schedule.cmd_schedule(tmp_path, "remove") == 0
+    assert capsys.readouterr() == ("aramid schedule: remove ok (aramid-drain)\n", "")
+    assert calls == [schedule._delete_argv()]
+
+
+def test_schedule_on_windows_status_prints_schtasks_or_not_installed(monkeypatch, tmp_path,
+                                                                     capsys):
+    calls = _windows(monkeypatch, lambda argv: _CP(0, "Folder: \\\nTaskName: aramid-drain\n"))
+    assert schedule.cmd_schedule(tmp_path, "status") == 0
+    assert capsys.readouterr() == ("Folder: \\\nTaskName: aramid-drain\n", "")
+    assert calls == [schedule._query_argv()]
+
+    _windows(monkeypatch, lambda argv: _CP(1, "", "ERROR: The system cannot find the file"))
+    assert schedule.cmd_schedule(tmp_path, "status") == 3
+    assert capsys.readouterr() == ("aramid-drain: not installed\n", "")
+
+
+def test_schedule_on_windows_reports_a_failed_schtasks_call(monkeypatch, tmp_path, capsys):
+    _windows(monkeypatch, lambda argv: _CP(1, "", "ERROR: Access is denied.\n"))
+    assert schedule.cmd_schedule(tmp_path, "remove") == 3
+    assert capsys.readouterr() == ("", "aramid: schedule remove failed: ERROR: Access is denied.\n")
+
+    def boom(argv):
+        raise OSError("schtasks vanished")
+    _windows(monkeypatch, boom)
+    assert schedule.cmd_schedule(tmp_path, "install") == 3
+    assert capsys.readouterr() == ("", "aramid: schedule: engine error: schtasks vanished\n")
+
+
+def test_schedule_off_windows_reports_a_missing_crontab(monkeypatch, tmp_path, capsys):
+    monkeypatch.setattr(sys, "platform", "linux")
+
+    def absent():
+        raise FileNotFoundError("crontab")
+    monkeypatch.setattr(schedule, "_read_crontab", absent)
+    assert schedule.cmd_schedule(tmp_path, "status") == 3
+    assert capsys.readouterr() == ("", "aramid: schedule: `crontab` not found on PATH\n")
+
+
+def test_write_crontab_feeds_the_body_on_stdin_and_raises_on_a_refusal(monkeypatch):
+    seen = []
+
+    def run(argv, **kw):
+        seen.append((argv, kw["input"]))
+        return _CP(0)
+    monkeypatch.setattr(schedule.subprocess, "run", run)
+    schedule._write_crontab("\n\n# keep\n0 * * * * echo hi\n\n")
+    schedule._write_crontab("")
+    assert seen == [(["crontab", "-"], "# keep\n0 * * * * echo hi\n"),
+                    (["crontab", "-"], "")]
+
+    monkeypatch.setattr(schedule.subprocess, "run",
+                        lambda argv, **kw: _CP(1, "", "crontab: installing new crontab\nbad\n"))
+    with pytest.raises(RuntimeError, match=r"^crontab write failed: crontab: installing new "
+                                            r"crontab\nbad$"):
+        schedule._write_crontab("# x")
+
+
+def test_schedule_on_windows_installs_from_the_config_interval_and_a_whole_second_start(
+        monkeypatch, tmp_path, capsys):
+    """The task XML is written, handed to schtasks and unlinked; only its
+    argv was ever asserted. Read the XML during the call: the interval is
+    the config's `[drain] interval_hours` (the default 4 without one), and
+    the start boundary is a whole second -- Task Scheduler rejects a
+    fractional StartBoundary, which `microsecond=0` exists to prevent."""
+    import re
+    seen = {}
+
+    def reply(argv):
+        if argv[:2] == ["schtasks", "/Create"]:
+            seen["xml"] = Path(argv[argv.index("/XML") + 1]).read_text(encoding="utf-16")
+        return _CP()
+    calls = _windows(monkeypatch, reply)
+
+    assert schedule.cmd_schedule(tmp_path, "install") == 0
+    assert calls[0][:4] == ["schtasks", "/Create", "/TN", "aramid-drain"]
+    assert "<Interval>PT4H</Interval>" in seen["xml"]
+    start = re.search(r"<StartBoundary>([^<]*)</StartBoundary>", seen["xml"]).group(1)
+    assert re.fullmatch(r"\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d", start), start
+    assert not Path(calls[0][calls[0].index("/XML") + 1]).exists(), "the temp XML is unlinked"
+    assert capsys.readouterr().out == "aramid schedule: install ok (aramid-drain)\n"
+
+    (tmp_path / "aramid.toml").write_text('schema_version = 1\n[drain]\ninterval_hours = 6\n',
+                                          encoding="utf-8")
+    assert schedule.cmd_schedule(tmp_path, "install") == 0
+    assert "<Interval>PT6H</Interval>" in seen["xml"]

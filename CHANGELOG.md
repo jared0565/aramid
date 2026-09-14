@@ -195,6 +195,30 @@ to publish a tag that disagrees with it.
   asserts the report whole, the verdict JSON verbatim, every notices line
   and exit on the isolated store, and one reader pass over every skipped
   row shape. Proof against the generator: 34 of 34 red at stage 1.
+- **`aramid schedule`, `aramid triage`, `aramid pack` and
+  `aramid mutation-score` are pinned at unit scope** (burn-down task 9,
+  step 3). Survivors by construction: schedule's schtasks `remove` and
+  `status` branches (the drain runs on Windows, and only `install` was
+  ever exercised there), the "crontab not on PATH" refusal and every
+  `return 3` but install's; triage's range split, `or` -> `and` on the
+  two range shas (a half-resolved range scored anyway), the seven-char
+  short sha, every exit and the watchdog's `os._exit(3)`; pack's two
+  compiler predicates under `and` -> `or` (an OPEN gitleaks finding
+  compiled into a reintroduction rule, an open CVE into a manifest ban)
+  and the `or ""` on a missing rule id; mutation-score's empty-history and
+  nothing-measured guards and its three exits. `tests/unit/test_schedule.py`
+  (+7, each platform branch faked at the subprocess, the install's task XML
+  read during the call), `test_triage_cmd_exits.py`
+  (7, a real tmp repo with the scorer answered), `test_pack_cmd_compile.py` (18, a
+  real tmp ledger) and `test_mutation_score_cmd_report.py` (6, the text and JSON
+  reports whole). Schedule's `interval_hours` default (`.get(..., 4)`) was
+  dead -- defaults.toml always supplies the key -- and is gone from both
+  scheduler branches. One equivalent mutant stays: schedule's inner
+  `else: return 3` is unreachable behind the action check at the top and
+  is kept as the defensive branch it is. Proof against the generator:
+  50 of 51 red at stage 1; the one survivor (the inner `else: return 3`
+  -> `return 4` on a schtasks failure) is the equivalent documented
+  above.
 
 ## [0.17.4] — 2026-09-14
 
