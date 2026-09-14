@@ -106,19 +106,21 @@ jobs:
       # stage 2: the unit directory), so a generator mutant on a line only
       # tests/integration reaches can never be killed there -- it is a
       # survivor waiting to be drawn. The 2026-09-14 burn-down pinned 300
-      # of them; this leg re-runs the unit suite under coverage and counts
-      # what is left per file (scripts/latent_mutants.py), so the number
-      # is in every run's log. ONE leg, deliberately: the count is a
-      # property of the suite, not of the platform, once the platform
-      # branches are pinned both ways, and the unit suite is a second
-      # pytest run of several minutes.
+      # of them; this leg re-runs the unit suite under coverage, counts
+      # what is left per file (scripts/latent_mutants.py) and refuses a
+      # count above tests/latent_mutants_baseline.json -- a ratchet: the
+      # baseline was written from this leg's own measurement and may only
+      # be lowered (`write-baseline`), never raised by hand. ONE leg,
+      # deliberately: the count is a property of the suite, not of the
+      # platform, once the platform branches are pinned both ways, and
+      # the unit suite is a second pytest run of several minutes.
       - name: Unit suite under coverage (for the latent-mutant count)
         if: matrix.os == 'ubuntu-latest' && matrix.python == '3.12'
         run: python -m pytest -q tests/unit -p no:cacheprovider --cov=aramid --cov-report=json:${{ runner.temp }}/cov-unit.json
 
-      - name: Count the mutants the unit suite never executes
+      - name: Latent mutants -- the ratchet against tests/latent_mutants_baseline.json
         if: matrix.os == 'ubuntu-latest' && matrix.python == '3.12'
-        run: python -P scripts/latent_mutants.py measure ${{ runner.temp }}/cov-unit.json --verbose
+        run: python -P scripts/latent_mutants.py check ${{ runner.temp }}/cov-unit.json --baseline tests/latent_mutants_baseline.json --verbose
 
       # Dogfood: run aramid's own gate against this repo as the CI backbone.
       # Exit-code contract (see docs/superpowers/specs/2026-07-12-aramid-phase1-design.md):

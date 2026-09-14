@@ -282,6 +282,29 @@ to publish a tag that disagrees with it.
   Proof against the generator: 190 of 191 red at stage 1; the one
   survivor (`i + 1 < len(seg)` -> `i + 2` on the `-c VALUE` guard) is
   the equivalent documented above.
+- **The latent-mutant count is a ratchet: CI fails when a file's count
+  rises above `tests/latent_mutants_baseline.json`** (burn-down task 10,
+  second half). The baseline is the `ubuntu-latest / 3.12` leg's own
+  measurement of run 34907200639 (13d3096): one mutant in one file,
+  `commands/schedule.py`'s documented equivalent (`cmd_schedule`'s inner
+  `return 3`, unreachable behind the action check) -- down from 197
+  across 37 files on 5279d5d, the run before the burn-down's last seven
+  commits, and from 375 when the plan was written. A fresh local measure
+  at the same tree reads the same one (2552 unit tests under coverage),
+  but the baseline is taken from the leg and never from this machine,
+  because the two can differ: on 5279d5d the leg counted three lines this
+  Windows machine executes and Linux does not (`win_sh_path`'s drive
+  branch, `_installed_direct_url`'s wheel return), pinned both ways
+  since. The leg now runs `check --baseline
+  tests/latent_mutants_baseline.json --verbose` in place of `measure`: a
+  file above its count fails the leg naming the file and the stage-1 test
+  set to pin it in; a file below it is reported so the baseline can be
+  lowered with `write-baseline`. The workflow guard asserts the step is a
+  check, names the committed file and cannot be soft-failed, and a new
+  test reads the baseline itself: every key a `src/aramid` path, every
+  count a positive int, `_total` their sum, keys sorted -- a hand edit is
+  caught at unit scope, not in CI. The baseline only ever goes down:
+  raising it by hand is the one edit this entry forbids.
 
 ### Fixed
 

@@ -8,12 +8,15 @@ guarded onto one (os, python) pair that the matrix actually runs, the
 coverage run feeding it carries the same guard and names the same file,
 and both come after the unpatched full-suite step so a red suite is
 reported as a red suite, not as a coverage failure."""
+import json
 import re
 from pathlib import Path
 
 import yaml
 
-WORKFLOW = Path(__file__).resolve().parents[2] / ".github" / "workflows" / "aramid.yml"
+REPO = Path(__file__).resolve().parents[2]
+WORKFLOW = REPO / ".github" / "workflows" / "aramid.yml"
+BASELINE = REPO / "tests" / "latent_mutants_baseline.json"
 SCRIPT = "scripts/latent_mutants.py"
 
 
@@ -51,8 +54,11 @@ def test_the_count_runs_once_on_a_leg_the_matrix_has_after_the_full_suite():
     assert _matrix().count(leg) == 1, "the guard would fire on two legs"
     suite = next(i for i, s in enumerate(steps) if s.get("name") == "Run test suite")
     assert steps.index(count) > suite, "the count must not pre-empt the full suite"
-    assert "measure" in count["run"] and "--verbose" in count["run"], \
+    assert " check " in count["run"], "a measurement is not a ratchet"
+    assert "--baseline tests/latent_mutants_baseline.json" in count["run"]
+    assert "--verbose" in count["run"], \
         "the log must name every latent mutant, not just count them"
+    assert "continue-on-error" not in count, "a ratchet that cannot fail is decoration"
 
 
 def test_the_coverage_run_feeding_the_count_has_the_same_guard_and_file():
@@ -68,3 +74,20 @@ def test_the_coverage_run_feeding_the_count_has_the_same_guard_and_file():
     assert "tests/integration" not in cov["run"]
     assert f"--cov-report=json:{cov_file}" in cov["run"], \
         f"coverage writes {cov['run']!r} but the count reads {cov_file!r}"
+
+
+def test_the_committed_baseline_is_the_one_the_step_names_and_adds_up():
+    """The ratchet is only as honest as the file it compares against: every
+    key a src/aramid path, every count a positive int, and `_total` the
+    sum -- a hand edit that forgets the total is caught here, not in CI."""
+    steps = _steps()
+    count = next(s for s in steps if SCRIPT in str(s.get("run", "")))
+    named = re.search(r"--baseline (\S+)", count["run"]).group(1)
+    assert (REPO / named) == BASELINE and BASELINE.exists()
+    base = json.loads(BASELINE.read_text(encoding="utf-8"))
+    files = {k: v for k, v in base.items() if k != "_total"}
+    assert files, "an empty baseline ratchets nothing"
+    assert all(k.startswith("src/aramid/") and k.endswith(".py") for k in files), list(files)
+    assert all(isinstance(v, int) and v > 0 for v in files.values())
+    assert base["_total"] == sum(files.values())
+    assert list(base) == sorted(base), "write-baseline writes sorted keys; keep it that way"
