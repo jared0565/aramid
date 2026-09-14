@@ -62,7 +62,9 @@ def latent_mutants(source: str, missing_lines: set[int]) -> list[mutation.Mutant
     except SyntaxError:
         return []
     stmt = statement_lines(tree)
-    every_line = set(range(1, source.count("\n") + 2))
+    # every line that carries a node: a range would need a start and an
+    # end literal, one of which the generator could move past line 1
+    every_line = {n.lineno for n in ast.walk(tree) if getattr(n, "lineno", None)}
     return [m for m in mutation.generate_mutants(source, every_line)
             if stmt.get(m.line, m.line) in missing_lines]
 

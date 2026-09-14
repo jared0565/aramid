@@ -69,3 +69,44 @@ def test_malformed_direct_url_does_not_raise():
     positive marker, so failing to parse can only under-report."""
     assert install_mode_lines("{not json") == []
     assert install_mode_lines("") == []
+
+
+def test_the_probe_reads_every_installed_aramid_and_prefers_the_editable_one(monkeypatch):
+    """`_installed_direct_url` walks importlib.metadata. CI installs aramid
+    editable, so `return found[0] if found else None` never ran on the
+    latent-mutant ratchet's leg and its mutant (`found[1]`, an IndexError
+    the blanket except turns into None) was latent there. Faked
+    distributions run every exit: no aramid -> None; one wheel entry ->
+    that entry; a wheel and an editable, either order -> the editable one;
+    a malformed entry skipped; an aramid with no direct_url.json -> None."""
+    import importlib.metadata as importlib_metadata
+
+    from aramid.commands import doctor
+
+    class Dist:
+        def __init__(self, name, text):
+            self.metadata = {"Name": name}
+            self._text = text
+
+        def read_text(self, filename):
+            assert filename == "direct_url.json"
+            return self._text
+
+    wheel = json.dumps({"url": "file:///w", "dir_info": {}})
+    editable = json.dumps({"url": "file:///e", "dir_info": {"editable": True}})
+
+    def installed(*dists):
+        monkeypatch.setattr(importlib_metadata, "distributions", lambda: iter(dists))
+
+    installed(Dist("requests", editable), Dist(None, editable))
+    assert doctor._installed_direct_url() is None
+    installed(Dist("Aramid", wheel), Dist("other", None))
+    assert doctor._installed_direct_url() == wheel
+    installed(Dist("aramid", wheel), Dist("aramid", editable))
+    assert doctor._installed_direct_url() == editable
+    installed(Dist("aramid", editable), Dist("aramid", wheel))
+    assert doctor._installed_direct_url() == editable
+    installed(Dist("aramid", "{not json"), Dist("aramid", editable))
+    assert doctor._installed_direct_url() == editable
+    installed(Dist("aramid", None))
+    assert doctor._installed_direct_url() is None

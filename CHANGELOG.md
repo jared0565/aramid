@@ -134,6 +134,25 @@ to publish a tag that disagrees with it.
   the file the count reads). `pytest-cov` joins the `dev` extra. The
   baseline that turns the count into a ratchet is written from the leg's
   own measurement in the entry that follows.
+- **The latent-mutant script's own first drain, and the three lines
+  only one platform executes, are pinned** (burn-down task 10, between
+  the halves). The 18:00Z drain of 2026-09-14 drew two survivors from
+  `scripts/latent_mutants.py` after eighteen of its twenty-eight mutants
+  (budget hit): the whole-file line set `range(1, ...)` -> `range(2, ...)`
+  (no test had a mutable line 1 -- the set is the parsed tree's own node
+  lines now, so the range and both its literals are gone) and `check`'s
+  `baseline.get("_total", 0)` (a baseline without the key now reads
+  "baseline 0" in an asserted line); the stage-1 sweep that followed found
+  `measure`'s `indent=2` reachable only through `json.loads`, so the JSON
+  is asserted as text. The `ubuntu-latest / 3.12` ratchet leg also
+  counted three mutants this Windows machine never sees as latent:
+  `hooks.win_sh_path`'s drive branch (unreachable off Windows through the
+  platform `Path`; one test binds the module's `Path` to `PureWindowsPath`
+  and runs it everywhere) and `doctor._installed_direct_url`'s wheel
+  return (CI installs editable, so `found[0]` never ran there; faked
+  distributions run every exit). Proof against the generator: 26 of 26
+  red at stage 1 for the script, 7 of 7 for `win_sh_path`, 3 of 3 for
+  `_installed_direct_url`.
 
 ## [0.17.4] — 2026-09-14
 

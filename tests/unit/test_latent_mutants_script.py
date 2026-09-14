@@ -72,6 +72,17 @@ def test_a_mutant_counts_on_a_missing_statement_and_its_continuation_lines_only(
     assert lm.measure(_cov(**{"src/aramid/m.py": set()}), root) == {}, "all executed"
 
 
+def test_a_mutant_on_line_one_counts(lm):
+    """The 18Z drain of 2026-09-14 drew `range(1, ...)` -> `range(2, ...)`
+    as a survivor: no test had a mutable line 1. The line set is the parsed
+    tree's own lines now, and a one-line function on line 1 pins it (a
+    module-level statement has no mutants: the generator walks functions)."""
+    got = lm.latent_mutants("def f(): return 1\n", {1})
+    assert [(m.line, m.description) for m in got] == [(1, "1 -> 2 in f")]
+    assert lm.latent_mutants("def f(): return 1\n", set()) == []
+    assert lm.latent_mutants("X = 1\n", {1}) == []
+
+
 def test_files_outside_src_aramid_and_unparseable_ones_contribute_nothing(lm, tmp_path):
     root = _tree(tmp_path, **{"src/aramid/m.py": SRC, "tests/unit/t.py": SRC,
                               "src/aramid/broken.py": "def (:\n"})
@@ -113,6 +124,11 @@ def test_check_passes_at_or_below_the_baseline_and_names_every_file_over(lm):
     assert lm.check({}, {"_total": 1, "src/aramid/a.py": 1}, out) == 0, "below is not over"
     assert out.getvalue().splitlines()[0].startswith("latent mutants: src/aramid/a.py has 0")
 
+    out = io.StringIO()
+    assert lm.check({"src/aramid/a.py": 1}, {"src/aramid/a.py": 1}, out) == 0
+    assert out.getvalue() == "latent mutants: 1 total, baseline 0; 0 file(s) over, 0 below\n", \
+        "a baseline with no _total reads 0 there (the drain drew 0 -> 1 as a survivor)"
+
 
 def test_the_cli_measures_checks_and_writes_a_sorted_baseline(lm, tmp_path, capsys):
     root = _tree(tmp_path, **{"src/aramid/z.py": SRC, "src/aramid/a.py": SRC})
@@ -122,8 +138,9 @@ def test_the_cli_measures_checks_and_writes_a_sorted_baseline(lm, tmp_path, caps
     base = tmp_path / "baseline.json"
 
     assert lm.main(["measure", str(cov), "--root", str(root)]) == 0
-    assert json.loads(capsys.readouterr().out) == {
-        "_total": 3, "src/aramid/a.py": 2, "src/aramid/z.py": 1}
+    assert capsys.readouterr().out == (
+        '{\n  "_total": 3,\n  "src/aramid/a.py": 2,\n  "src/aramid/z.py": 1\n}\n'), \
+        "the JSON is asserted as text: the two-space indent is what the CI log shows"
 
     assert lm.main(["write-baseline", str(cov), "--baseline", str(base),
                     "--root", str(root)]) == 0

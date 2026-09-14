@@ -1,6 +1,6 @@
 import subprocess
 import sys
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 
 import pytest
 
@@ -68,6 +68,22 @@ def test_win_sh_path_passes_posix_paths_through_unchanged():
     the platform matrix this branch had no test at all -- the three tests
     above only covered the Windows half."""
     assert win_sh_path(Path("/usr/bin/python3")) == "/usr/bin/python3"
+
+
+def test_win_sh_path_drive_branch_runs_on_every_platform(monkeypatch):
+    """The drain confirms a mutant against this suite on whichever platform
+    runs it, and the latent-mutant ratchet's CI leg is Linux, where the
+    three win32-gated tests above skip and the drive branch's two mutants
+    (`drive[0]` and the slash guard) stay latent. `win_sh_path` re-casts
+    through the module's own `Path` name, so binding that name to
+    PureWindowsPath for one test runs the branch everywhere: the drive
+    letter lowercased, a drive-relative path given its slash, a POSIX path
+    passed through."""
+    from aramid import hooks
+    monkeypatch.setattr(hooks, "Path", PureWindowsPath)
+    assert hooks.win_sh_path("C:\\x\\y") == "/c/x/y"
+    assert hooks.win_sh_path("D:rel\\bar.exe") == "/d/rel/bar.exe"
+    assert hooks.win_sh_path("/usr/bin/python3") == "/usr/bin/python3"
     assert win_sh_path(Path("/opt/py 3.14/bin/python")) == "/opt/py 3.14/bin/python"
 
 
