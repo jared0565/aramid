@@ -35,6 +35,30 @@ to publish a tag that disagrees with it.
   survivors on lines the suite executed without asserting -- the
   suppression marker's source, the two-space JSON indent and the
   no-match text exit -- all pinned.
+- **`aramid override` and the gate-start invalidation sweep are pinned
+  at unit scope** (burn-down task 5). `.aramid/` is gitignored, so a
+  local override is a machine-local, unreviewable suppression, and 25
+  of the module's 31 generator mutants sat on lines the unit suite
+  never executed: `or` -> `and` on the tier composite (a stored WARN
+  that blocks under today's config becoming locally overridable),
+  every refusal's `return 3`, the TOML escaper's control-character
+  bounds, the sweep's status and tier guards and its last-sweep-wins
+  selection. `tests/unit/test_override_cmd.py` (27 arms) runs them on
+  a real tmp ledger with the event clock and run id injected: the
+  override Event whole with the arming state it assumed, every
+  refusal line byte for byte (reason, unknown id, unreachable,
+  out-of-scope, superseded naming its successor, unreadable config),
+  the BLOCK-tier refusal with the ready-to-paste entry and -- after a
+  sweep -- the sweep's cause and batch size, both halves of the
+  ratchet (a stored WARN armed today is refused; a stored BLOCK stays
+  refused when its rule is demoted), the LLM confirmed-critical rule,
+  the escaper on quotes, backslashes, control characters and the
+  bytes either side of its bounds, the sweep's two causes, its
+  idempotency and what it leaves alone, and both renderers whole.
+  Proof against the generator: 31 of 31 red at stage 1 -- `cmd_override`
+  16, `_toml_str` 3, `render_invalidations` 3,
+  `invalidate_stale_overrides` 5, `_sweep_context` 2,
+  `render_sweep_reason` 2.
 
 ## [0.17.4] — 2026-09-14
 
