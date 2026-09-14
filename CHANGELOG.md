@@ -53,6 +53,28 @@ to publish a tag that disagrees with it.
   code) is the equivalent already suppressed as c5326a9c, since both
   values map to exit 3.
 
+### Fixed
+
+- **A slow `git` no longer zeroes the triage score.** `triage.score`
+  started its 2 s budget clock before fetching the diff, so on a loaded
+  machine the two git calls alone could spend it and the budget check
+  then skipped every signal -- the pure path and content signals
+  included -- returning score 0 with only `triage-budget-exceeded:
+  partial score`. A risky commit was recorded as triaged and never
+  queued, and nothing said so beyond that reason string. CI showed it
+  first (windows-latest / py3.14, run 34802791228: the gate's test run
+  under semgrep contention scored an `exec` in `src/auth/` at 0), but
+  the post-commit shim on a developer machine mid-drain is the same
+  case. The clock now starts at the first signal: the fetch is the
+  input, the signals are the budgeted work, and the `--budget`
+  watchdog remains the ceiling on git itself. Pinned in
+  `tests/unit/test_triage.py`: three seconds spent in the fetch still
+  scores all signals (75), the existing early-stop pin between signals
+  is unchanged, and the proof against the generator surfaced two
+  latent survivors in `score` that are now pinned too -- a check
+  landing exactly on the limit still runs its signal (`>` is strict),
+  and a 115-point total is capped at exactly 100 (3 of 3 red).
+
 ## [0.17.3] — 2026-09-13
 
 ### Added

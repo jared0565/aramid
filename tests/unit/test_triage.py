@@ -174,6 +174,71 @@ def test_score_budget_stops_early(tmp_path, monkeypatch):
     led.close()
 
 
+def test_a_slow_diff_fetch_does_not_spend_the_budget(tmp_path, monkeypatch):
+    """CI 34802791228 (windows-latest / py3.14): the gate's test run under
+    semgrep contention spent the whole 2 s budget inside the two git calls
+    that FEED the signals, the check before the first signal then skipped
+    all five, and an `exec` in `src/auth/` scored 0 -- recorded as triaged,
+    never queued. The fetch is the input; the clock starts at the first
+    signal."""
+    led = Ledger(tmp_path / "l.db")
+    clock = [0.0]
+
+    def slow_diff_text(root, base, head, max_bytes=400_000, paths=None):
+        clock[0] += 3.0          # git took three seconds; the budget is two
+        return "+exec(x)\n"
+    monkeypatch.setattr(triage.gitutil, "diff_paths",
+                        lambda root, base, head: ["src/auth/handler.py"])
+    monkeypatch.setattr(triage.gitutil, "diff_text", slow_diff_text)
+    cfg = type("C", (), {"triage": {"min_score": 40, "extra_security_paths": []},
+                         "ignore_paths": []})()
+    try:
+        result = triage.score(tmp_path, "a", "b", cfg, led, budget_s=2.0,
+                              monotonic=lambda: clock[0])
+    finally:
+        led.close()
+
+    assert result.reasons == ("security-path: src/auth/handler.py",
+                              "risky-content: exec/eval/subprocess",
+                              "novelty: 1 unseen path(s) incl. src/auth/handler.py")
+    assert result.score == 75
+
+
+def test_the_budget_stops_past_the_limit_not_at_it(tmp_path, monkeypatch):
+    """"Past budget_s" is strictly greater: a check landing exactly on the
+    limit still runs its signal (`>` -> `>=` was a latent survivor)."""
+    led = Ledger(tmp_path / "l.db")
+    _fake_git(monkeypatch, ["src/auth/handler.py"], "+exec(x)\n")
+    cfg = type("C", (), {"triage": {"min_score": 40, "extra_security_paths": []},
+                         "ignore_paths": []})()
+    clock = iter([0.0, 2.0, 2.0, 2.0, 2.0, 2.0]).__next__   # every check exactly at the limit
+    try:
+        result = triage.score(tmp_path, "a", "b", cfg, led, budget_s=2.0, monotonic=clock)
+    finally:
+        led.close()
+
+    assert result.score == 75
+    assert not any("budget" in r for r in result.reasons)
+
+
+def test_score_is_capped_at_exactly_100(tmp_path, monkeypatch):
+    """path 30 + content 25 + novelty 20 + survivor 40 = 115 -> 100, not 101
+    (`min(total, 100)`'s literal was a latent survivor: nothing summed past
+    the cap)."""
+    led = _survivor_ledger(tmp_path, file="src/auth/handler.py")
+    _fake_git(monkeypatch, ["src/auth/handler.py"], "+exec(x)\n")
+    cfg = type("C", (), {"triage": {"min_score": 40, "extra_security_paths": []},
+                         "ignore_paths": []})()
+    try:
+        result = triage.score(tmp_path, "a", "b", cfg, led)
+    finally:
+        led.close()
+
+    assert result.score == 100
+    assert result.reasons[-1] == ("survivor-retest: 1 module(s) with a recorded survivor"
+                                  " incl. src/auth/handler.py")
+
+
 def test_run_triage_records_and_enqueues(tmp_path, monkeypatch):
     led = Ledger(tmp_path / "l.db")
     _fake_git(monkeypatch, ["src/auth/handler.py"], "+exec(x)\n")

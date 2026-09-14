@@ -5,7 +5,12 @@ lookups, and an optional read of graphite's graph-out/graph.json. It
 must NEVER spawn a scan tool. Self-budgeted: score() checks elapsed
 time between signals and stops early past budget_s, keeping whatever
 partial score it has (the post-commit hook can never be slowed past
-its fail-open ceiling).
+its fail-open ceiling). The clock starts at the FIRST signal, after the
+diff has been fetched: the two git calls that feed the signals are the
+input, not the work being budgeted, and counting them meant a slow git
+(a loaded CI runner, a developer machine mid-drain) skipped every
+signal -- the pure ones included -- and scored a risky commit 0, so it
+was never queued. The watchdog (`--budget`) is the ceiling on git.
 """
 import fnmatch
 import json
@@ -182,7 +187,6 @@ def survivor_signal(ledger, paths: list[str]) -> tuple[int, list[str]]:
 def score(root: Path, base: str | None, head: str, cfg, ledger, *,
           budget_s: float = 2.0,
           monotonic: Callable[[], float] = time.monotonic) -> TriageResult:
-    start = monotonic()
     paths = gitutil.diff_paths(root, base, head)
     # spec section 8b: git-tracked graphite artifacts (graph-out/,
     # .graphite*, .cache/) must never be triaged as targets -- mirrors
@@ -199,6 +203,7 @@ def score(root: Path, base: str | None, head: str, cfg, ledger, *,
     extra = list(cfg.triage.get("extra_security_paths", []))
 
     total, reasons = 0, []
+    start = monotonic()     # the budget is for the signals, not the fetch
     signals: tuple[Callable[[], tuple[int, list[str]]], ...] = (
         lambda: path_signal(paths, extra),
         lambda: content_signal(diff, paths),

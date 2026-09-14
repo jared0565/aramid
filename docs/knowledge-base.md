@@ -50,7 +50,7 @@ A drain-time analysis module implementing the protocol in `consumers/base.py`: e
 - A `CONSUMER_RUN_FINISHED` ledger event is appended per consumer per item: `{consumer, item_id, state, duration_s, cost, finding_count, note, **result.extra}`.
 
 ### Triage score
-A pure, git-plumbing-only, self-budgeted score (default `budget_s=2.0`, checked between signal computations; a partial score is kept past budget with a `"triage-budget-exceeded"` reason) computed by `triage.py score()`, capped at 100 total, from four weighted signals:
+A pure, git-plumbing-only, self-budgeted score (default `budget_s=2.0`, checked between signal computations and measured from the first signal, after the diff fetch -- a slow `git` no longer zeroes the score; a partial score is kept past budget with a `"triage-budget-exceeded"` reason) computed by `triage.py score()`, capped at 100 total, from four weighted signals:
 
 | Signal | Weight | Trigger |
 |---|---|---|
