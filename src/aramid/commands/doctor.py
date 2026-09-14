@@ -959,10 +959,10 @@ def probe_relocated_shims(root: Path) -> list[str]:
         lines = []
         for hook, render in renderers:
             slot = hdir / hook
-            if not slot.exists() or hooks_mod._is_aramid_shim(slot):
+            if hooks_mod._is_aramid_shim(slot):
                 continue
             tool = hooks_mod._foreign_managed_tool(slot)
-            if tool is None:
+            if tool is None:        # absent, or a plain foreign hook
                 continue
             relocated = hooks_mod._find_chained_aramid_shim(hdir, hook)
             if relocated is None:

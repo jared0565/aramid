@@ -59,6 +59,34 @@ to publish a tag that disagrees with it.
   16, `_toml_str` 3, `render_invalidations` 3,
   `invalidate_stale_overrides` 5, `_sweep_context` 2,
   `render_sweep_reason` 2.
+- **`aramid doctor`'s probes and exit ladder are pinned at unit scope**
+  (burn-down task 7). 34 of the module's generator mutants sat on lines
+  the unit suite never executed -- all nine of `_sh_path_to_win`, the
+  Git Bash drive-path reverse mapping the interpreter probe and the
+  relocated-shim probe both stand on; the gitleaks download's timeout,
+  its sha256 check, its zip-or-tarball branch and the executable bit;
+  the autolearn state's version test; the enforcement probe's
+  "nothing missing" exit; the relocated-shim probe's stale comparison;
+  and every `return 2`, the config `return 3` and both `return 0` of
+  the exit ladder -- tests/integration covers them and the drain never
+  runs that directory. `tests/unit/test_doctor_probes.py` (48 arms)
+  pins them: the drive mapping on both sides of every bound, the baked
+  interpreter line and the three interpreter verdicts, the platform
+  key per (platform, machine), the gitleaks repair against a canned
+  archive (verified zip, verified tarball, a checksum mismatch that
+  never touches the tools dir, a download failure's stderr line, no
+  pinned key), every autolearn state line, the enforcement probe with
+  none/one/both shims, the relocated-shim probe's four verdicts on a
+  real trampoline, and `cmd_doctor`'s exit for each ladder rung with
+  stderr whole -- including `--fix` repairing only what is missing and
+  re-probing once. The one redundant guard the generator could only
+  mutate equivalently (`not slot.exists() or _is_aramid_shim(slot)`,
+  where `_is_aramid_shim` already answers False for a missing path) is
+  gone. Proof against the generator: 44 of 44 red at stage 1 (the 34
+  latent plus the 10 the unit suite already reached) -- `_sh_path_to_win`
+  9, `_baked_interpreter` 2, `probe_interpreter` 2, `_gitleaks_platform_key`
+  2, `_fix_gitleaks` 5, `_autolearn_probe_line` 3, `probe_enforcement` 2,
+  `probe_relocated_shims` 3, `cmd_doctor` 16.
 
 ## [0.17.4] — 2026-09-14
 
