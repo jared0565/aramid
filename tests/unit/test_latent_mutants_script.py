@@ -170,6 +170,67 @@ def test_check_and_write_baseline_refuse_to_run_without_a_baseline_path(lm, tmp_
     assert "check needs --baseline" in capsys.readouterr().err
 
 
+def test_no_rise_passes_when_no_file_rose_and_counts_the_lowered_ones(lm):
+    """The baseline only ever goes down. The healthy directions -- unchanged,
+    lowered, a file gone -- pass with the counts in one summary line."""
+    out = io.StringIO()
+    prev = {"_total": 3, "src/aramid/a.py": 2, "src/aramid/b.py": 1}
+    assert lm.no_rise(prev, prev, out) == 0
+    assert out.getvalue() == \
+        "latent mutants: baseline 3 (was 3); 0 file(s) rose, 0 lowered\n"
+
+    out = io.StringIO()
+    assert lm.no_rise({"_total": 1, "src/aramid/a.py": 1}, prev, out) == 0
+    assert out.getvalue() == \
+        "latent mutants: baseline 1 (was 3); 0 file(s) rose, 2 lowered\n", \
+        "a.py 2 -> 1 and b.py gone both count as lowered; the totals are the sums of the files"
+
+    out = io.StringIO()
+    assert lm.no_rise({"_total": 0}, {"_total": 0}, out) == 0
+    assert out.getvalue() == "latent mutants: baseline 0 (was 0); 0 file(s) rose, 0 lowered\n"
+
+
+def test_no_rise_refuses_a_file_whose_count_rose_or_that_was_not_in_the_previous_baseline(lm):
+    out = io.StringIO()
+    rc = lm.no_rise({"_total": 4, "src/aramid/a.py": 3, "src/aramid/c.py": 1},
+                    {"_total": 3, "src/aramid/a.py": 2, "src/aramid/b.py": 1}, out)
+    assert rc == 1
+    assert out.getvalue() == (
+        "latent mutants: src/aramid/a.py baseline rose 2 -> 3 -- the baseline only "
+        "ever goes down; pin the mutant (tests/unit/test_a*.py) instead of raising it\n"
+        "latent mutants: src/aramid/c.py baseline rose 0 -> 1 -- the baseline only "
+        "ever goes down; pin the mutant (tests/unit/test_c*.py) instead of raising it\n"
+        "latent mutants: baseline 4 (was 3); 2 file(s) rose, 1 lowered\n")
+
+    out = io.StringIO()
+    assert lm.no_rise({"_total": 2, "src/aramid/a.py": 2}, {"src/aramid/a.py": 1}, out) == 1, \
+        "a previous baseline without _total is still a previous baseline"
+    assert out.getvalue().splitlines()[-1] == \
+        "latent mutants: baseline 2 (was 1); 1 file(s) rose, 0 lowered"
+
+
+def test_the_cli_compares_the_current_baseline_against_a_previous_copy(lm, tmp_path, capsys):
+    cur = tmp_path / "baseline.json"
+    prev = tmp_path / "before.json"
+    prev.write_text('{"_total": 2, "src/aramid/a.py": 2}\n', encoding="utf-8")
+
+    cur.write_text('{"_total": 1, "src/aramid/a.py": 1}\n', encoding="utf-8")
+    assert lm.main(["no-rise", str(cur), "--previous", str(prev)]) == 0
+    assert capsys.readouterr().out == \
+        "latent mutants: baseline 1 (was 2); 0 file(s) rose, 1 lowered\n"
+
+    cur.write_text('{"_total": 3, "src/aramid/a.py": 3}\n', encoding="utf-8")
+    assert lm.main(["no-rise", str(cur), "--previous", str(prev)]) == 1
+    lines = capsys.readouterr().out.splitlines()
+    assert lines[0].startswith("latent mutants: src/aramid/a.py baseline rose 2 -> 3")
+    assert lines[1] == "latent mutants: baseline 3 (was 2); 1 file(s) rose, 0 lowered"
+
+    with pytest.raises(SystemExit) as exc:
+        lm.main(["no-rise", str(cur)])
+    assert exc.value.code == 2
+    assert "no-rise needs --previous" in capsys.readouterr().err
+
+
 def test_the_script_measures_with_the_tree_generator_not_an_installed_one(lm):
     """The drain that draws these mutants ships next from this tree; an
     installed aramid's generator could count a different set."""

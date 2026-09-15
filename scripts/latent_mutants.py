@@ -13,11 +13,15 @@ so the count can only go down:
     python -P scripts/latent_mutants.py measure cov-unit.json [--verbose]
     python -P scripts/latent_mutants.py check cov-unit.json --baseline tests/latent_mutants_baseline.json
     python -P scripts/latent_mutants.py write-baseline cov-unit.json --baseline tests/latent_mutants_baseline.json
+    python -P scripts/latent_mutants.py no-rise tests/latent_mutants_baseline.json --previous <the pre-push copy>
 
 `check` exits 1 naming every file whose count is above its baseline (a file
 absent from the baseline is at 0). A count below the baseline is reported
 too -- lower the baseline with `write-baseline` so the ratchet keeps its
-teeth; never raise it by hand. The generator is the TREE's, imported from
+teeth; never raise it by hand. `no-rise` makes that rule mechanical: it
+exits 1 naming every file whose committed count is above the previous
+copy's (CI feeds it the baseline at `github.event.before`, so a raise
+inside one push fails the leg). The generator is the TREE's, imported from
 src/ ahead of any installed aramid, because the drain that will draw these
 mutants runs whatever ships next.
 
@@ -113,19 +117,45 @@ def check(measured: dict[str, int], baseline: dict[str, int], out=None) -> int:
     return 1 if over else 0
 
 
+def no_rise(current: dict[str, int], previous: dict[str, int], out=None) -> int:
+    """The baseline only ever goes down: exit 1 naming every file whose
+    committed count is above the previous copy's (a file the previous copy
+    lacked was at 0). Lowered and departed files are counted, not named."""
+    out = out or sys.stdout
+    cur = {f: n for f, n in current.items() if f != "_total"}
+    prev = {f: n for f, n in previous.items() if f != "_total"}
+    rose = {f: n for f, n in cur.items() if n > prev.get(f, 0)}
+    lowered = {f for f, b in prev.items() if cur.get(f, 0) < b}
+    for f, n in sorted(rose.items()):
+        print(f"latent mutants: {f} baseline rose {prev.get(f, 0)} -> {n} -- the baseline "
+              f"only ever goes down; pin the mutant (tests/unit/test_{Path(f).stem}*.py) "
+              f"instead of raising it", file=out)
+    print(f"latent mutants: baseline {sum(cur.values())} (was {sum(prev.values())}); "
+          f"{len(rose)} file(s) rose, {len(lowered)} lowered", file=out)
+    return 1 if rose else 0
+
+
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(prog="latent_mutants.py",
                                  description="count the generator's mutants on lines "
                                              "the unit suite never executes")
-    ap.add_argument("command", choices=["measure", "check", "write-baseline"])
-    ap.add_argument("coverage_json", type=Path)
+    ap.add_argument("command", choices=["measure", "check", "write-baseline", "no-rise"])
+    ap.add_argument("path", type=Path,
+                    help="the coverage JSON (measure, check, write-baseline) or the "
+                         "current baseline (no-rise)")
     ap.add_argument("--baseline", type=Path)
+    ap.add_argument("--previous", type=Path, help="no-rise: the baseline before this push")
     ap.add_argument("--root", type=Path, default=ROOT)
     ap.add_argument("--verbose", action="store_true", help="measure: list every latent mutant")
     args = ap.parse_args(argv)
+    if args.command == "no-rise":
+        if args.previous is None:
+            ap.error("no-rise needs --previous")
+        return no_rise(json.loads(args.path.read_text(encoding="utf-8")),
+                       json.loads(args.previous.read_text(encoding="utf-8")))
     if args.command != "measure" and args.baseline is None:
         ap.error(f"{args.command} needs --baseline")
-    cov = json.loads(args.coverage_json.read_text(encoding="utf-8"))
+    cov = json.loads(args.path.read_text(encoding="utf-8"))
     measured = measure(cov, args.root, verbose=args.verbose)
     if args.command == "measure":
         print(json.dumps(with_total(measured), indent=2))

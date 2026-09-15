@@ -110,7 +110,12 @@ jobs:
       # what is left per file (scripts/latent_mutants.py) and refuses a
       # count above tests/latent_mutants_baseline.json -- a ratchet: the
       # baseline was written from this leg's own measurement and may only
-      # be lowered (`write-baseline`), never raised by hand. ONE leg,
+      # be lowered (`write-baseline`), never raised by hand -- and the
+      # `no-rise` step makes that rule mechanical by comparing the
+      # committed baseline against its copy at github.event.before, so a
+      # raise cannot land in the same push as the code it excuses (the
+      # 02Z drain's review of 2026-09-15 named the hand edit as the one
+      # bypass; lowering never was one, it fails `check`). ONE leg,
       # deliberately: the count is a property of the suite, not of the
       # platform, once the platform branches are pinned both ways, and
       # the unit suite is a second pytest run of several minutes.
@@ -121,6 +126,19 @@ jobs:
       - name: Latent mutants -- the ratchet against tests/latent_mutants_baseline.json
         if: matrix.os == 'ubuntu-latest' && matrix.python == '3.12'
         run: python -P scripts/latent_mutants.py check ${{ runner.temp }}/cov-unit.json --baseline tests/latent_mutants_baseline.json --verbose
+
+      # Only a push has a `before`: a ref-creating push (a tag, a new
+      # branch) carries the zero sha and a rewritten ref's before may not
+      # be fetched, so those skip out loud instead of failing on nothing.
+      - name: Latent mutants -- the baseline only ever goes down (against the pre-push copy)
+        if: matrix.os == 'ubuntu-latest' && matrix.python == '3.12' && github.event_name == 'push' && github.event.before != '0000000000000000000000000000000000000000'
+        run: |
+          if git cat-file -e "${{ github.event.before }}:tests/latent_mutants_baseline.json" 2>/dev/null; then
+            git show "${{ github.event.before }}:tests/latent_mutants_baseline.json" > "${{ runner.temp }}/latent-baseline-before.json"
+            python -P scripts/latent_mutants.py no-rise tests/latent_mutants_baseline.json --previous "${{ runner.temp }}/latent-baseline-before.json"
+          else
+            echo "latent mutants: no baseline at ${{ github.event.before }} (a rewritten ref, or one that predates the file); nothing to compare"
+          fi
 
       # Dogfood: run aramid's own gate against this repo as the CI backbone.
       # Exit-code contract (see docs/superpowers/specs/2026-07-12-aramid-phase1-design.md):

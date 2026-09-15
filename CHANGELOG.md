@@ -10,6 +10,32 @@ to publish a tag that disagrees with it.
 
 ## [Unreleased]
 
+### Added
+
+- **The latent-mutant baseline cannot rise inside a push: the ratchet leg
+  compares it against the pre-push copy.** The 02Z drain's review of
+  2026-09-15 named the one bypass the ratchet had -- a hand edit raising
+  `tests/latent_mutants_baseline.json` passes `check` -- and had its
+  mechanism backwards (lowering makes `check` fail, it never loosened
+  anything). The documented lower-only rule is mechanical now:
+  `scripts/latent_mutants.py no-rise <current> --previous <before>` exits
+  1 naming every file whose committed count is above the previous copy's
+  (a file the previous copy lacked was at 0), counting the lowered and
+  departed ones in its summary line; the `ubuntu-latest / 3.12` leg runs
+  it after `check` with the copy `git show`n from `github.event.before`,
+  so a raise and the code it excuses cannot land in one push. Only a push
+  has a before: the step is guarded to `push` events and skips out loud
+  when the before is the zero sha (a ref-creating push) or its baseline is
+  not fetched (a rewritten ref, or a before that predates the file). The
+  workflow guard pins the step onto the check step's leg, after it, with
+  the before-sha read, the zero-sha exclusion, the else branch and no
+  `continue-on-error`. Rehearsed locally in the step's own shell shape:
+  the parent of HEAD reads `0 file(s) rose`, a before that predates the
+  file takes the else branch, a raised copy exits 1 naming
+  `commands/schedule.py` and the pin set, a zeroed copy passes here and
+  fails `check`. Proof against the generator: 37 of 37 red at stage 1 for
+  the whole script (`no_rise` 10, `main` 9).
+
 ## [0.17.5] — 2026-09-15
 
 ### Added

@@ -18,6 +18,7 @@ REPO = Path(__file__).resolve().parents[2]
 WORKFLOW = REPO / ".github" / "workflows" / "aramid.yml"
 BASELINE = REPO / "tests" / "latent_mutants_baseline.json"
 SCRIPT = "scripts/latent_mutants.py"
+ZERO_SHA = "0" * 40  # github.event.before for a push that creates the ref
 
 
 def _steps() -> list[dict]:
@@ -31,11 +32,20 @@ def _matrix() -> list[tuple[str, str]]:
 
 
 def _guarded_leg(step: dict) -> tuple[str, str]:
-    """The single (os, python) pair a step's `if:` admits."""
+    """The single (os, python) pair a step's `if:` admits (further `&&`
+    clauses may narrow it, never widen it)."""
     cond = step.get("if", "")
-    m = re.fullmatch(r"matrix\.os == '([^']+)' && matrix\.python == '([^']+)'", cond)
+    m = re.fullmatch(r"matrix\.os == '([^']+)' && matrix\.python == '([^']+)'(?: && .+)?", cond)
     assert m, f"{step.get('name')!r} is not guarded onto one leg: if={cond!r}"
     return m.group(1), m.group(2)
+
+
+def _script_step(command: str) -> dict:
+    """The one step running the script's `command`; asserting one."""
+    steps = [s for s in _steps()
+             if SCRIPT in str(s.get("run", "")) and f" {command} " in s["run"]]
+    assert len(steps) == 1, (command, [s.get("name") for s in steps])
+    return steps[0]
 
 
 def test_the_guard_can_actually_see_the_ci_job():
@@ -46,9 +56,7 @@ def test_the_guard_can_actually_see_the_ci_job():
 
 def test_the_count_runs_once_on_a_leg_the_matrix_has_after_the_full_suite():
     steps = _steps()
-    counting = [s for s in steps if SCRIPT in str(s.get("run", ""))]
-    assert len(counting) == 1, [s.get("name") for s in counting]
-    (count,) = counting
+    count = _script_step("check")
     leg = _guarded_leg(count)
     assert leg in _matrix(), f"{leg} is not a matrix leg: {_matrix()}"
     assert _matrix().count(leg) == 1, "the guard would fire on two legs"
@@ -63,7 +71,7 @@ def test_the_count_runs_once_on_a_leg_the_matrix_has_after_the_full_suite():
 
 def test_the_coverage_run_feeding_the_count_has_the_same_guard_and_file():
     steps = _steps()
-    count = next(s for s in steps if SCRIPT in str(s.get("run", "")))
+    count = _script_step("check")
     cov_file = re.search(r"latent_mutants\.py \S+ (\S+)", count["run"]).group(1)
     feeders = [s for s in steps[:steps.index(count)]
                if "--cov=aramid" in str(s.get("run", ""))]
@@ -80,8 +88,7 @@ def test_the_committed_baseline_is_the_one_the_step_names_and_adds_up():
     """The ratchet is only as honest as the file it compares against: every
     key a src/aramid path, every count a positive int, and `_total` the
     sum -- a hand edit that forgets the total is caught here, not in CI."""
-    steps = _steps()
-    count = next(s for s in steps if SCRIPT in str(s.get("run", "")))
+    count = _script_step("check")
     named = re.search(r"--baseline (\S+)", count["run"]).group(1)
     assert (REPO / named) == BASELINE and BASELINE.exists()
     base = json.loads(BASELINE.read_text(encoding="utf-8"))
@@ -91,3 +98,27 @@ def test_the_committed_baseline_is_the_one_the_step_names_and_adds_up():
     assert all(isinstance(v, int) and v > 0 for v in files.values())
     assert base["_total"] == sum(files.values())
     assert list(base) == sorted(base), "write-baseline writes sorted keys; keep it that way"
+
+
+def test_the_baseline_cannot_rise_inside_a_push_because_the_leg_reads_the_pre_push_copy():
+    """`no-rise` compares the committed baseline against its copy at
+    github.event.before: the documented lower-only rule made mechanical, so
+    a raise and the code it excuses cannot land in one push. Only a push
+    has a before; a ref-creating push carries the zero sha and a rewritten
+    ref's before may not be fetched, so the step skips those out loud
+    instead of failing on nothing. It runs after `check`, which names the
+    missing pin before this step names the raised number."""
+    steps = _steps()
+    step = _script_step("no-rise")
+    check = _script_step("check")
+    assert steps.index(step) > steps.index(check)
+    assert _guarded_leg(step) == _guarded_leg(check)
+    cond = step["if"]
+    assert "github.event_name == 'push'" in cond, "only a push has a before"
+    assert f"github.event.before != '{ZERO_SHA}'" in cond
+    run = step["run"]
+    assert "${{ github.event.before }}:tests/latent_mutants_baseline.json" in run
+    assert "no-rise tests/latent_mutants_baseline.json --previous " in run
+    assert "git cat-file -e " in run and "\nelse\n" in run, \
+        "a before whose baseline is not fetched is reported, not failed"
+    assert "continue-on-error" not in step, "a ratchet that cannot fail is decoration"
