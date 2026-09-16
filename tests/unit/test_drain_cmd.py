@@ -216,6 +216,57 @@ def test_nothing_queued_drains_nothing_and_says_so(tmp_path, seam, capsys):
     assert out.splitlines()[-1] == "aramid drain: 0 item(s) drained, 0 left"
 
 
+def _visits(r):
+    return [e for e in _events(r) if e.type is EventType.DRAIN_VISITED]
+
+
+def test_an_idle_visit_leaves_one_drain_visited_row_so_status_can_tell_it_from_a_dead_scheduler(
+        tmp_path, seam):
+    """Seven idle drains (2026-09-15 06Z .. 09-16 06Z) wrote nothing, and
+    `aramid status` kept naming a consumer run from the day before as the
+    last drain. Every repo the drain looks at gets one row, at the drain's
+    clock, under the drain's own run id, saying whether it found an item to
+    pop -- here nothing, so `queued` is None."""
+    r = _repo(tmp_path)
+    Ledger(r / ".aramid" / "ledger.db").close()
+
+    rc = cmd_drain([], dry_run=False, clock=CLOCK)
+
+    assert rc == 0
+    (visit,) = _visits(r)
+    assert visit.at == NOW
+    assert visit.payload == {"queued": None}
+    assert visit.finding_id is None
+    assert len(visit.run_id) == 32, "the drain's own run id, not a consumer's"
+
+    cmd_drain([], dry_run=False, clock=CLOCK)
+    assert len(_visits(r)) == 2, "one row per visit, every visit"
+
+
+def test_a_visit_that_pops_an_item_names_it_and_precedes_the_consumers_rows(tmp_path, seam):
+    r = _repo(tmp_path)
+    item = _enqueue(r, score=45)
+
+    rc = cmd_drain([], dry_run=False, clock=CLOCK)
+
+    assert rc == 0
+    (visit,) = _visits(r)
+    assert visit.payload == {"queued": item.id}
+    types = [e.type for e in _events(r)]
+    assert types.index(EventType.DRAIN_VISITED) < types.index(EventType.CONSUMER_RUN_FINISHED), \
+        "the visit is written before the consumers run, so their rows are the newer ones"
+
+
+def test_a_visit_that_finds_only_an_item_below_min_score_reads_idle(tmp_path, seam):
+    r = _repo(tmp_path)
+    _enqueue(r, score=39)
+
+    cmd_drain([], dry_run=False, clock=CLOCK)
+
+    (visit,) = _visits(r)
+    assert visit.payload == {"queued": None}, "nothing the drain would pop"
+
+
 def test_an_item_at_exactly_the_default_min_score_is_popped(tmp_path, seam, bare_config):
     # The loop admits `score >= min_score`, 40 when no [triage] names one --
     # the score the empty-queue re-test item is written at.

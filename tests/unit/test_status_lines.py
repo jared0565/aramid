@@ -221,3 +221,36 @@ def test_last_drain_line_names_the_newest_consumer_run_and_its_count(tmp_path):
         assert status._last_drain_line(led) == f"last drain: {at} (mutation, 3 finding(s))"
     finally:
         led.close()
+
+
+def test_last_drain_line_reads_an_idle_visit_so_a_dead_scheduler_and_an_empty_queue_differ(tmp_path):
+    """An idle drain used to write nothing, so seven idle drains later the
+    line still named a consumer run from the day before and could not tell
+    "the scheduler is dead" from "nothing to do" (2026-09-16 07:41Z, the
+    scheduled task was the only witness). The drain now writes a
+    DRAIN_VISITED row per repo it looks at; the newest of that and a
+    consumer run is the line. A visit that found an item names it until
+    the consumers' own rows follow."""
+    led = _ledger(tmp_path)
+    try:
+        at = _iso(3)
+        led.append(Event(EventType.DRAIN_VISITED, "d1", at, payload={"queued": None}))
+        assert status._last_drain_line(led) == f"last drain: {at} (idle: nothing to drain)"
+
+        at = _iso(2)
+        led.append(Event(EventType.DRAIN_VISITED, "d2", at, payload={"queued": "0123abcd" + "e" * 24}))
+        assert status._last_drain_line(led) == \
+            f"last drain: {at} (item 0123abcd queued, not yet consumed)"
+
+        at = _iso(1)
+        led.append(Event(EventType.CONSUMER_RUN_FINISHED, "d2", at,
+                         payload={"consumer": "mutation", "finding_count": 1}))
+        assert status._last_drain_line(led) == f"last drain: {at} (mutation, 1 finding(s))", \
+            "the consumers' rows follow the visit and win"
+
+        at = _iso(0)
+        led.append(Event(EventType.DRAIN_VISITED, "d3", at, payload={}))
+        assert status._last_drain_line(led) == f"last drain: {at} (idle: nothing to drain)", \
+            "a visit without the key is idle"
+    finally:
+        led.close()

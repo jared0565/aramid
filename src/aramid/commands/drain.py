@@ -281,6 +281,7 @@ def cmd_drain(targets: list, *, dry_run: bool = False, max_items: int | None = N
 
     degraded = False
     started = monotonic()
+    drain_run_id = uuid.uuid4().hex
     try:
         candidates = []  # (score, repo, item, cfg)
         for repo_path in repos:
@@ -321,9 +322,18 @@ def cmd_drain(targets: list, *, dry_run: bool = False, max_items: int | None = N
                     item = queue.queued_item(queue.materialize_queue(ledger.events()))
                     if item is None:
                         item = _pending_retest_item(root, cfg, ledger, clock())
+                    if item is not None and item.score < int(cfg.triage.get("min_score", 40)):
+                        item = None  # queued, but nothing this drain would pop
+                    # The visit itself, whether or not there was work: an
+                    # idle drain used to leave no trace, so `status` could
+                    # not tell a dead scheduler from an empty queue. Written
+                    # before the consumers run so their rows are the newer
+                    # ones when there was an item.
+                    ledger.append(Event(EventType.DRAIN_VISITED, drain_run_id, clock(),
+                                        payload={"queued": item.id if item else None}))
                 finally:
                     ledger.close()
-                if item is not None and item.score >= int(cfg.triage.get("min_score", 40)):
+                if item is not None:
                     candidates.append((item.score, root, item, cfg))
             except Exception as exc:
                 # Per-repo isolation (spec section 6): ANY failure probing one
@@ -352,7 +362,6 @@ def cmd_drain(targets: list, *, dry_run: bool = False, max_items: int | None = N
         drained = 0
         rolled: dict[str, tuple] = {}
         drained_roots: list[str] = []
-        drain_run_id = uuid.uuid4().hex
         for idx, (score_val, root, item, cfg) in enumerate(candidates):
             now = monotonic()
             if drained >= limit or now - started > budget_s:

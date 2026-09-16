@@ -10,6 +10,29 @@ to publish a tag that disagrees with it.
 
 ## [Unreleased]
 
+### Added
+
+- **`aramid status` can tell a dead scheduler from an empty queue: every
+  drain writes a `drain_visited` row into each repo it looks at.** Seven
+  scheduled drains in a row (2026-09-15 06Z to 09-16 06Z) found nothing
+  queued and wrote nothing, so the `last drain:` line kept naming a
+  consumer run from the day before and the only witness that the
+  scheduler was alive was the Windows task's own last-run time. The drain
+  now appends one `DRAIN_VISITED` event per repo per visit, under the
+  drain's run id, whether or not there was work (`queued`: the popped
+  item's id, or None when nothing at or above `min_score` was queued),
+  written before the consumers run so their rows are the newer ones when
+  there was an item; `--dry-run` writes nothing, as before. The status
+  line is the newest of a consumer run and a visit: `idle: nothing to
+  drain`, `item <id> queued, not yet consumed` (a visit whose consumers
+  have not written yet, or were deferred by the budget), or the consumer
+  form as before. Every other ledger reader dispatches on the event types
+  it knows and ignores this one. Pinned in `tests/unit/test_drain_cmd.py`
+  (one row per visit, its payload whole, its position before the
+  consumers' rows, a below-`min_score` item reading idle) and
+  `tests/unit/test_status_lines.py` (all three forms, and a visit without
+  the key reading idle).
+
 ## [0.17.6] — 2026-09-15
 
 ### Added

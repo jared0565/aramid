@@ -268,15 +268,23 @@ def _queue_lines(ledger: Ledger) -> list[str]:
 
 
 def _last_drain_line(ledger: Ledger) -> str:
-    last_consumer = None
+    """The newest of a consumer's run and the drain's own visit row: an
+    idle drain writes only the visit, so the line moves every drain and a
+    dead scheduler reads as old, not as idle."""
+    last = None
     for e in ledger.events():
-        if e.type is EventType.CONSUMER_RUN_FINISHED:
-            last_consumer = e
-    if last_consumer is None:
+        if e.type in (EventType.CONSUMER_RUN_FINISHED, EventType.DRAIN_VISITED):
+            last = e
+    if last is None:
         return "last drain: never"
-    return (f"last drain: {last_consumer.at} "
-            f"({last_consumer.payload.get('consumer')}, "
-            f"{last_consumer.payload.get('finding_count', 0)} finding(s))")
+    if last.type is EventType.DRAIN_VISITED:
+        queued = last.payload.get("queued")
+        what = (f"item {queued[:8]} queued, not yet consumed" if queued
+                else "idle: nothing to drain")
+        return f"last drain: {last.at} ({what})"
+    return (f"last drain: {last.at} "
+            f"({last.payload.get('consumer')}, "
+            f"{last.payload.get('finding_count', 0)} finding(s))")
 
 
 def _registry_line(root: Path) -> str:

@@ -91,6 +91,14 @@ class EventType(StrEnum):
     # `QueueItem.deferred`, which the next drain orders on first (round 177).
     QUEUE_ITEM_DEFERRED = "queue_item_deferred"
     CONSUMER_RUN_FINISHED = "consumer_run_finished"
+    # The drain looked at this repo. Written once per repo per drain,
+    # whether or not anything was queued (`queued`: the popped item's id
+    # or None), so `aramid status` can tell an idle scheduler from a dead
+    # one: an idle drain used to leave no trace at all, and seven of them
+    # in a row left the status line naming a consumer run from the day
+    # before (2026-09-16). The consumers' own rows follow it when there
+    # was work.
+    DRAIN_VISITED = "drain_visited"
 
     # What a resolver SAW, not only what it cleared. Emitted once per
     # invocation -- including the early returns -- so that no event at all
