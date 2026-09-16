@@ -62,6 +62,45 @@ def _cfg(**over):
     return config_mod.Config(**{k: v for k, v in base.items() if k in fields})
 
 
+def test_aging_line_sets_aside_findings_that_carry_a_suppression_entry(tmp_path):
+    """A suppression entry in the tracked file is a decision about the
+    finding, so an open row that carries one is not waiting for anyone:
+    counting it as aging left `aging: 3` on this repo for a month with
+    nothing to do about it (2026-09-16). Suppressed rows past the window
+    are set aside and counted in a tail; the base form is unchanged when
+    none are."""
+    led = _ledger(tmp_path)
+    try:
+        _detect(led, "a" * 64, _iso(status._AGING_DAYS + 5))   # old, open, suppressed
+        _detect(led, "b" * 64, _iso(status._AGING_DAYS + 5))   # old, open, not suppressed
+        _detect(led, "c" * 64, _iso(status._AGING_DAYS - 1))   # young, suppressed: not counted anywhere
+        state = led.open_findings()
+        assert status._aging_line(led, state, suppressed={"a" * 64, "c" * 64}) == \
+            f"aging: 1 finding(s) open > {status._AGING_DAYS}d, 1 suppressed"
+        assert status._aging_line(led, state, suppressed={"a" * 64, "b" * 64}) == \
+            f"aging: 0 finding(s) open > {status._AGING_DAYS}d, 2 suppressed"
+        assert status._aging_line(led, state, suppressed=set()) == \
+            f"aging: 2 finding(s) open > {status._AGING_DAYS}d"
+        assert status._aging_line(led, state) == \
+            f"aging: 2 finding(s) open > {status._AGING_DAYS}d", "the default sets nothing aside"
+    finally:
+        led.close()
+
+
+def test_suppressed_ids_reads_the_tracked_file_and_reads_empty_when_it_is_unreadable(tmp_path):
+    """The set the aging line sets aside comes from `.aramid-suppressions.toml`
+    at the root, the same file `ledger filter` tags rows from. A missing or
+    malformed file reads as no suppressions, so the count stays conservative
+    (everything aged is counted) rather than the command failing."""
+    assert status._suppressed_ids(tmp_path) == set()
+    (tmp_path / ".aramid-suppressions.toml").write_text(
+        '[[suppress]]\nid = "%s"\ntool = "semgrep"\nrule = "r"\npath = "a.py"\n'
+        'reason = "reviewed"\n' % ("a" * 64), encoding="utf-8")
+    assert status._suppressed_ids(tmp_path) == {"a" * 64}
+    (tmp_path / ".aramid-suppressions.toml").write_text("[[suppress\n", encoding="utf-8")
+    assert status._suppressed_ids(tmp_path) == set()
+
+
 def test_bake_lines_day_count_and_per_rule_hits_sorted_by_count_then_name():
     today = date.today().isoformat()
     state = {"1": {"tool": "semgrep", "rule": "z-rule"},

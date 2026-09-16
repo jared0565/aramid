@@ -90,17 +90,38 @@ def _detected_at(ledger: Ledger) -> dict[str, str]:
     return detected
 
 
-def _aging_line(ledger: Ledger, state: dict) -> str:
+def _suppressed_ids(root: Path) -> set[str]:
+    """The ids `.aramid-suppressions.toml` adjudicates -- the file `ledger
+    filter` tags rows from. Unreadable or missing reads empty, so the aging
+    count stays conservative rather than the command failing."""
+    try:
+        return {rec.id for rec in config_mod.load_suppressions(root)[0]}
+    except Exception:
+        return set()
+
+
+def _aging_line(ledger: Ledger, state: dict, suppressed: set[str] = frozenset()) -> str:
+    """Open findings past the window, less the ones a suppression entry
+    adjudicates: a reviewed reason is a decision, not a wait, and counting
+    them left this repo reading `aging: 3` for a month with nothing to do.
+    They are set aside and counted in a tail, never hidden."""
     detected = _detected_at(ledger)
     now = datetime.now(timezone.utc)
     aged = 0
+    set_aside = 0
     for fid, rec in state.items():
         if rec.get("status") != "open":
             continue
         parsed = _parse_at(detected[fid]) if fid in detected else None
         if parsed is not None and (now - parsed).days > _AGING_DAYS:
-            aged += 1
-    return f"aging: {aged} finding(s) open > {_AGING_DAYS}d"
+            if fid in suppressed:
+                set_aside += 1
+            else:
+                aged += 1
+    line = f"aging: {aged} finding(s) open > {_AGING_DAYS}d"
+    if set_aside:
+        line += f", {set_aside} suppressed"
+    return line
 
 
 def _skip_streak_lines(ledger: Ledger) -> list[str]:
@@ -362,7 +383,7 @@ def cmd_status(root) -> int:
             f"  {_last_run_line(ledger)}",
             f"  {_open_counts_line(state)}",
             f"  {_new_since_baseline_line(ledger, state)}",
-            f"  {_aging_line(ledger, state)}",
+            f"  {_aging_line(ledger, state, _suppressed_ids(root))}",
         ]
 
         h = health.snapshot(cfg, ledger)

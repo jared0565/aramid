@@ -10,6 +10,20 @@ to publish a tag that disagrees with it.
 
 ## [Unreleased]
 
+### Changed
+
+- **`aramid status`'s aging line sets aside findings that carry a
+  suppression entry** and counts them in a tail (`aging: 0 finding(s)
+  open > 30d, 3 suppressed`). An entry in `.aramid-suppressions.toml` is
+  a reviewed decision about the finding, not a wait, but the line counted
+  every open row past the window and read `aging: 3` on this repo for a
+  month with nothing anyone could do about it -- a nag that cannot be
+  satisfied stops carrying information. The ids come from the same file
+  `ledger filter` tags rows from; a missing or unreadable file reads as
+  no suppressions, so the count stays conservative. Nothing is hidden:
+  the open count and `ledger filter --status open` still list them. The
+  base form is unchanged when no aged finding is suppressed.
+
 ## [0.17.7] — 2026-09-16
 
 ### Added
