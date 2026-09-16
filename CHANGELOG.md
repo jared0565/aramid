@@ -10,6 +10,8 @@ to publish a tag that disagrees with it.
 
 ## [Unreleased]
 
+## [0.17.7] — 2026-09-16
+
 ### Added
 
 - **`aramid status` can tell a dead scheduler from an empty queue: every
@@ -4687,7 +4689,8 @@ Stated plainly because each one changes how you should deploy this:
 - **PyPI publishing is not set up.** Install from a GitHub Release artifact or
   from git; `pip install aramid` does not work.
 
-[Unreleased]: https://github.com/jared0565/aramid/compare/v0.17.6...HEAD
+[Unreleased]: https://github.com/jared0565/aramid/compare/v0.17.7...HEAD
+[0.17.7]: https://github.com/jared0565/aramid/releases/tag/v0.17.7
 [0.17.6]: https://github.com/jared0565/aramid/releases/tag/v0.17.6
 [0.17.5]: https://github.com/jared0565/aramid/releases/tag/v0.17.5
 [0.17.4]: https://github.com/jared0565/aramid/releases/tag/v0.17.4
