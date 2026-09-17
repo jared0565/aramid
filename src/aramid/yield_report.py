@@ -201,16 +201,20 @@ def _grade(runs: int, considered: int, resolved: int,
 def collect(ledger: Ledger) -> list[Row]:
     """One row per registered (resolver, producer) pair, in registry order."""
     seen: dict[tuple[str, str], list[int]] = defaultdict(lambda: [0, 0, 0])
-    # The run each pair LAST yielded in, and the run that opened each
-    # finding's CURRENT open episode (its first detection since it was last
-    # resolved): the join that keeps a run's own output out of its BLIND
-    # grade (`_grade`, `open_before`).
+    # The run and ledger position each pair LAST yielded at, and the run and
+    # position that opened each finding's CURRENT open episode (its first
+    # detection since it was last resolved): the join that keeps out of a
+    # BLIND grade what the resolver could not have seen (`_grade`,
+    # `open_before`).
     latest_run: dict[tuple[str, str], str] = {}
+    latest_pos: dict[tuple[str, str], int] = {}
     first_run: dict[str, str] = {}
-    for e in ledger.events():
+    first_pos: dict[str, int] = {}
+    for pos, e in enumerate(ledger.events()):
         if e.type is EventType.FINDING_DETECTED:
             if e.finding_id and e.finding_id not in first_run:
                 first_run[e.finding_id] = e.run_id
+                first_pos[e.finding_id] = pos
             continue
         if e.type is EventType.FINDING_RESOLVED:
             # A resolution ends the episode. The ledger reopens a resolved
@@ -218,6 +222,7 @@ def collect(ledger: Ledger) -> list[Row]:
             # it as resolved -- not a candidate -- so the next detection
             # anchors on ITS run, like a new finding.
             first_run.pop(e.finding_id, None)
+            first_pos.pop(e.finding_id, None)
             continue
         if e.type is not EventType.RESOLVER_YIELD:
             continue
@@ -227,6 +232,7 @@ def collect(ledger: Ledger) -> list[Row]:
         acc[1] += int(e.payload.get("considered", 0) or 0)
         acc[2] += int(e.payload.get("resolved", 0) or 0)
         latest_run[key] = e.run_id
+        latest_pos[key] = pos
 
     # A LEDGER PREDATING THE INSTRUMENTATION IS NOT A REPO WITH ELEVEN DEAD
     # RESOLVERS. Measured on this repo's own ledger the day it shipped: eight
@@ -255,16 +261,25 @@ def collect(ledger: Ledger) -> list[Row]:
         matched = {fid: rec for fid, rec in state.items() if spec.match(rec)}
         volume = len(matched)
         open_now = sum(1 for rec in matched.values() if rec.get("status") == "open")
-        # Findings first detected in the pair's LATEST yield run were not
-        # there when that run read the ledger -- a first productive run
-        # files its survivors and then yields `considered 0` under the same
-        # run id, and grading that against the count it just created read
-        # BLIND on every gate run after a fresh repo's first drain (File
-        # Convert, 2026-09-17). Only that one run is exempt: the next run
-        # read them, so declining them all is the shape BLIND is for.
-        own = latest_run.get((spec.resolver, spec.tool))
+        # A candidate the resolver could have missed is an open finding that
+        # was recorded BEFORE its latest yield, and not BY that yield's own
+        # run. Two shapes fail that test, both seen on File Convert on
+        # 2026-09-17. A first productive drain run files its survivors and
+        # then yields `considered 0` under the same run id: they were not
+        # there when it read, and grading it against the count it had just
+        # created read BLIND on every gate run afterwards. And a finding a
+        # LATER run files -- a drain's llm-review consume between two
+        # pushes, for a resolver that yields only at pre-push -- is not a
+        # candidate yet; counting it read BLIND on every pre-commit until
+        # the next push, one minute after the first fix was promoted. Only
+        # those are exempt: the next run reads them, so declining them all
+        # then is the shape BLIND is for.
+        pair = (spec.resolver, spec.tool)
+        own, own_pos = latest_run.get(pair), latest_pos.get(pair, -1)
         open_before = sum(1 for fid, rec in matched.items()
-                          if rec.get("status") == "open" and first_run.get(fid) != own)
+                          if rec.get("status") == "open"
+                          and first_pos.get(fid, -1) < own_pos
+                          and first_run.get(fid) != own)
         verdict = (_grade(runs, considered, resolved, volume, open_before)
                    if instrumented else NOT_INSTRUMENTED)
         rows.append(Row(spec.resolver, spec.tool, runs, considered, resolved,

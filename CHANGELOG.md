@@ -10,6 +10,22 @@ to publish a tag that disagrees with it.
 
 ## [Unreleased]
 
+### Fixed
+
+- **`aramid resolvers` (and the fleet `resolvers_ok` criterion) no longer
+  grades a resolver `BLIND` for a finding recorded after its latest run.**
+  0.17.9 exempted the findings a resolver's own latest run filed, but a
+  finding a LATER run files -- a drain's llm-review consume between two
+  pushes, for `evidence_gone`, which yields only at pre-push -- was still
+  counted, so every pre-commit until the next push read `BLIND` for a
+  resolver that had not run since the finding appeared, and three of them
+  would have posted a fleet-defect notice. Seen on File Convert one minute
+  after 0.17.9 was promoted; pre-existing, not a regression. The join is
+  now by ledger order as well as run identity: an open finding is a
+  candidate the resolver could have missed only if it was recorded before
+  the pair's latest yield and not by that yield's own run. The rendered
+  row and the user guide are unchanged except for one sentence.
+
 ## [0.17.9] — 2026-09-17
 
 ### Fixed

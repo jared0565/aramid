@@ -231,6 +231,38 @@ def test_a_finding_reopened_by_the_latest_run_is_exempt_like_a_new_one(led):
     assert row.verdict == "no opportunity"
 
 
+def test_a_finding_filed_after_the_resolver_latest_run_is_not_yet_a_candidate(led):
+    """`evidence_gone` yields only at pre-push. A drain's llm-review consume
+    between two pushes files a finding under its own run id AFTER the
+    resolver's latest yield; the resolver has not run since it appeared, so
+    it is not a candidate it missed. Counting it read BLIND on every
+    pre-commit until the next push (File Convert, 2026-09-17 17:13Z, the
+    first row after 0.17.9 was promoted) -- and three of those would post a
+    fleet-defect notice for a resolver that had no chance yet."""
+    _yield(led, "evidence_gone", "llm-review", considered=0, resolved=0, run="push-P")
+    led.record_run("drain-D", NOW, "drain", set(), set(),
+                   [_finding("a" * 64, tool="llm-review")])
+
+    row = _row(led, "evidence_gone", "llm-review")
+
+    assert row.verdict == "no opportunity"
+    assert not row.flagged
+
+
+def test_a_finding_filed_after_the_latest_run_becomes_a_candidate_at_the_next(led):
+    """The same finding, one push later: the resolver ran with it recorded
+    and considered nothing. That is the filter-matches-nothing shape."""
+    _yield(led, "evidence_gone", "llm-review", considered=0, resolved=0, run="push-P")
+    led.record_run("drain-D", NOW, "drain", set(), set(),
+                   [_finding("a" * 64, tool="llm-review")])
+    _yield(led, "evidence_gone", "llm-review", considered=0, resolved=0, run="push-Q")
+
+    row = _row(led, "evidence_gone", "llm-review")
+
+    assert row.verdict == "BLIND"
+    assert row.flagged
+
+
 def test_a_resolver_that_sees_candidates_and_clears_none_is_reported_not_accused(led):
     """`no clears yet` is INFORMATIONAL, and the reason is measured rather
     than argued. On the FIRST instrumented gate run in this repo, two rows
