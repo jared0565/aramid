@@ -10,6 +10,25 @@ to publish a tag that disagrees with it.
 
 ## [Unreleased]
 
+### Fixed
+
+- **`aramid resolvers` (and the `resolvers_ok` fleet criterion behind it)
+  no longer grades a resolver `BLIND` for the findings its own latest run
+  filed.** A first productive run reads the recorded survivors (none, in a
+  freshly onboarded repo), files what it finds, and yields `considered 0`
+  under the same run id; graded against the open count that run had just
+  created, the row read `BLIND` on every gate run afterwards, the repo went
+  red on `resolvers_ok`, and after three gate runs the drain posted a
+  fleet-defect notice -- for a resolver that had nothing to examine. Seen
+  on File Convert on 2026-09-17, the first repo onboarded after the yield
+  instrumentation shipped; a repo whose first runs predate it can never
+  show the shape. The BLIND join now counts only open findings recorded
+  before the latest yield run of the pair (run identity, not timestamps:
+  the drain stamps `record_run` and `resolve_repaired` with separate clock
+  reads). Only that one run is exempt -- the next run read those findings,
+  so declining them all is still `BLIND`. The rendered footnote and the
+  user guide say so; nothing else changes.
+
 ## [0.17.8] — 2026-09-17
 
 ### Changed

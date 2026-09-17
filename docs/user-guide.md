@@ -461,7 +461,7 @@ This command closes that hole by recording what each resolver **looked at**, not
 | `no clears yet` | saw candidates, cleared none — usually just means nothing has been fixed | no |
 | `not instrumented` | no yield data recorded yet — run a gate first | no |
 | `NEVER RAN` | no yield events at all, but its producer **has** findings | **yes** |
-| `BLIND` | ran, but matched zero candidates while findings are open | **yes** |
+| `BLIND` | ran, but matched zero candidates while findings recorded before its latest run are open | **yes** |
 
 The split is the whole point, and it is narrower than you might expect. "Zero" is normal for a JavaScript mutation resolver in a Python-only repo, and a five-alarm fire for a resolver whose producer has eleven findings open.
 
@@ -469,7 +469,7 @@ The split is the whole point, and it is narrower than you might expect. "Zero" i
 
 The clearest case is `file_departed`, which clears a finding only when its file has left the repository. In a healthy repo it walks the open set on every run and correctly resolves nothing, indefinitely — so treating "cleared none" as a defect would brand a resolver broken for doing a rare job right.
 
-`BLIND` deserves a note: it catches a resolver whose **filter** never matches — for example one keyed on a tool name that has since been renamed. Counting clears structurally cannot catch that, because a filter matching nothing never produces a candidate to decline.
+`BLIND` deserves a note: it catches a resolver whose **filter** never matches — for example one keyed on a tool name that has since been renamed. Counting clears structurally cannot catch that, because a filter matching nothing never produces a candidate to decline. The join is to what was already recorded when the resolver last ran: a first productive run files its survivors and then yields `considered 0` under the same run id, and those findings are not candidates it could have missed, so that run reads `no opportunity`. The exemption ends with the next run, which read them.
 
 `aramid status` prints a one-line pointer whenever any resolver is graded a defect, so you do not have to remember to run this. Neither command can block a push — a dead resolver is a fault in the gate's own machinery, not a verdict on your code.
 

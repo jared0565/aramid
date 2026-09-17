@@ -18,7 +18,8 @@ was AVAILABLE to it, and the grades are the product:
     no clears yet    saw candidates, cleared none -- reported, not accused
     live             cleared something
     NEVER RAN        no yield events at all, but its producer HAS findings
-    BLIND            ran, saw zero candidates, producer has open findings now
+    BLIND            ran, saw zero candidates, producer has open findings that
+                     were already recorded when it ran
     UNREGISTERED     emits, but the report's own registry has no row for it
 
 The upper-case ones are defects, and only those, because only those are
@@ -142,6 +143,92 @@ def test_a_resolver_whose_filter_never_matches_anything_open_is_blind(led):
 
     assert row.verdict == "BLIND"
     assert row.flagged
+
+
+def test_a_resolver_is_not_blind_to_findings_its_own_latest_run_filed(led):
+    """The FIRST productive run, which every freshly onboarded repo has once.
+    A drain reads the recorded survivors (none yet), files sixteen, and then
+    `resolve_repaired` yields `considered 0` under the SAME run id -- there
+    was nothing to examine when it read. Graded against the open count that
+    run had just created, it read BLIND on every gate run after File
+    Convert's first drain (2026-09-17), and the fleet held `resolvers_ok` red
+    for a non-defect until some risky commit there happened to queue the
+    producer again. Findings the resolver's own latest run filed are not
+    candidates it could have missed."""
+    led.record_run("r1", NOW, "drain", set(), set(),
+                   [_finding("a" * 64, tool="js-mutation"), _finding("b" * 64, tool="js-mutation")])
+    _yield(led, "mutant_killed", "js-mutation", considered=0, resolved=0, run="r1")
+
+    row = _row(led, "mutant_killed", "js-mutation")
+
+    assert row.verdict == "no opportunity"
+    assert not row.flagged
+
+
+def test_the_exemption_ends_at_the_resolver_next_run(led):
+    """Only the LATEST run's own findings are exempt. The run after it read
+    the ledger with those findings recorded, so considering none of them is
+    the filter-matches-nothing shape BLIND exists to catch."""
+    led.record_run("r1", NOW, "drain", set(), set(),
+                   [_finding("a" * 64, tool="js-mutation"), _finding("b" * 64, tool="js-mutation")])
+    _yield(led, "mutant_killed", "js-mutation", considered=0, resolved=0, run="r1")
+    _yield(led, "mutant_killed", "js-mutation", considered=0, resolved=0, run="r2")
+
+    row = _row(led, "mutant_killed", "js-mutation")
+
+    assert row.verdict == "BLIND"
+    assert row.flagged
+
+
+def test_a_re_detected_finding_is_still_a_candidate_the_run_should_have_seen(led):
+    """The exemption is keyed on the run that FIRST detected a finding, not
+    the latest one to record it. Today the ledger writes a detection event
+    only when a finding opens (a re-detection of an open finding writes
+    nothing), so the guard is for the day it records every one: anchoring
+    on the latest detection would then exempt everything a blind resolver
+    walks past, forever -- the exact shape BLIND exists for. The duplicate
+    is appended by hand because `record_run` will not write it."""
+    from aramid.ledger import Event
+    from aramid.models import EventType
+    led.record_run("r1", NOW, "drain", set(), set(), [_finding("a" * 64, tool="js-mutation")])
+    first = next(e for e in led.events() if e.type is EventType.FINDING_DETECTED)
+    led.append(Event(EventType.FINDING_DETECTED, "r2", NOW, finding_id="a" * 64,
+                     payload=dict(first.payload)))
+    _yield(led, "mutant_killed", "js-mutation", considered=0, resolved=0, run="r2")
+
+    row = _row(led, "mutant_killed", "js-mutation")
+
+    assert row.verdict == "BLIND"
+
+
+def test_one_open_finding_the_run_should_have_seen_is_enough_for_blind(led):
+    """A single candidate walked past is a filter that matches nothing; the
+    bound is zero, not a quorum."""
+    _seed_findings(led, _finding("a" * 64))
+    _yield(led, "gap_addressed", "mutation", considered=0, resolved=0)
+
+    row = _row(led, "gap_addressed", "mutation")
+
+    assert row.verdict == "BLIND"
+
+
+def test_a_finding_reopened_by_the_latest_run_is_exempt_like_a_new_one(led):
+    """Resolved, then re-detected: the ledger reopens it, and the run that
+    re-detected it read it as `fixed` -- not a candidate it could have
+    examined. The exemption anchors on the first detection of the CURRENT
+    open episode, so a kill that later un-kills does not brand the resolver
+    that proved the kill."""
+    from aramid.ledger import Event
+    from aramid.models import EventType
+    led.record_run("r1", NOW, "drain", set(), set(), [_finding("a" * 64, tool="js-mutation")])
+    led.append(Event(EventType.FINDING_RESOLVED, "r2", NOW, finding_id="a" * 64,
+                     payload={"auto_resolved": "mutant_killed"}))
+    led.record_run("r3", NOW, "drain", set(), set(), [_finding("a" * 64, tool="js-mutation")])
+    _yield(led, "mutant_killed", "js-mutation", considered=0, resolved=0, run="r3")
+
+    row = _row(led, "mutant_killed", "js-mutation")
+
+    assert row.verdict == "no opportunity"
 
 
 def test_a_resolver_that_sees_candidates_and_clears_none_is_reported_not_accused(led):

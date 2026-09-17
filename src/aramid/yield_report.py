@@ -172,16 +172,18 @@ class Row:
 
 
 def _grade(runs: int, considered: int, resolved: int,
-           volume: int, open_now: int) -> str:
+           volume: int, open_before: int) -> str:
     """Six answers, and the two joins that keep them apart.
 
     `volume` (lifetime) answers NEVER RAN: has this producer ever filed
-    anything for the resolver to have missed? `open_now` answers BLIND: is
-    there anything here RIGHT NOW that it should have seen? They are
+    anything for the resolver to have missed? `open_before` answers BLIND: is
+    there anything open RIGHT NOW that it should have seen -- open, and
+    already recorded when its latest run read the ledger? They are
     deliberately different questions. Using lifetime volume for BLIND would
     flag every producer whose findings were all legitimately fixed; using the
     open count for NEVER RAN would miss a resolver that was dead for months
-    and whose backlog someone has since cleared by hand.
+    and whose backlog someone has since cleared by hand. And counting what
+    the latest run itself filed would brand a first productive run BLIND.
 
     BLIND is a grade of its own because counting clears structurally cannot
     catch a filter that matches nothing: no candidates means `resolved == 0`
@@ -192,14 +194,31 @@ def _grade(runs: int, considered: int, resolved: int,
     if runs == 0:
         return NEVER_RAN if volume > 0 else NO_DATA
     if considered == 0:
-        return BLIND if open_now > 0 else NO_OPPORTUNITY
+        return BLIND if open_before > 0 else NO_OPPORTUNITY
     return NO_CLEARS if resolved == 0 else LIVE
 
 
 def collect(ledger: Ledger) -> list[Row]:
     """One row per registered (resolver, producer) pair, in registry order."""
     seen: dict[tuple[str, str], list[int]] = defaultdict(lambda: [0, 0, 0])
+    # The run each pair LAST yielded in, and the run that opened each
+    # finding's CURRENT open episode (its first detection since it was last
+    # resolved): the join that keeps a run's own output out of its BLIND
+    # grade (`_grade`, `open_before`).
+    latest_run: dict[tuple[str, str], str] = {}
+    first_run: dict[str, str] = {}
     for e in ledger.events():
+        if e.type is EventType.FINDING_DETECTED:
+            if e.finding_id and e.finding_id not in first_run:
+                first_run[e.finding_id] = e.run_id
+            continue
+        if e.type is EventType.FINDING_RESOLVED:
+            # A resolution ends the episode. The ledger reopens a resolved
+            # finding on re-detection, and the run that re-detects it read
+            # it as resolved -- not a candidate -- so the next detection
+            # anchors on ITS run, like a new finding.
+            first_run.pop(e.finding_id, None)
+            continue
         if e.type is not EventType.RESOLVER_YIELD:
             continue
         key = (e.payload.get("resolver", ""), e.payload.get("tool", ""))
@@ -207,6 +226,7 @@ def collect(ledger: Ledger) -> list[Row]:
         acc[0] += 1
         acc[1] += int(e.payload.get("considered", 0) or 0)
         acc[2] += int(e.payload.get("resolved", 0) or 0)
+        latest_run[key] = e.run_id
 
     # A LEDGER PREDATING THE INSTRUMENTATION IS NOT A REPO WITH ELEVEN DEAD
     # RESOLVERS. Measured on this repo's own ledger the day it shipped: eight
@@ -232,10 +252,20 @@ def collect(ledger: Ledger) -> list[Row]:
     rows = []
     for spec in _SPECS:
         runs, considered, resolved = seen[(spec.resolver, spec.tool)]
-        matched = [rec for rec in state.values() if spec.match(rec)]
+        matched = {fid: rec for fid, rec in state.items() if spec.match(rec)}
         volume = len(matched)
-        open_now = sum(1 for rec in matched if rec.get("status") == "open")
-        verdict = (_grade(runs, considered, resolved, volume, open_now)
+        open_now = sum(1 for rec in matched.values() if rec.get("status") == "open")
+        # Findings first detected in the pair's LATEST yield run were not
+        # there when that run read the ledger -- a first productive run
+        # files its survivors and then yields `considered 0` under the same
+        # run id, and grading that against the count it just created read
+        # BLIND on every gate run after a fresh repo's first drain (File
+        # Convert, 2026-09-17). Only that one run is exempt: the next run
+        # read them, so declining them all is the shape BLIND is for.
+        own = latest_run.get((spec.resolver, spec.tool))
+        open_before = sum(1 for fid, rec in matched.items()
+                          if rec.get("status") == "open" and first_run.get(fid) != own)
+        verdict = (_grade(runs, considered, resolved, volume, open_before)
                    if instrumented else NOT_INSTRUMENTED)
         rows.append(Row(spec.resolver, spec.tool, runs, considered, resolved,
                         volume, open_now, verdict))
@@ -280,7 +310,8 @@ def render(rows: list[Row]) -> str:
     elif flagged:
         out.append(f"{len(flagged)} of {len(rows)} resolvers flagged. "
                    "NEVER RAN = no yield events while its producer has findings; "
-                   "BLIND = ran but matched nothing while findings are open; "
+                   "BLIND = ran but matched nothing while findings recorded "
+                   "before its latest run are open; "
                    "UNREGISTERED = it emits, but this report's registry has no "
                    "row for the pair (add one to `yield_report._SPECS`). "
                    "`no clears yet` is not a defect -- it usually means the "
