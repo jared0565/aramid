@@ -10,6 +10,8 @@ to publish a tag that disagrees with it.
 
 ## [Unreleased]
 
+## [0.17.8] — 2026-09-17
+
 ### Changed
 
 - **`aramid status`'s aging line sets aside findings that carry a
@@ -4703,7 +4705,8 @@ Stated plainly because each one changes how you should deploy this:
 - **PyPI publishing is not set up.** Install from a GitHub Release artifact or
   from git; `pip install aramid` does not work.
 
-[Unreleased]: https://github.com/jared0565/aramid/compare/v0.17.7...HEAD
+[Unreleased]: https://github.com/jared0565/aramid/compare/v0.17.8...HEAD
+[0.17.8]: https://github.com/jared0565/aramid/releases/tag/v0.17.8
 [0.17.7]: https://github.com/jared0565/aramid/releases/tag/v0.17.7
 [0.17.6]: https://github.com/jared0565/aramid/releases/tag/v0.17.6
 [0.17.5]: https://github.com/jared0565/aramid/releases/tag/v0.17.5
