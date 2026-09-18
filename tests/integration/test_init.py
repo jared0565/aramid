@@ -139,6 +139,26 @@ def test_init_registers_repo_in_central_registry(tmp_path, monkeypatch):
     assert any(Path(e["path"]).resolve() == r.resolve() for e in registry.load_registry())
 
 
+def test_init_inside_a_consumer_worktree_leaves_the_registry_alone(tmp_path, monkeypatch, capsys):
+    """The consumed repo's own tooling ran `aramid init` inside a fuzz
+    worktree (2026-09-18) and registered the checkout as a fleet member.
+    Under the consumer marker init still onboards the checkout -- the
+    tooling asked for it -- but says in one line why it is not a member."""
+    monkeypatch.setattr(doctor, "probe_toolchain", _fake_present)
+    r = _repo(tmp_path)
+    from aramid import registry
+    monkeypatch.setattr(registry, "registry_path", lambda: tmp_path / "central" / "repos.toml")
+    monkeypatch.setenv("ARAMID_CONSUMER_WORKTREE", str(r))
+
+    rc = init.cmd_init(r)
+
+    assert rc == 0
+    assert registry.load_registry() == []
+    assert ("aramid: init: not registered as a fleet member -- "
+            "ARAMID_CONSUMER_WORKTREE is set (a consumer subprocess)"
+            ) in capsys.readouterr().out.splitlines()
+
+
 def test_init_refuses_non_repo(tmp_path, monkeypatch):
     monkeypatch.setattr(doctor, "probe_toolchain", _fake_present)
     not_repo = tmp_path / "not-a-repo"

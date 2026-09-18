@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Callable, Protocol
 
 from aramid import toolpath
+from aramid.registry import CONSUMER_WORKTREE_ENV
 
 class ToolState(StrEnum):
     OK = "ok"
@@ -299,12 +300,22 @@ def worktree_import_env(wt: Path) -> dict[str, str]:
     target -- and a worktree starts with no __pycache__; forbidding the
     write keeps it that way, so nothing stale can exist. Import cost is one
     compile per module per run, which is noise next to a pytest start.
+
+    AND THE CONSUMER MARKER. The subprocess runs the consumed repo's OWN
+    commands -- its test suite, a fuzz target's imports -- and on 2026-09-18
+    one of those ran `aramid init` on the checkout, which registered
+    `<temp>/aramid-fuzz-*/wt` as a fleet member the drain then waited on
+    forever. `registry.register` refuses under the marker, so whatever the
+    repo's tooling does, a descendant `aramid init` cannot touch the real
+    registry. (`consumers/js_mutation.py` builds its own env for `npm test`
+    and carries the marker itself.)
     """
     parts = [str(wt / "src"), str(wt)]
     existing = os.environ.get("PYTHONPATH", "")
     if existing:
         parts.append(existing)
-    return {"PYTHONPATH": os.pathsep.join(parts), "PYTHONDONTWRITEBYTECODE": "1"}
+    return {"PYTHONPATH": os.pathsep.join(parts), "PYTHONDONTWRITEBYTECODE": "1",
+            CONSUMER_WORKTREE_ENV: str(wt)}
 
 
 def _tapped_communicate(proc: subprocess.Popen, timeout_s: float, on_stdout_line):

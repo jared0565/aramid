@@ -25,7 +25,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from aramid import health as health_mod
-from aramid import registry
+from aramid import leftovers, registry
 from aramid.fingerprint import normalize_path
 
 SCHEMA_VERSION = 1
@@ -252,11 +252,25 @@ def _parse(at) -> datetime | None:
 
 
 def registered_repos(entries: list[dict] | None = None) -> dict[str, str]:
-    """registry key -> display name for every registered repo. The registry
-    stores resolved paths, so `repo_key` on them equals the key a gate run
-    in that repo writes."""
+    """registry key -> display name for every registered repo that is a
+    member; a consumer shell is set aside for `spurious_entries`. The
+    registry stores resolved paths, so `repo_key` on them equals the key a
+    gate run in that repo writes."""
     entries = registry.load_registry() if entries is None else entries
-    return {repo_key(e["path"]): Path(e["path"]).name for e in entries}
+    return {repo_key(e["path"]): Path(e["path"]).name for e in entries
+            if leftovers.shell_of(e["path"]) is None}
+
+
+def spurious_entries(entries: list[dict] | None = None) -> list[str]:
+    """Display names of the registry entries that are consumer shells:
+    `<temp>/aramid-<kind>-*/wt`, registered by an `aramid init` the consumed
+    repo's own tooling ran inside a worktree (2026-09-18, two fuzz
+    checkouts; `no rows: wt, wt` held the fleet at insufficient-data with
+    no row ever coming). `registry.register` refuses them now; an entry an
+    older aramid wrote is named here for the operator to remove, and the
+    judge waits on nothing from it."""
+    entries = registry.load_registry() if entries is None else entries
+    return [Path(e["path"]).name for e in entries if leftovers.shell_of(e["path"]) is not None]
 
 
 def _red_criteria(crit: dict) -> list[str]:
@@ -288,7 +302,7 @@ def _red_detail(row: dict) -> str:
 
 
 def judge(rows: list[dict], registered: dict[str, str], policy: Policy, now: str,
-          *, aramid_version: str = "") -> dict:
+          *, aramid_version: str = "", spurious: list[str] | tuple[str, ...] = ()) -> dict:
     """Spec section 6. Walk the registered repos' rows in time order,
     tracking each repo's latest row; the fleet is green at a row when every
     registered repo has a row and its latest is green. The streak starts at
@@ -296,7 +310,9 @@ def judge(rows: list[dict], registered: dict[str, str], policy: Policy, now: str
     a disarm (criterion 6), which restarts it at the disarming row rather
     than pinning the verdict forever -- or (amendment A1) on any repo's
     latest row ageing past `policy.max_row_age_days`, so a streak is held
-    by rows, never by silence."""
+    by rows, never by silence. `spurious` names the registry entries that
+    are not members (`spurious_entries`): reported for removal, counted
+    for nothing."""
     now_dt = _parse(now) or datetime.now(timezone.utc)
     cutoff = now_dt - timedelta(days=ROW_WINDOW_DAYS)
     # Amendment A1: a row is fresh at time t while t - at <= window; exactly
@@ -421,6 +437,9 @@ def judge(rows: list[dict], registered: dict[str, str], policy: Policy, now: str
         if disarm is not None:
             notes.append(f"streak restarted by {disarm['name']} disarming "
                          f"{disarm['flag']} at {disarm['at']}")
+    if spurious:
+        notes.append(f"spurious: {', '.join(spurious)} "
+                     "(consumer worktree; remove from ~/.aramid/repos.toml)")
     reasons.extend(blockers)
     reasons.extend(notes)
 
@@ -432,6 +451,7 @@ def judge(rows: list[dict], registered: dict[str, str], policy: Policy, now: str
             "fleet": {"all_green_now": all_green_now, "streak_started_at": streak_start,
                       "days_held": days_held, "versions_in_streak": sorted(versions),
                       "armed_anywhere": armed_anywhere, "stale_repos": stale,
+                      "spurious": list(spurious),
                       "disarm_in_streak": disarm is not None,
                       "blockers": blockers, "notes": notes, "breaking_row": breaking},
             "verdict": verdict, "reasons": reasons}
@@ -621,9 +641,11 @@ def run_judgement(now: str, *, aramid_version: str, entries: list[dict] | None =
     try:
         policy = policy or load_policy()
         registered = registered_repos(entries)
+        spurious = spurious_entries(entries)
         previous = read_verdict()
         rows = read_rows()
-        verdict = judge(rows, registered, policy, now, aramid_version=aramid_version)
+        verdict = judge(rows, registered, policy, now, aramid_version=aramid_version,
+                        spurious=spurious)
         if _monotonic() - started > JUDGE_BUDGET_S:
             print(f"aramid: fleet: judgement over the {JUDGE_BUDGET_S:.0f}s budget; "
                   "verdict not written", file=sys.stderr)

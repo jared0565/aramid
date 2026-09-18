@@ -58,6 +58,26 @@ def _is_ours(shell: Path) -> bool:
     return shell.name.startswith(PREFIXES)
 
 
+def shell_of(path) -> Path | None:
+    """The ``aramid-<kind>-<random>`` shell under :func:`temp_root` that
+    contains ``path``, or None. A consumer runs the consumed repo's own
+    commands inside ``<shell>/wt``, and on 2026-09-18 one of those commands
+    was ``aramid init`` on the checkout: two fuzz shells registered
+    themselves as fleet members the drain then waited on forever. The
+    registry asks this before accepting a path and the fleet judge asks it
+    of every entry it inherits. The location is the whole rule: under the
+    temp root, below a directory named with one of :data:`PREFIXES`."""
+    root = temp_root()
+    try:
+        rel = Path(path).resolve().relative_to(root.resolve())
+    except (ValueError, OSError):
+        return None
+    for i, part in enumerate(rel.parts):
+        if part.startswith(PREFIXES):
+            return root.joinpath(*rel.parts[:i + 1])
+    return None
+
+
 def _registrations(root: Path) -> list[tuple[Path, bool]]:
     """``(shell dir, locked)`` for every registered worktree of ``root``
     that lives in one of our shells; the main worktree is never one."""

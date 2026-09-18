@@ -12,6 +12,22 @@ to publish a tag that disagrees with it.
 
 ### Fixed
 
+- **A consumer's worktree can no longer register itself as a fleet member.**
+  A consumer (mutation, fuzz, js-mutation, red-proof) runs the consumed
+  repo's own commands in a throwaway checkout under the system temp dir,
+  and on 2026-09-18 one of those commands ran `aramid init` on the
+  checkout: two `aramid-fuzz-*/wt` paths landed in `~/.aramid/repos.toml`,
+  the drain read `no rows: wt, wt`, and readiness could never start a
+  streak. Every consumer subprocess now carries `ARAMID_CONSUMER_WORKTREE`
+  and `registry.register` refuses under it; independently, it refuses any
+  path under the temp dir below an `aramid-<kind>-*` directory, so a
+  process launched with a scrubbed environment is caught too. `aramid init`
+  still onboards the checkout and says in one line why it is not a member.
+  The fleet judge sets such an entry aside as `spurious: <name> (consumer
+  worktree; remove from ~/.aramid/repos.toml)` instead of waiting on it, so
+  an entry an older aramid wrote stops holding the verdict at
+  insufficient-data. Nothing to re-run; consumers carry the marker from the
+  first drain under this version.
 - **`aramid resolvers` (and the fleet `resolvers_ok` criterion) no longer
   grades a resolver `BLIND` for a finding recorded after its latest run.**
   0.17.9 exempted the findings a resolver's own latest run filed, but a

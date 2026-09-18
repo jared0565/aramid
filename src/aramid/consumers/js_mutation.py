@@ -23,6 +23,7 @@ from aramid.consumers import base, mutation
 from aramid.consumers.base import ConsumerResult, DrainContext
 from aramid.fingerprint import compute_fingerprint
 from aramid.normalizer import RawFinding
+from aramid.registry import CONSUMER_WORKTREE_ENV
 from aramid.runners.base import ToolState, run_subprocess
 
 NAME = "js_mutation"
@@ -37,6 +38,15 @@ _JS_SUFFIXES = (".js", ".jsx", ".mjs", ".cjs", ".ts", ".tsx", ".mts", ".cts")
 
 # See consumers/mutation.py: budget-truncated batches -> pin occurrence_index 0.
 PIN_OCCURRENCE = True
+
+
+def _marker(wt: Path) -> dict[str, str]:
+    """The consumer marker `registry.register` refuses on. The Python
+    consumers get it from `worktree_import_env`; `npm test` needs no
+    PYTHONPATH, so this env carries the marker alone -- without it a
+    `package.json` script that runs `aramid init` registers the checkout as
+    a fleet member (the fuzz consumer's shape, 2026-09-18)."""
+    return {CONSUMER_WORKTREE_ENV: str(wt)}
 
 
 def link_note_prefix(head: str) -> str:
@@ -215,7 +225,7 @@ def consume(item, ctx: DrainContext) -> ConsumerResult:
                                   note=f"{link_note_prefix(item.head)}: {str(exc)[:150]}",
                                   duration_s=time.monotonic() - started)
 
-        base_res = run_subprocess(test_argv, wt, baseline_budget)
+        base_res = run_subprocess(test_argv, wt, baseline_budget, env=_marker(wt))
         if base_res.state is ToolState.TIMEOUT:
             # A timeout is a property of the repo's suite and budget, not of
             # this commit -- see consumers/mutation.py for the full account.
@@ -258,7 +268,7 @@ def consume(item, ctx: DrainContext) -> ConsumerResult:
                 stats["tested"] += 1
                 try:
                     src_path.write_text(m.source, encoding="utf-8")
-                    res = run_subprocess(test_argv, wt, mutant_timeout)
+                    res = run_subprocess(test_argv, wt, mutant_timeout, env=_marker(wt))
                     if res.state is ToolState.TIMEOUT:
                         stats["timeouts"] += 1
                     elif res.state is ToolState.OK and res.returncode == 0:
@@ -301,7 +311,7 @@ def consume(item, ctx: DrainContext) -> ConsumerResult:
         # claim and still not be airtight, so it is accepted and counted.
         claimable = sorted({fp for fp in stats["killed_fps"] if fp in open_ids})
         if claimable:
-            final = run_subprocess(test_argv, wt, mutant_timeout * 4)
+            final = run_subprocess(test_argv, wt, mutant_timeout * 4, env=_marker(wt))
             if final.state is ToolState.OK and final.returncode == 0:
                 repaired_ids = tuple(claimable)
             else:

@@ -60,6 +60,11 @@ def _isolated_registry(tmp_path, monkeypatch):
     `monkeypatch.setattr(registry, "registry_path", ...)` in a test body
     still wins."""
     monkeypatch.setattr(registry, "registry_path", lambda: tmp_path / "repos.toml")
+    # The drain runs THIS suite inside a consumer worktree, where every
+    # subprocess carries the marker `registry.register` refuses on; the
+    # registry tests would then refuse their own fixtures and the mutation
+    # baseline would read failing. A test that wants the marker sets it.
+    monkeypatch.delenv("ARAMID_CONSUMER_WORKTREE", raising=False)
 
 
 @pytest.fixture(autouse=True)

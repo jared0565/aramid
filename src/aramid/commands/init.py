@@ -538,7 +538,9 @@ def _init_one(target: Path) -> int:
     hooks.install(root, interpreter)
 
     from aramid import registry
-    registry.register(root, _now())
+    refused = registry.register(root, _now())
+    if refused:
+        print(f"aramid: init: not registered as a fleet member -- {refused}")
 
     cfg = config_mod.load_config(root)
     ledger = Ledger(root / ".aramid" / "ledger.db")

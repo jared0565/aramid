@@ -2,7 +2,7 @@
 timestamps and versions. No sleeps: `now` is an argument."""
 from datetime import datetime, timedelta, timezone
 
-from aramid import fleet, health
+from aramid import fleet, health, leftovers
 
 R_A, R_B = "f:/projects/a", "f:/projects/b"
 REG = {R_A: "a", R_B: "b"}
@@ -284,3 +284,30 @@ def test_a_verdict_written_before_a1_renders_unchanged():
     del v["fleet"]["stale_repos"], v["policy"]["max_row_age_days"]
     assert fleet.readiness_line(v) == (
         "fleet: 1.0 readiness READY -- 2/2 repos green, streak 20d, versions 2/2")
+
+
+# --- a consumer shell in the registry is spurious, never a member ------------
+
+def test_a_spurious_entry_is_named_and_never_holds_the_verdict():
+    """Two `aramid-fuzz-*/wt` entries (2026-09-18) read `no rows: wt, wt`
+    and held the fleet at insufficient-data with no row ever coming. A
+    spurious entry is reported for the operator to remove and counts for
+    nothing else: the verdict is what the real members earn."""
+    v = fleet.judge(_ready_rows(), REG, POLICY, NOW, aramid_version="0.9.0",
+                    spurious=["wt", "wt"])
+    assert v["verdict"] == "ready"
+    assert v["fleet"]["spurious"] == ["wt", "wt"]
+    assert v["reasons"] == ["spurious: wt, wt (consumer worktree; remove from ~/.aramid/repos.toml)"]
+    assert all(r["name"] != "wt" for r in v["repos"].values())
+    assert fleet.readiness_line(v).endswith(
+        "; spurious: wt, wt (consumer worktree; remove from ~/.aramid/repos.toml)")
+
+
+def test_registered_repos_sets_a_consumer_shell_aside():
+    """`registered_repos` is the seam between the registry and the judge;
+    `spurious_entries` is its complement, the names the judge reports."""
+    shell = leftovers.temp_root() / "aramid-fuzz-3cvlqu0b" / "wt"      # conftest isolates temp_root
+    entries = [{"path": "F:/projects/a", "registered_at": "t"},
+               {"path": str(shell), "registered_at": "t"}]
+    assert fleet.registered_repos(entries) == {fleet.repo_key("F:/projects/a"): "a"}
+    assert fleet.spurious_entries(entries) == ["wt"]

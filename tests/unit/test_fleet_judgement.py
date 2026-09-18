@@ -4,7 +4,7 @@ compact old rows once a day, and never raise."""
 import json
 from datetime import datetime, timedelta, timezone
 
-from aramid import fleet, health, notices
+from aramid import fleet, health, leftovers, notices
 
 NOW_DT = datetime(2026, 9, 20, 12, 0, 0, tzinfo=timezone.utc)
 NOW = NOW_DT.isoformat()
@@ -254,3 +254,16 @@ def test_going_stale_from_ready_posts_readiness_broken_on_the_prior_streak():
     assert len(broken) == 1
     assert broken[0]["key"] == "streak:" + prior["fleet"]["streak_started_at"]
     assert broken[0]["title"] == "fleet readiness lost -- stale: a (8.0d), b (8.0d) -- window 7d"
+
+
+def test_a_consumer_shell_entry_is_reported_and_never_waited_on():
+    """The registry as the drain found it on 2026-09-18: the real members
+    plus an `aramid-fuzz-*/wt` checkout a consumed repo's tooling registered.
+    The verdict is the members' own; the shell is named for removal."""
+    _seed(_entries_rows(_ready_rows()))
+    shell = leftovers.temp_root() / "aramid-fuzz-3cvlqu0b" / "wt"
+    v = fleet.run_judgement(NOW, aramid_version="0.9.0",
+                            entries=ENTRIES + [{"path": str(shell), "registered_at": "t"}])
+    assert v["verdict"] == "ready"
+    assert v["reasons"] == ["spurious: wt (consumer worktree; remove from ~/.aramid/repos.toml)"]
+    assert [r["name"] for r in v["repos"].values()] == ["a", "b"]

@@ -100,6 +100,7 @@ class Oracle:
         self.outcomes = {k: (list(v) if isinstance(v, list) else v) for k, v in outcomes.items()}
         self.default = default
         self.calls = []
+        self.envs = []
 
     def __call__(self, argv, cwd, timeout_s, env=None):
         p = Path(cwd) / "calc.js"
@@ -109,6 +110,7 @@ class Oracle:
         except OSError:
             label = "DIR"
         self.calls.append((label, timeout_s, list(argv)))
+        self.envs.append((Path(cwd), env))
         spec = self.outcomes.get(label, PASS if label == "BASE" else self.default)
         if isinstance(spec, list):
             spec = spec.pop(0)
@@ -290,6 +292,20 @@ def test_two_of_each_do_not_give_up(tmp_path, monkeypatch):
     res, oracle = _run(r, base, head, monkeypatch, {})
 
     assert res.state == "ok" and len(oracle.calls) == 4, "baseline + 3 mutants"
+
+
+def test_every_worktree_subprocess_carries_the_consumer_marker(tmp_path, monkeypatch):
+    """The Python consumers get the marker from `worktree_import_env`; this
+    one builds its own env for `npm test`, so it has to carry it itself --
+    or a `package.json` script that runs `aramid init` registers the
+    checkout as a fleet member (the fuzz consumer's shape, 2026-09-18)."""
+    r, base, head = _repo(tmp_path)
+
+    res, oracle = _run(r, base, head, monkeypatch, {})
+
+    assert res.state == "ok" and len(oracle.envs) == 4, "baseline + 3 mutants"
+    for cwd, env in oracle.envs:
+        assert (env or {}).get("ARAMID_CONSUMER_WORKTREE") == str(cwd)
 
 
 # ------------------------------------------------- worktree and baseline --

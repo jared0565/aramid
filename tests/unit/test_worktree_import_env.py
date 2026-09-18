@@ -139,3 +139,17 @@ def test_a_subprocess_under_the_env_never_leaves_bytecode_behind(tmp_path):
     os.utime(calc, (st.st_atime, st.st_mtime))      # same second, same size: the CI case, forced
     assert _probe(tmp_path) == "True False", "the second mutant ran the first one's bytecode"
     assert not (tmp_path / "__pycache__").exists(), "bytecode was written under the env"
+
+
+# --- a descendant `aramid init` must not register the checkout -------------
+
+def test_the_env_marks_every_child_as_running_inside_a_consumer_worktree(tmp_path):
+    """A consumer runs the REPO'S OWN commands in its checkout -- its test
+    suite, a fuzz target's imports -- and on 2026-09-18 one of those ran
+    `aramid init` on the checkout, which registered `<temp>/aramid-fuzz-*/wt`
+    as a fleet member: the drain then read `no rows: wt, wt` and readiness
+    could never start a streak. Every subprocess under this env carries the
+    marker `registry.register` refuses on, so whatever the repo's tooling
+    does, a descendant `aramid init` cannot touch the real registry."""
+    env = worktree_import_env(tmp_path)
+    assert env["ARAMID_CONSUMER_WORKTREE"] == str(tmp_path)
