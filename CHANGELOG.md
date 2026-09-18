@@ -10,6 +10,8 @@ to publish a tag that disagrees with it.
 
 ## [Unreleased]
 
+## [0.17.10] — 2026-09-19
+
 ### Fixed
 
 - **A consumer's worktree can no longer register itself as a fleet member.**
@@ -4758,7 +4760,8 @@ Stated plainly because each one changes how you should deploy this:
 - **PyPI publishing is not set up.** Install from a GitHub Release artifact or
   from git; `pip install aramid` does not work.
 
-[Unreleased]: https://github.com/jared0565/aramid/compare/v0.17.9...HEAD
+[Unreleased]: https://github.com/jared0565/aramid/compare/v0.17.10...HEAD
+[0.17.10]: https://github.com/jared0565/aramid/releases/tag/v0.17.10
 [0.17.9]: https://github.com/jared0565/aramid/releases/tag/v0.17.9
 [0.17.8]: https://github.com/jared0565/aramid/releases/tag/v0.17.8
 [0.17.7]: https://github.com/jared0565/aramid/releases/tag/v0.17.7
