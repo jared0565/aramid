@@ -56,7 +56,14 @@ command = ["python", "-m", "pytest", "-q"]
 # 600 s cap. A timeout is not a cost -- it never slows a passing push -- but
 # too tight a one blocks EVERY push, so this keeps a similar ratio of headroom
 # to the new figure rather than a similar absolute margin.
-timeout_s = 2400
+#
+# 2026-09-19: the whole tree is 3292 tests and measured 1954 s on a quiet
+# machine, 2255 s and 2321 s with another repo's gate running alongside --
+# and it blew the 2400 s cap twice in one morning (the 0.17.10 rehearsal,
+# 07:02Z and 07:45Z) while two other repos gated continuously. Same ratio
+# rule applied to ~2300 s: 4800. The only price is that a genuinely hung
+# suite takes 80 min rather than 40 to be declared hung.
+timeout_s = 4800
 
 # Headroom over that measured ~243 s. These are TIMEOUTS, not costs: raising
 # the cap does not slow a passing push by one second, it only widens how slow
@@ -69,7 +76,8 @@ timeout_s = 2400
 # budget, so leaving it at 600 s would call a healthy push hung after ten
 # minutes while its (now legitimately ~19 min) test runner was still working.
 # A per-runner cap that exceeds the gate cap is a cap that never fires.
-pre_push = 2700
+# 2026-09-19: raised with [tests].timeout_s again, keeping the 300 s margin.
+pre_push = 5100
 
 [hooks]
 # Run the pre-push shim with the argv CI step 8 uses (`--all --strict`)
