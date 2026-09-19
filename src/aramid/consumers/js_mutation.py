@@ -23,8 +23,7 @@ from aramid.consumers import base, mutation
 from aramid.consumers.base import ConsumerResult, DrainContext
 from aramid.fingerprint import compute_fingerprint
 from aramid.normalizer import RawFinding
-from aramid.registry import CONSUMER_WORKTREE_ENV
-from aramid.runners.base import ToolState, run_subprocess
+from aramid.runners.base import CONSUMER_WORKTREE_ENV, ToolState, run_subprocess
 
 NAME = "js_mutation"
 # The string the FINDINGS carry, which is NOT `NAME` -- note the hyphen. Both

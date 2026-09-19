@@ -9,7 +9,15 @@ from pathlib import Path
 from typing import Callable, Protocol
 
 from aramid import toolpath
-from aramid.registry import CONSUMER_WORKTREE_ENV
+
+# Set, to the worktree, in every subprocess a consumer runs
+# (`worktree_import_env` below; `consumers/js_mutation.py` builds its own
+# env and carries it too). `registry.register` refuses under it. Defined
+# HERE, not in `registry`, because this module must import nothing outside
+# the standard library: the release's sdist smoke test installs with
+# `--no-deps` and imports the runners, and `registry` imports `tomli_w`
+# (0.17.10's first tag run failed on exactly that, 2026-09-19).
+CONSUMER_WORKTREE_ENV = "ARAMID_CONSUMER_WORKTREE"
 
 class ToolState(StrEnum):
     OK = "ok"

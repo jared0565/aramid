@@ -10,10 +10,7 @@ import tomli_w
 
 from aramid import leftovers
 from aramid.fingerprint import normalize_path
-
-# Set, to the worktree, in every subprocess a consumer runs
-# (`runners.base.worktree_import_env`, and js_mutation's own env).
-CONSUMER_WORKTREE_ENV = "ARAMID_CONSUMER_WORKTREE"
+from aramid.runners.base import CONSUMER_WORKTREE_ENV  # noqa: F401  (re-exported; set by every consumer subprocess)
 
 
 def registry_path() -> Path:
