@@ -10,6 +10,25 @@ to publish a tag that disagrees with it.
 
 ## [Unreleased]
 
+### Fixed
+
+- **The first push of a new branch no longer scans the whole history as if
+  it were live.** `resolve_range` tried the branch's upstream, then
+  `origin/HEAD`'s merge-base, then gave up -- and a clone made by `git init`
+  + `git remote add` never has `refs/remotes/origin/HEAD`, so pushing a NEW
+  BRANCH from such a clone fell through to the full-history scan meant for
+  a brand-new repo: gitleaks walked every commit and reported secrets that
+  live only in old commits (already ruled `not_a_secret` there) as live
+  BLOCK findings at the current line numbers, once per new branch
+  (demo-store2, channel round 233, 2026-09-19). The range now falls back
+  to the newest commit already on ANY remote-tracking ref (`git merge-base
+  HEAD <every refs/remotes/* sha>`), which is exactly what the push adds
+  to the remote; a detached HEAD or tag checkout whose commit the remote
+  already holds therefore scans an empty delta instead of the tree. Only a
+  repo with no remote ref at all still widens to the full tracked set and
+  full history, and its note now says so ("no upstream and no
+  remote-tracking ref to diff against").
+
 ## [0.17.10] — 2026-09-19
 
 ### Fixed

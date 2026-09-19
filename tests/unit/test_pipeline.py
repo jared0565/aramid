@@ -1172,6 +1172,14 @@ def test_mode_range_no_upstream_scans_full_tracked_set_not_empty_diff(tmp_path):
     assert rng == pipeline.FULL_HISTORY_RNG
     assert rng is not None
     assert widened is not None, "a whole-tree scan must announce itself"
+    assert "upstream" in widened, "the note has to name the CAUSE, not just the size"
+    # `_discover_files` returns the cause ONLY. The count is the caller's,
+    # because only `run_gate` has applied the ignore-path filter by then --
+    # quoting the pre-filter total here would claim coverage of files the
+    # runners were never handed, in the one report a reader uses to decide
+    # whether an absent finding means clean or unscanned.
+    assert not any(ch.isdigit() for ch in widened), \
+        "a count in the cause would be the pre-filter one, i.e. an overstatement"
 
 
 def test_a_widened_scope_says_so_and_a_narrow_one_does_not(tmp_path):
@@ -1187,6 +1195,15 @@ def test_a_widened_scope_says_so_and_a_narrow_one_does_not(tmp_path):
     scan and a delta scan were reported identically. A scan that silently
     changes what it covers is the same class as a report that cannot
     distinguish absent from clean.
+
+    Since 2026-09-19 (channel round 233: a clone without `origin/HEAD` pushed
+    a NEW BRANCH and the same widening reported history-only secrets as live
+    BLOCKs) `resolve_range` also falls back to the newest commit on any
+    remote-tracking ref, so the detached-tag shape below no longer widens at
+    all: the tagged commit is on origin already, the delta is empty, and
+    nothing is announced because nothing changed. The widening, and its
+    note, are now reserved for a repo with no remote ref at all (the test
+    above).
     """
     root = _repo(tmp_path)
     bare = tmp_path / "origin.git"
@@ -1201,22 +1218,15 @@ def test_a_widened_scope_says_so_and_a_narrow_one_does_not(tmp_path):
     assert rng_narrow == "@{u}..HEAD"
     assert widened_narrow is None
 
-    # TREATMENT: detached at a tag, which is how a release pushes one.
+    # TREATMENT: detached at a tag, which is how a release pushes one. The
+    # tagged commit is already on origin: the push adds nothing.
     _git(root, "tag", "v1.0.0")
     _git(root, "checkout", "-q", "--detach", "v1.0.0")
     files, rng, widened = pipeline._discover_files(root, "range")
 
-    assert files == ["a.py"], "the whole tracked tree, not the push's delta"
-    assert rng == pipeline.FULL_HISTORY_RNG
-    assert widened is not None
-    assert "upstream" in widened, "the note has to name the CAUSE, not just the size"
-    # `_discover_files` returns the cause ONLY. The count is the caller's,
-    # because only `run_gate` has applied the ignore-path filter by then --
-    # quoting the pre-filter total here would claim coverage of files the
-    # runners were never handed, in the one report a reader uses to decide
-    # whether an absent finding means clean or unscanned.
-    assert not any(ch.isdigit() for ch in widened), \
-        "a count in the cause would be the pre-filter one, i.e. an overstatement"
+    assert files == [], "the tagged commit is on origin already: an empty delta, not the tree"
+    assert rng == f"{gitutil.rev_sha(root, 'HEAD')}..HEAD"
+    assert widened is None, "nothing widened, so nothing may be announced"
 
 
 # --------------------------------------------- (i) wall-clock budget -------

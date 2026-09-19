@@ -45,12 +45,27 @@ def blob_at(root: Path, ref: str, rel_path: str) -> str | None:
     return cp.stdout if cp.returncode == 0 else None
 
 def resolve_range(root: Path):
+    """The push's delta as `base..HEAD`, or None when nothing on this machine
+    says what the remote already has (a brand-new repo's first push: the
+    caller then scans every commit reachable from HEAD). Two sources, in
+    order: the branch's upstream, and the newest commit already on ANY
+    remote-tracking ref -- `git merge-base HEAD <every refs/remotes/* sha>`,
+    the base of HEAD and a hypothetical merge of them all, which is exactly
+    what the push adds to the remote. The second replaced an `origin/HEAD`
+    merge-base: a clone made by `git init` + `git remote add` never has
+    `refs/remotes/origin/HEAD`, so the first push of a NEW BRANCH fell
+    through to the full-history scan and reported secrets that live only in
+    old commits as live BLOCKs at the current line numbers (demo-store2,
+    channel round 233, 2026-09-19); and wherever `origin/HEAD` does exist,
+    its target is one of the remote refs, so this answer is never further
+    from HEAD than that one was. A remote ref with no common history (an
+    orphan, another project) fails the merge-base: None, full history."""
     if _run(root, "rev-parse", "@{u}").returncode == 0:
         return "@{u}..HEAD"
-    head = _run(root, "symbolic-ref", "refs/remotes/origin/HEAD")
-    if head.returncode == 0:
-        base = head.stdout.strip()
-        mb = _run(root, "merge-base", base, "HEAD")
+    refs = _run(root, "for-each-ref", "--format=%(objectname)", "refs/remotes/")
+    shas = sorted({s for s in refs.stdout.split() if s}) if refs.returncode == 0 else []
+    if shas:
+        mb = _run(root, "merge-base", "HEAD", *shas)
         if mb.returncode == 0:
             return f"{mb.stdout.strip()}..HEAD"
     return None

@@ -319,9 +319,9 @@ def _discover_files(root: Path, mode: str) -> tuple[list[str], str | None, str |
             # coverage in exactly the report a reader uses to decide whether an
             # absent finding means clean or unscanned.
             return gitutil.all_tracked_files(root), FULL_HISTORY_RNG, (
-                "no upstream to diff against (detached HEAD, a tag checkout, "
-                "or a first push). Pre-existing findings anywhere in the repo "
-                "apply here")
+                "no upstream and no remote-tracking ref to diff against (a "
+                "brand-new repo's first push, or a checkout with no remote "
+                "refs). Pre-existing findings anywhere in the repo apply here")
         return gitutil.changed_files(root, rng), rng, None
     if mode == "all":
         # Deliberately silent: `--all` IS the request to scan everything, so

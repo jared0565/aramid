@@ -199,3 +199,66 @@ def test_range_commits_lists_the_range_or_head_and_is_empty_for_a_bad_spec(tmp_p
     assert gitutil.range_commits(r, None) == [second, first]
     assert gitutil.range_commits(r, f"{first}..HEAD") == [second]
     assert gitutil.range_commits(r, "nope..HEAD") == []
+
+
+# --- a new branch in a clone without origin/HEAD (round 233) ----------------
+
+def test_resolve_range_new_branch_without_origin_head_diffs_against_the_remote(tmp_path):
+    """demo-store2, channel round 233 (2026-09-19): a clone made by `git init`
+    + `git remote add` never has refs/remotes/origin/HEAD, so the first push
+    of a NEW BRANCH fell through to the full-history sentinel meant for a
+    brand-new repo -- and gitleaks reported two secrets that live only in
+    old commits as live BLOCKs at the current line numbers. The push's real
+    delta is what no remote-tracking ref has yet: the base is the newest
+    commit already on any remote."""
+    r = _repo(tmp_path)
+    _commit(r, "a.py", "x = 1\n", "base")
+    base = gitutil.rev_sha(r, "HEAD")
+    _git(r, "update-ref", "refs/remotes/origin/main", "HEAD")   # a remote ref; no origin/HEAD, no upstream
+    _git(r, "checkout", "-q", "-b", "feature")
+    _commit(r, "a.py", "x = 2\n", "head")
+
+    assert gitutil.resolve_range(r) == f"{base}..HEAD"
+
+
+def test_resolve_range_new_branch_at_a_commit_the_remote_holds_is_an_empty_range(tmp_path):
+    """A branch created at a commit the remote already has pushes no
+    commits: tip..HEAD, not the whole history."""
+    r = _repo(tmp_path)
+    _commit(r, "a.py", "x = 1\n", "base")
+    _git(r, "update-ref", "refs/remotes/origin/main", "HEAD")
+    _git(r, "checkout", "-q", "-b", "feature")
+
+    assert gitutil.resolve_range(r) == f"{gitutil.rev_sha(r, 'HEAD')}..HEAD"
+
+
+def test_resolve_range_uses_the_closest_of_several_remote_refs(tmp_path):
+    """`origin/old` behind the branch point, `origin/main` at it: the base is
+    the branch point. (`git merge-base HEAD a b` is the base of HEAD and a
+    hypothetical merge of a and b.)"""
+    r = _repo(tmp_path)
+    _commit(r, "a.py", "x = 1\n", "old")
+    _git(r, "update-ref", "refs/remotes/origin/old", "HEAD")
+    _commit(r, "a.py", "x = 2\n", "main")
+    point = gitutil.rev_sha(r, "HEAD")
+    _git(r, "update-ref", "refs/remotes/origin/main", "HEAD")
+    _git(r, "checkout", "-q", "-b", "feature")
+    _commit(r, "a.py", "x = 3\n", "head")
+
+    assert gitutil.resolve_range(r) == f"{point}..HEAD"
+
+
+def test_resolve_range_is_none_when_the_only_remote_ref_shares_no_history(tmp_path):
+    """A remote ref with no common ancestor (an orphan branch, a remote of
+    another project) fails the merge-base: None, i.e. the full-history
+    scan, never a bare "..HEAD" range."""
+    r = _repo(tmp_path)
+    _commit(r, "a.py", "x = 1\n", "ours")
+    _git(r, "checkout", "-q", "--orphan", "elsewhere")
+    _git(r, "rm", "-q", "--cached", "a.py")
+    _commit(r, "b.py", "y = 1\n", "theirs")
+    _git(r, "update-ref", "refs/remotes/origin/elsewhere", "HEAD")
+    (r / "a.py").unlink()          # untracked on this branch; it would block the checkout
+    _git(r, "checkout", "-q", "main")
+
+    assert gitutil.resolve_range(r) is None
