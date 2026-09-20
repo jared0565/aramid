@@ -10,6 +10,17 @@ to publish a tag that disagrees with it.
 
 ## [Unreleased]
 
+### Added
+
+- **`aramid ledger consumers`** lists the drain's consumer runs (mutation,
+  js_mutation, fuzz, red_proof, llm_review, dast) newest first, one line
+  each -- `[state] <at> <consumer> <duration>s item <id> -- <note>` -- with
+  `--consumer <name>`, `--last N` and `--json` (every payload field per row;
+  an empty result is `[]`). `ledger filter` reads findings only, so a
+  degraded consumer's history had no CLI surface beyond the current streak
+  in `status`; the agent that needed it opened `ledger.db` by hand
+  (channel rounds 243-244, 2026-09-20).
+
 ### Fixed
 
 - **A red JS baseline now says what failed, and `status` says where to

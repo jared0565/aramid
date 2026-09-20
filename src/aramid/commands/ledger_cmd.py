@@ -259,6 +259,49 @@ def cmd_ledger_filter(root, tool: str | None = None, rule: str | None = None,
         ledger.close()
 
 
+# -------------------------------------------------------------- consumers ---
+
+def cmd_ledger_consumers(root, consumer: str | None = None, last: int | None = None,
+                          as_json: bool = False) -> int:
+    """The drain's consumer runs (mutation, js_mutation, fuzz, red_proof,
+    llm_review, dast), newest first, one line each:
+    `[state] <at> <consumer> <duration>s item <item id> -- <note>`.
+
+    `filter` reads findings only. A consumer run is an EVENT, so until
+    channel round 244 (2026-09-20) a degraded consumer could be seen in the
+    `degraded consumer runs:` block of `status` and nowhere else on the CLI;
+    the agent that needed the row's history opened ledger.db by hand.
+    `--consumer` is an exact name, `--last N` keeps the newest N after that
+    filter, and `--json` emits `at`, `run_id` and every payload field on
+    every row (an empty result is `[]`, never prose). No config is read: no
+    field here is recomputed from the config in force, so there is nothing
+    to refuse over."""
+    root = Path(root)
+    ledger = Ledger(root / ".aramid" / "ledger.db")
+    try:
+        rows = [e for e in reversed(ledger.events())
+                if e.type is EventType.CONSUMER_RUN_FINISHED]
+    finally:
+        ledger.close()
+    if consumer is not None:
+        rows = [e for e in rows if str(e.payload.get("consumer", "")) == consumer]
+    if last is not None:
+        rows = rows[:max(last, 0)]
+    if as_json:
+        print(json.dumps([{"at": e.at, "run_id": e.run_id, **e.payload} for e in rows],
+                         indent=2))
+        return 0
+    if not rows:
+        print("aramid: ledger consumers: no consumer runs")
+        return 0
+    for e in rows:
+        p = e.payload
+        print(f"[{p.get('state', '?')}] {e.at} {p.get('consumer', '?')} "
+              f"{float(p.get('duration_s') or 0.0):.1f}s item {p.get('item_id', '?')}"
+              f" -- {p.get('note', '')}")
+    return 0
+
+
 # ----------------------------------------------------------- mark-rotated ---
 
 def cmd_ledger_mark_rotated(root, finding_id: str, reason: str) -> int:

@@ -25,6 +25,7 @@ from aramid.commands.drain import cmd_drain
 from aramid.commands.fleet_cmd import cmd_fleet, cmd_notices
 from aramid.commands.init import cmd_init
 from aramid.commands.ledger_cmd import (
+    cmd_ledger_consumers,
     cmd_ledger_filter,
     cmd_ledger_list,
     cmd_ledger_mark_not_a_secret,
@@ -142,6 +143,11 @@ def build_parser() -> argparse.ArgumentParser:
     p_filter.add_argument("--severity",
                           help="info, low, medium, high or critical; case accepted")
     p_filter.add_argument("--json", action="store_true")
+    p_consumers = ledger_sub.add_parser(
+        "consumers", help="the drain's consumer runs, newest first")
+    p_consumers.add_argument("--consumer", help="exact consumer name, e.g. js_mutation")
+    p_consumers.add_argument("--last", type=int, help="keep only the newest N rows")
+    p_consumers.add_argument("--json", action="store_true")
     p_rotated = ledger_sub.add_parser("mark-rotated")
     p_rotated.add_argument("id")
     p_rotated.add_argument("--reason", required=True)
@@ -336,6 +342,9 @@ def main(argv: list[str] | None = None) -> int:
             return cmd_ledger_filter(root, tool=args.tool, rule=args.rule,
                                       status=args.status, severity=args.severity,
                                       as_json=args.json)
+        if args.ledger_command == "consumers":
+            return cmd_ledger_consumers(root, consumer=args.consumer, last=args.last,
+                                         as_json=args.json)
         if args.ledger_command == "mark-rotated":
             return cmd_ledger_mark_rotated(root, args.id, args.reason)
         if args.ledger_command == "mark-not-a-secret":
@@ -349,7 +358,7 @@ def main(argv: list[str] | None = None) -> int:
             return max(cmd_ledger_resolve(root, fid, args.out_of_scope, args.reason)
                        for fid in args.id)
         print("aramid: ledger: a subcommand is required "
-              "(list|show|filter|mark-rotated|mark-not-a-secret|mark-unreachable|resolve)",
+              "(list|show|filter|consumers|mark-rotated|mark-not-a-secret|mark-unreachable|resolve)",
               file=sys.stderr)
         return 3
 

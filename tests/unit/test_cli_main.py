@@ -296,7 +296,7 @@ def test_ledger_without_a_subcommand_names_them_all_and_exits_3(capsys):
     assert cli.main(["ledger"]) == 3
     assert capsys.readouterr() == (
         "", "aramid: ledger: a subcommand is required "
-            "(list|show|filter|mark-rotated|mark-not-a-secret|mark-unreachable|resolve)\n")
+            "(list|show|filter|consumers|mark-rotated|mark-not-a-secret|mark-unreachable|resolve)\n")
 
 
 def test_override(monkeypatch):
