@@ -235,9 +235,14 @@ def consume(item, ctx: DrainContext) -> ConsumerResult:
                 duration_s=time.monotonic() - started)
         if base_res.state is not ToolState.OK or base_res.returncode != 0:
             # Load-bearing note prefix: the give-up counter matches it. Shared
-            # with the Python consumer so the two cannot drift apart.
+            # with the Python consumer so the two cannot drift apart. The
+            # suffix and the log tail are that consumer's too (round 243:
+            # pawscout-worker sat degraded across two drains with nothing in
+            # the repo naming the failing test).
+            mutation.tail_log(ctx.root, item.id, item.head, base_res, tool=TOOL)
             return ConsumerResult(consumer=NAME, state="degraded",
-                                  note=mutation.failing_note_prefix(item.head),
+                                  note=(f"{mutation.failing_note_prefix(item.head)} -- rc "
+                                        f"{base_res.returncode}: {mutation.last_line(base_res)}"),
                                   duration_s=time.monotonic() - started)
 
         done = False

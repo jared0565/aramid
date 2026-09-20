@@ -10,6 +10,22 @@ to publish a tag that disagrees with it.
 
 ## [Unreleased]
 
+### Fixed
+
+- **A red JS baseline now says what failed, and `status` says where to
+  read the rest.** The Python mutation consumer has carried the exit code
+  and the last output line in its `baseline failing` note, and the run's
+  last 60 lines of stdout and stderr under `.aramid/logs/`, since round
+  174; the JS consumer returned the bare prefix and wrote nothing, so a
+  repo could sit degraded across drains with nothing anywhere naming the
+  failing test (pawscout-worker, channel rounds 242-243, 2026-09-20).
+  `js_mutation` now uses the same two helpers (`consumers.mutation.tail_log`
+  and `last_line`, made public; the log is
+  `.aramid/logs/js-mutation-baseline-<item>-<head>.log`), and `aramid
+  status` prints a remedy line under any failing-baseline consumer note
+  pointing at that log. The note prefix the give-up counter matches on is
+  unchanged.
+
 ## [0.17.11] — 2026-09-19
 
 ### Fixed

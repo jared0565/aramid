@@ -371,7 +371,8 @@ def test_a_red_baseline_degrades_with_the_shared_prefix(tmp_path, monkeypatch):
 
     res, oracle = _run(r, base, head, monkeypatch, {}, {"BASE": FAIL})
 
-    assert (res.state, res.note) == ("degraded", pymut.failing_note_prefix(head))
+    assert (res.state, res.note) == (
+        "degraded", f"{pymut.failing_note_prefix(head)} -- rc 1: (no output)")
     assert len(oracle.calls) == 1
 
 
@@ -380,7 +381,60 @@ def test_a_baseline_that_crashed_at_rc_0_is_failing_too(tmp_path, monkeypatch):
 
     res, _ = _run(r, base, head, monkeypatch, {}, {"BASE": CRASHED})
 
-    assert (res.state, res.note) == ("degraded", pymut.failing_note_prefix(head))
+    assert (res.state, res.note) == (
+        "degraded", f"{pymut.failing_note_prefix(head)} -- rc 0: (no output)")
+
+
+def test_a_red_baseline_is_degraded_with_the_rc_and_the_last_line_and_a_log(
+        tmp_path, monkeypatch):
+    """Mirror of the Python consumer's contract: the prefix stays byte-identical
+    (the give-up counter matches on it), the suffix says what the counter never
+    needed -- the exit code and the last line -- and the output tails land under
+    .aramid/logs beside the gate's own logs, named by item and head. Round 243:
+    two degraded drains on pawscout-worker with nothing in the repo saying
+    which test failed."""
+    r, base, head = _repo(tmp_path)
+    red = RunnerResult(tool="npm", state=ToolState.OK, returncode=1,
+                       raw="RUN v1\n x calc.test.js > adds\n Tests 1 failed | 4 passed\n")
+
+    res, _ = _run(r, base, head, monkeypatch, {}, {"BASE": red})
+
+    assert res.state == "degraded"
+    assert res.note == (f"{pymut.failing_note_prefix(head)} -- rc 1: "
+                        f"Tests 1 failed | 4 passed")
+    log = r / ".aramid" / "logs" / f"js-mutation-baseline-q1-{head[:12]}.log"
+    assert log.is_file(), sorted(p.name for p in (r / ".aramid" / "logs").glob("*")) \
+        if (r / ".aramid" / "logs").exists() else "no logs dir"
+    assert "calc.test.js > adds" in log.read_text(encoding="utf-8")
+
+
+def test_a_red_baseline_prefers_stderr_for_its_last_line(tmp_path, monkeypatch):
+    """A crash before the runner prints its summary puts the traceback on
+    stderr; that is the line worth reading, so stderr wins when it has one."""
+    r, base, head = _repo(tmp_path)
+    red = RunnerResult(tool="npm", state=ToolState.OK, returncode=2,
+                       raw="RUN v1\n", stderr="Error: Cannot find module 'vitest'\n")
+
+    res, _ = _run(r, base, head, monkeypatch, {}, {"BASE": red})
+
+    assert res.note == (f"{pymut.failing_note_prefix(head)} -- rc 2: "
+                        f"Error: Cannot find module 'vitest'")
+    log = r / ".aramid" / "logs" / f"js-mutation-baseline-q1-{head[:12]}.log"
+    assert "Error: Cannot find module 'vitest'" in log.read_text(encoding="utf-8")
+
+
+def test_a_red_baseline_cuts_its_last_line_at_160_characters(tmp_path, monkeypatch):
+    """The note is one ledger column; a vitest stack line can run to
+    thousands of characters. The cut is 160, and the log keeps the whole line."""
+    r, base, head = _repo(tmp_path)
+    long = "x" * 200
+    red = RunnerResult(tool="npm", state=ToolState.OK, returncode=1, raw=f"RUN v1\n{long}\n")
+
+    res, _ = _run(r, base, head, monkeypatch, {}, {"BASE": red})
+
+    assert res.note == f"{pymut.failing_note_prefix(head)} -- rc 1: {'x' * 160}"
+    log = r / ".aramid" / "logs" / f"js-mutation-baseline-q1-{head[:12]}.log"
+    assert long in log.read_text(encoding="utf-8")
 
 
 def test_the_configured_baseline_budget_wins_over_the_multiple(tmp_path, monkeypatch):

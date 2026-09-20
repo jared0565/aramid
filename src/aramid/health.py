@@ -394,10 +394,30 @@ def skip_streak_lines(h: Health) -> list[str]:
             for tool, streak in sorted(h.skip_streaks[gate].items())]
 
 
+_FAILING_BASELINE = "baseline failing"
+
+
+def _remedy_line(fault: ConsumerFault) -> list[str]:
+    """One remedy per note family that has somewhere else to look. The
+    failing-baseline family (both mutation consumers) writes the run's last
+    lines to `.aramid/logs/<tool>-baseline-<item>-<head>.log`; the note holds
+    a sha and one line, and until round 243 (2026-09-20) nothing in `status`
+    said where the rest went. The consumer name is `js_mutation`, the tool
+    (and log stem) is `js-mutation`; same for `mutation`."""
+    if not fault.note.startswith(_FAILING_BASELINE):
+        return []
+    stem = fault.name.replace("_", "-")
+    return [f"      remedy: the test command exited non-zero in a clean worktree of that "
+            f"commit; its last lines are in .aramid/logs/{stem}-baseline-*.log. Green by "
+            f"hand at that commit means the drain's run, not the suite, is what to look at"]
+
+
 def degraded_consumer_lines(h: Health) -> list[str]:
-    faults = [f"    {f.name}: degraded last {f.count} run(s)"
-              + (f" -- {f.note}" if f.note else "")
-              for f in h.degraded_consumers]
+    faults = []
+    for f in h.degraded_consumers:
+        faults.append(f"    {f.name}: degraded last {f.count} run(s)"
+                      + (f" -- {f.note}" if f.note else ""))
+        faults.extend(_remedy_line(f))
     return ["  degraded consumer runs:", *faults] if faults else []
 
 

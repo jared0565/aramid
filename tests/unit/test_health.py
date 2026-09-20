@@ -287,3 +287,26 @@ def test_snapshot_without_a_ledger_reads_zero_open_and_carries_the_run_id(tmp_pa
         assert health.snapshot(None, lg, result=_result(run_id="")).run_id is None
     finally:
         lg.close()
+
+
+def test_a_failing_baseline_streak_says_where_the_output_went(tmp_path):
+    """The note names the commit and the last line; the log under
+    .aramid/logs holds the rest, and nothing told the reader so (round 243:
+    an agent read "baseline failing" twice and could not find which test).
+    Only this note family gets the line -- a fuzz driver fault, say, has
+    its own wording."""
+    lg = Ledger(tmp_path / "l.db")
+    _consumer(lg, "js_mutation", "degraded",
+              "baseline failing (last seen @ dc668ab8abf0) -- rc 1: Tests 1 failed | 4 passed")
+    _consumer(lg, "fuzz", "degraded", "fuzz driver broken @ abc: boom")
+    h = health.snapshot(None, lg)
+    assert health.degraded_consumer_lines(h) == [
+        "  degraded consumer runs:",
+        "    fuzz: degraded last 1 run(s) -- fuzz driver broken @ abc: boom",
+        "    js_mutation: degraded last 1 run(s) -- baseline failing (last seen @ dc668ab8abf0)"
+        " -- rc 1: Tests 1 failed | 4 passed",
+        "      remedy: the test command exited non-zero in a clean worktree of that commit;"
+        " its last lines are in .aramid/logs/js-mutation-baseline-*.log. Green by hand at"
+        " that commit means the drain's run, not the suite, is what to look at",
+    ]
+    lg.close()

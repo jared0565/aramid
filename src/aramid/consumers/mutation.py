@@ -180,7 +180,7 @@ def _finalize_scores(scores: dict) -> dict:
     return {"schema": 1, "targets": scores}
 
 
-def _last_line(res) -> str:
+def last_line(res) -> str:
     """The last non-empty line of stderr, else of stdout, else a marker.
     pytest puts its summary on stdout, so stderr alone is often empty;
     a crash before collection puts the traceback on stderr, so stderr
@@ -192,10 +192,13 @@ def _last_line(res) -> str:
     return "(no output)"
 
 
-def _tail_log(root: Path, item_id: str, head: str, res) -> None:
+def tail_log(root: Path, item_id: str, head: str, res, tool: str = "mutation") -> None:
     """The last `_LOG_TAIL_LINES` of stdout and of stderr, under
-    `.aramid/logs/` beside the gate's own logs, named by item and head so a
-    re-run at the same head overwrites rather than accumulates. Best
+    `.aramid/logs/` beside the gate's own logs, named by consumer, item and
+    head so a re-run at the same head overwrites rather than accumulates.
+    Shared with the JS consumer (`tool="js-mutation"`), which until round
+    243 (2026-09-20) marked a red baseline degraded with nothing anywhere
+    saying what failed -- the exact gap round 174 closed here. Best
     effort: a log that cannot be written costs nothing but the log (spec
     section 9, fail-open) -- but says so on stderr, the way the worktree
     cleanup does, rather than vanishing. Only OSError is caught: that is
@@ -208,10 +211,10 @@ def _tail_log(root: Path, item_id: str, head: str, res) -> None:
             f"--- stderr (last {_LOG_TAIL_LINES} lines) ---\n{err}\n")
     try:
         logs.mkdir(parents=True, exist_ok=True)
-        (logs / f"mutation-baseline-{item_id}-{head[:12]}.log").write_text(
+        (logs / f"{tool}-baseline-{item_id}-{head[:12]}.log").write_text(
             body, encoding="utf-8")
     except OSError as exc:
-        print(f"aramid: mutation: baseline log not written under {logs}: {exc}",
+        print(f"aramid: {tool}: baseline log not written under {logs}: {exc}",
               file=sys.stderr)
 
 
@@ -766,11 +769,11 @@ def consume(item, ctx: DrainContext) -> ConsumerResult:
             # never needed: the exit code and the last line of output. The
             # tails go to a log beside the gate's own (round 174: three weeks
             # of `baseline failing` with nothing anywhere saying what failed).
-            _tail_log(ctx.root, item.id, item.head, base_res)
+            tail_log(ctx.root, item.id, item.head, base_res)
             return ConsumerResult(
                 consumer=NAME, state="degraded",
                 note=(f"{failing_note_prefix(item.head)} -- rc "
-                      f"{base_res.returncode}: {_last_line(base_res)}"),
+                      f"{base_res.returncode}: {last_line(base_res)}"),
                 duration_s=time.monotonic() - started)
         # The one run that can actually MEASURE the suite is one that finished.
         # A timeout only ever yields the budget you set, so recording "elapsed"
