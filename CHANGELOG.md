@@ -10,6 +10,8 @@ to publish a tag that disagrees with it.
 
 ## [Unreleased]
 
+## [0.18.0] — 2026-09-20
+
 ### Added
 
 - **`aramid ledger consumers`** lists the drain's consumer runs (mutation,
@@ -4808,7 +4810,8 @@ Stated plainly because each one changes how you should deploy this:
 - **PyPI publishing is not set up.** Install from a GitHub Release artifact or
   from git; `pip install aramid` does not work.
 
-[Unreleased]: https://github.com/jared0565/aramid/compare/v0.17.11...HEAD
+[Unreleased]: https://github.com/jared0565/aramid/compare/v0.18.0...HEAD
+[0.18.0]: https://github.com/jared0565/aramid/releases/tag/v0.18.0
 [0.17.11]: https://github.com/jared0565/aramid/releases/tag/v0.17.11
 [0.17.10]: https://github.com/jared0565/aramid/releases/tag/v0.17.10
 [0.17.9]: https://github.com/jared0565/aramid/releases/tag/v0.17.9
