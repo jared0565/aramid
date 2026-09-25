@@ -98,8 +98,12 @@ jobs:
           version: 8.28.0
           run: false # install only -- aramid's own gate invokes gitleaks itself
 
+      # -rs names every skipped test and its reason in the summary. Without it
+      # a leg reports only "15 skipped", and whether the real-npm js-mutation
+      # test (skipped without node+npm) ever runs in CI could not be read
+      # from any log (1.0 blocker PLAT-3, 2026-09-25).
       - name: Run test suite
-        run: python -m pytest -q
+        run: python -m pytest -q -rs
 
       # LATENT MUTANTS. The mutation drain confirms a survivor against
       # tests/unit alone (stage 1: the module's own test_<stem>*.py files;
@@ -237,9 +241,14 @@ jobs:
       # finding carries evidence=None and the directory is gitignored. On
       # 2026-08-06 the windows-latest/py3.14 leg failed at the pre-push step
       # with "tests-failed", passed on re-run with no code change, and the one
-      # string naming the failing test died with the container. Six legs were
-      # green, so that is a live intermittent in the suite of a tool whose
-      # whole claim is deterministic verdicts -- and it is unidentified.
+      # string naming the failing test died with the container. It was traced
+      # two days later, without this step, to a wall-clock margin that CPU
+      # contention at this step could close (5bca2f2). On 2026-09-14 the same
+      # leg failed at the same step again (run 34802791228, attempt 1), and
+      # this step ran and named it: test_triage_head_scores_risky_commit_and_enqueues,
+      # a triage budget clock that started before its inputs (fixed bd37772).
+      # Both were timing under load at a step that runs the unit suite
+      # alongside four analyzers; this step is why the second took one run.
       #
       # PLACEMENT. `if: failure()` fires for any earlier failed step even
       # though the steps between it were skipped, so one step here covers both

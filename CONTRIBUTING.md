@@ -16,8 +16,9 @@ pip install -e ".[dev]"
 aramid doctor                                      # gitleaks must be on PATH
 ```
 
-`aramid doctor` probes every analyzer (gitleaks, semgrep, ruff, pip-audit,
-eslint, mypy) and offers a repair for anything missing. The Python analyzers
+`aramid doctor` probes the four analyzers (gitleaks, semgrep, ruff,
+pip-audit) and the repo's test runner, and offers a repair for anything
+missing. The Python analyzers
 arrive as dependencies; gitleaks is a binary you install yourself (the CI
 workflow pins 8.28.0).
 

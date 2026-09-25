@@ -82,18 +82,24 @@ Net effect: **only OWASP-semgrep and LLM findings are gated by an arming flag** 
 **Pre-push no-new-warnings ratchet**: at `Gate.PRE_PUSH`, any `WARN` finding whose id is "new" (`f.id in new_ids`, never seen before in the ledger) is escalated to `BLOCK` — except findings with rule `deps.DEPS_SHAPE_DRIFT_RULE`, which are exempt.
 
 ### Arming / bake-then-arm
-Aramid ships with several checks in a WARN-only "bake" period so an operator can observe noise before committing to enforcement. There are exactly **four** arming-style flags:
+Aramid ships with several checks in a WARN-only "bake" period so an operator can observe noise before committing to enforcement. There are exactly **ten** arming-style flags, independent of one another:
 
-| Flag | Location | Default | What it BLOCKs when armed |
-|---|---|---|---|
-| `semgrep_block_armed` | root of `aramid.toml` | `false` | OWASP-semgrep block-list matches |
-| `[pack].pack_block_armed` | `aramid.toml` | `true` | regression-pack-compiled block rules (`aramid-regression.block.*`) — deliberately independent of `semgrep_block_armed` |
-| `[llm].llm_block_armed` | `aramid.toml` | `false` | confirmed-and-CRITICAL `llm-review` findings |
-| `[llm.autolearn].armed` | `aramid.toml` | `false` | not a BLOCK gate — controls whether learned uplift/cascade actually change reviewer *selection* (vs. shadow-only telemetry) |
+| Flag | Location | Default | Armed by | What it changes when armed |
+|---|---|---|---|---|
+| `semgrep_block_armed` | root of `aramid.toml` | `false` | `aramid arm` | OWASP-semgrep block-list matches BLOCK |
+| `[pack].pack_block_armed` | `aramid.toml` | `true` | hand edit (no `arm` variant) | regression-pack-compiled block rules (`aramid-regression.block.*`) BLOCK — deliberately independent of `semgrep_block_armed` |
+| `[llm].llm_block_armed` | `aramid.toml` | `false` | `arm --llm` | confirmed-and-CRITICAL `llm-review` findings BLOCK at pre-push |
+| `[llm.autolearn].armed` | `aramid.toml` | `false` | `arm --autolearn` | not a BLOCK gate — learned uplift/cascade actually change reviewer *selection* (vs. shadow-only telemetry) |
+| `tdd_block_armed` | root of `aramid.toml` | `false` | `arm --tdd` | code-without-test (`tdd`) findings BLOCK at pre-push |
+| `[mutation].mutation_block_armed` | `aramid.toml` | `false` | `arm --mutation` | surviving-mutant findings BLOCK at pre-push |
+| `[mutation].score_block_armed` | `aramid.toml` | `false` | `arm --mutation-score` | mutation-score *transition* regressions BLOCK at pre-push (rate deltas stay WARN) |
+| `[red_proof].red_proof_block_armed` | `aramid.toml` | `false` | `arm --red-proof` | never-red test findings BLOCK at pre-push |
+| `[shadow].shadow_block_armed` | `aramid.toml` | `false` | `arm --shadow` | a repo-root file that hijacks `python -m aramid` BLOCKs at every gate, pre-commit included |
+| `agent_block_armed` | root of `aramid.toml` | `false` | `arm --agent` | not a finding tier — the agent `pre-tool-use` hook REJECTS a git hook-bypass (`--no-verify`, `core.hooksPath`) instead of only warning |
 
-`[dast].block_armed` exists as a fifth flag-shaped key but is explicitly RESERVED/inert (never read by the dast consumer). `[mutation]`, `[fuzz]`, and `[js_mutation]` have **no** arming flag of any kind.
+The verdict of every armable finding tool is computed from the arming flag at gate time, so arming applies to findings recorded before it. Drain-time mutation survivors are recorded `WARN`; `mutation_block_armed` is what escalates them at the next pre-push. `[dast].block_armed` is an eleventh flag-shaped key but RESERVED/inert: the dast consumer never reads it (it only shows up in reported arming state). `[fuzz]` and `[js_mutation]` have **no** arming flag of any kind.
 
-Arming is always a manual, deliberate act (`aramid arm` / `arm --llm` / `arm --autolearn`) — never a timer or auto-promotion. All three commands rewrite `aramid.toml` via targeted regex substitution (not a full TOML parse/re-dump) specifically to preserve hand-written comments byte-for-byte. `aramid init` writes a fresh repo's `aramid.toml` stub with `semgrep_block_armed = false` and `bake_started = <today>` always, and never touches an existing `aramid.toml`. `aramid status` surfaces bake day-count and per-rule semgrep hit counts while unarmed, so an operator can spot/demote noisy rules before arming.
+Arming is always a manual, deliberate act (`aramid arm` and its variants) — never a timer or auto-promotion. Every variant rewrites `aramid.toml` via targeted regex substitution (not a full TOML parse/re-dump) specifically to preserve hand-written comments byte-for-byte. `aramid init` writes a fresh repo's `aramid.toml` stub with `semgrep_block_armed = false` and `bake_started = <today>` always, and never touches an existing `aramid.toml`. `aramid status` surfaces bake day-count and per-rule semgrep hit counts while unarmed, so an operator can spot/demote noisy rules before arming.
 
 The stub's header **comment** (`# aramid repo config -- detected stack: ...; package manager: ...`, and the matching "Detected stack:" line `init` writes into `ARAMID.md`) is informational only — `detect_stacks()`/`detect_package_manager()` are re-detected fresh on every gate run, never persisted as config keys (`render_repo_stub`'s own docstring is explicit about this). Its only observable effect is that comment's text: a JS/TS repo whose only `.py` files are vendored under `node_modules/`, `venv/`, or `build/` (no top-level Python of its own) now gets an accurate `detected stack: js` there instead of a spurious `detected stack: js, python` — the same pruned walk described under the `[tests]` config section above, applied to `detect_stacks()` too.
 
@@ -189,7 +195,7 @@ Two invariants worth keeping in mind when touching this:
 
 **The npm side is promoted to a real second suite only when a JS package-manager lockfile is present** (`package-lock.json`, `pnpm-lock.yaml`, or `yarn.lock`, via `detect_package_manager`). A `package.json` `scripts.test` entry with nothing installed behind it is common — e.g. `npm init`'s own default stub, `"... && exit 1"` — and promoting every such stub to a second concurrent BLOCK-tier suite would manufacture false blocks on repos that only ever meant that `package.json` for tooling like prettier/husky. Without a lockfile, only pytest runs and a stderr notice explains that npm was skipped rather than silently dropping it. This lockfile gate applies **only** to the promotion decision: a repo with npm detected but no pytest still runs `npm test` with no lockfile required at all, unchanged.
 
-**A detected suite whose own tool can't run.** Inside a dual-stack run, if one sub-suite's binary can't be resolved at all (not installed, not on PATH), that sub-result comes back `MISSING` and now surfaces a `tool="tests"`, `rule="tests-tool-missing"` finding — unconditionally `BLOCK` per `policy.classify`, same tier as `tests-failed`, so the push fails with a stated reason instead of a bare degraded exit code. **This is narrower than it may sound: it fires only for a sub-result of a dual-stack run.** A single-suite repo (only pytest, or only npm, detected) whose one tool is missing still gets the pre-existing, unchanged behavior — zero findings from `runners/tests.py`, degrading the BLOCK tier via `degraded_block_tier`/`--accept-degraded` exactly as before this dual-suite path existed. Closing that single-suite gap (the more common case in practice — an unactivated venv or a slim CI image missing pytest entirely) is a separately tracked follow-up; `doctor`/`init` still don't probe for pytest or npm at all.
+**A detected suite whose own tool can't run.** Inside a dual-stack run, if one sub-suite's binary can't be resolved at all (not installed, not on PATH), that sub-result comes back `MISSING` and now surfaces a `tool="tests"`, `rule="tests-tool-missing"` finding — unconditionally `BLOCK` per `policy.classify`, same tier as `tests-failed`, so the push fails with a stated reason instead of a bare degraded exit code. **This is narrower than it may sound: it fires only for a sub-result of a dual-stack run.** A single-suite repo (only pytest, or only npm, detected) whose one tool is missing still gets the pre-existing, unchanged behavior — zero findings from `runners/tests.py`, degrading the BLOCK tier via `degraded_block_tier`/`--accept-degraded` exactly as before this dual-suite path existed. Closing that single-suite gap (the more common case in practice — an unactivated venv or a slim CI image missing pytest entirely) is a separately tracked follow-up. `aramid doctor` does probe it (`probe_tests`: pytest/npm, or the binary a configured `[tests].command` names, resolved the way the gate would) and exits `2` when a detected suite's tool cannot be resolved, so the single-suite case is visible before a push.
 
 **Notices.** Six independent stderr notices exist around `[tests]`: the pre-existing `[tests].enabled = false` notice (fires only when a suite or command actually exists to be suppressed); two added by Task 4 for a false-negative/skipped suite, both pointing at `[tests].command` as the fix — `detect_tests()` finds nothing despite a plausible test setup existing anyway (`tests/`, `test/`, `pytest.ini`, `tox.ini`, or `[tool.pytest.ini_options]` — e.g. a custom `python_files` pattern, unittest-style `testfoo.py` naming, or a doctest-only suite that the detector's literal filename match doesn't recognize), and both kinds detected but no lockfile backing the npm side (the case above); two independent budget-vs-timeout notices — one dual-suite-specific (fires only inside the lockfile-present dual-suite branch, comparing the effective per-suite timeout, defaulted via `tests.TIMEOUT_S` when unset, against the shared gate budget) and one general (fires whenever `[tests].timeout_s` is explicitly set above the gate budget, regardless of single- or dual-stack — the same check the `timeout_s` row above already documents); and a sixth, separate, differently-worded notice that `runners/tests.py` itself prints at actual dual-suite execution time for the same no-lockfile case. The last is a deliberate duplication across two independent code paths (pipeline's pre-flight check vs. the runner's own runtime check), not a bug — Task 4 kept both so neither's removal silently reopens the other's gap.
 
@@ -261,7 +267,10 @@ Two invariants worth keeping in mind when touching this:
 | `retest_open_survivors` | bool | `true` | When the item's range changes any test file, regenerate each open or `pending_retest` mutation survivor from its fingerprint and re-run it through the same stage-1 / full-suite confirmation (and, on the item the drain synthesizes for a repo with an empty queue, the `pending_retest` rows alone); a confirmed kill is claimed as `mutant_killed`. Survivors bound by `.aramid-suppressions.toml` are skipped; the range's mutation scores are untouched. |
 | `retest_cap` | int | `3` | Re-tests per item. A survivor whose module a changed test in the range maps to (the `gap_addressed` stem rule) is re-tested first, on its own confirm budget (one per re-test) and outside `max_mutants`; every other survivor runs after the range's own mutants, inside the range's budget. One survivor id names every line with that content, and a claim needs every occurrence killed, so a survivor whose occurrences outnumber the mutant or confirm slots a pass has left is skipped before its first run rather than half-tested (a later pass with room, or the empty-queue re-test item, picks it up). The note reads `re-tested N of M open survivor(s), K killed`, plus `C of D survivor(s) named by a changed test re-tested first` when there were any, plus `S survivor(s) not re-tested: occurrences exceed the remaining re-test budget` when any were skipped. |
 
-No arming flag exists in `[mutation]`.
+| `mutation_block_armed` | bool | `false` | Arming flag: surviving-mutant findings BLOCK at pre-push. Flipped via `aramid arm --mutation`. |
+| `score_block_armed` | bool | `false` | Arming flag: mutation-score *transition* regressions BLOCK at pre-push; rate deltas stay WARN. Flipped via `aramid arm --mutation-score`. |
+
+Drain-time survivors are recorded `WARN` either way; the pre-push gate applies the flag, so arming covers survivors recorded before it.
 
 ### `[js_mutation]`
 
@@ -309,8 +318,14 @@ No arming flag exists in `[fuzz]`.
 2. `[pack].pack_block_armed` — default `true` — no arm subcommand; hand-edited.
 3. `[llm].llm_block_armed` — default `false` — armed via `aramid arm --llm`.
 4. `[llm.autolearn].armed` — default `false` — armed via `aramid arm --autolearn`.
+5. `tdd_block_armed` (top level) — default `false` — armed via `aramid arm --tdd`.
+6. `[mutation].mutation_block_armed` — default `false` — armed via `aramid arm --mutation`.
+7. `[mutation].score_block_armed` — default `false` — armed via `aramid arm --mutation-score`.
+8. `[red_proof].red_proof_block_armed` — default `false` — armed via `aramid arm --red-proof`.
+9. `[shadow].shadow_block_armed` — default `false` — armed via `aramid arm --shadow`.
+10. `agent_block_armed` (top level) — default `false` — armed via `aramid arm --agent`.
 
-`[dast].block_armed` is a fifth flag-shaped key but explicitly RESERVED/inert. `[mutation]`, `[fuzz]`, and `[js_mutation]` have **no** arming flag of any kind.
+`[dast].block_armed` is an eleventh flag-shaped key but explicitly RESERVED/inert. `[fuzz]` and `[js_mutation]` have **no** arming flag of any kind. What each flag changes: see "Arming / bake-then-arm" in section 1.
 
 ---
 
@@ -358,7 +373,7 @@ No arming flag exists in `[fuzz]`.
 - **Purpose**: call top-level, type-hinted Python functions touched by the queue item's commits with deterministic seeded inputs, inside a throwaway worktree; report DEEP-CRASH exceptions as WARN-tier findings. Candidate selection is AST-only; fuzzing runs in a separate subprocess (`python -m aramid.fuzzdriver <spec.json>`) that re-checks type hints at import time. `PYTHONHASHSEED=0` is forced for stable crash reproduction.
 - **Config keys**: `[fuzz]` (`enabled=true`, `max_functions=10`, `cases_per_function=50`, `wall_budget_s=300`, `batch_timeout_s=120`, `skip_name_patterns=[...]`).
 - **WARN/BLOCK + arming**: no arming knob exists; WARN only.
-- **OK-skip / give-up**: OK-skip when `enabled=false` (`"disabled"`); no non-test Python files changed (`"no python files in range"`); no fuzzable functions found (`"no fuzzable functions in range"`); driver timed out — treated as OK (`"driver timed out (budget did its job)"`); driver exited non-zero/crashed — still OK (`f"driver error: ..."`); driver produced unparseable JSON — still OK (`"driver produced no parseable output"`). **ERROR** only when `git worktree add` fails. **No give-up valve at all, and can never return DEGRADED** — every failure short of worktree-add is swallowed as OK.
+- **OK-skip / give-up**: OK-skip when `enabled=false` (`"disabled"`); no non-test Python files changed (`"no python files in range"`); no fuzzable functions found (`"no fuzzable functions in range"`). A driver that **times out** is recorded OK — `degraded` would pin the queue item — with a note naming the function it hung in and the marker `no cases run`; that marker is what `aramid status`'s no-work line and the fleet row's `no_work` evidence read, so a consumer that keeps timing out turns `consumers_healthy` red instead of passing silently (exclude the blocking target with `skip_name_patterns`). A driver that **exits non-zero / crashes** or prints **no parseable JSON** is **DEGRADED** (`fuzz driver broken @ <head[:12]>: ...`): the item stays queued and the next drain retries. After three such runs at the same head the consumer gives up (`"fuzz giving up: driver persistently broken"`), recorded OK so the item can drain and reported as stood down. **ERROR** when `git worktree add` fails. (Until 2026-08-11 every driver failure was swallowed as OK; `6a97508` made them visible.)
 - **Stack requirement**: Python stack with top-level, non-async, type-hinted functions in changed lines.
 - **Token cost**: always `0.0`.
 
@@ -375,7 +390,7 @@ No arming flag exists in `[fuzz]`.
 
 ## 4. CLI Command Reference
 
-Entry points: console script `aramid` (`pyproject.toml` `[project.scripts]`), or `python -m aramid` (what the installed git hooks actually call). `aramid --version` prints `aramid 0.1.0` and exits 0. `-h`/`--help` on any (sub)parser exits 0. No subcommand → `aramid: no command` to stderr, exit 3. Unknown/bad subcommand or malformed flags → remapped to exit 3.
+Entry points: console script `aramid` (`pyproject.toml` `[project.scripts]`), or `python -P -m aramid` (what the installed git hooks actually call). `aramid --version` prints `aramid <version>` (e.g. `aramid X.Y.Z`) and exits 0. `-h`/`--help` on any (sub)parser exits 0. No subcommand → `aramid: no command` to stderr, exit 3. Unknown/bad subcommand or malformed flags → remapped to exit 3.
 
 ### `aramid init [path] [--discover]`
 Onboard a repo: write config, install hooks, seed baseline.
@@ -387,7 +402,7 @@ Onboard a repo: write config, install hooks, seed baseline.
 Run the gate pipeline.
 - `--gate {pre-commit,pre-push}` (default `pre-commit`).
 - Mode group (mutually exclusive): `--staged`, `--range`, `--all`; default is `staged` for pre-commit, `range` for pre-push.
-- `--strict` — remaps exit codes 2/3 to 1.
+- `--strict` — remaps exit code 2 to 1; 3 passes through unchanged.
 - `--json` — render JSON instead of console report.
 - `--accept-degraded` — accept a degraded run; `--reason` (default `None`, falls back to `"no reason given"`) records why. Also settable via `ARAMID_ACCEPT_DEGRADED` env var.
 - Fresh-ledger downgrade at `--gate pre-push` with no baseline yet.
@@ -436,12 +451,18 @@ Suppress a WARN-tier finding, ledger-logged. `--reason` required (non-empty afte
 - `--rebuild` — replays every registered repo's ledger events from scratch into a fresh state.
 - Always exits 0.
 
-### `aramid arm [--llm | --autolearn]`
+### `aramid arm [--llm | --autolearn | --tdd | --mutation | --mutation-score | --red-proof | --shadow | --agent]`
 End a WARN-only bake by flipping an armed flag.
 - No flag — `semgrep_block_armed = true`.
 - `--llm` — `[llm].llm_block_armed = true`.
 - `--autolearn` — `[llm.autolearn].armed = true` (also prints the shadow record).
-- `--llm`/`--autolearn` mutually exclusive; refuses (exit 3) if `aramid.toml` doesn't exist yet.
+- `--tdd` — `tdd_block_armed = true` (top level).
+- `--mutation` — `[mutation].mutation_block_armed = true`.
+- `--mutation-score` — `[mutation].score_block_armed = true`.
+- `--red-proof` — `[red_proof].red_proof_block_armed = true`.
+- `--shadow` — `[shadow].shadow_block_armed = true` (BLOCKs at every gate, pre-commit included).
+- `--agent` — `agent_block_armed = true` (top level).
+- All eight flags are mutually exclusive: one flag per call. Refuses (exit 3) if `aramid.toml` doesn't exist yet, or if the rewritten file would not read back as armed (e.g. the key sits in the wrong table); nothing is written then.
 
 ### `aramid update-rules`
 Reports on the vendored, offline OWASP semgrep ruleset — performs no network fetch. Prints the pinned upstream source, the vendored path, and whether a ruleset is installed (warns to stderr if not). Always exits 0.
@@ -450,7 +471,7 @@ Reports on the vendored, offline OWASP semgrep ruleset — performs no network f
 Removes installed hook shims, deletes `ARAMID.md`, removes the `.gitignore` entries `init` appended, deregisters the repo. The ledger (`.aramid/`) is deliberately kept.
 
 ### `aramid schedule install|remove|status`
-Register/remove/query a recurring `<interpreter> -m aramid drain --all`. Cross-platform: Windows Task Scheduler on Windows, cron elsewhere.
+Register/remove/query a recurring `<interpreter> -P -m aramid drain --all`. Cross-platform: Windows Task Scheduler on Windows, cron elsewhere.
 - `install` — reads `[drain].interval_hours` (default 4).
   - **Windows** — registers via `schtasks /Create ... /F` under task name `aramid-drain`.
   - **Linux/macOS** — writes one crontab line tagged `# aramid-drain`. Intervals under a day become an hour step (`0 */4 * * *`); a day or more becomes a day step (48h → `0 0 */2 * *`), because `*/N` in the hour field is meaningless for N > 23. Re-installing replaces aramid's line rather than adding a second one, and every unmarked line in your crontab is preserved verbatim.
@@ -478,7 +499,7 @@ Register/remove/query a recurring `<interpreter> -m aramid drain --all`. Cross-p
 
 ### Remap layers
 
-1. **`--strict`** (`aramid check`): remaps `2`/`3` → `1`. Applied after the fresh-clone downgrade.
+1. **`--strict`** (`aramid check`): remaps `2` → `1`; `3` passes through unchanged (an engine or config error is already a hard failure). Applied after the fresh-clone downgrade.
 2. **Git hook shims** (`hooks.py`):
    - `pre-commit` shim: `{2,3} → 0` (always fail-open).
    - `pre-push` shim: `2 → 0`; `1` and `3` pass through and block (fail-closed).
@@ -519,7 +540,7 @@ Register/remove/query a recurring `<interpreter> -m aramid drain --all`. Cross-p
 Run `aramid doctor` to see which of `gitleaks`, `semgrep`, `ruff`, `pip-audit` are missing (`doctor` exits `2` if either BLOCK-tier tool — gitleaks or semgrep — is missing; WARN-tier absence of ruff/pip-audit never affects the exit code; `2` also for "configured but not enforced", a stale or missing relocated shim behind another tool's managed hook (reported, never rewritten -- `aramid init .` regenerates it), a broken detected test toolchain, and an editable aramid install while any repo is registered — see the user guide's doctor section). On a CI checkout `doctor` exits `2` by construction — hooks are never cloned, so it is "configured but NOT enforced" — and a `pwsh` step wrapper without `exit $LASTEXITCODE` reports that as `1`; run it informationally there. Run `aramid doctor --fix` to `pip install --upgrade` the owned toolchain (`ruff`, `semgrep`, `pip-audit`) into the current interpreter, and to download a pinned, sha256-verified gitleaks v8.21.2 binary into `~/.aramid/tools/` if missing. Note that `aramid init` itself gates on `doctor`: if a BLOCK-tier tool is missing at init time, the whole init aborts (no hooks installed, no partial config written), exit 3.
 
 **The scheduled drain doesn't seem to be running.**
-Read `aramid status`'s `last drain:` line first: every drain writes a `drain_visited` row into each repo it looks at, with or without work, so the line moves every interval -- `idle: nothing to drain` means it ran and found nothing, a timestamp older than one interval means it did not run here (not scheduled, or this repo is not registered). Until 2026-09-16 an idle drain wrote nothing and the line kept naming the last consumer run, so a dead scheduler and an empty queue looked alike. Then check `aramid schedule status` (Windows Task Scheduler job named `aramid-drain`; prints `schtasks`' own output or "aramid-drain: not installed"). If not installed, run `aramid schedule install` (reads `[drain].interval_hours`, default 4). If it's installed but drains never seem to complete, check for a stuck singleton lock at `~/.aramid/drain.lock` (JSON `{pid, started_at}`) — it's treated as stale/breakable automatically once its recorded PID is dead or it's older than `2 × [drain].wall_clock_budget_s` (default 600s, so 1200s). `aramid drain --dry-run` gives a read-only preview of what would be swept/popped without acquiring the lock.
+Read `aramid status`'s `last drain:` line first: every drain writes a `drain_visited` row into each repo it looks at, with or without work, so the line moves every interval -- `idle: nothing to drain` means it ran and found nothing, a timestamp older than one interval means it did not run here (not scheduled, or this repo is not registered). Until 2026-09-16 an idle drain wrote nothing and the line kept naming the last consumer run, so a dead scheduler and an empty queue looked alike. Then check `aramid schedule status` (on Windows the Task Scheduler job named `aramid-drain`, printing `schtasks`' own output; on Linux/macOS the marked crontab line; "aramid-drain: not installed" if neither). If not installed, run `aramid schedule install` (reads `[drain].interval_hours`, default 4). If it's installed but drains never seem to complete, check for a stuck singleton lock at `~/.aramid/drain.lock` (JSON `{pid, started_at}`) — it's treated as stale/breakable automatically once its recorded PID is dead or it's older than `2 × [drain].wall_clock_budget_s` (default 600s, so 1200s). `aramid drain --dry-run` gives a read-only preview of what would be swept/popped without acquiring the lock.
 
 **Findings aren't blocking even though they look like real issues.**
 Check which arming flag governs that finding — most WARN/BLOCK behavior is arming-gated: `semgrep_block_armed` (top-level, default `false`) for OWASP-semgrep matches; `[pack].pack_block_armed` (default `true`, so normally already armed) for compiled regression-pack rules; `[llm].llm_block_armed` (default `false`) for confirmed-CRITICAL LLM findings, applied retroactively at the pre-push gate only; `[llm.autolearn].armed` doesn't affect BLOCK at all, only reviewer selection. `[dast].block_armed` exists but is explicitly reserved/inert — dast findings are always WARN. `[mutation]`, `[fuzz]`, `[js_mutation]` have no arming flag at all and are structurally WARN-only. Run `aramid status` to see current bake day-count and per-rule semgrep hit counts before deciding to arm. Note: gitleaks, curated ruff rules (`S102,S105,S106,S107,S608,S301,S302`), failing tests, and dependency findings ≥ `[deps].block_severity` (default `"critical"`) BLOCK unconditionally regardless of any arming flag.

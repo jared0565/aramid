@@ -21,14 +21,18 @@ as a wheel and an sdist — the *same bytes*, verified by sha256 across both
 indexes — so pinning a file works too:
 
 ```bash
-pip install https://github.com/jared0565/aramid/releases/download/v0.2.0/aramid-0.2.0-py3-none-any.whl
+pip install https://github.com/jared0565/aramid/releases/download/vX.Y.Z/aramid-X.Y.Z-py3-none-any.whl
 ```
 
 Or straight from git, if you would rather pin a ref than a file:
 
 ```bash
-pip install "git+https://github.com/jared0565/aramid@v0.2.0"
+pip install "git+https://github.com/jared0565/aramid@vX.Y.Z"
 ```
+
+Replace `X.Y.Z` with the release you want to pin; the newest is on
+[PyPI](https://pypi.org/project/aramid/) and the
+[Releases page](https://github.com/jared0565/aramid/releases).
 
 To work on aramid itself, install it editable from a checkout — this is a
 development install, not the way to deploy it:
@@ -47,7 +51,7 @@ design — not a runtime fetch).
 
 ```bash
 aramid init <repo>       # onboard a repo: writes aramid.toml, installs git hooks, baselines
-aramid doctor             # probe the toolchain (gitleaks/semgrep/ruff/eslint/pip-audit) and offer repair
+aramid doctor             # probe the toolchain (gitleaks/semgrep/ruff/pip-audit + the repo's test runner) and offer repair
 aramid check --all        # run the full gate on demand (also: --staged, --range, --gate pre-push)
 aramid status              # report ledger and config state
 ```
@@ -90,9 +94,9 @@ list`). In a log or CI step the same line is written afresh at most every
 | 2 | pass-but-degraded — a WARN-tier tool was skipped or timed out |
 | 3 | engine or config error |
 
-`--strict` (CI mode) remaps 2 and 3 onto 1, so a run that "couldn't tell" fails the
-build the same as a run that found something. The engine never exits 0 silently on
-its own failure.
+`--strict` (CI mode) remaps 2 onto 1, so a run that "couldn't tell" fails the build
+the same as a run that found something; 3 is already a failure and keeps its own
+code. The engine never exits 0 silently on its own failure.
 
 ## Scope & roadmap
 
@@ -108,13 +112,19 @@ under a budget rather than on every commit. Four phases:
      queue → budgeted scheduled drain → pluggable consumers, plus the regression attack pack.
    - **2b — done:** the LLM reviewer — evidence-bound adversarial review over a provider
      chain, cross-provider refute (self-refute fallback on single-provider installs), bake-then-arm blocking (detailed below).
-   - **2c — in progress:** the heavy adversarial tier, each a new drain consumer —
+   - **2c — done for 1.0:** the heavy adversarial tier, each a new drain consumer —
      mutation (2c-1), JS/TS mutation (2c-1b), fuzz/property harness (2c-2), and
-     DAST passive web-hygiene probing (2c-3) are all shipped. Remaining within 2c:
-     an explicit-config app auto-start runtime, nuclei enrichment, and armed-BLOCK
-     wiring for DAST.
-3. **Phase 3:** harness advisory layer — non-blocking, mid-development early warning.
-4. **Phase 4:** metering & governance — token budgets, ledger-derived regression tests.
+     DAST passive web-hygiene probing (2c-3). **Deferred past 1.0:** an
+     explicit-config app auto-start runtime, nuclei enrichment, and armed-BLOCK
+     wiring for DAST — DAST stays advisory (WARN-only) throughout 1.x.
+3. **Phase 3 — shipped as the agent surfaces:** mid-development early warning inside
+   an agent's own session — `SessionStart`/`PreToolUse` hooks (`aramid agent-hook`,
+   with `aramid arm --agent` to turn the bypass warning into a refusal) and an MCP
+   server (`python -P -m aramid.mcp`) that every MCP-capable agent can call.
+4. **Phase 4 — shipped in part:** metering & governance — a monthly OpenRouter spend
+   cap with its spend ledger (`aramid status`), the regression attack pack compiled
+   from resolved findings, mutation-score regression findings, and fleet health with
+   notices (`aramid fleet`, `aramid notices`). Anything further is post-1.0.
 
 Full design specs and implementation plans: `docs/superpowers/specs/` and
 `docs/superpowers/plans/`.
@@ -136,8 +146,9 @@ to install the post-commit triage shim and `aramid schedule install` to register
 the drain job.
 Once installed, every commit is scored at zero cost by a post-commit hook
 (security-surface paths, risky content, novelty, graphite blast radius). Commits
-scoring >= 40 join a review queue drained on a schedule (`aramid drain`, Task
-Scheduler task `aramid-drain`).
+scoring >= 40 join a review queue drained on a schedule (`aramid drain`, installed by
+`aramid schedule install` as the Task Scheduler task `aramid-drain` on Windows
+or a crontab line elsewhere).
 The post-commit hook self-kills after 15s (`--budget`), so a wedged triage can
 never hang `git commit`; shims installed before this feature pick it up on the
 next `aramid init` (idempotent shim regeneration).
@@ -151,7 +162,7 @@ manages rules.
 ```bash
 aramid triage HEAD                # score a commit (or range) and enqueue if risky
 aramid drain --repo . --dry-run   # preview what a drain would consume
-aramid schedule install           # register the Task Scheduler drain job (Windows)
+aramid schedule install           # schedule the drain (Task Scheduler on Windows, cron elsewhere)
 aramid pack list                  # show compiled regression rules
 ```
 

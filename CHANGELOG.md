@@ -10,6 +10,39 @@ to publish a tag that disagrees with it.
 
 ## [Unreleased]
 
+### Fixed
+
+- **The docs now describe the code on the points a user acts on.** Each
+  statement was checked against the source before it was rewritten:
+  - The user guide's hook table showed `"$INTERP" -m aramid ...`, a shim
+    the guide itself would grade as tampered. The shims `aramid init` writes
+    carry `-P` (the repo root cannot shadow the installed aramid) and
+    `ARAMID_HOOK=<gate>` (the gate may read git's ref lines). Both are now
+    shown and explained.
+  - The arming inventory listed 4 flags in the knowledge base and 5 in the
+    user guide, and said `[mutation]` has none. There are ten:
+    `tdd_block_armed`, `[mutation].mutation_block_armed` and
+    `score_block_armed`, `[red_proof].red_proof_block_armed`,
+    `[shadow].shadow_block_armed` and `agent_block_armed` were missing.
+    `aramid arm`'s eight variants are all mutually exclusive, not just two.
+  - `--strict` remaps `2` to `1` only. The README and two knowledge-base
+    lines still said "2 and 3" after the user guide was corrected.
+  - `aramid schedule` is not Windows-only. On Linux and macOS it installs
+    one marked crontab line, and every action exits `3` on failure.
+  - `aramid doctor` probes the repo's test runner (pytest, npm, or a
+    configured `[tests].command`'s binary). It does not probe eslint or mypy.
+  - The fuzz consumer's failure states in the knowledge base were those of
+    August. A crashed or unparseable driver is `degraded` with a
+    three-per-head give-up, and a timeout reports `no cases run`, which
+    fleet health reads as no-work.
+  - The dependency-audit criterion text said a pyproject-only repo is never
+    audited. It is, in `pip-audit`'s project-path mode.
+  - Version examples no longer name 0.1.0 or 0.2.0. The README roadmap
+    records that the remaining 2c items (app auto-start, nuclei, armed DAST)
+    are deferred past 1.0 and that DAST stays advisory in 1.x.
+  - CI's full-suite step now runs with `-rs`, so every skipped test and its
+    reason is named in the log.
+
 ## [0.18.0] — 2026-09-20
 
 ### Added
