@@ -229,6 +229,34 @@ def test_render_json_is_valid_and_shape_matches():
     assert parsed["stale_overrides"][0]["id"] == "stale1"
 
 
+def test_render_json_leads_with_its_schema_version():
+    """1.0 API-3: every `--json` document says which shape it is, first,
+    so a reader can refuse a shape it does not know instead of guessing."""
+    out = reporter.render_json(GateResult(exit_code=0, findings=[], degraded=[],
+                                          new_ids=[], stale_overrides=[], run_id="r1"))
+
+    assert list(json.loads(out))[0] == "schema_version"
+    assert json.loads(out)["schema_version"] == reporter.JSON_SCHEMA_VERSION == 1
+    # Two-space indent, the form every other `--json` document prints.
+    assert out == json.dumps(json.loads(out), indent=2)
+    # The run it reports, so a saved copy can be matched to its ledger row.
+    assert json.loads(out)["run_id"] == "r1"
+
+
+def test_render_json_names_the_grandfathered_ids_sorted():
+    """The fresh-ledger rule's waved-through ids reach the report, sorted --
+    a CI checkout is a fresh ledger every run, so this list is the only
+    place a reader learns the ratchet did not bite."""
+    result = GateResult(exit_code=0, findings=[], degraded=[], new_ids=[],
+                        stale_overrides=[], run_id="r1",
+                        fresh_ledger_baseline=True, grandfathered=("b2", "a1"))
+
+    parsed = json.loads(reporter.render_json(result))
+
+    assert parsed["fresh_ledger_baseline"] is True
+    assert parsed["grandfathered"] == ["a1", "b2"]
+
+
 def test_render_json_never_contains_raw_secret():
     # Finding.evidence is already-redacted (normalizer's job) -- reporter must
     # not reintroduce raw material; simulate a redacted evidence string and

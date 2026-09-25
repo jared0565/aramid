@@ -189,7 +189,7 @@ def test_filter_marks_a_committed_suppression_in_both_output_shapes(tmp_path, ca
 
     assert cmd_ledger_filter(tmp_path, status="open", as_json=True) == 0
     rows = {r["id"]: (r["suppressed"], r["suppressed_reason"])
-            for r in json.loads(capsys.readouterr().out)}
+            for r in json.loads(capsys.readouterr().out)["findings"]}
     assert rows == {"adjudicated": (True, "reviewed: fixture import"),
                     "unexamined": (False, None)}
 
@@ -211,7 +211,7 @@ def test_filter_clauses_are_conjoined_and_each_one_is_its_own_gate(tmp_path, cap
 
     def ids(**kw):
         assert cmd_ledger_filter(tmp_path, as_json=True, **kw) == 0
-        return [r["id"] for r in json.loads(capsys.readouterr().out)]
+        return [r["id"] for r in json.loads(capsys.readouterr().out)["findings"]]
 
     assert ids() == ["base", "tool", "rule", "sev"]
     assert ids(tool="semgrep") == ["tool"]
@@ -233,10 +233,11 @@ def test_filter_json_exits_0_with_every_promised_key(tmp_path, capsys):
         "severity": "low", "verdict": "warn", "message": "SQL built by concat",
         "evidence": "e", "historical": False, "status": "open", "reason": None,
         "verdict_now": "warn", "suppressed": False, "suppressed_reason": None}]
-    assert json.loads(out) == rows
+    doc = {"schema_version": 1, "findings": rows}
+    assert json.loads(out) == doc
     # pretty-printed at two spaces, key order as promised: a human reads this
     # in a terminal as often as a script parses it
-    assert out == json.dumps(rows, indent=2) + "\n"
+    assert out == json.dumps(doc, indent=2) + "\n"
 
 
 def test_filter_text_with_no_match_says_so_and_exits_0(tmp_path, capsys):
@@ -246,11 +247,12 @@ def test_filter_text_with_no_match_says_so_and_exits_0(tmp_path, capsys):
     assert capsys.readouterr() == ("aramid: ledger filter: no matching findings\n", "")
 
 
-def test_filter_json_with_no_match_is_an_empty_array_and_exit_0(tmp_path, capsys):
+def test_filter_json_with_no_match_is_an_empty_findings_list_and_exit_0(tmp_path, capsys):
     _seed(tmp_path, _f("f1"))
 
     assert cmd_ledger_filter(tmp_path, tool="eslint", as_json=True) == 0
-    assert capsys.readouterr() == ("[]\n", "")
+    assert capsys.readouterr() == (
+        json.dumps({"schema_version": 1, "findings": []}, indent=2) + "\n", "")
 
 
 def test_filter_refuses_a_bad_status_before_opening_the_ledger(tmp_path, capsys):

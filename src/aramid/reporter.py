@@ -156,6 +156,13 @@ def render_console(result: GateResult, ledger: Ledger) -> str:
     return "\n".join(lines)
 
 
+# The shape version of `check --json` (1.0 blocker API-3).
+# Bumped only by a change an existing reader could trip on -- a key removed,
+# renamed or retyped; adding a key is not one. Each `--json` document is
+# versioned on its own, so one command's change never moves another's.
+JSON_SCHEMA_VERSION = 1
+
+
 def render_json(result: GateResult) -> str:
     # Finding.evidence is already redacted by the normalizer -- this is pure
     # dataclass->dict serialization, nothing here adds raw material back in.
@@ -184,6 +191,7 @@ def render_json(result: GateResult) -> str:
         return d
 
     payload = {
+        "schema_version": JSON_SCHEMA_VERSION,
         "exit_code": result.exit_code,
         "findings": [_finding(f) for f in result.findings],
         "degraded": list(result.degraded),

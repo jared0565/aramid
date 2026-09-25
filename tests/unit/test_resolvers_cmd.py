@@ -22,10 +22,10 @@ def test_resolvers_prints_the_rendered_report_or_the_rows_as_json(tmp_path, caps
     assert capsys.readouterr() == ("1 row(s)\n", "")
 
     assert resolvers.cmd_resolvers(tmp_path, as_json=True) == 0
-    assert capsys.readouterr() == (json.dumps([{
+    assert capsys.readouterr() == (json.dumps({"schema_version": 1, "resolvers": [{
         "resolver": "line_departed", "tool": "ruff", "runs": 4, "considered": 9,
         "resolved": 2, "volume": "low", "open_now": 1, "verdict": "ok",
-        "flagged": False}], indent=2) + "\n", "")
+        "flagged": False}]}, indent=2) + "\n", "")
 
 
 def test_resolvers_engine_errors_exit_3_on_one_line(tmp_path, capsys, monkeypatch):

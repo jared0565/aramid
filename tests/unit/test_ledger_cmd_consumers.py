@@ -85,15 +85,40 @@ def test_consumers_json_emits_every_payload_field_newest_first(tmp_path, capsys)
 
     rc = ledger_cmd.cmd_ledger_consumers(root, as_json=True)
     out = capsys.readouterr().out
-    payload = json.loads(out)
+    doc = json.loads(out)
+    payload = doc["runs"]
 
     assert rc == 0
-    assert out == json.dumps(payload, indent=2) + "\n", "the two-space form filter emits"
+    assert list(doc) == ["schema_version", "runs"] and doc["schema_version"] == 1
+    assert out == json.dumps(doc, indent=2) + "\n", "the two-space form filter emits"
     assert [r["run_id"] for r in payload] == ["d3", "d2", "d1"]
     assert payload[1] == {
         "at": "2026-09-19T22:13:56+00:00", "run_id": "d2", "consumer": "js_mutation",
         "item_id": "q1", "state": "degraded", "duration_s": 434.338, "cost": 0.0,
-        "finding_count": 0, "note": "baseline failing (last seen @ dc668ab8abf0)"}
+        "finding_count": 0, "note": "baseline failing (last seen @ dc668ab8abf0)",
+        "extra": {}}
+
+
+def test_consumers_json_rows_have_one_shape_and_nest_consumer_extras(tmp_path, capsys):
+    """The row shape is fixed (1.0 API-3): the core keys the drain writes are
+    always present, null when an old row lacks one, and whatever a consumer
+    added lives under `extra` -- where a consumer key named `at` or `run_id`
+    can no longer overwrite the event's own (the old splat let it)."""
+    ledger = _ledger(tmp_path)
+    ledger.append(Event(EventType.CONSUMER_RUN_FINISHED, "d9", "2026-09-20T01:00:00+00:00",
+                        payload={"consumer": "fuzz", "item_id": "q9", "state": "ok",
+                                 "note": "n", "functions_seen": 5,
+                                 "at": "spoofed", "run_id": "spoofed"}))
+    ledger.close()
+
+    assert ledger_cmd.cmd_ledger_consumers(tmp_path, as_json=True) == 0
+    (row,) = json.loads(capsys.readouterr().out)["runs"]
+
+    assert row == {
+        "at": "2026-09-20T01:00:00+00:00", "run_id": "d9", "consumer": "fuzz",
+        "item_id": "q9", "state": "ok", "duration_s": None, "cost": None,
+        "finding_count": None, "note": "n",
+        "extra": {"functions_seen": 5, "at": "spoofed", "run_id": "spoofed"}}
 
 
 def test_consumers_on_an_empty_ledger_reports_nothing_without_error(tmp_path, capsys):
@@ -104,13 +129,13 @@ def test_consumers_on_an_empty_ledger_reports_nothing_without_error(tmp_path, ca
     assert out.strip() == "aramid: ledger consumers: no consumer runs"
 
 
-def test_consumers_json_with_no_rows_emits_an_empty_array(tmp_path, capsys):
+def test_consumers_json_with_no_rows_emits_an_empty_runs_list(tmp_path, capsys):
     """Prose is not parseable; an empty result stays valid JSON, as `filter`
     already promises."""
     rc = ledger_cmd.cmd_ledger_consumers(tmp_path, as_json=True)
 
     assert rc == 0
-    assert json.loads(capsys.readouterr().out) == []
+    assert json.loads(capsys.readouterr().out) == {"schema_version": 1, "runs": []}
 
 
 def test_consumers_is_wired_through_the_cli(tmp_path, monkeypatch, capsys):
@@ -121,5 +146,5 @@ def test_consumers_is_wired_through_the_cli(tmp_path, monkeypatch, capsys):
     rc = cli.main(["ledger", "consumers", "--consumer", "js_mutation", "--last", "1", "--json"])
 
     assert rc == 0
-    payload = json.loads(capsys.readouterr().out)
+    payload = json.loads(capsys.readouterr().out)["runs"]
     assert [r["run_id"] for r in payload] == ["d2"]

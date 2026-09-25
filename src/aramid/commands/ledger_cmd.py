@@ -176,6 +176,11 @@ def cmd_ledger_show(root, finding_id: str) -> int:
 # credential, so this cannot widen a leak beyond what `show` already prints.
 _JSON_KEYS = ("tool", "rule", "file", "line", "severity", "verdict",
               "message", "evidence", "historical", "status", "reason")
+# The shape version of `ledger filter --json` (1.0 blocker API-3).
+# Bumped only by a change an existing reader could trip on -- a key removed,
+# renamed or retyped; adding a key is not one. Each `--json` document is
+# versioned on its own, so one command's change never moves another's.
+FILTER_JSON_SCHEMA_VERSION = 1
 
 
 def cmd_ledger_filter(root, tool: str | None = None, rule: str | None = None,
@@ -225,7 +230,9 @@ def cmd_ledger_filter(root, tool: str | None = None, rule: str | None = None,
             and (severity is None or rec.get("severity") == severity)
         }
         if as_json:
-            # An empty match prints `[]`, NOT the prose below. A consumer that
+            # An empty match prints an empty `findings` list, NOT the prose
+            # below -- inside an object that carries its version (0.19.0;
+            # it was a bare list). A consumer that
             # has to special-case "no matching findings" is a consumer that
             # starts guessing -- and the text format's unparseability is the
             # defect this flag exists to fix, so it must not survive in the
@@ -239,12 +246,13 @@ def cmd_ledger_filter(root, tool: str | None = None, rule: str | None = None,
             # snapshot, `verdict_now` is always the recomputed truth, and which
             # one you are reading is answered structurally rather than by a
             # provenance flag nobody can check.
-            print(json.dumps(
-                [{"id": fid, **{k: rec.get(k) for k in _JSON_KEYS},
-                  "verdict_now": str(tier.verdict_now(cfg, rec)),
-                  "suppressed": fid in suppressed_reasons,
-                  "suppressed_reason": suppressed_reasons.get(fid)}
-                 for fid, rec in matched.items()], indent=2))
+            print(json.dumps({
+                "schema_version": FILTER_JSON_SCHEMA_VERSION,
+                "findings": [{"id": fid, **{k: rec.get(k) for k in _JSON_KEYS},
+                              "verdict_now": str(tier.verdict_now(cfg, rec)),
+                              "suppressed": fid in suppressed_reasons,
+                              "suppressed_reason": suppressed_reasons.get(fid)}
+                             for fid, rec in matched.items()]}, indent=2))
             return 0
         if not matched:
             print("aramid: ledger filter: no matching findings")
@@ -261,6 +269,18 @@ def cmd_ledger_filter(root, tool: str | None = None, rule: str | None = None,
 
 # -------------------------------------------------------------- consumers ---
 
+# The shape version of `ledger consumers --json` (1.0 blocker API-3).
+# Bumped only by a change an existing reader could trip on -- a key removed,
+# renamed or retyped; adding a key is not one. Each `--json` document is
+# versioned on its own, so one command's change never moves another's.
+CONSUMERS_JSON_SCHEMA_VERSION = 1
+# The keys the drain writes on every consumer run (commands/drain.py), in
+# the order a row carries them. Anything else a consumer recorded goes
+# under `extra`, so the row has one shape whatever ran.
+CONSUMER_RUN_KEYS = ("consumer", "item_id", "state", "duration_s", "cost",
+                     "finding_count", "note")
+
+
 def cmd_ledger_consumers(root, consumer: str | None = None, last: int | None = None,
                           as_json: bool = False) -> int:
     """The drain's consumer runs (mutation, js_mutation, fuzz, red_proof,
@@ -272,8 +292,10 @@ def cmd_ledger_consumers(root, consumer: str | None = None, last: int | None = N
     `degraded consumer runs:` block of `status` and nowhere else on the CLI;
     the agent that needed the row's history opened ledger.db by hand.
     `--consumer` is an exact name, `--last N` keeps the newest N after that
-    filter, and `--json` emits `at`, `run_id` and every payload field on
-    every row (an empty result is `[]`, never prose). No config is read: no
+    filter, and `--json` emits `{"schema_version": 1, "runs": [...]}`: each
+    row is `at`, `run_id`, the CONSUMER_RUN_KEYS (null when an old row
+    lacks one) and `extra`, every other key the consumer recorded (an
+    empty result is an empty `runs` list, never prose). No config is read: no
     field here is recomputed from the config in force, so there is nothing
     to refuse over."""
     root = Path(root)
@@ -288,8 +310,16 @@ def cmd_ledger_consumers(root, consumer: str | None = None, last: int | None = N
     if last is not None:
         rows = rows[:max(last, 0)]
     if as_json:
-        print(json.dumps([{"at": e.at, "run_id": e.run_id, **e.payload} for e in rows],
-                         indent=2))
+        # One shape per row (0.19.0). The old `{at, run_id, **payload}` row
+        # was whatever a consumer wrote, and a consumer key named `at` or
+        # `run_id` overwrote the event's own.
+        print(json.dumps({
+            "schema_version": CONSUMERS_JSON_SCHEMA_VERSION,
+            "runs": [{"at": e.at, "run_id": e.run_id,
+                      **{k: e.payload.get(k) for k in CONSUMER_RUN_KEYS},
+                      "extra": {k: v for k, v in e.payload.items()
+                                if k not in CONSUMER_RUN_KEYS}}
+                     for e in rows]}, indent=2))
         return 0
     if not rows:
         print("aramid: ledger consumers: no consumer runs")

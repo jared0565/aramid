@@ -89,7 +89,7 @@ def test_json_report_whole(tmp_path, capsys):
     assert cmd_mutation_score(tmp_path, as_json=True) == 0
     out, err = capsys.readouterr()
     assert err == ""
-    doc = {"targets": [
+    doc = {"schema_version": 1, "targets": [
         {"target": "m.py::f", "run_index": 1, "killed_s1": 1, "killed_s2": 0,
          "survived_s1": 2, "rate": 1 / 3, "fully_mutated": True},
         {"target": "m.py::g", "run_index": 2, "killed_s1": 2, "killed_s2": 1,
@@ -101,7 +101,7 @@ def test_json_report_whole(tmp_path, capsys):
     assert out == json.dumps(doc, indent=2) + "\n"
 
     assert cmd_mutation_score(tmp_path / "fresh", as_json=True) == 0
-    assert capsys.readouterr().out == json.dumps({"targets": [], "regressions": []},
+    assert capsys.readouterr().out == json.dumps({"schema_version": 1, "targets": [], "regressions": []},
                                                  indent=2) + "\n"
 
 

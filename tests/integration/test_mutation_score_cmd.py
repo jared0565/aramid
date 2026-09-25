@@ -152,4 +152,4 @@ def test_cmd_json_output_shape_unchanged(tmp_path, capsys):
     rc = cmd_mutation_score(tmp_path, as_json=True)
     doc = json.loads(capsys.readouterr().out)
     assert rc == 0
-    assert set(doc) == {"targets", "regressions"}   # no armed key added
+    assert set(doc) == {"schema_version", "targets", "regressions"}   # no armed key added

@@ -15,6 +15,13 @@ from aramid import yield_report
 from aramid.ledger import Ledger
 
 
+# The shape version of `resolvers --json` (1.0 blocker API-3).
+# Bumped only by a change an existing reader could trip on -- a key removed,
+# renamed or retyped; adding a key is not one. Each `--json` document is
+# versioned on its own, so one command's change never moves another's.
+JSON_SCHEMA_VERSION = 1
+
+
 def cmd_resolvers(root, as_json: bool = False) -> int:
     root = Path(root)
     try:
@@ -27,11 +34,14 @@ def cmd_resolvers(root, as_json: bool = False) -> int:
         rows = yield_report.collect(ledger)
         if as_json:
             import json
-            print(json.dumps([{"resolver": r.resolver, "tool": r.tool,
-                               "runs": r.runs, "considered": r.considered,
-                               "resolved": r.resolved, "volume": r.volume,
-                               "open_now": r.open_now, "verdict": r.verdict,
-                               "flagged": r.flagged} for r in rows], indent=2))
+            # An object, not a bare list (0.19.0): a list has nowhere to
+            # carry its own version.
+            print(json.dumps({"schema_version": JSON_SCHEMA_VERSION, "resolvers": [
+                {"resolver": r.resolver, "tool": r.tool,
+                 "runs": r.runs, "considered": r.considered,
+                 "resolved": r.resolved, "volume": r.volume,
+                 "open_now": r.open_now, "verdict": r.verdict,
+                 "flagged": r.flagged} for r in rows]}, indent=2))
         else:
             print(yield_report.render(rows))
         return 0

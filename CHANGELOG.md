@@ -40,6 +40,27 @@ to publish a tag that disagrees with it.
   now also covers `hooks`, `fleet`, `fleet deregister`, `notices`,
   `resolvers`, `mutation-score` and `agent-hook`, and states that
   `ledger resolve` with several ids exits with the worst of them.
+- **Every `--json` document now carries `schema_version`, and the three
+  that were bare lists are objects.** A reader can now tell which shape it
+  is holding and refuse one it does not know.
+  - `ledger filter --json` prints `{"schema_version": 1, "findings": [...]}`.
+  - `resolvers --json` prints `{"schema_version": 1, "resolvers": [...]}`.
+  - `ledger consumers --json` prints `{"schema_version": 1, "runs": [...]}`,
+    and each row now has one shape: `at`, `run_id`, the seven keys the
+    drain writes on every run (null when an old row lacks one), and
+    `extra` for everything else the consumer recorded. The row used to be
+    the payload as written, so its keys depended on which consumer ran, and
+    a consumer key named `at` or `run_id` overwrote the event's own.
+  - `check --json` and `mutation-score --json` were already objects and
+    gain the key without losing any.
+  - `fleet --json` is unchanged: the verdict already carries its own
+    `schema_version`, and `null` still means no verdict yet.
+
+  **A script that indexed the bare list needs one change:** read
+  `["findings"]`, `["resolvers"]` or `["runs"]` first. The version
+  changes only when a key is removed, renamed or retyped. The MCP tools are
+  unaffected: they call these commands in text mode. The user guide's new
+  *Machine-readable output* section lists all six documents.
 
 ### Removed
 

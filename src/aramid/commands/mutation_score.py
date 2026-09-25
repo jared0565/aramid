@@ -10,6 +10,13 @@ from aramid import mutation_score as analyzer
 from aramid.ledger import Ledger
 
 
+# The shape version of `mutation-score --json` (1.0 blocker API-3).
+# Bumped only by a change an existing reader could trip on -- a key removed,
+# renamed or retyped; adding a key is not one. Each `--json` document is
+# versioned on its own, so one command's change never moves another's.
+JSON_SCHEMA_VERSION = 1
+
+
 def cmd_mutation_score(root, *, as_json: bool = False) -> int:
     root = Path(root)
     try:
@@ -24,6 +31,7 @@ def cmd_mutation_score(root, *, as_json: bool = False) -> int:
         regressions = analyzer.latest_regressions(events)
         if as_json:
             print(json.dumps({
+                "schema_version": JSON_SCHEMA_VERSION,
                 "targets": [
                     {"target": s.target, "run_index": s.run_index,
                      "killed_s1": s.killed_s1, "killed_s2": s.killed_s2,

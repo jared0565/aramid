@@ -211,7 +211,7 @@ between `fully_mutated` runs).
 
 ```bash
 aramid mutation-score          # human-readable per-function scores + regressions
-aramid mutation-score --json   # machine-readable
+aramid mutation-score --json   # machine-readable: {"schema_version": 1, "targets": [...], "regressions": [...]}
 ```
 
 Four documented limitations (it measures drift, it doesn't enforce anything

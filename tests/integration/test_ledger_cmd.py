@@ -125,9 +125,11 @@ def test_filter_json_emits_parseable_records(tmp_path, capsys):
     ledger.close()
 
     rc = cmd_ledger_filter(root, tool="ruff", as_json=True)
-    payload = json.loads(capsys.readouterr().out)
+    doc = json.loads(capsys.readouterr().out)
+    payload = doc["findings"]
 
     assert rc == 0
+    assert doc["schema_version"] == 1
     assert len(payload) == 1
     rec = payload[0]
     # The whole point: every field a consumer needs is separately addressable.
@@ -153,13 +155,13 @@ def test_filter_json_survives_a_message_containing_the_text_delimiter(tmp_path, 
     ledger.close()
 
     cmd_ledger_filter(root, tool="ruff", as_json=True)
-    payload = json.loads(capsys.readouterr().out)
+    payload = json.loads(capsys.readouterr().out)["findings"]
 
     assert payload[0]["message"] == nasty
     assert payload[0]["file"] == "a.py"
 
 
-def test_filter_json_with_no_matches_emits_an_empty_array(tmp_path, capsys):
+def test_filter_json_with_no_matches_emits_an_empty_findings_list(tmp_path, capsys):
     """`no matching findings` is prose, and a consumer cannot parse it. An
     empty result must still be valid JSON or every caller needs a special
     case -- which is exactly where a parser starts guessing."""
@@ -171,7 +173,7 @@ def test_filter_json_with_no_matches_emits_an_empty_array(tmp_path, capsys):
     rc = cmd_ledger_filter(root, tool="nonexistent-tool", as_json=True)
 
     assert rc == 0
-    assert json.loads(capsys.readouterr().out) == []
+    assert json.loads(capsys.readouterr().out) == {"schema_version": 1, "findings": []}
 
 
 def test_filter_json_flag_is_wired_through_the_cli(tmp_path, monkeypatch, capsys):
@@ -184,7 +186,7 @@ def test_filter_json_flag_is_wired_through_the_cli(tmp_path, monkeypatch, capsys
     rc = cli.main(["ledger", "filter", "--tool", "ruff", "--json"])
 
     assert rc == 0
-    assert json.loads(capsys.readouterr().out)[0]["id"] == "f1"
+    assert json.loads(capsys.readouterr().out)["findings"][0]["id"] == "f1"
 
 
 # ------------------------------------------- redirected output is UTF-8 ---
@@ -723,7 +725,7 @@ def test_filter_json_marks_which_open_findings_are_adjudicated(tmp_path, capsys)
     _suppressions(root, ("adjudicated1", "reviewed: fixture key, not well-formed"))
 
     assert cmd_ledger_filter(root, status="open", as_json=True) == 0
-    rows = {r["id"]: r for r in json.loads(capsys.readouterr().out)}
+    rows = {r["id"]: r for r in json.loads(capsys.readouterr().out)["findings"]}
 
     assert rows["adjudicated1"]["suppressed"] is True
     assert "fixture key" in rows["adjudicated1"]["suppressed_reason"]
@@ -784,7 +786,7 @@ def test_filter_json_carries_verdict_now_on_every_row(tmp_path, capsys):
     ledger.close()
 
     assert cmd_ledger_filter(root, as_json=True) == 0
-    rows = {r["id"]: r for r in json.loads(capsys.readouterr().out)}
+    rows = {r["id"]: r for r in json.loads(capsys.readouterr().out)["findings"]}
 
     # The moved row: stored value untouched, current tier reported beside it.
     assert rows["mut1"]["verdict"] == "warn"
@@ -1141,7 +1143,10 @@ def test_filter_json_refuses_an_unknown_status_rather_than_printing_an_empty_lis
     captured = capsys.readouterr()
 
     assert rc == 3
-    assert captured.out.strip() != "[]"
+    # Nothing on stdout at all -- not an empty list, not an empty envelope.
+    # (`!= "[]"` stopped testing anything once the output became an object.)
+    assert captured.out == ""
+    assert "nonsense" in captured.err
 
 
 def test_filter_severity_is_case_insensitive(tmp_path, capsys):

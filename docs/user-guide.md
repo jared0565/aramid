@@ -258,8 +258,29 @@ aramid check --strict --json
 ```
 
 - `--strict` — remaps exit code `2` to `1` (treat degraded as failure; no soft-pass in CI). `3` (engine error) is already a failure and keeps its code.
-- `--json` — renders the machine-readable report instead of the console report. Beyond `findings`, it carries `exit_code` (the final one, after `--strict` and the fresh-ledger rule), `degraded` and `degraded_reasons` (the `{tool: reason}` map behind it), `new_ids`, `stale_overrides`, `tools` (which binary backed each probed key), `tools_ran` (what actually ran), `scope_widened`, and — since 0.7.1 — `fresh_ledger_baseline` / `grandfathered` (see the fresh-ledger rule above), and `run_id` / `recorded` (`recorded: false` means the run was `--no-record`: a real report against a snapshot, with no ledger row to match it against). Every finding carries `escalated_by_ratchet` and `verdict_before_ratchet`.
+- `--json` — renders the machine-readable report instead of the console report. It leads with `schema_version` (see *Machine-readable output* below). Beyond `findings`, it carries `exit_code` (the final one, after `--strict` and the fresh-ledger rule), `degraded` and `degraded_reasons` (the `{tool: reason}` map behind it), `new_ids`, `stale_overrides`, `tools` (which binary backed each probed key), `tools_ran` (what actually ran), `scope_widened`, and — since 0.7.1 — `fresh_ledger_baseline` / `grandfathered` (see the fresh-ledger rule above), and `run_id` / `recorded` (`recorded: false` means the run was `--no-record`: a real report against a snapshot, with no ledger row to match it against). Every finding carries `escalated_by_ratchet` and `verdict_before_ratchet`.
 - `--accept-degraded --reason "why"` — accept a degraded run instead of blocking on it: the gate exits `0`, writes an `infrastructure_bypass` ledger row carrying the reason, prints `degraded, ACCEPTED: <reason>` and carries `accepted_reason` in `--json`, so the pass is never mistaken for a clean one. `--strict` does not remap an accepted run, and the CI-parity shim needs no exit-code arm for it (until 0.12.0 the accepted run exited `2`, which `--strict` turned into `1` -- under `[hooks].pre_push_match_ci` the hatch refused the push with its acceptance on record). A genuine BLOCK finding still exits `1`; `--reason` defaults to `"no reason given"` if `--accept-degraded` is passed without one. The same signal can be supplied via the `ARAMID_ACCEPT_DEGRADED` environment variable, which hooks inherit from the parent git process automatically.
+
+### Machine-readable output (`--json`)
+
+Six commands take `--json`. Each prints one JSON object that begins with
+`schema_version`, the version of that command's shape. The version changes
+only when a key is removed, renamed or retyped; a new key can appear in any
+release, so read the keys you need and ignore the rest. Each document is
+versioned on its own.
+
+| Command | Document |
+|---|---|
+| `check --json` | the report: `schema_version`, then the keys listed under *CI / automation flags* above |
+| `ledger filter --json` | `{"schema_version": 1, "findings": [...]}` -- one row per finding: `id`, the `ledger show` fields, `verdict_now`, `suppressed`, `suppressed_reason` |
+| `ledger consumers --json` | `{"schema_version": 1, "runs": [...]}` -- one row per consumer run: `at`, `run_id`, `consumer`, `item_id`, `state`, `duration_s`, `cost`, `finding_count`, `note` (null when an old row lacks one), and `extra`, everything else that consumer recorded |
+| `resolvers --json` | `{"schema_version": 1, "resolvers": [...]}` -- one row per resolver and tool |
+| `mutation-score --json` | `{"schema_version": 1, "targets": [...], "regressions": [...]}` |
+| `fleet --json` | the fleet verdict, which carries its own `schema_version`; `null` until a verdict has been computed |
+
+An empty result is an empty list inside the object, never prose. Before
+0.19.0, `ledger filter`, `ledger consumers` and `resolvers` printed a bare
+list, and a `ledger consumers` row was the consumer's payload as written.
 
 ---
 
@@ -287,7 +308,7 @@ aramid ledger consumers --consumer js_mutation --last 5
 - `ledger list` — one line per finding: `[status] id tool:rule file:line — message`.
 - `ledger show <id>` — full record (`tool, rule, file, line, severity, verdict, message, evidence, historical, status, reason`) plus every ledger event tied to that id. Exits `3` for an unknown id. `reason` is populated once a finding has been overridden or marked not-a-secret; a rotated finding's reason is recorded in the ledger event but not currently surfaced here.
 - `ledger filter` — all four filters are optional and AND-combined. `--status` and `--severity` take the spelling `aramid status` prints (`pending-retest` and `pending_retest` are the same value; case is ignored), and a value outside the vocabulary exits 3 with the vocabulary listed instead of reporting an empty match.
-- `ledger consumers` — the drain's consumer runs (mutation, js_mutation, fuzz, red_proof, llm_review, dast), newest first: `[state] at consumer duration item — note`. `--consumer <name>` keeps one consumer, `--last N` the newest N, `--json` emits every payload field per row. This is where a `degraded consumer runs:` line in `aramid status` has its history; `ledger filter` reads findings only and never shows these rows.
+- `ledger consumers` — the drain's consumer runs (mutation, js_mutation, fuzz, red_proof, llm_review, dast), newest first: `[state] at consumer duration item — note`. `--consumer <name>` keeps one consumer, `--last N` the newest N, `--json` emits one fixed-shape row per run (see *Machine-readable output* in section 4). This is where a `degraded consumer runs:` line in `aramid status` has its history; `ledger filter` reads findings only and never shows these rows.
 
 If `init`'s one-time full-history secret scan found something, it has two possible exits: rotate the credential and mark it rotated, or confirm it was never a secret in the first place and mark it as such.
 
