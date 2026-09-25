@@ -38,6 +38,37 @@ def test_full_argv_falls_through_a_missing_section_to_the_next():
     assert mut_consumer._full_argv(cfg) == ["pytest", "-q"]
 
 
+# FN-11: the gate has always honoured the legacy top-level `test_command`
+# (schema v1's key) when `[tests]` does not set one; the consumer never did,
+# so a repo configured that way got a bare `pytest -q` at the drain -- a
+# suite the gate never runs. The consumer now resolves `[mutation]` first
+# and then asks the SAME resolver the gate asks.
+
+def test_full_argv_honours_the_legacy_top_level_test_command():
+    cfg = SimpleNamespace(test_command="pytest -q tests/unit")
+    assert mut_consumer._full_argv(cfg) == ["pytest", "-q", "tests/unit"]
+
+
+def test_full_argv_prefers_tests_command_over_the_legacy_key():
+    cfg = SimpleNamespace(tests={"command": "pytest -q"},
+                          test_command="pytest -q tests/unit")
+    assert mut_consumer._full_argv(cfg) == ["pytest", "-q"]
+
+
+def test_full_argv_prefers_mutation_test_command_over_the_legacy_key():
+    cfg = SimpleNamespace(mutation={"test_command": "pytest -q tests/fast"},
+                          test_command="pytest -q tests/unit")
+    assert mut_consumer._full_argv(cfg) == ["pytest", "-q", "tests/fast"]
+
+
+def test_an_explicitly_empty_tests_command_blocks_the_legacy_key_as_in_the_gate():
+    # The gate reads `[tests].command` by PRESENCE: a repo that writes
+    # `command = ""` has said "no command", and the legacy key is not
+    # consulted. The consumer must make the same call, not fall through.
+    cfg = SimpleNamespace(tests={"command": ""}, test_command="pytest -q tests/unit")
+    assert mut_consumer._full_argv(cfg) == [sys.executable, "-m", "pytest", "-q"]
+
+
 # The 2026-09-06 02:00Z drain reported every one of the 10 mutants it made
 # in src/aramid/runners/tests.py as a TIMEOUT -- silently not a finding. The
 # stem is `tests`; no `test_tests.py` exists, so stage 1 fell back to

@@ -305,7 +305,9 @@ def _suite_label(argv) -> str:
 
 def _full_argv(cfg=None, root: Path | None = None) -> list[str]:
     """Mutation's whole-suite command: `[mutation].test_command` if the repo
-    declares one, else `[tests].command`, else a bare `pytest -q`.
+    declares one, else the command the gate runs (`[tests].command`, or the
+    legacy top-level `test_command` -- `config.effective_test_command`, so
+    the two cannot drift again; 1.0 FN-11), else a bare `pytest -q`.
 
     THE TWO ARE DIFFERENT QUESTIONS and must be separable. `[tests].command`
     answers "what does the gate run before letting a push through", and the
@@ -334,8 +336,8 @@ def _full_argv(cfg=None, root: Path | None = None) -> list[str]:
     to have and inside the throwaway worktree alike (interop round 174).
     """
     if cfg is not None:
-        for section, key in (("mutation", "test_command"), ("tests", "command")):
-            command = (getattr(cfg, section, None) or {}).get(key)
+        own = (getattr(cfg, "mutation", None) or {}).get("test_command")
+        for command in (own, config_mod.effective_test_command(cfg)):
             if command:
                 argv = tests_runner._argv(command, root)
                 if argv:

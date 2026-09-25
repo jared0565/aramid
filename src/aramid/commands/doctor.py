@@ -506,7 +506,8 @@ def _effective_test_command(cfg):
     way -- matching `runners.tests.run()`'s own `if command:` check, so a
     RunContext built from this same Config would make the identical
     branch decision doctor just reported."""
-    return _tests_section(cfg).get("command", cfg.test_command)
+    from aramid import config as config_mod
+    return config_mod.effective_test_command(cfg)
 
 
 def _configured_argv0(command, root: Path | None = None) -> tuple[str | None, str | None]:

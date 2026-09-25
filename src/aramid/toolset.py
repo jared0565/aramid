@@ -13,6 +13,7 @@ the question (spec section 7).
 """
 from pathlib import Path
 
+from aramid import config as config_mod
 from aramid.detectors import detect_package_manager, detect_stacks, detect_tests
 from aramid.pipeline import GATE_RUNNER_KEYS, _is_applicable
 from aramid.runners import clippy, deps, eslint, ruff, typecheck
@@ -67,7 +68,7 @@ def _build_ctx(root: Path, cfg) -> RunContext:
         root=root,
         pkg_manager=detect_package_manager(root),
         stacks=detect_stacks(root, root),
-        test_command=tests_cfg.get("command", cfg.test_command),
+        test_command=config_mod.effective_test_command(cfg),
         tests_enabled=tests_cfg.get("enabled", True),
         detected_tests=detect_tests(root),
         cargo_audit_warnings=(cfg.deps or {}).get("cargo_audit_warnings", False)

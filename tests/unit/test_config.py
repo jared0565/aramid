@@ -501,3 +501,39 @@ def test_render_repo_stub_does_not_embed_derived_stack_state():
     assert text.startswith("# aramid repo config")
     assert "schema_version" in text
     assert 'bake_started = "2026-07-12"' in text
+
+
+# FN-11: one resolver for "the repo's test command", asked by the gate
+# (pipeline.run_gate), the gate-applicability mirror (toolset), doctor and
+# the mutation consumer. Four inline copies is how the consumer drifted.
+
+def test_effective_test_command_falls_back_to_the_legacy_top_level_key(tmp_path, monkeypatch):
+    monkeypatch.setattr(config, "_user_config_path", lambda: tmp_path / "no-user.toml")
+    (tmp_path / "aramid.toml").write_text('test_command = "pytest -q tests/unit"\n',
+                                          encoding="utf-8")
+    assert config.effective_test_command(config.load_config(tmp_path)) == "pytest -q tests/unit"
+
+
+def test_effective_test_command_prefers_the_tests_table(tmp_path, monkeypatch):
+    monkeypatch.setattr(config, "_user_config_path", lambda: tmp_path / "no-user.toml")
+    (tmp_path / "aramid.toml").write_text(
+        'test_command = "pytest -q tests/unit"\n[tests]\ncommand = "pytest -q"\n',
+        encoding="utf-8")
+    assert config.effective_test_command(config.load_config(tmp_path)) == "pytest -q"
+
+
+def test_effective_test_command_reads_presence_not_truthiness():
+    from types import SimpleNamespace
+    cfg = SimpleNamespace(tests={"command": ""}, test_command="pytest -q tests/unit")
+    assert config.effective_test_command(cfg) == ""
+
+
+def test_effective_test_command_reads_a_non_table_tests_as_no_section():
+    from types import SimpleNamespace
+    cfg = SimpleNamespace(tests="pytest -q", test_command="pytest -q tests/unit")
+    assert config.effective_test_command(cfg) == "pytest -q tests/unit"
+
+
+def test_effective_test_command_is_none_when_nothing_is_set():
+    from types import SimpleNamespace
+    assert config.effective_test_command(SimpleNamespace()) is None

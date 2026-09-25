@@ -119,6 +119,19 @@ to publish a tag that disagrees with it.
 
 ### Fixed
 
+- **The mutation drain consumer honours the legacy top-level
+  `test_command`.** A repo that set schema v1's top-level `test_command`,
+  and neither `[mutation].test_command` nor `[tests].command`, had that
+  command run by the gate but not by the drain, which fell back to a bare
+  `pytest -q` -- a suite the repo never configured. The consumer now tries
+  `[mutation].test_command` first and then asks the same resolver the gate
+  asks (`config.effective_test_command`, also used by `toolset` and
+  `doctor`). An explicitly empty `[tests].command` therefore blocks the
+  legacy key at the drain exactly as it does at the gate. A repo configured
+  this way sees the drain run its configured suite for the first time; if
+  that suite fails there, the mutation consumer reports
+  `baseline failing`.
+
 - **The fleet's `dep_audit_ran` criterion no longer reads red for a Python
   repo with nothing to audit.** A repo with no `requirements*.txt` and no
   `pyproject.toml` `[project]` table never selects pip-audit, so every

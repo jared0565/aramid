@@ -165,7 +165,7 @@ Config file: `aramid.toml` at the repo root. Three-layer merge: package defaults
 | `semgrep_block_armed` | bool | `false` | OWASP-bake arming flag; while false, semgrep BLOCK-tier findings are demoted to WARN. Flipped by `aramid arm`. |
 | `ignore_paths` | list[str] | the 8 built-ins below (set in `defaults.toml`) | Exclude patterns. The 8 built-ins — `.aramid/`, `graph-out/`, `.graphite*`, `.cache/`, `node_modules/`, `.venv/`, `__pycache__/`, `.git/` — are the default and are always unioned back in regardless of repo config (never removable); a repo's `ignore_paths` adds to them. |
 | `bake_started` | str \| None | `None` (absent from defaults.toml — TOML has no null literal) | ISO date string set by `init`'s repo stub marking when the WARN-only bake period began; reported by `status` as "bake in progress, day N". |
-| `test_command` | str \| None | `None` | **Legacy alias for `[tests].command`.** Shipped in schema v1 documented but with no read site at all; now consumed by `pipeline.run_gate` as the fallback when `[tests].command` is unset. `[tests].command` wins if both are set. Prefer `[tests].command` in new config. |
+| `test_command` | str \| None | `None` | **Legacy alias for `[tests].command`.** Shipped in schema v1 documented but with no read site at all; now consumed by `pipeline.run_gate` as the fallback when `[tests].command` is unset. `[tests].command` wins if both are set, by presence: `command = ""` in `[tests]` blocks the fallback. Since 0.19.0 the mutation drain consumer honours it too, after `[mutation].test_command`; the gate, `toolset`, `doctor` and the consumer all resolve it through `config.effective_test_command`. Prefer `[tests].command` in new config. |
 
 ### `[timeouts]`
 

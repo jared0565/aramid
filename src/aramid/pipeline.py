@@ -975,7 +975,7 @@ def run_gate(root: Path, gate: Gate, mode: str, cfg: config_mod.Config, ledger: 
                       extra_semgrep_configs=extra_configs,
                       force_refresh=(mode == "all"),
                       full_tree=(mode == "all"),
-                      test_command=tests_cfg.get("command", cfg.test_command),
+                      test_command=config_mod.effective_test_command(cfg),
                       test_timeout_s=tests_cfg.get("timeout_s"),
                       tests_enabled=tests_cfg.get("enabled", True),
                       gate_deadline=gate_deadline,

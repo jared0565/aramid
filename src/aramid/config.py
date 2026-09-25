@@ -254,6 +254,27 @@ def load_config(root: Path) -> Config:
     )
 
 
+def effective_test_command(cfg):
+    """The repo's test command as the gate runs it: `[tests].command` if
+    the section sets the key, else schema v1's top-level `test_command`.
+
+    PRESENCE, not truthiness: `[tests]\ncommand = ""` is a repo saying "no
+    command", and the legacy key is not consulted behind it. A falsy result
+    (None/""/[]) means "not configured" to every caller, which then detects.
+    A `tests` that is not a table reads as no section, so a hand-edited
+    aramid.toml degrades rather than raises.
+
+    The ONE place this is decided. The gate (pipeline.run_gate), its
+    applicability mirror (toolset), doctor and the mutation consumer each
+    carried their own copy, and the consumer's drifted: it never read the
+    legacy key, so a repo configured that way got a bare `pytest -q` at the
+    drain (1.0 FN-11). `getattr` so a caller may pass any object shaped like
+    a Config."""
+    tests = getattr(cfg, "tests", None)
+    tests = tests if isinstance(tests, dict) else {}
+    return tests.get("command", getattr(cfg, "test_command", None))
+
+
 def is_ignored(rel_path: str, ignore_paths: list[str]) -> bool:
     norm = normalize_path(rel_path)
     for entry in ignore_paths:

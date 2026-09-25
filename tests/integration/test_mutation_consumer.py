@@ -1354,6 +1354,22 @@ def test_mutation_still_falls_back_to_the_tests_command(tmp_path, monkeypatch):
     assert argv[-1] == "tests/fast"
 
 
+def test_mutation_honours_the_legacy_top_level_test_command(tmp_path, monkeypatch):
+    """FN-11: a repo that still sets schema v1's top-level `test_command`
+    (and neither `[mutation].test_command` nor `[tests].command`) gets it at
+    the drain, as it always has at the gate -- not a bare `pytest -q`."""
+    r, base, head = _repo(tmp_path, WEAK_TEST)
+    toml = r / "aramid.toml"
+    toml.write_text('test_command = ["python", "-m", "pytest", "-q", "tests/legacy"]\n'
+                    + toml.read_text(encoding="utf-8"), encoding="utf-8")
+    monkeypatch.setattr(config_mod, "_user_config_path",
+                        lambda: tmp_path / "no-user.toml")
+
+    argv = mut_consumer._full_argv(config_mod.load_config(r))
+
+    assert argv[-1] == "tests/legacy"
+
+
 def test_this_repos_mutation_baseline_is_not_the_whole_tree(monkeypatch, tmp_path):
     """A CONFIG regression guard, asserted behaviourally rather than as a
     literal: whatever aramid's own aramid.toml says, mutation must not end up
