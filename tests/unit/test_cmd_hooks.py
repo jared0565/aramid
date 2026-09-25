@@ -45,7 +45,9 @@ def test_install_refuses_to_clobber_a_foreign_template_dir(tmp_path, monkeypatch
     rc = ht.cmd_hooks("install", template_root=tpl)
     err = capsys.readouterr().err
 
-    assert rc == 2
+    # 3, not 2: across aramid 2 means "a tool degraded" (`--strict` turns it
+    # into 1, the pre-push shim into 0) and 3 means "refused" (1.0 DEC-6).
+    assert rc == 3
     assert git.store[KEY] == "C:/my/own/template", "clobbered the user's setting"
     assert "C:/my/own/template" in err, "must name what is already configured"
 
@@ -105,6 +107,38 @@ def test_status_warns_that_existing_repos_are_unaffected(tmp_path, monkeypatch, 
     assert "new" in out and ("clone" in out or "init" in out)
 
 
+def test_status_exits_0_in_every_branch_and_needs_both_shims_and_our_dir(
+        tmp_path, monkeypatch, capsys):
+    """`status` is a report: exit 0 whether or not the template is installed
+    (the documented contract -- unlike `schedule status`, which exits 3 when
+    its job is absent). "installed" needs BOTH aramid's dir configured AND
+    both shims on disk; either half alone is "not installed"."""
+    tpl = tmp_path / "tpl"
+    _FakeGit({KEY: str(tpl)}).install(monkeypatch)
+    assert ht.cmd_hooks("install", template_root=tpl) == 0
+    capsys.readouterr()
+
+    # Our shims are on disk, but git points at someone else's dir.
+    _FakeGit({KEY: "C:/my/own/template"}).install(monkeypatch)
+    assert ht.cmd_hooks("status", template_root=tpl) == 0
+    assert capsys.readouterr().out == (
+        "aramid hooks: not installed -- init.templateDir points at "
+        "'C:/my/own/template' (not aramid's).\n")
+
+    # Our dir is configured, but one of the two shims is gone.
+    (tpl / "hooks" / "pre-push").unlink()
+    _FakeGit({KEY: str(tpl)}).install(monkeypatch)
+    assert ht.cmd_hooks("status", template_root=tpl) == 0
+    assert capsys.readouterr().out == (
+        f"aramid hooks: not installed -- init.templateDir points at {tpl} "
+        f"but the shims are missing. Run `aramid hooks install`.\n")
+
+    _FakeGit().install(monkeypatch)
+    assert ht.cmd_hooks("status", template_root=tpl) == 0
+    assert capsys.readouterr().out == (
+        "aramid hooks: not installed -- init.templateDir is unset.\n")
+
+
 def test_unknown_action_is_rejected(tmp_path, monkeypatch):
     _FakeGit().install(monkeypatch)
-    assert ht.cmd_hooks("frobnicate", template_root=tmp_path / "tpl") == 2
+    assert ht.cmd_hooks("frobnicate", template_root=tmp_path / "tpl") == 3

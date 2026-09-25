@@ -27,6 +27,20 @@ to publish a tag that disagrees with it.
   that never recorded a row as `missing path: <name>`, followed by the
   command that removes it, where it used to say `no rows:`.
 
+### Changed
+
+- **`aramid hooks install` exits `3`, not `2`, when it refuses.** It
+  refuses when git's `init.templateDir` already points at a directory that
+  is not aramid's, since git allows only one. Everywhere else in aramid `2`
+  means "a tool degraded" (`--strict` turns it into `1`, the pre-push
+  shim into `0`) and `3` means "refused", so a script could not tell a
+  refused install from a degraded one. A direct call with an unknown action
+  also returns `3` now: that is what the CLI already gave for it, because
+  argparse rejects the action first. The knowledge base's exit-code table
+  now also covers `hooks`, `fleet`, `fleet deregister`, `notices`,
+  `resolvers`, `mutation-score` and `agent-hook`, and states that
+  `ledger resolve` with several ids exits with the worst of them.
+
 ### Fixed
 
 - **The docs now describe the code on the points a user acts on.** Each

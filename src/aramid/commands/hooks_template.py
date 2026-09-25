@@ -71,7 +71,8 @@ def _same_path(a: str | None, b: Path) -> bool:
 
 def cmd_hooks(action: str, template_root: Path | None = None,
               interpreter: Path | None = None) -> int:
-    """Returns 0 on success, 2 on refusal or an unknown action.
+    """Returns 0 on success, 3 on refusal or an unknown action -- aramid's
+    refusal code; 2 means "a tool degraded" everywhere else (1.0 DEC-6).
 
     `template_root`/`interpreter` are injectable so tests never touch the
     real `~/.aramid/git-template` or the developer's global git config."""
@@ -87,7 +88,7 @@ def cmd_hooks(action: str, template_root: Path | None = None,
                   f"-- refusing to overwrite it. git supports only one template "
                   f"directory; copy aramid's shims from {root / 'hooks'} into "
                   f"that directory instead, or unset it first.", file=sys.stderr)
-            return 2
+            return 3
 
         written = hooks.install_template(root, interp)
         _git_config_set(CONFIG_KEY, str(root))
@@ -129,6 +130,8 @@ def cmd_hooks(action: str, template_root: Path | None = None,
             print(f"aramid hooks: not installed -- {CONFIG_KEY} is unset.")
         return 0
 
+    # Unreachable from the CLI (argparse `choices` already exits 3); kept for
+    # a direct caller, which gets the same code the CLI gives for this input.
     print(f"aramid: hooks: unknown action {action!r} "
           f"(expected one of {', '.join(_ACTIONS)})", file=sys.stderr)
-    return 2
+    return 3

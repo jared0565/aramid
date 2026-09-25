@@ -524,8 +524,15 @@ Register/remove/query a recurring `<interpreter> -P -m aramid drain --all`. Cros
 | `aramid ledger mark-rotated` | `3` if id unknown, or finding's status is neither `historical` nor `not_a_secret` |
 | `aramid ledger mark-not-a-secret` | `3` if id unknown, or finding's status is not exactly `historical` |
 | `aramid ledger mark-unreachable` | `3` if id unknown, tool is a producer/consumer, status isn't exactly `open`, or the tool is still selected for this repo |
-| `aramid ledger resolve --out-of-scope` | `3` if id unknown, tool is a producer/consumer, status isn't exactly `open`, the tool is NOT selected (use `mark-unreachable`), the tool has no suffix scope, the runner still examines the path, or `--out-of-scope`/`--reason` is missing |
+| `aramid ledger resolve --out-of-scope` | `3` if id unknown, tool is a producer/consumer, status isn't exactly `open`, the tool is NOT selected (use `mark-unreachable`), the tool has no suffix scope, the runner still examines the path, or `--out-of-scope`/`--reason` is missing. Several ids per launch: every id is attempted and the exit is the worst of them |
 | `aramid override` | `3` if the finding is BLOCK-tier (refused), or the finding is `unreachable` or `out_of_scope` (nothing to override), or `superseded` (its line was rewritten -- the refusal names the finding that replaced it) |
+| `aramid hooks` | `0`; `3` when `install` finds `init.templateDir` already pointing at a directory that is not aramid's (refused, nothing written). `remove` and `status` always `0` -- `status` reports "not installed" with `0`, unlike `schedule status`. The refusal was `2` before 0.19.0 |
+| `aramid fleet` | always `0`, including when the verdict or policy cannot be read (one stderr line) -- a report has nothing to block |
+| `aramid fleet deregister` | `0` once the repo is removed; `3` when the target names no registered repo or more than one, or the registry cannot be rewritten |
+| `aramid notices` | `0`; `3` for an id the channel has never seen (`show`, `ack`) or an internal failure. `ack` of an already-acked id is `0` |
+| `aramid resolvers` | `0` whether or not a resolver is flagged -- it follows `status`'s contract, not `check`'s, so a false flag can never block; `3` on an engine error |
+| `aramid mutation-score` | `0`, including an empty history; `3` on an engine error. Advisory: a regression never changes the exit |
+| `aramid agent-hook <event>` | always `0` -- a deny or an advisory is carried in the JSON on stdout, never in the exit code, and an internal failure fails open. `python -P -m aramid agent-hook` with no event also exits `0`; the `aramid` console script needs the event like any argument and exits `3` without it |
 | `aramid pack` (bare) | `3` (usage line) |
 | `aramid ledger` (bare) | `3` (usage line) |
 | `aramid arm` | `3` if `aramid.toml` doesn't exist yet |
