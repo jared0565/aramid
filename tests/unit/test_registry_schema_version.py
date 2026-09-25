@@ -66,3 +66,23 @@ def test_a_newer_registry_is_never_overwritten(tmp_path, monkeypatch, capsys):
     assert registry.remove("C:/x") == 0, "nothing it can read, so nothing removed"
 
     assert p.read_text(encoding="utf-8") == before
+
+
+def test_an_unreadable_registry_is_never_overwritten(tmp_path, monkeypatch):
+    """One `aramid init` anywhere used to replace a corrupt or half-written
+    repos.toml with a one-repo fleet -- no error, no backup -- and the
+    readiness verdict then graded that repo alone (the 10Z drain's review of
+    bad0ce1, 2026-09-25). Only a person can say what the file held."""
+    p = _seam(tmp_path, monkeypatch)
+    p.write_text("not [ valid toml", encoding="utf-8")
+
+    refused = registry.register(tmp_path / "a", "t")
+    assert refused is not None and refused.startswith(f"{p} is unreadable (")
+    assert refused.endswith(") -- left untouched; fix it by hand, or delete it to "
+                            "start the fleet over")
+    with pytest.raises(registry.RegistryUnusable) as raised:
+        registry.deregister(tmp_path / "a")
+    assert str(raised.value) == refused
+    assert registry.remove("C:/x") == 0, "nothing it can read, so nothing removed"
+
+    assert p.read_text(encoding="utf-8") == "not [ valid toml"

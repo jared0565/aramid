@@ -41,10 +41,10 @@ def cmd_uninstall(path) -> int:
     deregistered = True
     try:
         registry.deregister(root)
-    except registry.RegistryTooNew as exc:
+    except registry.RegistryUnusable as exc:
         # Every other step still runs; the shared registry is left to the
-        # aramid that can read it, and the exit says the uninstall was not
-        # whole.
+        # aramid that can read it (or the person who can repair it), and the
+        # exit says the uninstall was not whole.
         deregistered = False
         print(f"aramid: uninstall: not deregistered -- {exc}", file=sys.stderr)
 

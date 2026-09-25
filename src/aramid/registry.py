@@ -78,11 +78,15 @@ def _write(entries: list[dict]) -> None:
     if p.exists():
         try:
             newer = _too_new(p, tomllib.loads(p.read_text(encoding="utf-8")))
-        except (tomllib.TOMLDecodeError, OSError):
-            # Unreadable: overwritten, as it always was. Only a file that
-            # READS as a newer aramid's is protected -- there is nothing in a
-            # corrupt one to lose that `load_registry` could have seen.
-            newer = None
+        except (tomllib.TOMLDecodeError, OSError) as exc:
+            # Unreadable: left alone, like a newer aramid's. It may be a
+            # half-written or hand-mangled fleet a person can repair, and
+            # writing over it made the fleet the one repo being registered
+            # -- a readiness verdict then graded that repo alone (the 10Z
+            # drain's review of bad0ce1, 2026-09-25).
+            raise RegistryUnusable(
+                f"{p} is unreadable ({exc}) -- left untouched; fix it by hand, or "
+                f"delete it to start the fleet over") from exc
         if newer is not None:
             raise newer
     p.parent.mkdir(parents=True, exist_ok=True)
@@ -110,8 +114,8 @@ def consumer_worktree(path: Path) -> str | None:
 
 def register(path: Path, at: str) -> str | None:
     """Add `path` unless it is already there. Returns why it was refused
-    (`consumer_worktree`, or a registry a newer aramid wrote), or None once
-    the entry is present."""
+    (`consumer_worktree`, or a registry this aramid cannot read or a newer
+    one wrote), or None once the entry is present."""
     refused = consumer_worktree(path)
     if refused:
         return refused
@@ -122,7 +126,7 @@ def register(path: Path, at: str) -> str | None:
     entries.append({"path": str(Path(path).resolve()), "registered_at": at})
     try:
         _write(entries)
-    except RegistryTooNew as exc:
+    except RegistryUnusable as exc:
         return str(exc)
     return None
 

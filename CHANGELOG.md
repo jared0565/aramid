@@ -89,6 +89,13 @@ to publish a tag that disagrees with it.
 
 ### Fixed
 
+- **An unreadable `~/.aramid/repos.toml` is no longer overwritten.**
+  `aramid init` in any repo replaced a corrupt or half-written registry
+  with a one-repo fleet, silently, and `aramid uninstall` replaced it
+  with an empty one; the fleet verdict then graded what was left. Both now
+  leave the file untouched and say so: `init` reports the repo as not
+  registered, and `uninstall` exits `3` after every other step. Repair
+  the file, or delete it to start the fleet over.
 - **`aramid drain` exits `3` when it cannot read the registry.** Its
   docstring, `drain --help`, the user guide and the knowledge base all
   said so. The code instead read an unreadable `repos.toml` as an empty

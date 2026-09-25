@@ -106,6 +106,28 @@ def test_uninstall_leaves_a_registry_from_a_newer_aramid_alone_and_exits_3(
     assert reg.read_text(encoding="utf-8") == "schema_version = 2\n"
 
 
+def test_uninstall_leaves_an_unreadable_registry_alone_and_exits_3(
+        tmp_path, capsys, monkeypatch):
+    """Same contract for a registry nothing can parse: it may be a fleet a
+    person can repair, so uninstall does not replace it with an empty one."""
+    _quiet(monkeypatch)
+    r = _repo(tmp_path)
+    reg = tmp_path / "repos.toml"
+    monkeypatch.setattr(registry, "registry_path", lambda: reg)
+    reg.write_text("not [ valid toml", encoding="utf-8")
+
+    assert uninstall.cmd_uninstall(r) == 3
+    out, err = capsys.readouterr()
+    assert out == _summary(r)
+    lines = err.splitlines()
+    assert len(lines) == 2
+    assert lines[0].startswith("aramid: registry unreadable (")
+    assert lines[1].startswith(f"aramid: uninstall: not deregistered -- {reg} is unreadable (")
+    assert lines[1].endswith("-- left untouched; fix it by hand, or delete it to start the "
+                             "fleet over")
+    assert reg.read_text(encoding="utf-8") == "not [ valid toml"
+
+
 def test_remove_gitignore_entries_rewrites_only_when_something_was_ours(tmp_path):
     uninstall._remove_gitignore_entries(tmp_path)          # no file: nothing to do
     assert not (tmp_path / ".gitignore").exists()

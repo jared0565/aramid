@@ -316,7 +316,9 @@ as they are. An aramid that meets a ledger written by a NEWER aramid refuses
 it rather than guess at its layout: `check` exits `3` with `... was written by a
 newer aramid ... -- upgrade aramid to use it`, so the pre-commit hook lets the
 commit through and the pre-push hook blocks. A registry from a newer aramid is
-never rewritten by an older one; `drain` exits `3` on it. In short: upgrade
+never rewritten by an older one, and neither is one that cannot be read at all:
+`init` reports the repo as not registered, `uninstall` exits `3`, and `drain`
+exits `3`, until the file is repaired or deleted. In short: upgrade
 freely, and do not downgrade below the aramid that last wrote these files.
 
 If `init`'s one-time full-history secret scan found something, it has two possible exits: rotate the credential and mark it rotated, or confirm it was never a secret in the first place and mark it as such.
