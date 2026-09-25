@@ -12,6 +12,23 @@ to publish a tag that disagrees with it.
 
 ### Added
 
+- **`.aramid/ledger.db` and `~/.aramid/repos.toml` record the version of
+  their layout.** Before this, an aramid had no way to tell a ledger or
+  registry written by a newer aramid from a corrupt one.
+  - The ledger is stamped in SQLite's `user_version` on its first open,
+    and the tables are unchanged.
+  - An aramid that meets a ledger stamped higher than it knows refuses
+    it: `check` exits `3` with "was written by a newer aramid ... upgrade
+    aramid to use it".
+  - A registry from a newer aramid reads as empty and is never rewritten:
+    `register` refuses and `uninstall` exits `3` having done everything
+    else.
+  - An event kind a newer aramid adds no longer crashes an older reader.
+    It is kept in place and matched by nothing.
+  - 0.18.0 was rehearsed reading both stamped files and ignores the
+    stamps, so this release can be rolled back. A later one that changes a
+    layout will not be.
+
 - **`aramid fleet deregister <path|name>`** takes one repo out of the
   fleet. Until now the registry had no removal command short of `aramid
   uninstall`, which needs the repo on disk (exit 3 on a vanished path) and
@@ -72,6 +89,12 @@ to publish a tag that disagrees with it.
 
 ### Fixed
 
+- **`aramid drain` exits `3` when it cannot read the registry.** Its
+  docstring, `drain --help`, the user guide and the knowledge base all
+  said so. The code instead read an unreadable `repos.toml` as an empty
+  fleet and exited `0`, so a scheduled drain would do nothing on every run
+  from then on without a failing exit. An empty registry still exits `0`:
+  a machine with nothing to drain is not an error.
 - **Three texts that ship in the wheel said things the code does not do.**
   - `aramid check --help` described `--strict` as "treat 2/3 as failure".
     It turns exit 2 (a tool degraded) into 1; exit 3 already fails and

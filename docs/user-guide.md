@@ -310,6 +310,15 @@ aramid ledger consumers --consumer js_mutation --last 5
 - `ledger filter` — all four filters are optional and AND-combined. `--status` and `--severity` take the spelling `aramid status` prints (`pending-retest` and `pending_retest` are the same value; case is ignored), and a value outside the vocabulary exits 3 with the vocabulary listed instead of reporting an empty match.
 - `ledger consumers` — the drain's consumer runs (mutation, js_mutation, fuzz, red_proof, llm_review, dast), newest first: `[state] at consumer duration item — note`. `--consumer <name>` keeps one consumer, `--last N` the newest N, `--json` emits one fixed-shape row per run (see *Machine-readable output* in section 4). This is where a `degraded consumer runs:` line in `aramid status` has its history; `ledger filter` reads findings only and never shows these rows.
 
+**Versions on disk.** `.aramid/ledger.db` and `~/.aramid/repos.toml` record the
+version of their layout (0.19.0). Files written earlier have none and are read
+as they are. An aramid that meets a ledger written by a NEWER aramid refuses
+it rather than guess at its layout: `check` exits `3` with `... was written by a
+newer aramid ... -- upgrade aramid to use it`, so the pre-commit hook lets the
+commit through and the pre-push hook blocks. A registry from a newer aramid is
+never rewritten by an older one; `drain` exits `3` on it. In short: upgrade
+freely, and do not downgrade below the aramid that last wrote these files.
+
 If `init`'s one-time full-history secret scan found something, it has two possible exits: rotate the credential and mark it rotated, or confirm it was never a secret in the first place and mark it as such.
 
 Rotate a real leak, then record it:
@@ -554,7 +563,7 @@ aramid drain --max-items 5
 
 `--all` (every registered repo) and `--repo PATH` (one repo) are mutually exclusive; with neither given, it defaults to the current directory. `--dry-run` previews what would be swept/popped per repo with no lock and no mutation. `--max-items N` caps items drained this run; otherwise the max across candidate repos' `[drain].max_items_per_drain` is used.
 
-A singleton lock at `~/.aramid/drain.lock` prevents overlapping drains; it's considered stale (and breakable) if the recorded PID is dead or the lock is older than `2 × [drain].wall_clock_budget_s`. Any exception probing one repo degrades only that repo — the rest still drain. Exit: `0` ok, `2` degraded (some repo/consumer failed, rest completed), `3` if the lock is already held or the registry is unusable (`0` is still returned if no repos are registered at all). `aramid drain --help` says the same.
+A singleton lock at `~/.aramid/drain.lock` prevents overlapping drains; it's considered stale (and breakable) if the recorded PID is dead or the lock is older than `2 × [drain].wall_clock_budget_s`. Any exception probing one repo degrades only that repo — the rest still drain. Exit: `0` ok, `2` degraded (some repo/consumer failed, rest completed), `3` if the lock is already held or the registry is unusable -- unreadable, or written by a newer aramid (`0` is still returned if no repos are registered at all). `aramid drain --help` says the same.
 
 **One item per repo, most-deferred first, under one budget.** A drain takes at most one queued item per registered repo (those at or above `[triage].min_score`), orders them most-deferred first and then by score (stable, so a full tie keeps registry order), and pops them under ONE drain-wide wall-clock budget -- the largest `[drain].wall_clock_budget_s` among the candidates, default 600 s -- that is checked only *between* items. An item's consumers carry their own budgets (mutation alone can run 25 minutes), so the first item can spend the whole drain. What happens to the items left behind is recorded, not lost: each gets a `queue_item_deferred` row in its own repo's ledger (`reason` "drain budget" or "item limit", the repos the drain did open, elapsed and budget), `aramid drain --dry-run` prints `queued=<score> deferred=<n> (<reason>)` (and `pending_retests=N` for a repo with nothing queued whose pending mutation survivors it would synthesize an item for -- see the mutation consumer), and `aramid status` prints `queue: 1 queued (score 45, 3h old, deferred 1x: drain budget)`. The next drain opens the most-deferred item first regardless of score, so one deferral guarantees an item is opened by the second scheduled drain after it was queued. The budget is deliberately not split per repo (a 150 s share cannot run any baseline) and a running item is never preempted (a killed mutation run is a wasted 25 minutes and a degraded row).
 

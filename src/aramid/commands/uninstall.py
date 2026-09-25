@@ -38,7 +38,15 @@ def cmd_uninstall(path) -> int:
     hooks.uninstall(root)
 
     from aramid import registry
-    registry.deregister(root)
+    deregistered = True
+    try:
+        registry.deregister(root)
+    except registry.RegistryTooNew as exc:
+        # Every other step still runs; the shared registry is left to the
+        # aramid that can read it, and the exit says the uninstall was not
+        # whole.
+        deregistered = False
+        print(f"aramid: uninstall: not deregistered -- {exc}", file=sys.stderr)
 
     md_path = root / "ARAMID.md"
     if md_path.exists():
@@ -73,4 +81,4 @@ def cmd_uninstall(path) -> int:
           f"blocks removed, agent hooks removed, mcp server removed, gitignore "
           f"entries removed. The ledger (.aramid/) is KEPT -- delete it by hand "
           f"if you also want to discard finding/security history.")
-    return 0
+    return 0 if deregistered else 3

@@ -86,6 +86,26 @@ def test_uninstall_names_each_surface_it_had_to_leave_alone(tmp_path, capsys, mo
         "aramid's server entry by hand.\n")
 
 
+def test_uninstall_leaves_a_registry_from_a_newer_aramid_alone_and_exits_3(
+        tmp_path, capsys, monkeypatch):
+    """Every other step still runs; the registry -- one file every aramid on
+    the machine shares -- is not rewritten by one that cannot read it, and
+    the exit says the uninstall was not whole (1.0 blocker API-4)."""
+    _quiet(monkeypatch)
+    r = _repo(tmp_path)
+    reg = tmp_path / "repos.toml"
+    monkeypatch.setattr(registry, "registry_path", lambda: reg)
+    reg.write_text("schema_version = 2\n", encoding="utf-8")
+    newer = (f"{reg} was written by a newer aramid (registry schema 2; this one "
+             f"reads up to 1) -- upgrade aramid to use it")
+
+    assert uninstall.cmd_uninstall(r) == 3
+    assert capsys.readouterr() == (_summary(r), (
+        f"aramid: registry: {newer}; treating as empty\n"
+        f"aramid: uninstall: not deregistered -- {newer}\n"))
+    assert reg.read_text(encoding="utf-8") == "schema_version = 2\n"
+
+
 def test_remove_gitignore_entries_rewrites_only_when_something_was_ours(tmp_path):
     uninstall._remove_gitignore_entries(tmp_path)          # no file: nothing to do
     assert not (tmp_path / ".gitignore").exists()

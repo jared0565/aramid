@@ -258,8 +258,16 @@ def _consume_item(root: Path, cfg, ledger, item, clock) -> bool:
 def cmd_drain(targets: list, *, dry_run: bool = False, max_items: int | None = None,
               clock: Callable[[], str] = _now,
               monotonic: Callable[[], float] = time.monotonic) -> int:
-    repos = [Path(t) for t in targets] if targets else \
-            [Path(e["path"]) for e in registry.load_registry()]
+    if targets:
+        repos = [Path(t) for t in targets]
+    else:
+        try:
+            repos = [Path(e["path"]) for e in registry.load_registry(strict=True)]
+        except registry.RegistryUnusable as exc:
+            # Not an empty fleet: read as one, the scheduled drain would
+            # exit 0 on every run and never drain again.
+            print(f"aramid: drain: registry unusable -- {exc}", file=sys.stderr)
+            return 3
     if not repos:
         print("aramid drain: no repos registered and none given", file=sys.stderr)
         return 0

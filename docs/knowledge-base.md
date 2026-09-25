@@ -146,6 +146,9 @@ Shared primitive `prior_note_count(ledger, consumer, item_id, prefix)` (`consume
 ### PIN_OCCURRENCE
 Optional per-consumer-module attribute, read via `getattr(module, "PIN_OCCURRENCE", False)` in the drain; defaults to `False`. Set `True` by `mutation`, `fuzz`, `js_mutation`, and `dast` — all of which have budget-truncated or membership-variable batches across drains, so positional occurrence-index fingerprints would drift and create ghost never-resolving findings. When set, fingerprinting instead pins one finding per `(tool, rule, file, line-content)` and collapses/drops duplicates. `regression_pack` and `llm_review` do **not** set it (their finding-sets aren't drain-to-drain membership-variable the same way; `llm_review` additionally has its own separate internal fingerprint scheme).
 
+### Store versions
+The two files aramid keeps on disk carry the version of their layout (0.19.0, 1.0 blocker API-4). `.aramid/ledger.db` records it in SQLite's `user_version` header (`ledger.LEDGER_SCHEMA_VERSION`, now `1`); `~/.aramid/repos.toml` carries a top-level `schema_version` (`registry.REGISTRY_SCHEMA_VERSION`, now `1`). A file written before 0.19.0 has neither and is read as it is -- the same layout; the first 0.19.0 open of a ledger stamps it. A ledger stamped higher than this aramid knows raises `LedgerTooNew`, so `check` exits `3` with `... was written by a newer aramid (ledger schema N; this one reads up to 1) -- upgrade aramid to use it` (the pre-commit shim lets that through, the pre-push shim blocks). A registry from a newer aramid reads as empty with one stderr line, is never rewritten (`register` refuses, `deregister` raises `RegistryTooNew`, `uninstall` exits `3` having done everything else), and makes `drain` exit `3`. The stamp is the one write a ledger open makes, once per ledger, and a locked database at that moment does not fail the open. A new EVENT KIND is not a layout change: `Ledger.events()` keeps a kind it does not know as an `UnknownEventType` -- in place, since autolearn's rollup cursor counts positions in that list -- and nothing matches it. 0.18.0 was rehearsed reading both stamped files: it ignores the stamps.
+
 ---
 
 ## 2. Configuration Reference
@@ -517,7 +520,7 @@ Register/remove/query a recurring `<interpreter> -P -m aramid drain --all`. Cros
 | `aramid rebaseline` (no `--yes`) | `3` always (reports what would be discarded) |
 | `aramid doctor` | `2` if either BLOCK-tier tool (gitleaks, semgrep) missing; `0` otherwise. WARN-tier tool absence (ruff, pip-audit) never changes it. |
 | `aramid schedule` | `3` on unknown action, a non-zero `schtasks` result, a failed `crontab` write, or `crontab` missing from `PATH`; `status` returns `3` when the job is not installed |
-| `aramid drain` | `0` ok; `2` degraded (some repo/consumer failed, rest completed); `3` if the lock is already held (real drain, not dry-run) or the registry is unusable; `0` also when no repos are registered/given |
+| `aramid drain` | `0` ok; `2` degraded (some repo/consumer failed, rest completed); `3` if the lock is already held (real drain, not dry-run) or the registry is unusable (unreadable, or written by a newer aramid -- before 0.19.0 that case read as an empty registry and exited `0`); `0` also when no repos are registered/given |
 | `aramid triage` | `0` on success (queued or not); `3` on engine error |
 | `aramid ledger show <id>` | `3` if id unknown |
 | `aramid ledger mark-rotated` | `3` if id unknown, or finding's status is neither `historical` nor `not_a_secret` |
@@ -535,7 +538,7 @@ Register/remove/query a recurring `<interpreter> -P -m aramid drain --all`. Cros
 | `aramid pack` (bare) | `3` (usage line) |
 | `aramid ledger` (bare) | `3` (usage line) |
 | `aramid arm` | `3` if `aramid.toml` doesn't exist yet |
-| `aramid init` / `uninstall` | `3` if not inside a git repo; `init` also `3` if a BLOCK-tier tool is missing (doctor gate) |
+| `aramid init` / `uninstall` | `3` if not inside a git repo; `init` also `3` if a BLOCK-tier tool is missing (doctor gate); `uninstall` also `3`, after every other step, when the registry was written by a newer aramid (it is left as it is) |
 | `aramid autolearn` | always `0` |
 | `aramid update-rules` | always `0` |
 | `aramid --version` / `-h`/`--help` | `0` |

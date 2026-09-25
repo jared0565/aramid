@@ -1,3 +1,4 @@
+import contextlib
 import json
 import re
 import sqlite3
@@ -18,6 +19,51 @@ CREATE TABLE IF NOT EXISTS events(
   type TEXT NOT NULL, run_id TEXT NOT NULL, at TEXT NOT NULL,
   finding_id TEXT, payload TEXT NOT NULL DEFAULT '{}');
 """
+
+# The on-disk shape of ledger.db, stamped in SQLite's `user_version` header
+# (1.0 blocker API-4). 0 is every ledger written before 0.19.0: the same
+# table, stamped 1 on its first open. A change to the table layout bumps it,
+# and an aramid that meets a ledger stamped higher than it knows refuses it
+# (LedgerTooNew) rather than read a layout it cannot parse or write rows the
+# newer one cannot. A new EVENT KIND is not a layout change: a reader keeps a
+# kind it does not know as an UnknownEventType (see `Ledger.events`), so a
+# newer 1.x may add kinds -- provided an older reader that ignores them
+# errs toward caution; one that must not be ignored bumps this instead.
+LEDGER_SCHEMA_VERSION = 1
+# A literal, not a format: PRAGMA takes no bound parameter, and SQL built
+# from values is the shape the SAST rules exist to flag. The version test
+# reads the stamp back against LEDGER_SCHEMA_VERSION.
+_STAMP_SQL = "PRAGMA user_version = 1"
+
+
+class LedgerTooNew(RuntimeError):
+    """ledger.db was stamped by an aramid newer than this one."""
+
+
+class UnknownEventType(str):
+    """An event kind this aramid does not know -- one a newer 1.x added.
+
+    Kept IN `Ledger.events()`: autolearn's rollup cursor is a count of that
+    list, so dropping the row would shift every position between versions.
+    Matched by nothing -- neither `is` nor `==` any EventType member -- and
+    its `.value` is its own raw text, which no member's value equals, so the
+    materializers' `.value` comparisons pass over it."""
+
+    @property
+    def value(self) -> str:
+        return str(self)
+
+
+def _event_type(raw: str) -> EventType | UnknownEventType:
+    try:
+        return EventType(raw)
+    except ValueError:
+        return UnknownEventType(raw)
+
+
+def _stamp(conn) -> None:
+    conn.execute(_STAMP_SQL)
+    conn.commit()
 
 
 _SYNTHETIC_RE = re.compile(r"^<.*>$")
@@ -548,9 +594,26 @@ class Ledger:
     def __init__(self, db_path: Path):
         db_path.parent.mkdir(parents=True, exist_ok=True)
         self._c = sqlite3.connect(str(db_path))
-        self._c.execute("PRAGMA journal_mode=WAL")
-        self._c.executescript(_SCHEMA)
-        self._c.commit()
+        try:
+            found = self._c.execute("PRAGMA user_version").fetchone()[0]
+            if found > LEDGER_SCHEMA_VERSION:
+                raise LedgerTooNew(
+                    f"{db_path} was written by a newer aramid (ledger schema {found}; "
+                    f"this one reads up to {LEDGER_SCHEMA_VERSION}) -- upgrade aramid "
+                    f"to use it")
+            self._c.execute("PRAGMA journal_mode=WAL")
+            self._c.executescript(_SCHEMA)
+            self._c.commit()
+            if found < LEDGER_SCHEMA_VERSION:
+                # The one write an open makes, once per ledger. Gates and
+                # drains overlap, so a locked database here must not fail an
+                # open that never used to write: the unstamped ledger reads
+                # as schema 0 over identical tables, and the next open stamps.
+                with contextlib.suppress(sqlite3.OperationalError):
+                    _stamp(self._c)
+        except BaseException:
+            self._c.close()
+            raise
 
     def append(self, event: Event) -> None:
         self._c.execute(
@@ -562,7 +625,7 @@ class Ledger:
     def events(self) -> list[Event]:
         rows = self._c.execute(
             "SELECT type,run_id,at,finding_id,payload FROM events ORDER BY seq").fetchall()
-        return [Event(EventType(t), r, a, fid, json.loads(p)) for t, r, a, fid, p in rows]
+        return [Event(_event_type(t), r, a, fid, json.loads(p)) for t, r, a, fid, p in rows]
 
     def close(self): self._c.close()
 

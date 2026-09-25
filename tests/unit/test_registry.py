@@ -16,6 +16,14 @@ def test_register_load_roundtrip(tmp_path, monkeypatch):
     assert got[0]["registered_at"] == "2026-07-13T00:00:00+00:00"
 
 
+def test_load_keeps_only_entries_that_are_tables_with_a_path(tmp_path, monkeypatch):
+    _seam(tmp_path, monkeypatch)
+    (tmp_path / "repos.toml").write_text(
+        'repos = [{path = "C:/a"}, {registered_at = "t"}, {path = ""}, "C:/b"]\n',
+        encoding="utf-8")
+    assert registry.load_registry() == [{"path": "C:/a"}]
+
+
 def test_register_is_idempotent(tmp_path, monkeypatch):
     _seam(tmp_path, monkeypatch)
     registry.register(tmp_path / "repoA", "2026-07-13T00:00:00+00:00")
