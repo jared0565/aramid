@@ -273,6 +273,17 @@ def spurious_entries(entries: list[dict] | None = None) -> list[str]:
     return [Path(e["path"]).name for e in entries if leftovers.shell_of(e["path"]) is not None]
 
 
+def vanished_repos(entries: list[dict] | None = None) -> set[str]:
+    """Registry keys of the member entries whose path no longer exists on
+    disk. The judge names such a repo `missing path:` with the command that
+    removes it, rather than waiting on a row that can never come (1.0
+    blocker FN-1: a vanished repo held the verdict at insufficient-data with
+    no CLI able to deregister it)."""
+    entries = registry.load_registry() if entries is None else entries
+    return {repo_key(e["path"]) for e in entries
+            if leftovers.shell_of(e["path"]) is None and not Path(e["path"]).exists()}
+
+
 def _red_criteria(crit: dict) -> list[str]:
     return [k for k in health_mod.CRITERIA
             if not (crit.get(k) is True or (k == "dep_audit_ran" and crit.get(k) is None))]
@@ -302,7 +313,8 @@ def _red_detail(row: dict) -> str:
 
 
 def judge(rows: list[dict], registered: dict[str, str], policy: Policy, now: str,
-          *, aramid_version: str = "", spurious: list[str] | tuple[str, ...] = ()) -> dict:
+          *, aramid_version: str = "", spurious: list[str] | tuple[str, ...] = (),
+          vanished: set[str] | frozenset[str] = frozenset()) -> dict:
     """Spec section 6. Walk the registered repos' rows in time order,
     tracking each repo's latest row; the fleet is green at a row when every
     registered repo has a row and its latest is green. The streak starts at
@@ -312,7 +324,9 @@ def judge(rows: list[dict], registered: dict[str, str], policy: Policy, now: str
     latest row ageing past `policy.max_row_age_days`, so a streak is held
     by rows, never by silence. `spurious` names the registry entries that
     are not members (`spurious_entries`): reported for removal, counted
-    for nothing."""
+    for nothing. `vanished` holds the keys of members whose path is gone
+    (`vanished_repos`): one with no rows is reported as `missing path:`
+    with its remedy instead of under `no rows:`; the verdict is the same."""
     now_dt = _parse(now) or datetime.now(timezone.utc)
     cutoff = now_dt - timedelta(days=ROW_WINDOW_DAYS)
     # Amendment A1: a row is fresh at time t while t - at <= window; exactly
@@ -416,7 +430,13 @@ def judge(rows: list[dict], registered: dict[str, str], policy: Policy, now: str
         reasons.append("no repos registered")
     elif missing:
         verdict = INSUFFICIENT
-        reasons.append("no rows: " + ", ".join(missing))
+        gone = sorted((v["name"] for k, v in repos_out.items() if v["rows"] == 0 and k in vanished),
+                      key=str.casefold)
+        waiting = sorted((v["name"] for k, v in repos_out.items()
+                          if v["rows"] == 0 and k not in vanished), key=str.casefold)
+        if waiting:
+            reasons.append("no rows: " + ", ".join(waiting))
+        reasons.extend(f"missing path: {n} (`aramid fleet deregister {n}`)" for n in gone)
     elif stale:
         # A1: an old row is not evidence of the current state either way, so
         # this outranks red (both reasons stay listed) and yields to no-rows.
@@ -645,7 +665,7 @@ def run_judgement(now: str, *, aramid_version: str, entries: list[dict] | None =
         previous = read_verdict()
         rows = read_rows()
         verdict = judge(rows, registered, policy, now, aramid_version=aramid_version,
-                        spurious=spurious)
+                        spurious=spurious, vanished=vanished_repos(entries))
         if _monotonic() - started > JUDGE_BUDGET_S:
             print(f"aramid: fleet: judgement over the {JUDGE_BUDGET_S:.0f}s budget; "
                   "verdict not written", file=sys.stderr)

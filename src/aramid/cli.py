@@ -22,7 +22,7 @@ from aramid.commands.arm import cmd_arm
 from aramid.commands.check import cmd_check
 from aramid.commands.doctor import cmd_doctor
 from aramid.commands.drain import cmd_drain
-from aramid.commands.fleet_cmd import cmd_fleet, cmd_notices
+from aramid.commands.fleet_cmd import cmd_fleet, cmd_fleet_deregister, cmd_notices
 from aramid.commands.init import cmd_init
 from aramid.commands.ledger_cmd import (
     cmd_ledger_consumers,
@@ -86,8 +86,15 @@ def build_parser() -> argparse.ArgumentParser:
 
     p_fleet = sub.add_parser("fleet",
                              help="fleet health across every registered repo and the "
-                                  "1.0 readiness verdict (machine-level; read-only)")
+                                  "1.0 readiness verdict (machine-level); "
+                                  "`fleet deregister <path|name>` removes one repo from it")
     p_fleet.add_argument("--json", action="store_true")
+    fleet_sub = p_fleet.add_subparsers(dest="fleet_command")
+    p_fleet_dereg = fleet_sub.add_parser(
+        "deregister",
+        help="remove one repo from ~/.aramid/repos.toml (keeps a backup; its hooks, "
+             "aramid.toml and ledger are untouched; works on a path that no longer exists)")
+    p_fleet_dereg.add_argument("target", help="the repo's path, or its name as `aramid fleet` prints it")
 
     p_notices = sub.add_parser("notices",
                                help="aramid's own notices: list (default), show <id>, "
@@ -318,6 +325,8 @@ def main(argv: list[str] | None = None) -> int:
         return cmd_resolvers(root, as_json=args.json)
 
     if args.command == "fleet":
+        if getattr(args, "fleet_command", None) == "deregister":
+            return cmd_fleet_deregister(args.target)
         return cmd_fleet(as_json=args.json)
 
     if args.command == "notices":

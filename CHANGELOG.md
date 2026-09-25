@@ -10,6 +10,23 @@ to publish a tag that disagrees with it.
 
 ## [Unreleased]
 
+### Added
+
+- **`aramid fleet deregister <path|name>`** takes one repo out of the
+  fleet. Until now the registry had no removal command short of `aramid
+  uninstall`, which needs the repo on disk (exit 3 on a vanished path) and
+  strips its hooks as well. So a repo that left the disk held the 1.0
+  readiness verdict at `insufficient-data` for good, and
+  `~/.aramid/repos.toml` was edited by a hand-run Python call at least five
+  times. The command matches a path, or the name `aramid fleet` prints
+  (case-insensitive), and works on a path that no longer exists. It
+  touches only the registry: hooks, `aramid.toml` and the ledger stay. It
+  keeps the file it rewrote as `repos.toml.bak-<UTC>-deregister` and
+  re-judges at once. An ambiguous or unknown target exits `3` with nothing
+  written. The verdict now names a registered repo whose path is gone and
+  that never recorded a row as `missing path: <name>`, followed by the
+  command that removes it, where it used to say `no rows:`.
+
 ### Fixed
 
 - **The docs now describe the code on the points a user acts on.** Each

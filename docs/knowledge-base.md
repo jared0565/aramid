@@ -468,7 +468,11 @@ End a WARN-only bake by flipping an armed flag.
 Reports on the vendored, offline OWASP semgrep ruleset — performs no network fetch. Prints the pinned upstream source, the vendored path, and whether a ruleset is installed (warns to stderr if not). Always exits 0.
 
 ### `aramid uninstall [path]`
-Removes installed hook shims, deletes `ARAMID.md`, removes the `.gitignore` entries `init` appended, deregisters the repo. The ledger (`.aramid/`) is deliberately kept.
+Removes installed hook shims, deletes `ARAMID.md`, removes the `.gitignore` entries `init` appended, deregisters the repo. The ledger (`.aramid/`) is deliberately kept. Needs the repo on disk (exit 3 otherwise) -- use `aramid fleet deregister` for a repo that has gone.
+
+### `aramid fleet [--json]` / `aramid fleet deregister <path|name>`
+`aramid fleet` prints the fleet-health matrix and the 1.0 readiness verdict from `~/.aramid/fleet_verdict.json` (`--json`: the verdict file verbatim). A report: always exits 0.
+`aramid fleet deregister` removes ONE entry from `~/.aramid/repos.toml`, matched by path or by the directory name `aramid fleet` prints (case-insensitive), including a path that no longer exists. It keeps the old file as `repos.toml.bak-<UTC>-deregister`, touches nothing in the repo (hooks, `aramid.toml`, ledger stay), and re-judges at once. Exit 0 on removal; 3 when the target names no entry or more than one (nothing written) or the registry cannot be rewritten.
 
 ### `aramid schedule install|remove|status`
 Register/remove/query a recurring `<interpreter> -P -m aramid drain --all`. Cross-platform: Windows Task Scheduler on Windows, cron elsewhere.

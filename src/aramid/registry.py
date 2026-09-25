@@ -2,6 +2,7 @@
 ~/.aramid/repos.toml, the list of onboarded repos the drain iterates.
 Everything else stays in per-repo ledgers."""
 import os
+import shutil
 import sys
 import tomllib
 from pathlib import Path
@@ -73,3 +74,30 @@ def deregister(path: Path) -> None:
     resolved = normalize_path(str(Path(path).resolve()))
     entries = [e for e in load_registry() if normalize_path(e["path"]) != resolved]
     _write(entries)
+
+
+def remove(stored_path: str) -> int:
+    """Remove every entry whose STORED path normalizes to `stored_path`, and
+    return how many went. Deliberately not resolved: a repo that has left
+    the disk, or a junction that now points elsewhere, must still match the
+    string the file holds -- `deregister` resolves, so it cannot promise
+    that (`aramid fleet deregister`, 1.0 blocker FN-1)."""
+    target = normalize_path(stored_path)
+    entries = load_registry()
+    kept = [e for e in entries if normalize_path(e["path"]) != target]
+    if len(kept) != len(entries):
+        _write(kept)
+    return len(entries) - len(kept)
+
+
+def backup(tag: str) -> Path | None:
+    """Copy the registry aside as `repos.toml.bak-<tag>` before a removal and
+    return the copy, or None when there is no file to keep. Every hand-run
+    cleanup of this file kept one (`repos.toml.bak-*-wt-cleanup`); the
+    command keeps the habit rather than trusting itself."""
+    p = registry_path()
+    if not p.exists():
+        return None
+    dest = p.with_name(f"{p.name}.bak-{tag}")
+    shutil.copy2(p, dest)
+    return dest
