@@ -129,25 +129,6 @@ def _candidate_functions(source: str, changed: set[int], skip_patterns):
     return candidates, skipped_name, skipped_async
 
 
-def _any_candidates_remain(wt: Path, rels, changed: dict, skip_patterns) -> bool:
-    """Candidacy-only sweep (AST parse, no fuzzing) over not-yet-visited
-    changed files: keeps the truncated flag honest on exact-fit budget
-    exhaustion. Unreadable/missing files count as no-candidates, matching
-    the main loop's skip."""
-    for rel in rels:
-        src_path = wt / rel
-        if not src_path.exists():
-            continue
-        try:
-            source = src_path.read_text(encoding="utf-8")
-        except OSError:
-            continue
-        cands, _, _ = _candidate_functions(source, changed[rel], skip_patterns)
-        if cands:
-            return True
-    return False
-
-
 def _read_progress(path: Path) -> dict | None:
     """The driver's last recorded position, or None when it never got as far
     as its first call (or the file is unreadable -- never a reason to fail)."""
@@ -203,14 +184,12 @@ def consume(item, ctx: DrainContext) -> ConsumerResult:
             return ConsumerResult(consumer=NAME, state="error",
                                   note=f"worktree add failed: {(cp.stderr or '').strip()[:200]}")
 
-        targets, budget = [], max_functions
-        for i, rel in enumerate(files):
-            if budget <= 0:
-                # Exact fit must not over-report (fuzz M4): only claim
-                # truncation if a remaining file actually has candidates.
-                if _any_candidates_remain(wt, files[i:], changed, skip_patterns):
-                    stats["truncated"] = True
-                break
+        # Every candidate goes to the driver, and so does the budget: only the
+        # driver knows which ones it can call, so it charges `max_functions`
+        # and reports what callable was left over (1.0 FN-3). That report is
+        # also what keeps an exact fit from reading as truncated (fuzz M4).
+        targets = []
+        for rel in files:
             src_path = wt / rel
             if not src_path.exists():
                 continue
@@ -225,11 +204,7 @@ def consume(item, ctx: DrainContext) -> ConsumerResult:
             stats["skipped_async"] += skip_async
             if not cands:
                 continue
-            if len(cands) > budget:
-                cands = cands[:budget]
-                stats["truncated"] = True
             targets.append({"file": rel, "functions": cands, "cases": cases})
-            budget -= len(cands)
 
         if not targets:
             return ConsumerResult(consumer=NAME, state="ok",
@@ -238,7 +213,8 @@ def consume(item, ctx: DrainContext) -> ConsumerResult:
                                   extra=dict(stats))
 
         progress_path = tmp / "progress.json"
-        spec = {"root": str(wt), "targets": targets, "progress": str(progress_path)}
+        spec = {"root": str(wt), "targets": targets, "progress": str(progress_path),
+                "max_functions": max_functions}
         spec_path = tmp / "spec.json"
         spec_path.write_text(json.dumps(spec), encoding="utf-8")
         remaining = max(1.0, min(batch_timeout, wall_budget - (time.monotonic() - started)))
@@ -301,6 +277,8 @@ def consume(item, ctx: DrainContext) -> ConsumerResult:
         # Which files, and why -- the row is what a consumer's reader has.
         stats["import_failed"] = dict(out.get("import_errors", {}))
         stats["skipped_unhinted"] = out.get("unfuzzable", 0)
+        over_budget = int(out.get("over_budget", 0) or 0)
+        stats["truncated"] = over_budget > 0
         # A target whose file import-failed never reaches the driver's
         # per-function loop, so its functions never count as unfuzzable --
         # subtract them explicitly, else functions_fuzzed silently overcounts
@@ -309,7 +287,8 @@ def consume(item, ctx: DrainContext) -> ConsumerResult:
         failed_fn_count = sum(len(t["functions"]) for t in targets
                               if t["file"] in failed_files)
         stats["functions_fuzzed"] = (sum(len(t["functions"]) for t in targets)
-                                     - stats["skipped_unhinted"] - failed_fn_count)
+                                     - stats["skipped_unhinted"] - failed_fn_count
+                                     - over_budget)
         for rec in out.get("records", []):
             findings.append(RawFinding(
                 tool="fuzz", rule=f"crash-{rec['exc'].lower()}",
@@ -356,6 +335,8 @@ def consume(item, ctx: DrainContext) -> ConsumerResult:
 
     note = (f"{stats['findings']} crash finding(s) from {stats['cases_run']} "
             f"case(s) over {stats['functions_fuzzed']} function(s)")
+    if stats["skipped_unhinted"]:
+        note += f"; {stats['skipped_unhinted']} skipped (unhinted)"
     if stats["truncated"]:
         note += " (truncated: max_functions cap hit)"
     return ConsumerResult(consumer=NAME, state="ok", findings=findings,

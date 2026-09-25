@@ -242,6 +242,44 @@ def test_run_spec_defaults_to_fifty_cases_and_counts_each_crash_and_unsupported_
     assert out["crashes"] == 1 and len(out["records"]) == 1
 
 
+_BUDGET_MODULE = """
+    def bare(a):
+        return a
+    def one(a: int) -> int:
+        return a
+    def also_bare(b):
+        return b
+    def two(a: int) -> int:
+        return a
+"""
+
+
+def test_the_budget_is_charged_only_on_functions_the_driver_calls(tmp_path):
+    """FN-3: a real row read `functions_seen 10, functions_fuzzed 0,
+    skipped_unhinted 10, truncated True` -- the budget went on candidates
+    the driver could not call. An unhinted one costs nothing now."""
+    _module(tmp_path, "mix", _BUDGET_MODULE)
+    spec = {**_spec(tmp_path, "mix.py", ["bare", "one", "also_bare", "two"], cases=1),
+            "max_functions": 2}
+    out = run_spec(spec)
+    assert out["fuzzed"] == [["mix.py", "one"], ["mix.py", "two"]]
+    assert (out["unfuzzable"], out["over_budget"]) == (2, 0), "an exact fit leaves nothing over"
+
+
+def test_a_callable_function_past_the_budget_is_counted_over_budget(tmp_path):
+    _module(tmp_path, "mix", _BUDGET_MODULE)
+    spec = {**_spec(tmp_path, "mix.py", ["one", "bare", "two"], cases=1), "max_functions": 1}
+    out = run_spec(spec)
+    assert out["fuzzed"] == [["mix.py", "one"]]
+    assert (out["unfuzzable"], out["over_budget"], out["cases_run"]) == (1, 1, 1)
+
+
+def test_a_spec_without_a_budget_fuzzes_everything_it_can(tmp_path):
+    _module(tmp_path, "mix", _BUDGET_MODULE)
+    out = run_spec(_spec(tmp_path, "mix.py", ["one", "two"], cases=1))
+    assert len(out["fuzzed"]) == 2 and out["over_budget"] == 0
+
+
 def test_an_import_error_is_recorded_with_200_characters_of_its_message(tmp_path):
     _module(tmp_path, "loud", """
         raise RuntimeError("x" * 300)

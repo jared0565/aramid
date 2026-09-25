@@ -57,6 +57,14 @@ def run_spec(spec: dict) -> dict:
     fuzzed: list = []
     progress = spec.get("progress")
     functions_started = 0
+    # The fuzz budget ([fuzz].max_functions), charged HERE because only the
+    # driver knows which functions it can call: one with no usable hints
+    # costs nothing (1.0 FN-3 -- a real row read `functions_seen 10,
+    # functions_fuzzed 0, skipped_unhinted 10, truncated True`). A callable
+    # function past it counts `over_budget`, so the consumer can say it was
+    # truncated only when something callable was left. None: no cap.
+    limit = spec.get("max_functions")
+    over_budget = 0
 
     for target in spec.get("targets", []):
         rel = target["file"]
@@ -75,6 +83,9 @@ def run_spec(spec: dict) -> dict:
             params = fuzzgen.supported_params(fn)
             if params is None:
                 unfuzzable += 1
+                continue
+            if limit is not None and len(fuzzed) >= limit:
+                over_budget += 1
                 continue
             hints = typing.get_type_hints(fn)
             functions_started += 1
@@ -111,7 +122,7 @@ def run_spec(spec: dict) -> dict:
     return {"records": records, "cases_run": cases_run, "crashes": crashes,
             "contract_exceptions": contract, "unfuzzable": unfuzzable,
             "import_failures": import_failures, "import_errors": import_errors,
-            "fuzzed": fuzzed}
+            "fuzzed": fuzzed, "over_budget": over_budget}
 
 
 def _note_progress(path, rel: str, func_name: str, n: int) -> None:

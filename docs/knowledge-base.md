@@ -291,7 +291,7 @@ No arming flag exists in `[js_mutation]`.
 | Key | Type | Default | Meaning |
 |---|---|---|---|
 | `enabled` | bool | `true` | Master switch. |
-| `max_functions` | int | `10` | Functions fuzzed per queue item. |
+| `max_functions` | int | `10` | Functions fuzzed per queue item. A candidate the driver cannot call (no usable type hints) is skipped without spending it, and the note says `N skipped (unhinted)`; `truncated` means a callable one was left over. |
 | `cases_per_function` | int | `50` | Fuzz cases generated per function. |
 | `wall_budget_s` | int (`float()`'d) | `300` | Whole-item wall clock budget. |
 | `batch_timeout_s` | int (`float()`'d) | `120` | Timeout for the single driver subprocess. |

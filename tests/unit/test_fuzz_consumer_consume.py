@@ -208,55 +208,45 @@ def test_configured_knobs_reach_the_spec_and_the_timeout(tmp_path, monkeypatch):
     assert driver.calls[0][2] == 9.0
 
 
-def test_max_functions_defaults_to_10_and_the_11th_is_dropped_with_a_note(
+def test_every_candidate_reaches_the_driver_with_the_budget_default_10(
         tmp_path, monkeypatch):
+    """FN-3: only the driver knows which candidates it can call, so the
+    budget travels with the spec and the driver charges it. `over_budget`
+    is its count of callable functions left unfuzzed."""
     names = [f"f{i}" for i in range(11)]
     r, base, head = _repo(tmp_path, {"lib.py": _fns(names)})
 
-    res, driver = _run(r, base, head, monkeypatch, {})
+    res, driver = _run(r, base, head, monkeypatch, {}, Driver({"over_budget": 1}))
 
-    assert driver.spec["targets"] == [{"file": "lib.py", "functions": names[:10], "cases": 50}]
+    assert driver.spec["targets"] == [{"file": "lib.py", "functions": names, "cases": 50}]
+    assert driver.spec["max_functions"] == 10
     assert res.extra["truncated"] is True and res.extra["functions_seen"] == 11
+    assert res.extra["functions_fuzzed"] == 10
     assert res.note == ("0 crash finding(s) from 0 case(s) over 10 function(s)"
                         " (truncated: max_functions cap hit)")
 
 
-def test_an_exact_fit_is_not_a_truncation(tmp_path, monkeypatch):
+def test_nothing_left_over_is_not_a_truncation(tmp_path, monkeypatch):
     names = [f"f{i}" for i in range(10)]
     r, base, head = _repo(tmp_path, {"lib.py": _fns(names)})
 
-    res, driver = _run(r, base, head, monkeypatch, {})
+    res, driver = _run(r, base, head, monkeypatch, {"max_functions": 4})
 
-    assert driver.spec["targets"][0]["functions"] == names
+    assert driver.spec["max_functions"] == 4
     assert res.extra["truncated"] is False
     assert res.note == "0 crash finding(s) from 0 case(s) over 10 function(s)"
 
 
-def test_a_budget_spent_exactly_is_a_truncation_only_if_a_later_file_has_candidates(
+def test_every_file_with_candidates_reaches_the_driver_whatever_the_budget(
         tmp_path, monkeypatch):
     r, base, head = _repo(tmp_path, {"a.py": _fns(["a1", "a2"]), "b.py": _fns(["b1"]),
                                      "c.py": "X = 1\n"})
 
-    res, driver = _run(r, base, head, monkeypatch, {"max_functions": 2})
-
-    assert driver.spec["targets"] == [{"file": "a.py", "functions": ["a1", "a2"], "cases": 50}]
-    assert res.extra["truncated"] is True
-
-    (tmp_path / "two").mkdir()
-    r2, base2, head2 = _repo(tmp_path / "two", {"a.py": _fns(["a1", "a2"]), "c.py": "X = 1\n"})
-    res2, _ = _run(r2, base2, head2, monkeypatch, {"max_functions": 2})
-    assert res2.extra["truncated"] is False
-
-
-def test_a_budget_with_one_slot_left_still_takes_one_from_the_next_file(
-        tmp_path, monkeypatch):
-    r, base, head = _repo(tmp_path, {"a.py": _fns(["a1", "a2"]), "b.py": _fns(["b1", "b2"])})
-
-    res, driver = _run(r, base, head, monkeypatch, {"max_functions": 3})
+    res, driver = _run(r, base, head, monkeypatch, {"max_functions": 1})
 
     assert driver.spec["targets"] == [{"file": "a.py", "functions": ["a1", "a2"], "cases": 50},
                                       {"file": "b.py", "functions": ["b1"], "cases": 50}]
-    assert res.extra["truncated"] is True
+    assert res.extra["functions_seen"] == 3
 
 
 # ------------------------------------------------------------ verdicts --
@@ -399,7 +389,8 @@ def test_records_become_findings_and_the_counters_read_the_verdict(tmp_path, mon
     res, _ = _run(r, base, head, monkeypatch, {}, Driver(out))
 
     assert res.state == "ok"
-    assert res.note == "2 crash finding(s) from 150 case(s) over 1 function(s)"
+    assert res.note == ("2 crash finding(s) from 150 case(s) over 1 function(s); "
+                        "1 skipped (unhinted)")
     assert res.extra == {**ZERO, "functions_seen": 3, "functions_fuzzed": 1, "cases_run": 150,
                          "crashes": 1, "contract_exceptions": 4, "skipped_unhinted": 1,
                          "import_failures": 1, "import_failed": {"bad.py": "ModuleNotFoundError"},

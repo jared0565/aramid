@@ -275,6 +275,35 @@ def _two_file_repo(tmp_path, second_feature_body):
     return r, base, _sha(r)
 
 
+def test_an_unhinted_candidate_does_not_spend_the_budget(tmp_path, monkeypatch):
+    """FN-3, with the real driver: budget 1, and the first candidate has no
+    hints. It used to take the only slot and nothing was fuzzed."""
+    r = tmp_path / "r"
+    r.mkdir()
+    _git(r, "init", "-q", "-b", "main")
+    _git(r, "config", "user.email", "t@t")
+    _git(r, "config", "user.name", "t")
+    (r / "aramid.toml").write_text(
+        "schema_version = 1\n[fuzz]\nmax_functions = 1\ncases_per_function = 5\n",
+        encoding="utf-8")
+    (r / "lib.py").write_text("X = 0\n", encoding="utf-8")
+    _git(r, "add", "-A")
+    _git(r, "commit", "-q", "-m", "base")
+    base = _sha(r)
+    (r / "lib.py").write_text("def a_bare(x):\n    return x\n\n\n"
+                              "def b_hinted(x: int) -> int:\n    return x\n",
+                              encoding="utf-8")
+    _git(r, "add", "-A")
+    _git(r, "commit", "-q", "-m", "feature")
+
+    res = _consume(r, base, _sha(r), monkeypatch, tmp_path)
+
+    assert res.state == "ok"
+    assert (res.extra["functions_fuzzed"], res.extra["skipped_unhinted"]) == (1, 1)
+    assert res.extra["truncated"] is False
+    assert res.note == "0 crash finding(s) from 5 case(s) over 1 function(s); 1 skipped (unhinted)"
+
+
 def test_exact_fit_budget_not_flagged_truncated(tmp_path, monkeypatch):
     # Budget exactly consumed and the remaining changed file has NO
     # candidates: claiming truncation is an over-report (fuzz M4).

@@ -126,6 +126,13 @@ to publish a tag that disagrees with it.
   green. It now reads n/a, as the readiness spec always said for an audit
   that is not expected; `aramid doctor` still warns that the Python
   dependency audit does not run there.
+- **The fuzz budget is spent on functions the fuzzer can call.**
+  `[fuzz].max_functions` was charged on every candidate the consumer
+  found, before the driver knew which ones had usable type hints, so a
+  range whose first ten candidates were unhinted fuzzed nothing and read
+  as truncated (a real row: `functions_fuzzed 0, skipped_unhinted 10,
+  truncated True`). The driver now charges the budget, a skipped function
+  costs nothing, and the note says `N skipped (unhinted)`.
 - **An unreadable `~/.aramid/repos.toml` is no longer overwritten.**
   `aramid init` in any repo replaced a corrupt or half-written registry
   with a one-repo fleet, silently, and `aramid uninstall` replaced it
