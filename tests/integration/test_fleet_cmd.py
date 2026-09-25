@@ -1,6 +1,7 @@
 """`aramid fleet` is a report (exit 0 always); `aramid notices` is the ack
 surface (exit 3 only for an unknown id, with the pending ids listed)."""
 import json
+from datetime import datetime, timezone
 
 import pytest
 
@@ -13,7 +14,13 @@ NOW = "2026-09-20T12:00:00+00:00"
 def _verdict(**over):
     # tests/integration is not a package: the fixture verdict is repeated
     # from test_agent_hook_fleet.py. Keep the copies identical.
-    base = {"schema_version": 1, "computed_at": NOW, "aramid_version": "0.9.0",
+    # `computed_at` reads the REAL clock: every surface renders against
+    # datetime.now() and appends "(stale: computed ...)" once a verdict is
+    # fleet.STALE_AFTER_H old. As the literal NOW it expired at 2026-09-21
+    # 00:00Z and failed the full-line asserts from then on, unseen until the
+    # next full-suite gate (2026-09-25). Stale shapes override it.
+    base = {"schema_version": 1, "computed_at": datetime.now(timezone.utc).isoformat(),
+            "aramid_version": "0.9.0",
             "policy": {"min_days": 14, "min_versions": 2},
             "repos": {"f:/p/aramid": {"name": "aramid", "rows": 41, "latest_at": NOW,
                                       "green": False, "red_criteria": ["dep_audit_ran"],
