@@ -147,7 +147,6 @@ def test_defaults_only_when_no_user_or_repo_config(tmp_path, monkeypatch):
     assert cfg.semgrep_block_armed is False
     assert cfg.bake_started is None
     assert cfg.test_command is None
-    assert cfg.scope_subpath is None
     assert cfg.timeouts["pre_commit"] == 5
     assert cfg.timeouts["pre_push"] == 300
     assert cfg.block_rules["deps"]["block_severity"] == "critical"
@@ -305,18 +304,12 @@ def test_render_repo_stub_contains_mandated_keys():
     assert 'bake_started = "2026-07-12"' in text
 
 
-def test_render_repo_stub_omits_scope_subpath_and_ignore_paths_by_default():
-    """A repo initted at its own root (no scope narrowing, no nested .git
-    exclusions) gets a stub with neither key -- init's target==root case."""
+def test_render_repo_stub_omits_ignore_paths_by_default_and_never_writes_scope_subpath():
+    """A repo with no nested .git dirs gets a stub without `ignore_paths`;
+    no stub carries `scope_subpath`, which no runner ever read."""
     text = config.render_repo_stub({"python"}, None, today="2026-07-12")
     assert "scope_subpath" not in text
     assert "ignore_paths" not in text
-
-
-def test_render_repo_stub_records_scope_subpath_when_given():
-    text = config.render_repo_stub({"python"}, None, today="2026-07-12",
-                                    scope_subpath="sub/dir")
-    assert 'scope_subpath = "sub/dir"' in text
 
 
 def test_render_repo_stub_records_extra_ignore_paths_when_given():
@@ -460,7 +453,7 @@ def test_dast_defaults_present(tmp_path, monkeypatch):
     assert cfg.dast.get("base_url") == ""
     assert cfg.dast.get("paths") == []
     assert cfg.dast.get("timeout_s") == 10
-    assert cfg.dast.get("block_armed") is False
+    assert "block_armed" not in cfg.dast, "a reserved flag nothing read (removed 0.19.0)"
 
 
 def test_tdd_defaults(tmp_path, monkeypatch):

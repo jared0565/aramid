@@ -149,9 +149,13 @@ def _isolated_user_config(tmp_path, monkeypatch):
     Point at a path that does not exist (matching `probe_tool`'s own
     "not found" contract) rather than an empty file -- `load_config` already
     treats a missing user config as "no override", so this reproduces
-    today's typical clean-machine behavior instead of inventing a new one."""
+    today's typical clean-machine behavior instead of inventing a new one.
+
+    Also empties `config._WARNED`, the set of config warnings this process
+    has already printed, so a test sees its own warnings and no other's."""
     monkeypatch.setattr(config, "_user_config_path",
                         lambda: tmp_path / "no-such-user-config.toml")
+    monkeypatch.setattr(config, "_WARNED", set())
 
 
 @pytest.fixture(autouse=True)

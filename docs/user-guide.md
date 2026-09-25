@@ -472,6 +472,8 @@ Exit is `0` if both BLOCK-tier tools (gitleaks, semgrep) are present, `2` if eit
 
 **In CI, expect `2`.** Git hooks are not cloned, so every CI checkout is "configured but NOT enforced" and `doctor` exits `2` by construction — even with every BLOCK-tier tool present. Run it informationally there and read the report for a `MISSING` BLOCK-tier tool, and capture the status explicitly: GitHub's default Windows `pwsh` step wrapper reports any non-zero native exit as `1` unless the script ends with `exit $LASTEXITCODE`, which is how a `2` was once read as a crash.
 
+A `config:` section checks the two config files a person writes -- `~/.aramid/config.toml` and the repo's `aramid.toml` -- against the keys aramid reads, with one `WARN` row per problem: an unknown key or table, a key in the wrong table ("`max_mutants` is not read there -- it belongs in [mutation] or [js_mutation]"), a value of the wrong type, and a key aramid once wrote or documented and never read ("... does nothing -- ...; delete it"). Every command that loads the config prints the same problems to stderr, once each, as `aramid: config: <file>: <problem>`. They are warnings only: the key is still ignored, or still used, exactly as before, and no exit code changes.
+
 Two more sections print on every non-init `doctor` run (suppressed during `aramid init` itself, per [section 2, item 5](#2-onboarding-a-repo--aramid-init) — their remedy is the very init run that is printing the report): `agent files:` grades the managed instruction block in `CLAUDE.md`/`AGENTS.md` against `ok`/`stale`/`absent`/`damaged`/`unreadable`, and `agent hooks:` grades aramid's `SessionStart` entry in `.claude/settings.json` against `ok`/`absent`/`stale`/`tampered`/`unparseable`, plus an advisory line if PATH's `python` -- the interpreter the generated hook command names -- cannot import aramid. Both sections are advisory: WARN never fails doctor, with one exception. `tampered` is the one state in either vocabulary that moves the exit code, to `2` (see above); every other state -- `stale`, `absent`, `damaged`, `unreadable`, `unparseable`, and the PATH-python probe's own WARN -- means only "re-run `aramid init`" (or fix PATH) and leaves the exit code untouched.
 
 `agent hooks:` covers a second entry beyond `SessionStart`: a `PreToolUse` hook that screens every agent tool call for a `git commit` carrying `--no-verify` or `-n`, a `git push` carrying `--no-verify` (`git push -n` is `--dry-run`, a harmless read-only flag, and is deliberately exempt), or either subcommand carrying a `-c core.hooksPath=...` wrapper. While the agent bake is in progress this is advisory only -- the call goes through, with a warning in the agent's own context; once the repo runs `aramid arm --agent` (see [section 9](#9-the-bake-then-arm-model)) the same call is rejected outright. Humans running `git` from a real terminal are never touched -- the hook only ever sees tool calls an agent issues.
@@ -637,7 +639,7 @@ Everything is fail-open: a missing, corrupt or unwritable store costs one stderr
 
 Every registered consumer runs against every popped queue item, unconditionally, in this order: `regression_pack`, `llm_review`, `mutation`, `fuzz`, `js_mutation`, `dast`. An item is only marked `drained` if every consumer finishes without an `error` or `degraded` state — otherwise it stays queued and the drain reports degraded.
 
-Important: drain-time findings are always recorded as `WARN` except regression-pack's (BLOCK by default via `[pack].pack_block_armed = true`). An LLM finding can only escalate to BLOCK later, at the pre-push gate — see [section 9](#9-the-bake-then-arm-model). Mutation survivors work the same way: recorded WARN by the drain, escalated at pre-push once `[mutation].mutation_block_armed` is set (and score transitions once `[mutation].score_block_armed` is). JS mutation, fuzz, and DAST are structurally WARN-only; there is no arming flag for any of them (`[dast].block_armed` is reserved and never read).
+Important: drain-time findings are always recorded as `WARN` except regression-pack's (BLOCK by default via `[pack].pack_block_armed = true`). An LLM finding can only escalate to BLOCK later, at the pre-push gate — see [section 9](#9-the-bake-then-arm-model). Mutation survivors work the same way: recorded WARN by the drain, escalated at pre-push once `[mutation].mutation_block_armed` is set (and score transitions once `[mutation].score_block_armed` is). JS mutation, fuzz, and DAST are structurally WARN-only; there is no arming flag for any of them.
 
 ### llm-review
 
@@ -751,7 +753,7 @@ paths = []
 timeout_s = 10
 ```
 
-An empty `base_url` (the default, `""`) means this consumer OK-skips — it never pins a queue item just because a repo doesn't happen to be a web app. There is a `block_armed` key in this section, but it is explicitly **RESERVED and inert** — not wired to anything today. Don't rely on it to block.
+An empty `base_url` (the default, `""`) means this consumer OK-skips — it never pins a queue item just because a repo doesn't happen to be a web app. There is no arming flag in this section: dast findings are WARN-only, and a `block_armed` set here is reported as a key that does nothing.
 
 ---
 
@@ -772,7 +774,7 @@ New rule classes and the LLM reviewer start in a WARN-only "bake" period so you 
 | `[shadow].shadow_block_armed` | `aramid.toml` | `false` | a repo-root file that hijacks `python -m aramid`, at **every** gate, pre-commit included |
 | `agent_block_armed` | root of `aramid.toml` | `false` | not a BLOCK gate — controls whether the `pre-tool-use` hook REJECTS a bypass-carrying agent tool call outright rather than only warning about it |
 
-Each verdict is computed from its flag at gate time, so arming also covers findings recorded before it. `[dast].block_armed` exists but is reserved and never read; `[fuzz]` and `[js_mutation]` have no arming flag.
+Each verdict is computed from its flag at gate time, so arming also covers findings recorded before it. `[dast]`, `[fuzz]` and `[js_mutation]` have no arming flag.
 
 While a bake is in progress, `aramid status` surfaces the bake day-count (from `bake_started`) and per-rule semgrep hit counts, so you can spot and demote a noisy rule before arming rather than after it starts blocking pushes.
 

@@ -97,7 +97,7 @@ Aramid ships with several checks in a WARN-only "bake" period so an operator can
 | `[shadow].shadow_block_armed` | `aramid.toml` | `false` | `arm --shadow` | a repo-root file that hijacks `python -m aramid` BLOCKs at every gate, pre-commit included |
 | `agent_block_armed` | root of `aramid.toml` | `false` | `arm --agent` | not a finding tier — the agent `pre-tool-use` hook REJECTS a git hook-bypass (`--no-verify`, `core.hooksPath`) instead of only warning |
 
-The verdict of every armable finding tool is computed from the arming flag at gate time, so arming applies to findings recorded before it. Drain-time mutation survivors are recorded `WARN`; `mutation_block_armed` is what escalates them at the next pre-push. `[dast].block_armed` is an eleventh flag-shaped key but RESERVED/inert: the dast consumer never reads it (it only shows up in reported arming state). `[fuzz]` and `[js_mutation]` have **no** arming flag of any kind.
+The verdict of every armable finding tool is computed from the arming flag at gate time, so arming applies to findings recorded before it. Drain-time mutation survivors are recorded `WARN`; `mutation_block_armed` is what escalates them at the next pre-push. `[dast]`, `[fuzz]` and `[js_mutation]` have **no** arming flag of any kind (until 0.19.0 `defaults.toml` carried a never-read `[dast].block_armed`; setting it now warns).
 
 Arming is always a manual, deliberate act (`aramid arm` and its variants) — never a timer or auto-promotion. Every variant rewrites `aramid.toml` via targeted regex substitution (not a full TOML parse/re-dump) specifically to preserve hand-written comments byte-for-byte. `aramid init` writes a fresh repo's `aramid.toml` stub with `semgrep_block_armed = false` and `bake_started = <today>` always, and never touches an existing `aramid.toml`. `aramid status` surfaces bake day-count and per-rule semgrep hit counts while unarmed, so an operator can spot/demote noisy rules before arming.
 
@@ -155,6 +155,8 @@ The two files aramid keeps on disk carry the version of their layout (0.19.0, 1.
 
 Config file: `aramid.toml` at the repo root. Three-layer merge: package defaults (`src/aramid/data/defaults.toml`) ← `~/.aramid/config.toml` ← `<root>/aramid.toml`. `CURRENT_SCHEMA_VERSION = 1`. `block_rules` is **not** sourced from `defaults.toml` at all — it is always overwritten from the separate packaged, curated file `src/aramid/data/block_rules.toml` and is not a user-facing tunable.
 
+**Validation (0.19.0).** Each layer a person writes (`~/.aramid/config.toml`, `<root>/aramid.toml`) is checked against the keys aramid reads: every key in `defaults.toml`, with its type, plus `config_keys.OPTIONAL` (`test_command`, `bake_started`, `[tests].command`, `[mutation].test_command`, the two `baseline_timeout_s` keys, `[shadow]`); `block_rules` tool tables are left open. An unknown key or table, a key in the wrong table, a wrong type, and a retired key (`scope_subpath`, `[llm].model_openrouter`, `[dast].block_armed`, `[dast].start_command`) each print `aramid: config: <file>: <problem>` on stderr, once per process, and a `WARN` row under `doctor`'s `config:` section. WARN only (DEC-4): what is loaded, and every exit code, are unchanged.
+
 ### Top level
 
 | Key | Type | Default | Meaning |
@@ -164,7 +166,6 @@ Config file: `aramid.toml` at the repo root. Three-layer merge: package defaults
 | `ignore_paths` | list[str] | the 8 built-ins below (set in `defaults.toml`) | Exclude patterns. The 8 built-ins — `.aramid/`, `graph-out/`, `.graphite*`, `.cache/`, `node_modules/`, `.venv/`, `__pycache__/`, `.git/` — are the default and are always unioned back in regardless of repo config (never removable); a repo's `ignore_paths` adds to them. |
 | `bake_started` | str \| None | `None` (absent from defaults.toml — TOML has no null literal) | ISO date string set by `init`'s repo stub marking when the WARN-only bake period began; reported by `status` as "bake in progress, day N". |
 | `test_command` | str \| None | `None` | **Legacy alias for `[tests].command`.** Shipped in schema v1 documented but with no read site at all; now consumed by `pipeline.run_gate` as the fallback when `[tests].command` is unset. `[tests].command` wins if both are set. Prefer `[tests].command` in new config. |
-| `scope_subpath` | str \| None | `None` | Set by `init` when the target dir isn't the true repo root; printed as "scan scope: …". |
 
 ### `[timeouts]`
 
@@ -306,8 +307,6 @@ No arming flag exists in `[fuzz]`.
 | `base_url` | str | `""` | Target base URL. Empty ⇒ OK-skip. |
 | `paths` | list[str] | `[]` | Extra paths to probe on top of the curated exposed-path set. |
 | `timeout_s` | int (`float()`'d) | `10` | Per-request timeout. |
-| `block_armed` | bool | `false` | **RESERVED and inert** — never read by the dast consumer's `consume()`. |
-| `start_command` | — | *(commented out, not a live key)* | Not currently a real config key. |
 
 ### Key naming collisions (same name, different meaning)
 
@@ -327,7 +326,7 @@ No arming flag exists in `[fuzz]`.
 9. `[shadow].shadow_block_armed` — default `false` — armed via `aramid arm --shadow`.
 10. `agent_block_armed` (top level) — default `false` — armed via `aramid arm --agent`.
 
-`[dast].block_armed` is an eleventh flag-shaped key but explicitly RESERVED/inert. `[fuzz]` and `[js_mutation]` have **no** arming flag of any kind. What each flag changes: see "Arming / bake-then-arm" in section 1.
+`[dast]`, `[fuzz]` and `[js_mutation]` have **no** arming flag of any kind. What each flag changes: see "Arming / bake-then-arm" in section 1.
 
 ---
 
@@ -382,8 +381,8 @@ No arming flag exists in `[fuzz]`.
 ### dast
 - **NAME**: `dast`, findings `tool="dast"`.
 - **Purpose**: passive web-hygiene scan of a user-declared `base_url` via an owned stdlib HTTP prober — five check families: headers (HSTS/CSP/X-Frame-Options/X-Content-Type-Options/Referrer-Policy/Permissions-Policy missing), cookies (Set-Cookie missing Secure/HttpOnly/SameSite), transport (plaintext HTTP, expired/invalid TLS cert), exposed paths (curated probes for `/.git/config`, `/.git/HEAD`, `/.env`, `/server-status`, plus user-declared `paths`), and banner leaks (`Server`/`X-Powered-By` version strings). Evidence is always synthetic metadata, never raw response body/cookie/secret values.
-- **Config keys**: `[dast]` (`enabled=true`, `base_url=""`, `paths=[]`, `timeout_s=10`, `block_armed=false` — reserved/inert).
-- **WARN/BLOCK + arming**: no live arming; all dast findings are WARN-tier via the catch-all (`block_armed` is never read).
+- **Config keys**: `[dast]` (`enabled=true`, `base_url=""`, `paths=[]`, `timeout_s=10`; no arming flag).
+- **WARN/BLOCK + arming**: no arming flag; all dast findings are WARN-tier via the catch-all.
 - **OK-skip / give-up**: OK-skip when `enabled=false` (`"disabled"`); `base_url` empty (`"no dast target configured"`); malformed `base_url` (`"invalid dast base_url (need http(s)://host with a valid port)"`); two independent give-up valves, both `=3`, head-scoped prefixes `f"dast target unreachable (last seen @ {head12})"` / `f"dast probe error (last seen @ {head12})"` → `"dast giving up: target persistently unreachable or erroring"`. DEGRADED when the target is unreachable (`DastUnreachable`) or the probe crashes unexpectedly — both explicitly not permanent (app may simply not be up at drain time).
 - **Stack requirement**: none structural — purely config-declared (`base_url` must be set by the operator; no auto-discovery of a running app).
 - **Token cost**: always `0.0`.
@@ -411,7 +410,7 @@ Run the gate pipeline.
 
 ### `aramid doctor [--fix]`
 Probe (and optionally repair) the toolchain and the hook shim's baked interpreter.
-- No flag: probes `gitleaks`, `semgrep`, `ruff`, `pip-audit` via `<exe> --version`, plus the shim's baked interpreter; prints LLM-provider probe lines and autolearn state health.
+- No flag: probes `gitleaks`, `semgrep`, `ruff`, `pip-audit` via `<exe> --version`, plus the shim's baked interpreter; prints LLM-provider probe lines, autolearn state health, and a `config:` section (one `WARN` row per config-key problem, or one `OK` row; never an exit code).
 - `--fix` — `pip install --upgrade`s `ruff`/`semgrep`/`pip-audit` into the current interpreter if missing; downloads a pinned gitleaks v8.21.2 binary into `~/.aramid/tools/` (sha256-verified) if missing; re-probes.
 
 ### `aramid status`
@@ -556,7 +555,7 @@ Run `aramid doctor` to see which of `gitleaks`, `semgrep`, `ruff`, `pip-audit` a
 Read `aramid status`'s `last drain:` line first: every drain writes a `drain_visited` row into each repo it looks at, with or without work, so the line moves every interval -- `idle: nothing to drain` means it ran and found nothing, a timestamp older than one interval means it did not run here (not scheduled, or this repo is not registered). Until 2026-09-16 an idle drain wrote nothing and the line kept naming the last consumer run, so a dead scheduler and an empty queue looked alike. Then check `aramid schedule status` (on Windows the Task Scheduler job named `aramid-drain`, printing `schtasks`' own output; on Linux/macOS the marked crontab line; "aramid-drain: not installed" if neither). If not installed, run `aramid schedule install` (reads `[drain].interval_hours`, default 4). If it's installed but drains never seem to complete, check for a stuck singleton lock at `~/.aramid/drain.lock` (JSON `{pid, started_at}`) — it's treated as stale/breakable automatically once its recorded PID is dead or it's older than `2 × [drain].wall_clock_budget_s` (default 600s, so 1200s). `aramid drain --dry-run` gives a read-only preview of what would be swept/popped without acquiring the lock.
 
 **Findings aren't blocking even though they look like real issues.**
-Check which arming flag governs that finding — most WARN/BLOCK behavior is arming-gated: `semgrep_block_armed` (top-level, default `false`) for OWASP-semgrep matches; `[pack].pack_block_armed` (default `true`, so normally already armed) for compiled regression-pack rules; `[llm].llm_block_armed` (default `false`) for confirmed-CRITICAL LLM findings, applied retroactively at the pre-push gate only; `[llm.autolearn].armed` doesn't affect BLOCK at all, only reviewer selection. `[dast].block_armed` exists but is explicitly reserved/inert — dast findings are always WARN. `[mutation]`, `[fuzz]`, `[js_mutation]` have no arming flag at all and are structurally WARN-only. Run `aramid status` to see current bake day-count and per-rule semgrep hit counts before deciding to arm. Note: gitleaks, curated ruff rules (`S102,S105,S106,S107,S608,S301,S302`), failing tests, and dependency findings ≥ `[deps].block_severity` (default `"critical"`) BLOCK unconditionally regardless of any arming flag.
+Check which arming flag governs that finding — most WARN/BLOCK behavior is arming-gated: `semgrep_block_armed` (top-level, default `false`) for OWASP-semgrep matches; `[pack].pack_block_armed` (default `true`, so normally already armed) for compiled regression-pack rules; `[llm].llm_block_armed` (default `false`) for confirmed-CRITICAL LLM findings, applied retroactively at the pre-push gate only; `[llm.autolearn].armed` doesn't affect BLOCK at all, only reviewer selection. `[mutation].mutation_block_armed` escalates drain-recorded survivors at the next pre-push (the arming table in section 1 lists every flag). `[dast]`, `[fuzz]` and `[js_mutation]` have no arming flag at all and are structurally WARN-only. Run `aramid status` to see current bake day-count and per-rule semgrep hit counts before deciding to arm. Note: gitleaks, curated ruff rules (`S102,S105,S106,S107,S608,S301,S302`), failing tests, and dependency findings ≥ `[deps].block_severity` (default `"critical"`) BLOCK unconditionally regardless of any arming flag.
 
 **How do I rebaseline after an aramid upgrade re-triggers old findings?**
 Run `aramid rebaseline --yes` — an aramid upgrade that changes rule-id or path normalization changes the fingerprint hash, making previously-accepted findings look "new" and triggering the pre-push ratchet. `aramid rebaseline` without `--yes` only reports the count of grandfathered findings that would be discarded and refuses with exit 3 (no interactive prompt, safe for hooks/CI). With `--yes`, it runs a full `Gate.ALL` scan and writes a new baseline, printing `old -> new` counts. Expect re-fingerprinted-but-unchanged findings to subsequently show as resolved in `status`/`ledger list` — `superseded` (naming the new id) when the new row is a nearby sibling, `fixed` otherwise; documented, expected behavior.

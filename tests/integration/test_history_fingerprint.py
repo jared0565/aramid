@@ -84,7 +84,7 @@ def _minimal_config() -> config_mod.Config:
     # BLOCK regardless of block_rules, so an empty dict is sufficient.
     return config_mod.Config(
         schema_version=1, semgrep_block_armed=False, bake_started=None,
-        ignore_paths=[], test_command=None, scope_subpath=None,
+        ignore_paths=[], test_command=None,
         timeouts={}, block_rules={}, triage={}, drain={}, pack={}, llm={})
 
 

@@ -351,8 +351,10 @@ def test_init_one_onboards_a_fresh_repo_and_summarises_it(tmp_path, capsys, onbo
         ledger.close()
 
 
-def test_init_one_on_a_subdirectory_scopes_the_stub_and_the_stack_walk(tmp_path, capsys,
-                                                                       onboard):
+def test_init_one_on_a_subdirectory_onboards_the_whole_repository(tmp_path, capsys, onboard):
+    """The gate scans the root, so init says so: the stack comes from the
+    root's app.py (nothing under sub/ is code) and no `scope_subpath` is
+    written -- before 0.19.0 both were scoped to sub/ and nothing applied it."""
     r = _repo(tmp_path)                       # app.py at the root, nothing under sub/
     sub = r / "sub"
     sub.mkdir()
@@ -363,13 +365,13 @@ def test_init_one_on_a_subdirectory_scopes_the_stub_and_the_stack_walk(tmp_path,
     assert _summary(out) == (
         "aramid: init: summary\n"
         f"  root:              {r}\n"
-        "  scan scope:        sub\n"
-        "  stack:             unknown\n"
+        "  scan scope:        whole repository (init ran in sub)\n"
+        "  stack:             python\n"
         "  hooks armed:       yes\n"
         "  baseline findings: 0\n"
         "  historical secrets:0\n"
         "aramid: init: done. Run `aramid status` any time to see open findings.\n")
-    assert 'scope_subpath = "sub"' in (r / "aramid.toml").read_text(encoding="utf-8")
+    assert "scope_subpath" not in (r / "aramid.toml").read_text(encoding="utf-8")
 
 
 def test_init_one_re_run_leaves_toml_and_baseline_alone(tmp_path, capsys, onboard):

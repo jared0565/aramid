@@ -54,7 +54,7 @@ def test_aging_line_counts_only_open_findings_past_the_window(tmp_path):
 
 def _cfg(**over):
     base = dict(schema_version=1, semgrep_block_armed=False, bake_started=None,
-                ignore_paths=[], test_command=None, scope_subpath=None, timeouts={},
+                ignore_paths=[], test_command=None, timeouts={},
                 block_rules={}, triage={}, drain={}, pack={}, llm={}, mutation={},
                 shadow={}, fuzz={}, js_mutation={})
     base.update(over)

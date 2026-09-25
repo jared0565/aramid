@@ -858,6 +858,22 @@ def _autolearn_probe_line() -> str:
         return "  OK       autolearn    probe unavailable"
 
 
+def config_lines(root: Path) -> list[str]:
+    """One WARN row per config_keys problem in a layer a person writes, or
+    one OK row (1.0 API-5; DEC-4: reported, never an exit code). load_config
+    has already printed the same problems to stderr; these are the report's
+    copy, under the report's own heading."""
+    from aramid import config as config_mod
+    try:
+        found = config_mod.layer_problems(root)
+    except Exception:
+        return ["  WARN     config       not checked -- a config file is unparseable "
+                "(see the error reported below)"]
+    if not found:
+        return ["  OK       config       every key set is one aramid reads"]
+    return [f"  WARN     config       {path}: {problem}" for path, problem in found]
+
+
 def probe_providers() -> list[str]:
     """Zero-LLM-call provider probe (spec section 7): which/env/spend reads
     only. Informational -- provider absence never changes doctor's exit code
@@ -1088,6 +1104,10 @@ def cmd_doctor(root: Path, fix: bool = False, during_init: bool = False) -> int:
 
     print("autolearn:")
     print(_autolearn_probe_line())
+
+    print("config:")
+    for line in config_lines(root):
+        print(line)
 
     if not during_init:
         # Suppressed during `aramid init`: this section's remedy is "run

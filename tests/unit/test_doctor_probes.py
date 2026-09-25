@@ -449,11 +449,29 @@ def test_doctor_exits_3_for_an_unparseable_config_after_reporting_everything_els
     out, err = capsys.readouterr()
     assert ("  OK       tests         (not probed -- aramid.toml is unparseable (see the "
             "error reported below))\n") in out
+    assert ("config:\n  WARN     config       not checked -- a config file is unparseable "
+            "(see the error reported below)\n") in out
     assert err.startswith(f"aramid: doctor: hooks: aramid.toml is present but pre-commit, "
                           f"pre-push missing from {hooks_mod.hooks_dir(r)}")
     assert "aramid: doctor: aramid.toml is unparseable -- " in err
     assert err.endswith("-- fix aramid.toml and re-run `aramid doctor` (the test toolchain "
                         "could not be probed)\n")
+
+
+def test_doctor_reports_each_config_problem_as_a_warn_row_and_keeps_its_exit(
+        tmp_path, capsys, quiet):
+    r = _repo(tmp_path)
+    clean_rc = _run(r)
+    assert "config:\n  OK       config       every key set is one aramid reads\n" in (
+        capsys.readouterr().out)
+
+    (r / "aramid.toml").write_text('schema_version = 1\ncolour = "red"\n', encoding="utf-8")
+
+    assert _run(r) == clean_rc
+    out, err = capsys.readouterr()
+    assert (f"config:\n  WARN     config       {r / 'aramid.toml'}: unknown key `colour` "
+            f"-- ignored\n") in out
+    assert f"aramid: config: {r / 'aramid.toml'}: unknown key `colour` -- ignored\n" in err
 
 
 def test_doctor_exits_2_when_configured_but_not_enforced(tmp_path, capsys, quiet):

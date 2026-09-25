@@ -240,7 +240,8 @@ def test_second_init_is_idempotent(tmp_path, monkeypatch):
 
 # --- scope subpath + nested .git exclusion (brief step 2) -------------------
 
-def test_init_records_scope_subpath_when_target_is_subdir(tmp_path, monkeypatch):
+def test_init_from_a_subdir_onboards_the_root_and_writes_no_scope_subpath(tmp_path,
+                                                                          monkeypatch):
     monkeypatch.setattr(doctor, "probe_toolchain", _fake_present)
     r = _repo(tmp_path)
     sub = r / "sub"
@@ -251,7 +252,7 @@ def test_init_records_scope_subpath_when_target_is_subdir(tmp_path, monkeypatch)
 
     assert rc == 0
     toml_text = (r / "aramid.toml").read_text(encoding="utf-8")
-    assert 'scope_subpath = "sub"' in toml_text
+    assert "scope_subpath" not in toml_text
     # hooks always install at the TRUE root, never inside the subdir.
     assert (r / ".git" / "hooks" / "pre-commit").exists()
     assert not (sub / ".git").exists()

@@ -12,6 +12,7 @@ from pathlib import Path
 import tomllib
 import tomli_w
 
+from aramid import config_keys
 from aramid.fingerprint import compute_fingerprint, normalize_path
 from aramid.models import Finding, Gate, Severity, Source, Verdict
 from aramid.policy import OverrideRecord, load_block_rules
@@ -34,7 +35,6 @@ class Config:
     bake_started: str | None
     ignore_paths: list[str]
     test_command: str | None
-    scope_subpath: str | None
     timeouts: dict
     block_rules: dict
     triage: dict
@@ -108,6 +108,36 @@ def _read_toml_file(path: Path) -> dict:
     return tomllib.loads(path.read_text(encoding="utf-8"))
 
 
+# (file, problem) pairs this process has already printed. load_config runs
+# more than once in one command, and a warning repeated per call is noise
+# that trains people to skip it.
+_WARNED: set[tuple[str, str]] = set()
+
+
+def _warn_layer(path: Path, raw: dict, known: dict) -> None:
+    """Print each config_keys problem in one layer a person writes, once per
+    process. WARN only (1.0 DEC-4): what load_config loads is unchanged --
+    an unknown key is still ignored, a mistyped value still passes through
+    -- and no exit code moves."""
+    for problem in config_keys.problems(raw, known=known):
+        if (str(path), problem) not in _WARNED:
+            _WARNED.add((str(path), problem))
+            print(f"aramid: config: {path}: {problem}", file=sys.stderr)
+
+
+def layer_problems(root: Path) -> list[tuple[Path, str]]:
+    """Every config_keys problem in the two layers a person writes -- the
+    user's ~/.aramid/config.toml, then <root>/aramid.toml -- for `aramid
+    doctor`'s `config:` rows. An unparseable layer raises what tomllib
+    raises, as it does in load_config."""
+    known = config_keys.known_keys()
+    out: list[tuple[Path, str]] = []
+    for path in (_user_config_path(), root / "aramid.toml"):
+        if path.exists():
+            out.extend((path, p) for p in config_keys.problems(_read_toml_file(path), known=known))
+    return out
+
+
 def _deep_merge(base: dict, override: dict) -> dict:
     result = deepcopy(base)
     for key, value in override.items():
@@ -171,16 +201,20 @@ def _enforce_block_rules_floor(floor: dict, merged: dict) -> dict:
 
 def load_config(root: Path) -> Config:
     merged = _read_data_toml("defaults.toml")
+    known = config_keys.known_keys(merged)
     merged["block_rules"] = load_block_rules()
 
     user_path = _user_config_path()
     if user_path.exists():
-        merged = _deep_merge(merged, _read_toml_file(user_path))
+        user_toml = _read_toml_file(user_path)
+        _warn_layer(user_path, user_toml, known)
+        merged = _deep_merge(merged, user_toml)
 
     repo_path = root / "aramid.toml"
     repo_schema_version = None
     if repo_path.exists():
         repo_toml = _read_toml_file(repo_path)
+        _warn_layer(repo_path, repo_toml, known)
         repo_schema_version = repo_toml.get("schema_version")
         pre_repo_block_rules = merged.get("block_rules", {})
         merged = _deep_merge(merged, repo_toml)
@@ -199,7 +233,6 @@ def load_config(root: Path) -> Config:
         bake_started=merged.get("bake_started"),
         ignore_paths=ignore_paths,
         test_command=merged.get("test_command"),
-        scope_subpath=merged.get("scope_subpath"),
         timeouts=merged.get("timeouts", {}),
         block_rules=merged.get("block_rules", {}),
         triage=merged.get("triage", {}),
@@ -271,18 +304,17 @@ def load_suppressions(root: Path) -> tuple[list[OverrideRecord], list[Finding]]:
 
 
 def render_repo_stub(stack, pkg_mgr, *, today: str | None = None,
-                      scope_subpath: str | None = None,
                       extra_ignore_paths: list[str] | tuple[str, ...] = ()) -> str:
     """Near-empty per-repo `aramid.toml` stub written by `init`. `stack`/
     `pkg_mgr` are surfaced only as an informational header comment -- the
     Config schema itself carries no stack/pkg-manager fields (those are
     re-detected each run by aramid.detectors, not persisted config).
 
-    `scope_subpath` (init step 2, target != true repo root) and
-    `extra_ignore_paths` (nested `.git` dirs excluded from scan scope) are
-    both omitted entirely when not given -- a repo initted at its own root
-    with no nested repos gets a stub with neither key, matching the
-    pre-existing stub shape exactly (backward compatible)."""
+    `extra_ignore_paths` (nested `.git` dirs excluded from scan scope) is
+    omitted entirely when not given -- a repo with no nested repos gets a
+    stub without the key, matching the pre-existing stub shape exactly
+    (backward compatible). There is no `scope_subpath`: until 0.19.0 a
+    subdirectory init wrote one, and no runner ever read it."""
     from datetime import date
 
     day = today or date.today().isoformat()
@@ -306,8 +338,6 @@ def render_repo_stub(stack, pkg_mgr, *, today: str | None = None,
         "agent_block_armed": False,
         "bake_started": day,
     }
-    if scope_subpath:
-        body_dict["scope_subpath"] = scope_subpath
     if extra_ignore_paths:
         body_dict["ignore_paths"] = list(extra_ignore_paths)
     body = tomli_w.dumps(body_dict)

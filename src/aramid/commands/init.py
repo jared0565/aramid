@@ -484,8 +484,11 @@ def _init_one(target: Path) -> int:
 
     print(f"aramid: init: {root}")
 
-    # step 2: scope subpath + nested .git exclusions.
-    scope_subpath = target.relative_to(root).as_posix() if target != root else None
+    # step 2: nested .git exclusions. A subdirectory target onboards its whole
+    # repository -- the hooks, the gate and every runner work from the root --
+    # so nothing here is scoped narrower than that. (Until 0.19.0 this wrote
+    # `scope_subpath`, a scope no runner applied.)
+    run_from = target.relative_to(root).as_posix() if target != root else None
     nested = nested_git_dirs(root)
     extra_ignores = [f"{p.relative_to(root).as_posix()}/" for p in nested]
 
@@ -513,8 +516,9 @@ def _init_one(target: Path) -> int:
 
     # step 4: aramid.toml (only if absent) + ARAMID.md (always) + agent
     # blocks (CLAUDE.md/AGENTS.md, fence-scoped refresh) + gitignore.
-    scope_root = target if target != root else root
-    stack = detect_stacks(root, scope_root)
+    # The gate's own walk (pipeline.run_gate), so ARAMID.md and the summary
+    # name what the gate will run.
+    stack = detect_stacks(root, root)
     pkg_mgr = detect_package_manager(root)
 
     toml_path = root / "aramid.toml"
@@ -522,8 +526,7 @@ def _init_one(target: Path) -> int:
         print(f"aramid: init: {toml_path} already exists -- left untouched")
     else:
         toml_path.write_text(
-            config_mod.render_repo_stub(stack, pkg_mgr, scope_subpath=scope_subpath,
-                                         extra_ignore_paths=extra_ignores),
+            config_mod.render_repo_stub(stack, pkg_mgr, extra_ignore_paths=extra_ignores),
             encoding="utf-8")
         print(f"aramid: init: wrote {toml_path}")
 
@@ -581,8 +584,8 @@ def _init_one(target: Path) -> int:
 
     print("aramid: init: summary")
     print(f"  root:              {root}")
-    if scope_subpath:
-        print(f"  scan scope:        {scope_subpath}")
+    if run_from:
+        print(f"  scan scope:        whole repository (init ran in {run_from})")
     if extra_ignores:
         print(f"  nested repos excl: {', '.join(extra_ignores)}")
     print(f"  stack:             {', '.join(sorted(stack)) or 'unknown'}")

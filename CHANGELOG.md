@@ -44,6 +44,21 @@ to publish a tag that disagrees with it.
   that never recorded a row as `missing path: <name>`, followed by the
   command that removes it, where it used to say `no rows:`.
 
+- **aramid warns about config keys it does not read.** Every command that
+  loads the config checks `~/.aramid/config.toml` and the repo's
+  `aramid.toml` against the keys aramid reads, and prints each problem to
+  stderr once, as `aramid: config: <file>: <problem>`:
+  - an unknown key or table;
+  - a key in the wrong table ("`max_mutants` is not read there -- it
+    belongs in [mutation] or [js_mutation]");
+  - a value of the wrong type;
+  - a key aramid wrote or documented and never read ("does nothing ...
+    delete it").
+
+  `aramid doctor` reports the same under a new `config:` section. These
+  are warnings only: what aramid loads, and every exit code, are
+  unchanged.
+
 ### Changed
 
 - **`aramid hooks install` exits `3`, not `2`, when it refuses.** It
@@ -79,13 +94,28 @@ to publish a tag that disagrees with it.
   unaffected: they call these commands in text mode. The user guide's new
   *Machine-readable output* section lists all six documents.
 
+- **`aramid init` run in a subdirectory onboards the whole repository,
+  and says so.** It used to write `scope_subpath` to `aramid.toml`, print
+  `scan scope: <subdir>`, and detect the stack from the subdirectory
+  alone, while the hooks and the gate always scanned the whole
+  repository. The summary now reads `scan scope: whole repository (init
+  ran in <subdir>)`, and the stack is detected from the root, as the gate
+  does. A stub written by an older init keeps its `scope_subpath`, which
+  now warns; delete the line.
+
 ### Removed
 
 - **`[llm].model_openrouter`.** Nothing read it: an openrouter arm in
   `[[llm.ladder]]` names its own model, and the comment above the key said
   the provider read it. `openrouter_monthly_cap_usd` stays -- the provider
-  and `aramid status` both read it. A repo that sets the key is unaffected
-  (it never did anything).
+  and `aramid status` both read it. A repo that sets the key now gets a
+  warning naming it (it never did anything).
+- **`[dast].block_armed`.** A reserved default that nothing read: dast
+  findings are WARN-only, so setting it armed nothing. Setting it now
+  warns. It also leaves the arming state recorded with overrides and fleet
+  rows; a flag that was `false` going absent is not a disarm, so no
+  readiness streak restarts.
+- **`scope_subpath`.** See *Changed*: nothing ever read it.
 
 ### Fixed
 
