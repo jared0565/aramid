@@ -196,6 +196,13 @@ class GateResult:
     # would spend the row's own budget on a fact the run had in hand.
     # Additive; the default keeps every construction site valid.
     stacks: tuple = ()
+    # Whether this repo has anything for pip-audit to audit
+    # (`deps.python_sources`, the predicate that selects the runner). False
+    # makes the health row's `dep_audit_ran` n/a rather than red: a Python
+    # repo with no requirements file and no `[project]` table has no audit
+    # to miss, and `aramid doctor` already warns about it (FN-10). None on a
+    # hand-built result, which keeps the criterion's older reading.
+    pip_audit_applies: bool | None = None
     # Fleet notices pending on this machine when the report was rendered
     # (fleet-readiness spec section 8): 0 when none, None when the channel
     # could not be read. Set by commands/check.py, which owns the read; the
@@ -1401,4 +1408,5 @@ def run_gate(root: Path, gate: Gate, mode: str, cfg: config_mod.Config, ledger: 
                        # ran is the defect this closes.
                        tools_ran=tuple(sorted(scope_tools)),
                        stacks=tuple(sorted(ctx.stacks)),
+                       pip_audit_applies=bool(deps.python_sources(ctx.root)),
                        refs_moved=tuple(moved or ()))

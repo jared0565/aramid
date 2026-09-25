@@ -600,7 +600,7 @@ Every action exits `0` on success and `3` on failure — including `status` when
 
 ### Fleet health, 1.0 readiness and notices
 
-aramid has no telemetry and never phones home, so the question "is aramid ready to be called 1.0?" is answered on your machine, from the repos it gates. Every recording gate run appends one row for its own repo to `~/.aramid/fleet_health.jsonl` -- which tools ran, whether a consumer is degraded or stood down, whether a resolver is graded `NEVER RAN`/`BLIND`, whether a BLOCK-tier tool failed, whether pip-audit ran on a Python repo, and every `*_armed` flag. The drain then judges every registered repo's rows (`~/.aramid/fleet_verdict.json`) and posts notices to aramid's own channel (`~/.aramid/notices.jsonl`). Nothing is written into any repo; no process reads another repo's ledger; `aramid uninstall` leaves the store alone.
+aramid has no telemetry and never phones home, so the question "is aramid ready to be called 1.0?" is answered on your machine, from the repos it gates. Every recording gate run appends one row for its own repo to `~/.aramid/fleet_health.jsonl` -- which tools ran, whether a consumer is degraded or stood down, whether a resolver is graded `NEVER RAN`/`BLIND`, whether a BLOCK-tier tool failed, whether pip-audit ran on a Python repo that has something for it to audit, and every `*_armed` flag. The drain then judges every registered repo's rows (`~/.aramid/fleet_verdict.json`) and posts notices to aramid's own channel (`~/.aramid/notices.jsonl`). Nothing is written into any repo; no process reads another repo's ledger; `aramid uninstall` leaves the store alone.
 
 ```powershell
 aramid fleet             # repo x criteria matrix, streak, verdict with reasons

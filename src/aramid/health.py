@@ -298,20 +298,22 @@ def resolver_defects(ledger) -> list[tuple[str, str, str]]:
 
 def _dep_audit_ran(gate, result, tools_ran: set[str]) -> bool | None:
     """Tri-state (spec section 4, criterion 5). None: the deps runner is not
-    part of this gate, or this is not a Python repo. True: pip-audit
-    finished OK -- `runners.deps.run_python` returns MISSING when it finds no
-    requirements file, so OK already means at least one file was audited
-    (`RunnerResult.examined` is None for this runner; there is nothing
-    further to check). False otherwise -- and a pyproject-only Python repo
-    lands here on every pre-push, which is the open `aramid doctor` lead
-    this criterion exists to keep visible until it is fixed."""
-    if gate is None or result is None:
+    part of this gate, this is not a Python repo, or the repo has nothing
+    for pip-audit to audit -- no requirements*.txt and no pyproject.toml
+    with a `[project]` table (`result.pip_audit_applies`, from the same
+    `deps.python_sources` predicate that selects the runner; `aramid doctor`
+    warns about such a repo, so the gap stays visible there). True:
+    pip-audit finished OK, which means it audited at least one of those
+    files. False: it applied and did not finish OK."""
+    if result is None:
         return None
     try:
         keys = GATE_RUNNER_KEYS.get(Gate(str(gate)), ())
-    except ValueError:
+    except ValueError:  # no gate, or one this aramid does not know: nothing expected
         return None
     if "deps" not in keys or "python" not in (getattr(result, "stacks", ()) or ()):
+        return None
+    if getattr(result, "pip_audit_applies", None) is False:
         return None
     return NAME_PIP_AUDIT in tools_ran
 

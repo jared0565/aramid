@@ -119,6 +119,13 @@ to publish a tag that disagrees with it.
 
 ### Fixed
 
+- **The fleet's `dep_audit_ran` criterion no longer reads red for a Python
+  repo with nothing to audit.** A repo with no `requirements*.txt` and no
+  `pyproject.toml` `[project]` table never selects pip-audit, so every
+  pre-push row read the audit as missed and the repo could never turn
+  green. It now reads n/a, as the readiness spec always said for an audit
+  that is not expected; `aramid doctor` still warns that the Python
+  dependency audit does not run there.
 - **An unreadable `~/.aramid/repos.toml` is no longer overwritten.**
   `aramid init` in any repo replaced a corrupt or half-written registry
   with a one-repo fleet, silently, and `aramid uninstall` replaced it

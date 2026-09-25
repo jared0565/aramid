@@ -216,6 +216,22 @@ def test_pip_audit_missing_on_a_python_repo_at_pre_push_reads_false(tmp_path):
     lg.close()
 
 
+def test_a_python_repo_with_nothing_to_audit_reads_null_not_red(tmp_path):
+    """FN-10: no requirements*.txt and no pyproject.toml [project] table
+    means pip-audit is never selected, so its absence is not a missed
+    audit (the spec's "not expected"; `aramid doctor` warns about the repo
+    instead). Applying and absent still reads red."""
+    lg = Ledger(tmp_path / "l.db")
+    empty = _result(tools_ran=("gitleaks", "semgrep"), stacks=("python",),
+                    pip_audit_applies=False)
+    missed = _result(tools_ran=("gitleaks", "semgrep"), stacks=("python",),
+                     pip_audit_applies=True)
+    assert _crit(lg, result=empty, gate=Gate.PRE_PUSH)["dep_audit_ran"] is None
+    assert _crit(lg, result=missed, gate=Gate.PRE_PUSH)["dep_audit_ran"] is False
+    assert _crit(lg, result=missed)["dep_audit_ran"] is None, "no gate named: nothing expected"
+    lg.close()
+
+
 def test_pip_audit_not_expected_reads_null(tmp_path):
     lg = Ledger(tmp_path / "l.db")
     py = _result(tools_ran=("gitleaks", "ruff"), stacks=("python",))
