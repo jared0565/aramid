@@ -32,6 +32,43 @@ def _raw(db, *statements):
 _INSERT = "INSERT INTO events(type,run_id,at,finding_id,payload) VALUES(?,?,?,?,?)"
 
 
+# Every event kind, by the ledger schema version whose readers all know it.
+# An older aramid skips a kind it does not know (UnknownEventType), so a kind
+# added WITHOUT a version bump must be one it can ignore and still err toward
+# caution -- never one that revokes an override, reopens a finding or cancels
+# a mark: ignored, those leave a finding suppressed that the newer aramid
+# blocks. A new EventType member fails the pin below until that is decided:
+# ignore-safe -> IGNORE_SAFE_ADDITIONS, with the reason; not -> bump
+# LEDGER_SCHEMA_VERSION (older aramids then refuse the ledger) and list the
+# kind under the new version here.
+KINDS_AT_SCHEMA = {
+    1: {
+        "run_started", "run_finished", "finding_detected", "finding_resolved",
+        "finding_overridden", "finding_rotated", "finding_not_a_secret",
+        "finding_unreachable", "finding_out_of_scope", "finding_moved",
+        "finding_override_invalidated", "infrastructure_bypass", "baseline_snapshot",
+        "triage_recorded", "queue_item_added", "queue_item_coalesced",
+        "queue_item_drained", "queue_item_expired", "queue_item_deferred",
+        "consumer_run_finished", "drain_visited", "resolver_yield",
+    },
+}
+IGNORE_SAFE_ADDITIONS: dict[str, str] = {}   # kind -> why an older reader may skip it
+
+
+def test_every_event_kind_carries_an_ignore_safety_decision():
+    """The forward-compatibility rule in ledger.py was a comment; this makes
+    it a decision nobody can skip (the 10Z drain's review of bad0ce1)."""
+    assert max(KINDS_AT_SCHEMA) == LEDGER_SCHEMA_VERSION
+    decided = set().union(*KINDS_AT_SCHEMA.values()) | set(IGNORE_SAFE_ADDITIONS)
+    undecided = {t.value for t in EventType} - decided
+    assert not undecided, (
+        f"new event kind(s) {sorted(undecided)}: an older aramid will skip them. Safe "
+        f"to skip -> add to IGNORE_SAFE_ADDITIONS with the reason; not -> bump "
+        f"LEDGER_SCHEMA_VERSION and list them under the new version")
+    assert decided == {t.value for t in EventType}, "a listed kind no longer exists"
+    assert all(reason.strip() for reason in IGNORE_SAFE_ADDITIONS.values())
+
+
 def test_a_new_ledger_is_stamped_with_the_current_version(tmp_path):
     db = tmp_path / "l.db"
     Ledger(db).close()

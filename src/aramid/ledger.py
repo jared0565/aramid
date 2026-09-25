@@ -28,7 +28,10 @@ CREATE TABLE IF NOT EXISTS events(
 # newer one cannot. A new EVENT KIND is not a layout change: a reader keeps a
 # kind it does not know as an UnknownEventType (see `Ledger.events`), so a
 # newer 1.x may add kinds -- provided an older reader that ignores them
-# errs toward caution; one that must not be ignored bumps this instead.
+# still errs toward caution. A kind that must not be ignored (one that
+# revokes an override, reopens a finding or cancels a mark) bumps this
+# instead: tests/unit/test_ledger_schema_version.py fails on every new
+# EventType until one of the two is recorded there.
 LEDGER_SCHEMA_VERSION = 1
 # A literal, not a format: PRAGMA takes no bound parameter, and SQL built
 # from values is the shape the SAST rules exist to flag. The version test
