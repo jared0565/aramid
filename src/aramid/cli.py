@@ -66,7 +66,9 @@ def build_parser() -> argparse.ArgumentParser:
     mode.add_argument("--staged", action="store_true")
     mode.add_argument("--range", action="store_true")
     mode.add_argument("--all", action="store_true")
-    p_check.add_argument("--strict", action="store_true", help="CI mode: treat 2/3 as failure")
+    p_check.add_argument("--strict", action="store_true",
+                         help="CI mode: exit 1 where the run would exit 2 (a tool "
+                              "degraded); 3 already fails and passes through")
     p_check.add_argument("--json", action="store_true")
     p_check.add_argument("--accept-degraded", action="store_true")
     p_check.add_argument("--no-record", action="store_true", dest="no_record",
@@ -201,7 +203,9 @@ def build_parser() -> argparse.ArgumentParser:
     p_uninstall = sub.add_parser("uninstall", help="reverse init")
     p_uninstall.add_argument("path", nargs="?", default=".")
 
-    p_schedule = sub.add_parser("schedule", help="register/remove/query the Windows Task Scheduler drain job")
+    p_schedule = sub.add_parser("schedule",
+                                help="register/remove/query the scheduled drain job (a Task "
+                                     "Scheduler task on Windows, a marked crontab line elsewhere)")
     p_schedule.add_argument("action", choices=["install", "remove", "status"])
 
     p_hooks = sub.add_parser("hooks",

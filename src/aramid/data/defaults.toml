@@ -82,9 +82,8 @@ llm_block_armed = false
 provider_order = ["claude-cli", "codex-cli", "ollama-cloud"]
 # openrouter is OPT-IN / in-app only -- NOT part of the dev-time default chain
 # (model-source policy). To use it, add "openrouter" to provider_order and an
-# openrouter arm to [[llm.ladder]] in a repo's aramid.toml. These keys are read
-# only by the opt-in openrouter provider:
-model_openrouter = "anthropic/claude-sonnet-4-5"
+# openrouter arm to [[llm.ladder]] in a repo's aramid.toml -- the arm names the
+# model. The cap is read by the openrouter provider and by `aramid status`:
 openrouter_monthly_cap_usd = 5.0
 # Hard cap on refute calls across a whole drain (spec section 4). A single
 # review response can surface many CRITICAL candidates, each of which would

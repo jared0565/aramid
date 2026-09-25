@@ -232,7 +232,6 @@ Two invariants worth keeping in mind when touching this:
 | `packet_max_bytes` | int | `120000` | Max size of the review packet sent to the LLM; oversized packets get sections dropped. |
 | `llm_block_armed` | bool | `false` | Bake-then-arm flag: confirmed-CRITICAL LLM findings WARN until armed. Flipped via `aramid arm --llm`. |
 | `provider_order` | list[str] | `["claude-cli", "codex-cli", "ollama-cloud"]` | Ordered provider chain (consumed only as a set/availability check). `openrouter` is opt-in only. |
-| `model_openrouter` | str | `"anthropic/claude-sonnet-4-5"` | Model id for the opt-in openrouter provider. No confirmed read site found in `src/aramid` beyond its own declaration. |
 | `openrouter_monthly_cap_usd` | float | `5.0` | Monthly USD spend cap for the openrouter provider. |
 | `max_refutes_per_drain` | int | `6` | Hard cap on cross-provider refute calls across a whole drain; once hit, further fresh CRITICALs are treated like a transport-failed refute (demoted to high, `confirmed=False`). |
 

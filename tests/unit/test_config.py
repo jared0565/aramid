@@ -360,7 +360,8 @@ def test_llm_defaults_present(tmp_path, monkeypatch):
     assert cfg.llm["packet_max_bytes"] == 120000
     assert cfg.llm["llm_block_armed"] is False
     assert cfg.llm["provider_order"] == ["claude-cli", "codex-cli", "ollama-cloud"]
-    assert cfg.llm["model_openrouter"] == "anthropic/claude-sonnet-4-5"
+    # Removed in 0.19.0: nothing read it -- a ladder arm names the model.
+    assert "model_openrouter" not in cfg.llm
     assert cfg.llm["openrouter_monthly_cap_usd"] == 5.0
     assert cfg.llm["max_refutes_per_drain"] == 6
     # Ladder assertions

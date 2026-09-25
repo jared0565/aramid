@@ -41,8 +41,31 @@ to publish a tag that disagrees with it.
   `resolvers`, `mutation-score` and `agent-hook`, and states that
   `ledger resolve` with several ids exits with the worst of them.
 
+### Removed
+
+- **`[llm].model_openrouter`.** Nothing read it: an openrouter arm in
+  `[[llm.ladder]]` names its own model, and the comment above the key said
+  the provider read it. `openrouter_monthly_cap_usd` stays -- the provider
+  and `aramid status` both read it. A repo that sets the key is unaffected
+  (it never did anything).
+
 ### Fixed
 
+- **Three texts that ship in the wheel said things the code does not do.**
+  - `aramid check --help` described `--strict` as "treat 2/3 as failure".
+    It turns exit 2 (a tool degraded) into 1; exit 3 already fails and
+    passes through.
+  - `aramid --help` called `schedule` "the Windows Task Scheduler drain
+    job". It has installed a marked crontab line on Linux and macOS since
+    the scheduler went cross-platform.
+  - The `ARAMID.md` that `aramid init` writes told every repo "a two-week
+    WARN-only bake is in effect" -- nothing enforces two weeks, and an
+    armed repo was told the same. It now says the bake lasts until
+    `aramid arm` and points at `aramid status`, which says whether it is
+    still running. It also called the regression pack "committed" in a
+    repo that has none (the file appears once `aramid pack` has a resolved
+    finding to compile) and named only the Windows scheduler. **Re-run
+    `aramid init` to pick up the new `ARAMID.md`.**
 - **The docs now describe the code on the points a user acts on.** Each
   statement was checked against the source before it was rewritten:
   - The user guide's hook table showed `"$INTERP" -m aramid ...`, a shim
