@@ -10,6 +10,26 @@ to publish a tag that disagrees with it.
 
 ## [Unreleased]
 
+### Fixed
+
+- **A second drain could start beside a live one, and delete its lock.**
+  `~/.aramid/drain.lock` was treated as stale once it was older than 1200
+  seconds (twice a fixed 600 s probe, whatever the drain's own deadline),
+  so a manual `aramid drain` 20 minutes into a 90-minute scheduled one
+  broke the lock and ran beside it. The first of the two to finish then
+  removed the lock with no check of whose it was.
+  - The lock now records the deadline its drain is armed with
+    (`deadline_s`), and moves it when the candidates' configs set a longer
+    one. It is held while its process lives and it is younger than that
+    deadline plus five minutes.
+  - A drain removes the lock only if the lock names its own process.
+  - A lock written by 0.19.1 or older has no `deadline_s`, and reads as
+    the default 90 minutes.
+  - A lock with no process id or no start time is unreadable, so stale.
+    It used to be checked as process `-1`, which on Linux and macOS
+    `os.kill` reads as every process the user can signal -- so a lock
+    missing its process id counted as held.
+
 ## [0.19.1] — 2026-09-28
 
 ### Added

@@ -8,6 +8,8 @@ from INSIDE, first, and does the bookkeeping the outside kill skipped: one
 `degraded` row naming the consumer it stopped, the children killed, the
 lock released, exit 2. Exit, kill and the ledger are injected here; the
 real-process arm is tests/integration/test_drain_deadline.py."""
+import json
+import os
 import threading
 import time
 
@@ -31,7 +33,10 @@ class _Harness:
         self.root = tmp_path / "repo"
         (self.root / ".aramid").mkdir(parents=True)
         self.lock = tmp_path / "drain.lock"
-        self.lock.write_text("{}", encoding="utf-8")
+        # The lock a real drain hands its watchdog names this process: FN-15
+        # releases only a lock its own pid holds.
+        self.lock.write_text(json.dumps({"pid": os.getpid(), "started_at": time.time(),
+                                         "deadline_s": deadline_s}), encoding="utf-8")
         self.exits, self.kills = [], []
         self.exited = threading.Event()
 

@@ -74,24 +74,59 @@ def _pid_alive(pid: int) -> bool:
         return False
 
 
-def _acquire_lock(budget_s: float) -> Path | None:
+# FN-15: how long past its recorded deadline a lock whose pid still lives is
+# held. The watchdog's own exit (row, kill, release) is bounded at seconds;
+# a pid still holding the lock minutes after that is not a drain.
+_LOCK_MARGIN_S = 300.0
+
+
+def _write_lock(p: Path, data: dict) -> None:
+    """Replace, never truncate-and-write: a drain reading the lock mid-write
+    would find it unreadable, call it stale and break it."""
+    tmp = p.with_name(f"{p.name}.{os.getpid()}.tmp")
+    tmp.write_text(json.dumps(data), encoding="utf-8")
+    os.replace(tmp, p)
+
+
+def _read_own_lock(p: Path) -> dict | None:
+    """The lock's contents when this process holds it, else None."""
+    try:
+        data = json.loads(p.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, ValueError, OSError):
+        return None
+    return data if isinstance(data, dict) and data.get("pid") == os.getpid() else None
+
+
+def _acquire_lock(deadline_s: float, *, now: Callable[[], float] = time.time) -> Path | None:
+    """Take the drain lock, recording the deadline this drain is armed with
+    (FN-15). A lock is held while its pid lives and it is younger than ITS
+    OWN recorded deadline plus a margin -- the holder's, not the asker's. A
+    lock with no deadline (an aramid <= 0.19.1 wrote it) reads as the
+    default one; a lock with no pid or no start is unreadable, so stale --
+    never `_pid_alive(-1)`, which on POSIX asks about every process."""
     p = _lock_path()
     if p.exists():
         try:
             data = json.loads(p.read_text(encoding="utf-8"))
-            age = time.time() - float(data.get("started_at", 0))
-            if _pid_alive(int(data.get("pid", -1))) and age < 2 * budget_s:
+            age = now() - float(data["started_at"])
+            held_for = float(data.get("deadline_s", drain_limits.DEFAULT_HARD_DEADLINE_S))
+            if _pid_alive(int(data["pid"])) and age < held_for + _LOCK_MARGIN_S:
                 return None  # genuinely held
             print("aramid: drain: breaking stale lock", file=sys.stderr)
-        except (json.JSONDecodeError, ValueError, OSError):
+        except (json.JSONDecodeError, ValueError, OSError, KeyError, TypeError,
+                AttributeError):
             pass  # unreadable lock is stale
     p.parent.mkdir(parents=True, exist_ok=True)
-    p.write_text(json.dumps({"pid": os.getpid(), "started_at": time.time()}),
-                 encoding="utf-8")
+    _write_lock(p, {"pid": os.getpid(), "started_at": now(),
+                    "deadline_s": float(deadline_s)})
     return p
 
 
 def _release_lock(p: Path) -> None:
+    """Remove the lock only if this process holds it (FN-15): a drain that
+    outlived its lock must not delete the next drain's."""
+    if _read_own_lock(p) is None:
+        return
     try:
         p.unlink()
     except OSError:
@@ -162,8 +197,14 @@ class _Watchdog:
 
     def set_deadline(self, deadline_s: float) -> None:
         """Seconds from this watchdog's start. Armed at the default before
-        any config is read, then set from the candidates' configs."""
+        any config is read, then set from the candidates' configs. The lock
+        records the new deadline too (FN-15): another drain judges this
+        one's lock by it."""
         self._deadline_s = float(deadline_s)
+        data = _read_own_lock(self._lock)
+        if data is not None:
+            with contextlib.suppress(OSError):
+                _write_lock(self._lock, {**data, "deadline_s": self._deadline_s})
 
     def begin(self, root: Path, item_id: str, consumer: str, run_id: str) -> None:
         with self._mutex:
@@ -425,10 +466,9 @@ def cmd_drain(targets: list, *, dry_run: bool = False, max_items: int | None = N
         print("aramid drain: no repos registered and none given", file=sys.stderr)
         return 0
 
-    probe_cfg_budget = 600.0
     lock = None
     if not dry_run:
-        lock = _acquire_lock(probe_cfg_budget)
+        lock = _acquire_lock(drain_limits.DEFAULT_HARD_DEADLINE_S)
         if lock is None:
             print("aramid: drain: another drain is running (lock held)", file=sys.stderr)
             return 3
@@ -530,9 +570,10 @@ def cmd_drain(targets: list, *, dry_run: bool = False, max_items: int | None = N
                 task_limit_minutes=schedule_mod.installed_task_limit_minutes()))
         budget_s = max((float(c[3].drain.get("wall_clock_budget_s", 600.0))
                         for c in candidates), default=600.0)
+        # No candidates, no comparison: the loop below is the only reader.
         limit = max_items if max_items is not None else \
                 max((int(c[3].drain.get("max_items_per_drain", 10))
-                     for c in candidates), default=10)
+                     for c in candidates), default=None)
         drained = 0
         rolled: dict[str, tuple] = {}
         drained_roots: list[str] = []
