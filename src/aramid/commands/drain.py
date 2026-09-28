@@ -132,14 +132,17 @@ class _Watchdog:
 
     Its clock is its own `time.monotonic`, never `cmd_drain`'s injected
     one: tests drive that one to exhaust the between-items budget, and a
-    watchdog reading it would fire in them."""
+    watchdog reading it would fire in them. `monotonic` exists so a test
+    can park it exactly on the deadline; `cmd_drain` never passes it."""
 
     def __init__(self, deadline_s: float, *, lock: Path, clock: Callable[[], str] = _now,
                  exit_: Callable[[int], object] = os._exit,
                  kill: Callable[[], object] | None = None,
                  open_ledger: Callable[[Path], Ledger] | None = None,
-                 poll_s: float = 0.5, write_timeout_s: float = 15.0):
-        self._t0 = time.monotonic()
+                 poll_s: float = 0.5, write_timeout_s: float = 15.0,
+                 monotonic: Callable[[], float] = time.monotonic):
+        self._monotonic = monotonic
+        self._t0 = monotonic()
         self._deadline_s = float(deadline_s)
         self._lock = lock
         self._clock = clock
@@ -164,7 +167,7 @@ class _Watchdog:
 
     def begin(self, root: Path, item_id: str, consumer: str, run_id: str) -> None:
         with self._mutex:
-            self._in_flight = (root, item_id, consumer, run_id, time.monotonic())
+            self._in_flight = (root, item_id, consumer, run_id, self._monotonic())
 
     @contextlib.contextmanager
     def finishing(self):
@@ -178,7 +181,7 @@ class _Watchdog:
 
     def _run(self) -> None:
         while not self._stop.wait(self._poll_s):
-            if time.monotonic() - self._t0 >= self._deadline_s:
+            if self._monotonic() - self._t0 >= self._deadline_s:
                 self._fire()
                 return
 
@@ -188,7 +191,7 @@ class _Watchdog:
         try:
             led.append(Event(EventType.CONSUMER_RUN_FINISHED, run_id, self._clock(), payload={
                 "consumer": consumer, "item_id": item_id, "state": "degraded",
-                "duration_s": round(time.monotonic() - began, 3), "cost": 0.0,
+                "duration_s": round(self._monotonic() - began, 3), "cost": 0.0,
                 "finding_count": 0,
                 "note": (f"stopped at the drain's hard deadline, {elapsed:.0f} s into the "
                          f"drain ([drain].hard_deadline_s = {self._deadline_s:g}); "
@@ -201,7 +204,7 @@ class _Watchdog:
             if self._stop.is_set():
                 return
             self._stop.set()
-            elapsed = time.monotonic() - self._t0
+            elapsed = self._monotonic() - self._t0
             flight = self._in_flight
             if flight is not None:
                 _bounded(lambda: self._record(flight, elapsed), self._write_timeout_s)

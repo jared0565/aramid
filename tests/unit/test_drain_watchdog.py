@@ -158,3 +158,34 @@ def test_it_fires_once(tmp_path):
     assert h.exited.wait(10)
     time.sleep(0.3)
     assert h.exits == [2] and len(_rows(h.root)) == 1
+
+
+# --- the watchdog's own clock, injected -----------------------------------------
+# Real time never lands a poll exactly on the deadline, so `>=` against `>`
+# and the row's rounding were unpinned (the 2026-09-28 06Z drain confirmed
+# both as survivors). A parked fake clock pins them.
+
+def test_the_deadline_fires_on_the_instant_it_falls_due(tmp_path):
+    """Elapsed EQUAL to the deadline is due. A clock parked there forever
+    must fire; a strict comparison would wait for ever."""
+    now = {"t": 0.0}
+    h = _Harness(tmp_path, 5.0, monotonic=lambda: now["t"])
+    h.dog.start()
+    now["t"] = 5.0
+    assert h.exited.wait(10), "elapsed == deadline did not fire"
+    assert h.exits == [2]
+
+
+def test_the_row_rounds_its_duration_to_milliseconds(tmp_path):
+    """The deadline's row reads like every other consumer row
+    (`_record_consumer_run` rounds to 3 places): the duration since
+    `begin`, not since the drain started."""
+    now = {"t": 0.0}
+    h = _Harness(tmp_path, 2.0, monotonic=lambda: now["t"])
+    now["t"] = 1.0
+    h.dog.begin(h.root, "item-1", "mutation", "run-1")
+    h.dog.start()
+    now["t"] = 2.23456
+    assert h.exited.wait(10)
+    [row] = _rows(h.root)
+    assert row["duration_s"] == 1.235
