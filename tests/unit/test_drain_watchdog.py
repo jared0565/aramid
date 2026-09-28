@@ -189,3 +189,19 @@ def test_the_row_rounds_its_duration_to_milliseconds(tmp_path):
     assert h.exited.wait(10)
     [row] = _rows(h.root)
     assert row["duration_s"] == 1.235
+
+
+def test_the_deadline_names_the_consumer_and_the_repo_it_stopped(tmp_path, capsys):
+    """The stderr line is what the operator reads in the task's log: which
+    consumer was stopped, on which repo. Pinned whole -- the 2026-09-28 14Z
+    drain confirmed `flight[0]` -> `flight[1]` (the item id in place of the
+    repo) as a survivor, because nothing read the line."""
+    now = {"t": 0.0}
+    h = _Harness(tmp_path, 7.0, monotonic=lambda: now["t"])
+    h.dog.begin(h.root, "item-1", "mutation", "run-1")
+    h.dog.start()
+    now["t"] = 7.0
+    assert h.exited.wait(10)
+    assert capsys.readouterr().err.splitlines() == [
+        "aramid drain: hard deadline reached after 7 s ([drain].hard_deadline_s = 7); "
+        f"stopped mutation on {h.root}; the item stays queued"]
