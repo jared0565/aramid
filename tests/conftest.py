@@ -186,6 +186,21 @@ def _stub_agent_interpreter_probe(request, monkeypatch):
     yield
 
 
+@pytest.fixture(autouse=True)
+def _stub_installed_task_limit(request, monkeypatch):
+    """`cmd_drain` reads the installed Windows task's time limit (FN-14:
+    its deadline sits under it) through `schtasks` -- machine state, and a
+    real scheduler query in every drain test. Stubbed suite-wide to "no
+    task"; the reader's own tests opt out with
+    @pytest.mark.real_task_limit_probe and stub the subprocess instead."""
+    if "real_task_limit_probe" in request.keywords:
+        yield
+        return
+    from aramid.commands import schedule
+    monkeypatch.setattr(schedule, "installed_task_limit_minutes", lambda: None)
+    yield
+
+
 @pytest.fixture
 def checkout_env() -> dict[str, str]:
     """`os.environ` with the aramid THIS process imported first on PYTHONPATH.

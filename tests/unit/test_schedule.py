@@ -16,6 +16,19 @@ def test_xml_contains_startwhenavailable_interval_and_interpreter():
     assert "<StartBoundary>2026-07-13T00:00:00</StartBoundary>" in xml
 
 
+def test_the_task_time_limit_follows_the_interval_and_sits_under_it():
+    """FN-14: the limit was a hard-coded PT1H. At a four-hour interval the
+    drain was killed at the hour mid-consumer -- no row written, lock
+    leaked (2026-09-25, 09-27). It now sits five minutes under the interval, so
+    the drain's own deadline (drain_limits) always fires first. Written in
+    the form Task Scheduler stores (PT235M reads back as PT3H55M), so
+    `status` can compare what it reads with what install wrote."""
+    import re
+    for hours, limit in ((4, "PT3H55M"), (6, "PT5H55M"), (1, "PT55M")):
+        xml = schedule.render_task_xml(Path("C:/py/python.exe"), hours, "2026-07-13T00:00:00")
+        assert re.findall(r"<ExecutionTimeLimit>([^<]*)</ExecutionTimeLimit>", xml) == [limit]
+
+
 def test_schtasks_argvs():
     assert schedule._create_argv(Path("t.xml")) == \
         ["schtasks", "/Create", "/TN", "aramid-drain", "/XML", "t.xml", "/F"]
@@ -469,3 +482,53 @@ def test_schedule_on_windows_installs_from_the_config_interval_and_a_whole_secon
                                           encoding="utf-8")
     assert schedule.cmd_schedule(tmp_path, "install") == 0
     assert "<Interval>PT6H</Interval>" in seen["xml"]
+    assert "<ExecutionTimeLimit>PT5H55M</ExecutionTimeLimit>" in seen["xml"]
+
+
+# --- the installed task's limit, read for the drain's deadline (FN-14) --------
+
+def _limit_xml(limit):
+    return ("<Task><Triggers><TimeTrigger><Repetition><Interval>PT4H</Interval>"
+            "</Repetition></TimeTrigger></Triggers><Settings>"
+            f"<ExecutionTimeLimit>{limit}</ExecutionTimeLimit></Settings></Task>")
+
+
+@pytest.mark.real_task_limit_probe
+def test_the_installed_task_limit_is_read_in_minutes(monkeypatch):
+    calls = _windows(monkeypatch, lambda argv: _CP(stdout=_limit_xml("PT1H")))
+    assert schedule.installed_task_limit_minutes() == 60
+    assert calls == [schedule._query_xml_argv()]
+    _windows(monkeypatch, lambda argv: _CP(stdout=_limit_xml("PT3H55M")))
+    assert schedule.installed_task_limit_minutes() == 235
+    _windows(monkeypatch, lambda argv: _CP(stdout=_limit_xml("P1D")))
+    assert schedule.installed_task_limit_minutes() == 1440
+
+
+@pytest.mark.real_task_limit_probe
+def test_no_task_no_limit_or_an_unreadable_one_reads_as_none(monkeypatch):
+    """None clamps nothing, which is the pre-FN-14 behaviour: every failure
+    to read lands there rather than on a guessed limit."""
+    for reply in (_CP(returncode=1), _CP(stdout=_limit_xml("PT0S")),
+                  _CP(stdout=_limit_xml("soon")), _CP(stdout="<Task/>"), _CP(stdout=None)):
+        _windows(monkeypatch, lambda argv, r=reply: r)
+        assert schedule.installed_task_limit_minutes() is None, vars(reply)
+
+    def boom(argv):
+        raise OSError("no schtasks")
+    _windows(monkeypatch, boom)
+    assert schedule.installed_task_limit_minutes() is None
+
+
+@pytest.mark.real_task_limit_probe
+def test_off_windows_there_is_no_task_limit_to_read(monkeypatch):
+    calls = _windows(monkeypatch, lambda argv: _CP(stdout=_limit_xml("PT1H")))
+    monkeypatch.setattr(sys, "platform", "linux")
+    assert schedule.installed_task_limit_minutes() is None
+    assert calls == [], "cron has no limit; nothing should be asked"
+
+
+def test_the_suite_never_reads_the_real_task_limit():
+    """tests/conftest.py stubs the reader for every test without the
+    marker: a drain test on a developer's Windows machine would otherwise
+    clamp to that machine's installed task."""
+    assert schedule.installed_task_limit_minutes() is None

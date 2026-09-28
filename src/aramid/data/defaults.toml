@@ -61,6 +61,11 @@ interval_hours = 4
 max_items_per_drain = 10
 item_expiry_days = 30
 wall_clock_budget_s = 600
+# FN-14: seconds from the drain's start to its hard deadline. It stops the
+# running consumer, records it `degraded`, and leaves the item queued. Capped
+# fifteen minutes under interval_hours; the scheduled task's own limit sits
+# five minutes under it (aramid.drain_limits).
+hard_deadline_s = 5400
 
 [pack]
 enabled = true

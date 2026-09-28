@@ -11,6 +11,7 @@ StartWhenAvailable equivalent, which is tolerable because the sweep already
 self-heals a fully missed window. cron rather than launchd on macOS so one
 implementation covers both platforms; launchd is the natural follow-up if
 per-user agent semantics are ever wanted."""
+import re
 import shlex
 import subprocess
 import sys
@@ -19,6 +20,7 @@ from datetime import datetime
 from pathlib import Path
 
 from aramid import config as config_mod
+from aramid import drain_limits
 
 TASK_NAME = "aramid-drain"
 
@@ -44,7 +46,7 @@ _XML_TEMPLATE = """<?xml version="1.0" encoding="UTF-16"?>
     <StartWhenAvailable>true</StartWhenAvailable>
     <DisallowStartIfOnBatteries>false</DisallowStartIfOnBatteries>
     <StopIfGoingOnBatteries>false</StopIfGoingOnBatteries>
-    <ExecutionTimeLimit>PT1H</ExecutionTimeLimit>
+    <ExecutionTimeLimit>{limit}</ExecutionTimeLimit>
     <MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy>
   </Settings>
   <Actions Context="Author">
@@ -58,7 +60,12 @@ _XML_TEMPLATE = """<?xml version="1.0" encoding="UTF-16"?>
 
 
 def render_task_xml(interpreter: Path, interval_hours: int, start_boundary: str) -> str:
+    # The limit was a literal PT1H under a four-hour interval: the drain was
+    # killed at the hour mid-consumer, with no row and a leaked lock
+    # (2026-09-25 and 09-27, FN-14). It now follows the interval, under it and over
+    # the drain's own deadline -- the order drain_limits keeps.
     return _XML_TEMPLATE.format(start=start_boundary, hours=interval_hours,
+                                limit=drain_limits.task_limit_iso(interval_hours),
                                 interpreter=str(interpreter))
 
 
@@ -72,6 +79,72 @@ def _delete_argv() -> list[str]:
 
 def _query_argv() -> list[str]:
     return ["schtasks", "/Query", "/TN", TASK_NAME]
+
+
+def _query_xml_argv() -> list[str]:
+    return [*_query_argv(), "/XML"]
+
+
+_ISO_DURATION = re.compile(r"P(?:(\d+)D)?(?:T(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?)?")
+
+
+def _iso_minutes(text: str) -> int | None:
+    """Whole minutes in an ISO 8601 duration of days, hours, minutes and
+    seconds -- the forms Task Scheduler writes. None for anything else
+    (weeks, years, a malformed value): the caller says nothing rather than
+    guess."""
+    m = _ISO_DURATION.fullmatch(text.strip())
+    if m is None or not any(m.groups()):
+        return None
+    d, h, mi, s = (int(g or 0) for g in m.groups())
+    return d * 1440 + h * 60 + mi + s // 60
+
+
+def installed_task_limit_minutes() -> int | None:
+    """The installed Windows task's ExecutionTimeLimit, in minutes, for the
+    drain's deadline to sit under (drain_limits.drain_deadline_s). None off
+    Windows (cron has no limit), with no task, on any failure to read it,
+    and for PT0S, which Task Scheduler reads as "no limit". Asked once per
+    drain; the suite stubs it (tests/conftest.py) so no test reads the real
+    scheduler."""
+    if sys.platform != "win32":
+        return None
+    try:
+        # S603 justification: argv comes from _query_xml_argv(), a fixed
+        # literal list -- no external input reaches it.
+        cp = subprocess.run(_query_xml_argv(), capture_output=True, text=True,  # noqa: S603
+                            errors="replace", timeout=30)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if cp.returncode != 0:
+        return None
+    m = re.search(r"<ExecutionTimeLimit>([^<]*)</ExecutionTimeLimit>", cp.stdout or "")
+    minutes = _iso_minutes(m.group(1)) if m else None
+    return minutes or None
+
+
+def stale_limit_note(task_xml: str) -> str | None:
+    """What `status` appends when the INSTALLED task's time limit is not
+    the one `install` writes today for that task's own interval. A task
+    registered before FN-14 keeps PT1H -- the drain killed at the hour,
+    recording nothing -- until `schedule install` is re-run, and nothing
+    else would tell the user. Read against the task's own `<Interval>`,
+    not this repo's config: it may have been installed from another
+    repo's. None when either element is missing or unreadable."""
+    interval = re.search(r"<Interval>([^<]*)</Interval>", task_xml)
+    limit = re.search(r"<ExecutionTimeLimit>([^<]*)</ExecutionTimeLimit>", task_xml)
+    if interval is None or limit is None:
+        return None
+    interval_min = _iso_minutes(interval.group(1))
+    limit_min = _iso_minutes(limit.group(1))
+    if interval_min is None or limit_min is None or interval_min % 60:
+        return None
+    hours = interval_min // 60
+    if limit_min == drain_limits.task_limit_minutes(hours):
+        return None
+    return (f"its time limit {limit.group(1).strip()} predates the drain's own deadline; "
+            f"re-run `aramid schedule install` (limit should be "
+            f"{drain_limits.task_limit_iso(hours)})")
 
 
 # ------------------------------------------------------------ POSIX (cron) ---

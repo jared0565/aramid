@@ -5,12 +5,19 @@ Exit codes reuse the Phase 1 contract: 0 ok, 2 degraded (some repo or
 consumer failed; the rest completed), 3 engine error (lock held, registry
 unusable). Singleton lock at ~/.aramid/drain.lock: JSON {pid, started_at};
 stale when the PID is dead OR the lock is older than 2x the wall-clock
-budget (spec section 6)."""
+budget (spec section 6).
+
+Hard deadline (FN-14): `[drain].hard_deadline_s` (default 90 minutes,
+aramid.drain_limits) after the lock is taken, `_Watchdog` stops the drain
+from inside -- a `degraded` row for the running consumer, its children
+killed, the lock released, exit 2. The item stays queued."""
+import contextlib
 import functools
 import json
 import os
 import subprocess
 import sys
+import threading
 import time
 import uuid
 from datetime import datetime, timezone
@@ -20,14 +27,17 @@ from typing import Callable
 from aramid import __version__
 from aramid import autolearn
 from aramid import config as config_mod
+from aramid import drain_limits
 from aramid import fleet, health
 from aramid import gitutil, leftovers, policy, queue, redact, registry, triage
 from aramid import ledger as ledger_mod
+from aramid.commands import schedule as schedule_mod
 from aramid.consumers.base import CONSUMERS, ConsumerResult, DrainContext
 from aramid.fingerprint import normalize_path
 from aramid.ledger import Ledger
 from aramid.models import Event, EventType, Gate
 from aramid.normalizer import normalize
+from aramid.runners import base as runners_base
 
 import aramid.consumers.regression_pack  # noqa: F401  -- registers the consumer
 from aramid.consumers import llm_review as _llm_review  # noqa: F401  (registers itself)
@@ -86,6 +96,125 @@ def _release_lock(p: Path) -> None:
         p.unlink()
     except OSError:
         pass
+
+
+def _bounded(fn: Callable[[], object], timeout_s: float) -> None:
+    """Run `fn` on a daemon thread and wait at most `timeout_s`. At the
+    deadline nothing may turn into a second hang: a ledger that never
+    answers or a taskkill that never returns is abandoned, not awaited."""
+    def run():
+        try:
+            fn()
+        except Exception as exc:  # noqa: BLE001 -- best effort at a deadline
+            print(f"aramid drain: at the hard deadline: {exc}", file=sys.stderr)
+    t = threading.Thread(target=run, daemon=True)
+    t.start()
+    t.join(timeout_s)
+
+
+class _Watchdog:
+    """The drain's hard deadline (FN-14). A daemon thread that, once the
+    deadline falls due, does what an outside kill cannot: writes a
+    `degraded` CONSUMER_RUN_FINISHED row for the consumer in flight (so
+    consumer health sees the run), kills the children the launchers have
+    registered and closes the registry so a looping consumer cannot start
+    another (runners.base.kill_live), releases the lock, and ends the
+    process with exit 2 -- `os._exit`, because the main thread is inside a
+    consumer that will not return. The item is never marked drained, so it
+    stays queued.
+
+    One mutex orders it against the main thread: `begin` names the
+    consumer about to run, `finishing` holds the mutex while that
+    consumer's own rows are written and clears it, so a deadline in that
+    window waits and then finds nothing in flight -- never two rows for
+    one run. `cancel` takes the same mutex, so a drain that finishes as
+    the deadline falls due either exits normally or is stopped, not both.
+
+    Its clock is its own `time.monotonic`, never `cmd_drain`'s injected
+    one: tests drive that one to exhaust the between-items budget, and a
+    watchdog reading it would fire in them."""
+
+    def __init__(self, deadline_s: float, *, lock: Path, clock: Callable[[], str] = _now,
+                 exit_: Callable[[int], object] = os._exit,
+                 kill: Callable[[], object] | None = None,
+                 open_ledger: Callable[[Path], Ledger] | None = None,
+                 poll_s: float = 0.5, write_timeout_s: float = 15.0):
+        self._t0 = time.monotonic()
+        self._deadline_s = float(deadline_s)
+        self._lock = lock
+        self._clock = clock
+        self._exit = exit_
+        self._kill = kill if kill is not None else (lambda: runners_base.kill_live(close=True))
+        self._open_ledger = open_ledger or (lambda root: Ledger(root / ".aramid" / "ledger.db"))
+        self._poll_s = poll_s
+        self._write_timeout_s = write_timeout_s
+        self._mutex = threading.Lock()
+        self._stop = threading.Event()
+        self._in_flight: tuple | None = None
+        self._thread = threading.Thread(target=self._run, name="aramid-drain-deadline",
+                                        daemon=True)
+
+    def start(self) -> None:
+        self._thread.start()
+
+    def set_deadline(self, deadline_s: float) -> None:
+        """Seconds from this watchdog's start. Armed at the default before
+        any config is read, then set from the candidates' configs."""
+        self._deadline_s = float(deadline_s)
+
+    def begin(self, root: Path, item_id: str, consumer: str, run_id: str) -> None:
+        with self._mutex:
+            self._in_flight = (root, item_id, consumer, run_id, time.monotonic())
+
+    @contextlib.contextmanager
+    def finishing(self):
+        with self._mutex:
+            self._in_flight = None
+            yield
+
+    def cancel(self) -> None:
+        with self._mutex:
+            self._stop.set()
+
+    def _run(self) -> None:
+        while not self._stop.wait(self._poll_s):
+            if time.monotonic() - self._t0 >= self._deadline_s:
+                self._fire()
+                return
+
+    def _record(self, flight: tuple, elapsed: float) -> None:
+        root, item_id, consumer, run_id, began = flight
+        led = self._open_ledger(root)
+        try:
+            led.append(Event(EventType.CONSUMER_RUN_FINISHED, run_id, self._clock(), payload={
+                "consumer": consumer, "item_id": item_id, "state": "degraded",
+                "duration_s": round(time.monotonic() - began, 3), "cost": 0.0,
+                "finding_count": 0,
+                "note": (f"stopped at the drain's hard deadline, {elapsed:.0f} s into the "
+                         f"drain ([drain].hard_deadline_s = {self._deadline_s:g}); "
+                         "the item stays queued")}))
+        finally:
+            led.close()
+
+    def _fire(self) -> None:
+        with self._mutex:
+            if self._stop.is_set():
+                return
+            self._stop.set()
+            elapsed = time.monotonic() - self._t0
+            flight = self._in_flight
+            if flight is not None:
+                _bounded(lambda: self._record(flight, elapsed), self._write_timeout_s)
+            what = f"{flight[2]} on {flight[0]}" if flight is not None else "no consumer"
+            print(f"aramid drain: hard deadline reached after {elapsed:.0f} s "
+                  f"([drain].hard_deadline_s = {self._deadline_s:g}); stopped {what}; "
+                  "the item stays queued", file=sys.stderr)
+            _bounded(self._kill, self._write_timeout_s)
+            _release_lock(self._lock)
+            for stream in (sys.stdout, sys.stderr):
+                with contextlib.suppress(Exception):   # a closed stream cannot stop the exit
+                    stream.flush()
+            self._exit(2)
 
 
 def _sweep_anchor(root: Path, ledger, head: str) -> str | None:
@@ -174,13 +303,21 @@ def _sweep_leftovers(root: Path, *, dry_run: bool) -> leftovers.Sweep:
     return report
 
 
-def _consume_item(root: Path, cfg, ledger, item, clock) -> bool:
+def _consume_item(root: Path, cfg, ledger, item, clock,
+                  watchdog: "_Watchdog | None" = None) -> bool:
     """Run every enabled consumer against one queue item. Returns True if
-    all consumers finished without error state."""
+    all consumers finished without error state. `watchdog` (FN-14) is told
+    which consumer is running, and holds off while that run's rows are
+    written."""
     ok = True
     run_id = uuid.uuid4().hex
     salt = redact.load_or_create_salt(root / ".aramid")
+
+    def finishing():
+        return watchdog.finishing() if watchdog is not None else contextlib.nullcontext()
     for name, module in CONSUMERS.items():
+        if watchdog is not None:
+            watchdog.begin(root, item.id, name, run_id)
         started = time.monotonic()
         try:
             result = module.consume(item, DrainContext(root=root, cfg=cfg,
@@ -194,53 +331,12 @@ def _consume_item(root: Path, cfg, ledger, item, clock) -> bool:
             findings = normalize(result.findings, root, lambda f: item.head, salt,
                                  Gate.ALL, functools.partial(policy.classify, cfg=cfg),
                                  pin_occurrence=pin)
-            # The drain runs a narrow ruleset (pack only) -- record detections
-            # but resolve NOTHING. Pack and OWASP findings both use
-            # tool="semgrep", so a scope of {semgrep}x{scanned files} would
-            # still spuriously resolve an open OWASP finding the pack
-            # ruleset never re-detects. Only a full gate, which examines the
-            # complete ruleset, may resolve. Empty scope makes
-            # record_run's resolve loop match nothing; FINDING_DETECTED for
-            # the pack findings still fires (detection doesn't depend on
-            # scope).
-            ledger.record_run(run_id, clock(), "drain", set(), set(), findings,
-                              head=item.head)
-        # ...and the empty scope above is exactly why this exists. Scope-based
-        # resolution INFERS repair from absence, which a narrow ruleset cannot
-        # support. A `repaired` claim is the opposite: the consumer re-derived
-        # those specific fingerprints and disproved them (mutation re-mutates
-        # the same line and the suite kills it). Nothing is inferred from
-        # silence, so the reason the scope is empty does not apply.
-        #
-        # This is the authoritative half of a pair, not a replacement:
-        # `mutation_gate.auto_resolve_mutation` resolves at the GATE on intent
-        # (source touched, or a `test_<module>.py` added) so a dev is not
-        # blocked, and names this re-drain as its backstop. The backstop could
-        # only ever re-REPORT; here it can also CONFIRM.
-        #
-        # Any claim, INCLUDING an empty one: a producer that examined the
-        # recorded survivors and killed none still gets its yield row
-        # (`considered N, resolved 0`), which the census grades as an
-        # outcome. Handing the ledger a claim only when it had ids meant a
-        # consumer whose runs never killed a recorded survivor read
-        # `mutant_killed NEVER RAN` forever (interop round 180).
-        if result.repaired is not None:
-            ledger_mod.resolve_repaired(ledger, run_id, clock(),
-                                        tool=result.repaired.tool,
-                                        reason=result.repaired.reason,
-                                        ids=result.repaired.ids,
-                                        present_ids={f.id for f in findings},
-                                        examined=getattr(result.repaired, "examined", ()))
-        payload = {"consumer": name, "item_id": item.id,
-                   "state": result.state,
-                   "duration_s": round(duration, 3),
-                   "cost": result.cost,
-                   "finding_count": len(findings),
-                   "note": result.note}
-        for key, value in (result.extra or {}).items():
-            payload.setdefault(key, value)
-        ledger.append(Event(EventType.CONSUMER_RUN_FINISHED, run_id, clock(),
-                            payload=payload))
+        # Every row this run writes, under the watchdog's mutex: a deadline
+        # falling due in here waits, then finds nothing in flight -- the run
+        # is recorded once, here, never twice.
+        with finishing():
+            _record_consumer_run(ledger, run_id, clock, name, item, result,
+                                 findings, duration)
         if result.state in ("error", "degraded"):
             ok = False
     # A not-fully-consumed item (any consumer errored or degraded, e.g. a
@@ -251,9 +347,63 @@ def _consume_item(root: Path, cfg, ledger, item, clock) -> bool:
     if ok:
         # Name the head consumed: a commit that landed during this run has
         # coalesced past it and must stay queued (queue.materialize_queue).
-        queue.mark_drained(ledger, item.id, run_id, clock(), head=item.head)
+        with finishing():
+            queue.mark_drained(ledger, item.id, run_id, clock(), head=item.head)
     return ok
 
+
+def _record_consumer_run(ledger, run_id, clock, name, item, result, findings,
+                         duration) -> None:
+    """One consumer run's rows: its detections, its repair claim, and the
+    CONSUMER_RUN_FINISHED row consumer health is built from."""
+    if result.findings:
+        # The drain runs a narrow ruleset (pack only) -- record detections
+        # but resolve NOTHING. Pack and OWASP findings both use
+        # tool="semgrep", so a scope of {semgrep}x{scanned files} would
+        # still spuriously resolve an open OWASP finding the pack
+        # ruleset never re-detects. Only a full gate, which examines the
+        # complete ruleset, may resolve. Empty scope makes
+        # record_run's resolve loop match nothing; FINDING_DETECTED for
+        # the pack findings still fires (detection doesn't depend on
+        # scope).
+        ledger.record_run(run_id, clock(), "drain", set(), set(), findings,
+                          head=item.head)
+    # ...and the empty scope above is exactly why this exists. Scope-based
+    # resolution INFERS repair from absence, which a narrow ruleset cannot
+    # support. A `repaired` claim is the opposite: the consumer re-derived
+    # those specific fingerprints and disproved them (mutation re-mutates
+    # the same line and the suite kills it). Nothing is inferred from
+    # silence, so the reason the scope is empty does not apply.
+    #
+    # This is the authoritative half of a pair, not a replacement:
+    # `mutation_gate.auto_resolve_mutation` resolves at the GATE on intent
+    # (source touched, or a `test_<module>.py` added) so a dev is not
+    # blocked, and names this re-drain as its backstop. The backstop could
+    # only ever re-REPORT; here it can also CONFIRM.
+    #
+    # Any claim, INCLUDING an empty one: a producer that examined the
+    # recorded survivors and killed none still gets its yield row
+    # (`considered N, resolved 0`), which the census grades as an
+    # outcome. Handing the ledger a claim only when it had ids meant a
+    # consumer whose runs never killed a recorded survivor read
+    # `mutant_killed NEVER RAN` forever (interop round 180).
+    if result.repaired is not None:
+        ledger_mod.resolve_repaired(ledger, run_id, clock(),
+                                    tool=result.repaired.tool,
+                                    reason=result.repaired.reason,
+                                    ids=result.repaired.ids,
+                                    present_ids={f.id for f in findings},
+                                    examined=getattr(result.repaired, "examined", ()))
+    payload = {"consumer": name, "item_id": item.id,
+               "state": result.state,
+               "duration_s": round(duration, 3),
+               "cost": result.cost,
+               "finding_count": len(findings),
+               "note": result.note}
+    for key, value in (result.extra or {}).items():
+        payload.setdefault(key, value)
+    ledger.append(Event(EventType.CONSUMER_RUN_FINISHED, run_id, clock(),
+                        payload=payload))
 
 def cmd_drain(targets: list, *, dry_run: bool = False, max_items: int | None = None,
               clock: Callable[[], str] = _now,
@@ -290,6 +440,15 @@ def cmd_drain(targets: list, *, dry_run: bool = False, max_items: int | None = N
     degraded = False
     started = monotonic()
     drain_run_id = uuid.uuid4().hex
+    # FN-14: armed at the default before any config is read -- the sweep
+    # and triage below can stall too -- and set from the candidates' own
+    # `[drain].hard_deadline_s` once they are known. Cancelled in the same
+    # `finally` as the lock, so a drain that ends by itself (or raises)
+    # never leaves one behind to `os._exit` whatever imported it.
+    watchdog = None
+    if lock is not None:
+        watchdog = _Watchdog(drain_limits.DEFAULT_HARD_DEADLINE_S, lock=lock, clock=clock)
+        watchdog.start()
     try:
         candidates = []  # (score, repo, item, cfg)
         for repo_path in repos:
@@ -362,6 +521,10 @@ def cmd_drain(targets: list, *, dry_run: bool = False, max_items: int | None = N
         # order. Round 177: a tied, quieter repo lost on registry order and
         # the winner spent the drain-wide budget, at every drain.
         candidates.sort(key=lambda c: (-c[2].deferred, -c[0]))
+        if watchdog is not None:
+            watchdog.set_deadline(drain_limits.drain_deadline_s(
+                (c[3] for c in candidates),
+                task_limit_minutes=schedule_mod.installed_task_limit_minutes()))
         budget_s = max((float(c[3].drain.get("wall_clock_budget_s", 600.0))
                         for c in candidates), default=600.0)
         limit = max_items if max_items is not None else \
@@ -401,7 +564,7 @@ def cmd_drain(targets: list, *, dry_run: bool = False, max_items: int | None = N
                 break
             ledger = Ledger(root / ".aramid" / "ledger.db")
             try:
-                if not _consume_item(root, cfg, ledger, item, clock):
+                if not _consume_item(root, cfg, ledger, item, clock, watchdog=watchdog):
                     degraded = True
             except Exception as exc:
                 print(f"aramid drain: {root}: {exc}", file=sys.stderr)
@@ -444,5 +607,7 @@ def cmd_drain(targets: list, *, dry_run: bool = False, max_items: int | None = N
               f"{len(candidates) - drained} left")
         return 2 if degraded else 0
     finally:
+        if watchdog is not None:
+            watchdog.cancel()
         if lock is not None:
             _release_lock(lock)

@@ -336,16 +336,22 @@ def _scheduled_drain_line() -> str:
 
         from aramid.commands import schedule as schedule_mod
 
+        note = None
         if sys.platform == "win32":
-            # S603 justification: argv comes from schedule._query_argv(), a
-            # fixed literal list -- no external input reaches it.
-            cp = subprocess.run(schedule_mod._query_argv(), capture_output=True,  # noqa: S603
+            # S603 justification: argv comes from schedule._query_xml_argv(),
+            # a fixed literal list -- no external input reaches it.
+            cp = subprocess.run(schedule_mod._query_xml_argv(), capture_output=True,  # noqa: S603
                                 text=True, errors="replace")
             installed = cp.returncode == 0
+            if installed:
+                # FN-14: a task installed before the time-limit fix is killed
+                # at the hour until re-installed; say so where it is seen.
+                note = schedule_mod.stale_limit_note(getattr(cp, "stdout", "") or "")
         else:
             installed = schedule_mod.CRON_MARKER in schedule_mod._read_crontab()
-        return ("scheduled drain: installed" if installed
-                else "scheduled drain: not installed")
+        if not installed:
+            return "scheduled drain: not installed"
+        return "scheduled drain: installed" + (f" -- {note}" if note else "")
     except Exception:
         return "scheduled drain: unknown"
 

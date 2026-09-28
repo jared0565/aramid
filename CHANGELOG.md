@@ -10,6 +10,41 @@ to publish a tag that disagrees with it.
 
 ## [Unreleased]
 
+### Added
+
+- **`[drain].hard_deadline_s`** (default `5400`, 90 minutes): how long a
+  drain may run before it stops itself. Capped fifteen minutes under
+  `[drain].interval_hours`, and on Windows five minutes under the installed
+  task's own time limit; a value of zero, a negative or a non-number reads
+  as the default, and anything under 60 s reads as 60. With several repos
+  queued, the largest value among them applies (the same rule as
+  `wall_clock_budget_s`).
+
+### Fixed
+
+- **A scheduled drain that overran was killed with no record.** The
+  Windows task carried a fixed one-hour time limit under a four-hour
+  interval. Task Scheduler's kill runs no cleanup. On 2026-09-27 a drain
+  died at the hour inside a mutation run and left no
+  `consumer_run_finished` row, so consumer health, built from those rows,
+  read green. An earlier one (2026-09-25) left its lock behind for a day.
+  - The drain now stops itself at `[drain].hard_deadline_s`, inside the
+    process. It writes a `degraded` row for the consumer it stopped, kills
+    that consumer's child processes -- and starts no new ones, so a
+    consumer that runs one test process after another cannot leave the
+    next one running -- releases the lock and exits `2`. The item stays
+    queued.
+  - The deadline also sits under the time limit of the task that is
+    installed, so it applies before you re-install: with the old one-hour
+    task it is 55 minutes.
+  - On Linux and macOS, where cron has no time limit, this deadline is the
+    only one; before, an overrunning drain ran on until it finished.
+  - The task's time limit now follows the interval: five minutes under it
+    (3 h 55 min at the default 4 h), above the drain's own deadline.
+  - `aramid status` names a task installed with the old limit.
+  - **Re-run `aramid schedule install` on Windows** to pick up the new
+    limit; the task you already have keeps the old one until you do.
+
 ## [0.19.0] — 2026-09-27
 
 ### Added

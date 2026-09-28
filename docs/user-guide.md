@@ -581,7 +581,10 @@ interval_hours = 4
 max_items_per_drain = 10
 item_expiry_days = 30
 wall_clock_budget_s = 600
+hard_deadline_s = 5400
 ```
+
+**A drain that overruns stops itself.** `hard_deadline_s` (default 90 minutes) after it starts, a drain stops whatever consumer is running. It writes that consumer a `degraded` row, which `aramid ledger consumers` and consumer health see, kills its child processes, releases the lock and exits `2`. The item stays queued for the next drain. The deadline is capped fifteen minutes under `interval_hours`, so a drain is gone before the next one is due; the Windows task's own time limit sits between the two, as a backstop for a drain too stuck to stop itself. On Windows the deadline also stays five minutes under the limit of the task actually installed, so a task left with an older limit still gets a drain that stops itself first. With several repos queued, the largest `hard_deadline_s` among them applies.
 
 ### Installing the schedule
 
@@ -593,7 +596,7 @@ aramid schedule remove
 
 `install` reads `[drain].interval_hours` (default 4) and schedules `<interpreter> -P -m aramid drain --all` on that interval, through the platform's own scheduler:
 
-- **Windows** — a Task Scheduler job named `aramid-drain` (`StartWhenAvailable=true` so a missed window self-heals, a 1-hour execution time limit, and `IgnoreNew` for overlapping runs). `status` queries it via `schtasks /Query` and prints its output, or "aramid-drain: not installed" if absent; `remove` deletes it.
+- **Windows** — a Task Scheduler job named `aramid-drain` (`StartWhenAvailable=true` so a missed window self-heals, an execution time limit five minutes under the interval -- 3 h 55 min at the default 4 h -- and `IgnoreNew` for overlapping runs). A task installed by 0.19.0 or earlier has a 1-hour limit, which killed an overrunning drain with no record; `aramid status` says so on its `scheduled drain:` line, and re-running `aramid schedule install` replaces it. `status` queries it via `schtasks /Query` and prints its output, or "aramid-drain: not installed" if absent; `remove` deletes it.
 - **Linux and macOS** — one crontab line (`0 */N * * *`; an interval of 24 hours or more becomes a day-of-month step), tagged with an aramid marker so `install` replaces it and `remove` deletes it without touching anything else in your crontab. cron has no run-when-available, so a window missed while the machine was off is skipped; the next drain's catch-up sweep covers it. `status` prints `aramid schedule: installed (aramid-drain, cron)` or `aramid-drain: not installed`. macOS uses cron, not launchd.
 
 Every action exits `0` on success and `3` on failure — including `status` when nothing is installed, a failing `schtasks` call, or no `crontab` on PATH.

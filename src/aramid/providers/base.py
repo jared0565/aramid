@@ -15,6 +15,7 @@ import sys
 from dataclasses import dataclass
 
 from aramid import diagnostics
+from aramid.runners import base as runners_base
 
 ERR_UNAVAILABLE = "unavailable"
 ERR_QUOTA = "quota"
@@ -77,7 +78,11 @@ def _tree_kill(pid: int) -> None:
 def run_provider_subprocess(argv: list[str], prompt: str,
                             timeout_s: float) -> tuple[int, str, str] | None:
     """Returns (returncode, stdout, stderr), or None on timeout (after
-    killing the whole child tree)."""
+    killing the whole child tree) -- and None, unstarted, once the drain's
+    hard deadline has closed the registry (FN-14), or for a child it
+    killed."""
+    if runners_base.closed():
+        return None
     # S603 justification: the LLM-provider counterpart of
     # runners.base.run_subprocess -- launching a provider's own CLI is this
     # function's entire purpose. Every `argv` is built by a provider module
@@ -87,11 +92,21 @@ def run_provider_subprocess(argv: list[str], prompt: str,
     proc = subprocess.Popen(argv, stdin=subprocess.PIPE, stdout=subprocess.PIPE,  # noqa: S603
                             stderr=subprocess.PIPE, text=True,
                             encoding="utf-8", errors="replace")
+    def kill() -> None:
+        _tree_kill(proc.pid)
+        proc.kill()
     try:
-        out, err = proc.communicate(input=prompt, timeout=timeout_s)
+        # Registered so the drain's hard deadline can stop it (FN-14,
+        # runners.base.kill_live): the provider CLI is not in a group of its
+        # own, so this kill is the tree kill on Windows and the direct child
+        # elsewhere, the same reach as the timeout below.
+        with runners_base.live_process(kill):
+            out, err = proc.communicate(input=prompt, timeout=timeout_s)
     except subprocess.TimeoutExpired:
         _tree_kill(proc.pid)
         proc.kill()
         proc.communicate()
+        return None
+    if runners_base.closed():
         return None
     return proc.returncode, out, err

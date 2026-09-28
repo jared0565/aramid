@@ -217,7 +217,7 @@ def test_scheduled_drain_line_probes_schtasks_on_windows_and_the_crontab_elsewhe
     monkeypatch.setattr(subprocess, "run",
                         lambda argv, **kw: calls.append(argv) or SimpleNamespace(returncode=0))
     assert status._scheduled_drain_line() == "scheduled drain: installed"
-    assert calls == [schedule_mod._query_argv()]
+    assert calls == [schedule_mod._query_xml_argv()]
     monkeypatch.setattr(subprocess, "run", lambda argv, **kw: SimpleNamespace(returncode=1))
     assert status._scheduled_drain_line() == "scheduled drain: not installed"
 
@@ -229,6 +229,48 @@ def test_scheduled_drain_line_probes_schtasks_on_windows_and_the_crontab_elsewhe
     assert status._scheduled_drain_line() == "scheduled drain: installed"
     monkeypatch.setattr(schedule_mod, "_read_crontab", lambda: "0 3 * * * /x/backup.sh\n")
     assert status._scheduled_drain_line() == "scheduled drain: not installed"
+
+
+def _task_xml(interval, limit):
+    """What `schtasks /Query /XML` printed for the live task, trimmed to the
+    two elements the line reads. Task Scheduler normalises a duration when
+    it stores it: PT235M registered reads back PT3H55M (measured
+    2026-09-28 on a disabled throwaway task)."""
+    return ("<Task><Triggers><TimeTrigger><Repetition>"
+            f"<Interval>{interval}</Interval></Repetition></TimeTrigger></Triggers>"
+            f"<Settings><ExecutionTimeLimit>{limit}</ExecutionTimeLimit></Settings></Task>")
+
+
+def test_scheduled_drain_line_names_a_task_installed_before_its_time_limit_was_fixed(monkeypatch):
+    """FN-14. A task registered by 0.19.0 or earlier keeps its PT1H limit --
+    the drain is killed at the hour, recording nothing -- until the user
+    re-runs `schedule install`. The fix does not reach them unless
+    something says so. Read against the task's OWN interval, since the
+    config it was installed from may not be this repo's; unreadable
+    elements say nothing rather than guess."""
+    import subprocess
+    import sys
+    from types import SimpleNamespace
+
+    monkeypatch.setattr(sys, "platform", "win32")
+
+    def answer(xml):
+        monkeypatch.setattr(subprocess, "run",
+                            lambda argv, **kw: SimpleNamespace(returncode=0, stdout=xml))
+
+    answer(_task_xml("PT4H", "PT1H"))
+    assert status._scheduled_drain_line() == (
+        "scheduled drain: installed -- its time limit PT1H predates the drain's own "
+        "deadline; re-run `aramid schedule install` (limit should be PT3H55M)")
+    answer(_task_xml("PT4H", "PT3H55M"))
+    assert status._scheduled_drain_line() == "scheduled drain: installed"
+    answer(_task_xml("PT4H", "PT235M"))
+    assert status._scheduled_drain_line() == "scheduled drain: installed"
+    answer(_task_xml("PT6H", "PT3H55M"))
+    assert status._scheduled_drain_line().endswith("(limit should be PT5H55M)")
+    for unreadable in ("", "<Task/>", _task_xml("PT4H", "soon"), _task_xml("P1W", "PT1H")):
+        answer(unreadable)
+        assert status._scheduled_drain_line() == "scheduled drain: installed", unreadable
 
 
 def test_status_exits_0_on_a_fresh_repo(tmp_path, capsys):

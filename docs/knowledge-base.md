@@ -34,6 +34,7 @@ Severity tiering ("security blocks, quality warns") is **not uniform** — `poli
 The sweep (`aramid drain`) — scheduled (via `aramid schedule install`) or manual — that catches up triage on registered repos, pops the highest-scored queued item(s) from the [review queue](#review-queue), and runs every registered [consumer](#consumer) against each item. Consumers run in this fixed registration order: `regression_pack`, `llm_review`, `mutation`, `fuzz`, `js_mutation`, `dast`.
 
 - Singleton lock: `~/.aramid/drain.lock` (JSON `{pid, started_at}`); considered stale/breakable if the recorded PID is dead or the lock is older than `2 × wall_clock_budget_s`.
+- Hard deadline (0.19.1): `[drain].hard_deadline_s` (default 5400 s) after the lock is taken, the drain stops itself from inside. It writes a `degraded` `consumer_run_finished` row for the running consumer (note names the deadline), kills the children `run_subprocess` and the LLM provider launcher have alive and closes that registry (neither launcher starts a child afterwards, and a child the close killed returns `TIMEOUT`, never an exit code), releases the lock and exits 2; the item stays queued. Capped at `interval_hours × 3600 − 900` of the shortest interval among the candidates, and on Windows at the installed task's `ExecutionTimeLimit` − 300 s (read with `schtasks /Query /XML` at each drain; PT0S or no task clamps nothing). The Windows task's `ExecutionTimeLimit` is `interval_hours × 60 − 5` minutes, so the order is always deadline < task limit < interval (`aramid.drain_limits`). Not reached by the kill: `gitutil` git calls and `js_mutation`'s node_modules link, which spawn directly.
 - Candidate items (score ≥ `[triage].min_score`) across all target repos are sorted by score descending, then drained up to `max_items_per_drain` (CLI `--max-items` override, else the max across candidate repos' config, default 10) or until `[drain].wall_clock_budget_s` (default 600s) is exhausted; remaining items stay queued.
 - Drain-recorded findings are normalized with `Gate.ALL` and an **empty scope** for `record_run` — detections fire, but nothing is auto-resolved (only a full gate scan may resolve a finding).
 - An item is marked `drained` only if **every** consumer finished with state `!= "error"` and `!= "degraded"`. If any consumer returns DEGRADED or ERROR, the item stays queued for a future drain and the whole `cmd_drain` call sets `degraded=True` (exit code 2).
@@ -218,6 +219,7 @@ Two invariants worth keeping in mind when touching this:
 | `max_items_per_drain` | int | `10` | Cap on ledger items processed per drain run. Distinct from `[llm].max_items_per_drain` (=3). |
 | `item_expiry_days` | int | `30` | Items older than this are expired out of the queue. |
 | `wall_clock_budget_s` | int (s) | `600` | Whole-drain wall-clock budget. |
+| `hard_deadline_s` | int (s) | `5400` | Seconds from the drain's start to its hard deadline: the running consumer is stopped and recorded `degraded`, and the item stays queued. Capped 15 min under `interval_hours`; ≤ 0 or non-numeric reads as the default, under 60 reads as 60. |
 
 ### `[pack]`
 

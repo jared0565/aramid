@@ -1,3 +1,5 @@
+import contextlib
+import itertools
 import os
 import subprocess
 import sys
@@ -264,6 +266,75 @@ def _kill_tree(proc: subprocess.Popen):
     except Exception:
         proc.kill()
 
+
+# FN-14: every child the two long-running launchers have alive, as a kill
+# callable -- `run_subprocess` here and `providers.base.run_provider_subprocess`.
+# The drain's hard deadline ends the process with `os._exit`, which runs no
+# `finally`, so a consumer's own cleanup never kills what it started; the
+# deadline calls `kill_live(close=True)` first. NOT registered, and so left
+# running past a deadline: `gitutil._run` (short git calls) and
+# `consumers.js_mutation._link_node_modules`, which call subprocess
+# directly. Module state rather than a parameter because the launchers are
+# reached from deep inside consumers that have no handle on the drain.
+#
+# CLOSED is what makes the kill stick. Killing only what is registered at
+# that instant leaves a looping consumer (mutation runs one pytest per
+# mutant) free to start its next child before the process exits, and that
+# child, in a group of its own, outlives the drain. Closing and the
+# snapshot happen under one lock, so a child registered after is killed on
+# the spot, and neither launcher starts a new one once closed. Only the
+# deadline closes; the process ends right after, so it never reopens.
+_LIVE: dict[int, Callable[[], None]] = {}
+_LIVE_LOCK = threading.Lock()
+_LIVE_IDS = itertools.count()
+_CLOSED = False
+
+
+def _call(kill: Callable[[], None]) -> bool:
+    try:
+        kill()
+        return True
+    except Exception:  # noqa: BLE001 -- best effort at a deadline
+        return False
+
+
+def closed() -> bool:
+    """True once the drain's hard deadline has closed the registry: no
+    launcher may start a child, and a child that ends now was killed."""
+    return _CLOSED
+
+
+@contextlib.contextmanager
+def live_process(kill: Callable[[], None]):
+    """Hold `kill` in the registry for the duration of the block. Once the
+    registry is closed, `kill` runs at once instead: the child was started
+    after the deadline took its snapshot."""
+    token = next(_LIVE_IDS)
+    with _LIVE_LOCK:
+        late = _CLOSED
+        if not late:
+            _LIVE[token] = kill
+    if late:
+        _call(kill)
+    try:
+        yield
+    finally:
+        with _LIVE_LOCK:
+            _LIVE.pop(token, None)
+
+
+def kill_live(*, close: bool = False) -> int:
+    """Kill every registered child; how many kills did not raise. One that
+    raises (already gone, access denied) does not spare the rest. `close`
+    (the deadline's call) also closes the registry, in the same step as
+    the snapshot, so nothing registered after it escapes."""
+    global _CLOSED
+    with _LIVE_LOCK:
+        if close:
+            _CLOSED = True
+        kills = list(_LIVE.values())
+    return sum(_call(kill) for kill in kills)
+
 def worktree_import_env(wt: Path) -> dict[str, str]:
     """Put a WORKTREE's own source ahead of everything else on a child's import
     path. Pass as `run_subprocess(..., env=worktree_import_env(wt))` for any
@@ -369,6 +440,9 @@ def run_subprocess(argv, cwd: Path, timeout_s: float, env=None, *,
     with nothing on screen because output was only read at exit); without
     it this is the plain `communicate` path, unchanged."""
     tool = Path(argv[0]).name
+    if closed():
+        return RunnerResult(tool, ToolState.TIMEOUT,
+                            stderr=f"aramid: {tool} not started: the drain's hard deadline has passed")
     # Resolve through toolpath, NOT bare `shutil.which`: aramid downloads some
     # binaries itself (gitleaks -> ~/.aramid/tools) and pip can place console
     # scripts outside PATH. Using `which` alone here is what let `doctor --fix`
@@ -394,10 +468,11 @@ def run_subprocess(argv, cwd: Path, timeout_s: float, env=None, *,
                             encoding="utf-8", errors="replace",
                             env={**os.environ, **(env or {})}, **kwargs)
     try:
-        if on_stdout_line is None:
-            out, err = proc.communicate(timeout=timeout_s)
-        else:
-            out, err = _tapped_communicate(proc, timeout_s, on_stdout_line)
+        with live_process(lambda: _kill_tree(proc)):
+            if on_stdout_line is None:
+                out, err = proc.communicate(timeout=timeout_s)
+            else:
+                out, err = _tapped_communicate(proc, timeout_s, on_stdout_line)
     except subprocess.TimeoutExpired:
         _kill_tree(proc)
         try:
@@ -416,6 +491,13 @@ def run_subprocess(argv, cwd: Path, timeout_s: float, env=None, *,
         return RunnerResult(tool, ToolState.TIMEOUT,
                             stderr=(f"aramid: {tool} timed out after {timeout_s:g} s and was "
                                     f"killed; whatever it had written is discarded"),
+                            duration_s=time.monotonic()-start)
+    if closed():
+        # Killed by the drain's hard deadline, not finished: its exit code
+        # is the kill's, and a killed test run must not read as a failing
+        # one (to the mutation consumer, "the mutant was killed").
+        return RunnerResult(tool, ToolState.TIMEOUT,
+                            stderr=f"aramid: {tool} was killed at the drain's hard deadline",
                             duration_s=time.monotonic()-start)
     return RunnerResult(tool, ToolState.OK, out, err, time.monotonic()-start, proc.returncode)
 
