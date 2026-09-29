@@ -471,11 +471,13 @@ def test_schedule_on_windows_installs_from_the_config_interval_and_a_whole_secon
     calls = _windows(monkeypatch, reply)
 
     assert schedule.cmd_schedule(tmp_path, "install") == 0
-    assert calls[0][:4] == ["schtasks", "/Create", "/TN", "aramid-drain"]
+    # FN-18: the installed task is read first, for its StartBoundary.
+    [create] = [c for c in calls if c[:2] == ["schtasks", "/Create"]]
+    assert create[:4] == ["schtasks", "/Create", "/TN", "aramid-drain"]
     assert "<Interval>PT4H</Interval>" in seen["xml"]
     start = re.search(r"<StartBoundary>([^<]*)</StartBoundary>", seen["xml"]).group(1)
     assert re.fullmatch(r"\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d", start), start
-    assert not Path(calls[0][calls[0].index("/XML") + 1]).exists(), "the temp XML is unlinked"
+    assert not Path(create[create.index("/XML") + 1]).exists(), "the temp XML is unlinked"
     assert capsys.readouterr().out == "aramid schedule: install ok (aramid-drain)\n"
 
     (tmp_path / "aramid.toml").write_text('schema_version = 1\n[drain]\ninterval_hours = 6\n',

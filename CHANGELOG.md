@@ -46,6 +46,17 @@ to publish a tag that disagrees with it.
   - The deadline's row now names the deadline and the commit:
     `stopped at the drain's hard deadline ([drain].hard_deadline_s = N)
     (last seen @ <commit>), ...`.
+- **Re-running `aramid schedule install` on Windows moved the drain's
+  hours.** The task's start was the moment of the install, so every
+  re-install re-anchored the interval there and the next drain came a
+  whole interval later -- 0.19.1 asks every Windows user to re-install,
+  and on the machine that shipped it the drain due at 14:00 UTC moved to
+  16:10 UTC. A re-install now keeps the installed task's start time, so
+  it changes the time limit and never the cadence. A first install starts
+  at the next local hour divisible by the interval, so for an interval
+  that divides 24 the drain runs at the hours cron's `0 */N` does.
+  A task an earlier re-install already moved keeps its hours; run
+  `aramid schedule remove`, then `install`, to put it back on the grid.
 
 ## [0.19.1] — 2026-09-28
 

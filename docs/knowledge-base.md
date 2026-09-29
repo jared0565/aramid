@@ -480,7 +480,7 @@ Removes installed hook shims, deletes `ARAMID.md`, removes the `.gitignore` entr
 ### `aramid schedule install|remove|status`
 Register/remove/query a recurring `<interpreter> -P -m aramid drain --all`. Cross-platform: Windows Task Scheduler on Windows, cron elsewhere.
 - `install` — reads `[drain].interval_hours` (default 4).
-  - **Windows** — registers via `schtasks /Create ... /F` under task name `aramid-drain`.
+  - **Windows** — registers via `schtasks /Create ... /F` under task name `aramid-drain`. The trigger's `StartBoundary` is the installed task's own when one exists, so a re-install changes the time limit and never the cadence; a first install starts at the next local hour divisible by the interval (the next midnight for a day or more), so for an interval that divides 24 it runs at the hours cron's `0 */N` does.
   - **Linux/macOS** — writes one crontab line tagged `# aramid-drain`. Intervals under a day become an hour step (`0 */4 * * *`); a day or more becomes a day step (48h → `0 0 */2 * *`), because `*/N` in the hour field is meaningless for N > 23. Re-installing replaces aramid's line rather than adding a second one, and every unmarked line in your crontab is preserved verbatim.
 - `remove` — `schtasks /Delete /TN aramid-drain /F`, or strips only the marked crontab line.
 - `status` — exit `0` if installed, `3` if not.

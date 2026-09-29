@@ -16,7 +16,7 @@ import shlex
 import subprocess
 import sys
 import tempfile
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 
 from aramid import config as config_mod
@@ -67,6 +67,37 @@ def render_task_xml(interpreter: Path, interval_hours: int, start_boundary: str)
     return _XML_TEMPLATE.format(start=start_boundary, hours=interval_hours,
                                 limit=drain_limits.task_limit_iso(interval_hours),
                                 interpreter=str(interpreter))
+
+
+def start_boundary(installed_xml: str | None, now: datetime, interval_hours: int) -> str:
+    """The task's StartBoundary (FN-18): the INSTALLED task's own, when there
+    is one, so a re-install changes the limit and never the cadence; else
+    the next hour strictly after `now` on the grid cron's `0 */N` uses
+    (the next midnight for a day or more). `datetime.now()` used to be the
+    boundary: every install re-anchored the interval to the moment it ran,
+    and the next run came a whole interval later (2026-09-28: the drain due
+    at 14:00Z moved to 16:10Z)."""
+    found = re.search(r"<StartBoundary>([^<]+)</StartBoundary>", installed_xml or "")
+    if found:
+        return found.group(1).strip()
+    hours = max(1, int(interval_hours))
+    at = now.replace(minute=0, second=0, microsecond=0) + timedelta(hours=1)
+    while at.hour % hours:      # a day or more: only midnight's hour divides
+        at += timedelta(hours=1)
+    return at.isoformat()
+
+
+def _installed_task_xml() -> str | None:
+    """The installed task's XML, or None when there is none or it cannot be
+    read -- a first install."""
+    try:
+        # S603 justification: argv comes from _query_xml_argv(), a fixed
+        # literal list -- no external input reaches it.
+        cp = subprocess.run(_query_xml_argv(), capture_output=True, text=True,  # noqa: S603
+                            errors="replace", timeout=30)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    return cp.stdout if cp.returncode == 0 else None
 
 
 def _create_argv(xml_path: Path) -> list[str]:
@@ -317,7 +348,7 @@ def cmd_schedule(root, action: str) -> int:
         if action == "install":
             cfg = config_mod.load_config(Path(root))
             hours = int(cfg.drain["interval_hours"])  # defaults.toml carries the 4
-            start = datetime.now().replace(microsecond=0).isoformat()
+            start = start_boundary(_installed_task_xml(), datetime.now(), hours)
             xml = render_task_xml(Path(sys.executable), hours, start)
             with tempfile.NamedTemporaryFile("w", suffix=".xml", delete=False,
                                              encoding="utf-16") as f:
@@ -338,14 +369,11 @@ def cmd_schedule(root, action: str) -> int:
         elif action == "remove":
             cp = subprocess.run(_delete_argv(), capture_output=True, text=True,  # noqa: S603
                                 errors="replace")
-        elif action == "status":
+        else:   # "status": cmd_schedule refused every other action above
             cp = subprocess.run(_query_argv(), capture_output=True, text=True,  # noqa: S603
                                 errors="replace")
             print(cp.stdout.strip() or "aramid-drain: not installed")
             return 0 if cp.returncode == 0 else 3
-        else:
-            print(f"aramid: schedule: unknown action {action!r}", file=sys.stderr)
-            return 3
         if cp.returncode != 0:
             print(f"aramid: schedule {action} failed: {cp.stderr.strip()}", file=sys.stderr)
             return 3
