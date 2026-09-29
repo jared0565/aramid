@@ -209,3 +209,38 @@ def test_on_posix_the_mutex_is_an_exclusive_non_blocking_flock(fd, monkeypatch):
     assert fake.calls == [2 | 4, 8]
     monkeypatch.setattr(drain_mod, "fcntl", _FakeFcntl(refuse=True), raising=False)
     assert drain_mod._try_lock(fd) is False
+
+
+# The drain's fuzz consumer (5adab94c, 2026-09-29) called `_try_lock` with an
+# fd of -2**63 and it raised OverflowError: only OSError was caught. The fd is
+# always os.open's, so no drain ever passes one -- but the helper's contract
+# is "had or not", and a raise out of it would crash acquire, release and the
+# watchdog alike. CPython reports a bad fd three ways: OSError (EBADF),
+# ValueError (a negative fd, on POSIX) and OverflowError (outside a C int).
+@pytest.mark.parametrize("bad", [-2**63, 2**63, -1])
+def test_a_bad_fd_is_a_lock_not_had_on_this_platform(bad):
+    assert drain_mod._try_lock(bad) is False
+
+
+@pytest.mark.parametrize("bad", [-2**63, 2**63, -1])
+def test_unlocking_a_bad_fd_does_not_raise_on_this_platform(bad):
+    """`os.close` releases the lock whatever happens here, so a failed
+    explicit unlock must not turn a release into a crash."""
+    assert drain_mod._unlock(bad) is None
+
+
+@pytest.mark.parametrize("error", [OSError, ValueError, OverflowError])
+def test_each_bad_fd_error_is_not_had_on_either_platform(monkeypatch, error):
+    """The branch the real primitive does not reach here is driven with a
+    fake that raises each of the three in turn."""
+    def boom(*a):
+        raise error("bad fd")
+    fake = SimpleNamespace(LK_NBLCK=2, LK_UNLCK=0, LOCK_EX=2, LOCK_NB=4, LOCK_UN=8,
+                           locking=boom, flock=boom)
+    for win in (True, False):
+        monkeypatch.setattr(drain_mod, "_WIN", win)
+        monkeypatch.setattr(drain_mod, "msvcrt", fake)
+        monkeypatch.setattr(drain_mod, "fcntl", fake)
+        monkeypatch.setattr(drain_mod.os, "lseek", lambda *a: 0)
+        assert drain_mod._try_lock(3) is False
+        assert drain_mod._unlock(3) is None

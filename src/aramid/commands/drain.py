@@ -115,31 +115,37 @@ _WIN = sys.platform == "win32"
 _MUTEX_TIMEOUT_S = 30.0
 _MUTEX_POLL_S = 0.05
 _sleep = time.sleep     # seam: the poll's wait
+_BAD_FD = (OSError, ValueError, OverflowError)
 
 
 def _try_lock(fd: int) -> bool:
     """One non-blocking try at the OS lock on the mutex file. `flock`, not
     `lockf`: POSIX record locks do not conflict within one process, and a
     drain's watchdog thread takes the mutex too. On Windows one byte at
-    offset 0 -- an empty file locks past its end."""
+    offset 0 -- an empty file locks past its end. A bad fd is a lock not had,
+    never a raise: CPython says so as OSError, ValueError (a negative fd) or
+    OverflowError (outside a C int) -- fuzz 5adab94c."""
     try:
         if _WIN:
             os.lseek(fd, 0, os.SEEK_SET)
             msvcrt.locking(fd, msvcrt.LK_NBLCK, 1)
         else:
             fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
-    except OSError:
+    except _BAD_FD:
         return False
     return True
 
 
 def _unlock(fd: int) -> None:
-    """Release explicitly: Windows frees a lock on close only eventually."""
-    if _WIN:
-        os.lseek(fd, 0, os.SEEK_SET)
-        msvcrt.locking(fd, msvcrt.LK_UNLCK, 1)
-    else:
-        fcntl.flock(fd, fcntl.LOCK_UN)
+    """Release explicitly: Windows frees a lock on close only eventually. A
+    failed unlock is not raised: the caller closes the fd next, and closing
+    releases the lock regardless."""
+    with contextlib.suppress(*_BAD_FD):
+        if _WIN:
+            os.lseek(fd, 0, os.SEEK_SET)
+            msvcrt.locking(fd, msvcrt.LK_UNLCK, 1)
+        else:
+            fcntl.flock(fd, fcntl.LOCK_UN)
 
 
 @contextlib.contextmanager
