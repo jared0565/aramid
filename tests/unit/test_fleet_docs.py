@@ -21,7 +21,11 @@ def test_maintainers_points_at_the_gate():
     assert "The 1.0 gate" in _read("MAINTAINERS.md")
 
 
-def test_user_guide_documents_every_surface():
+def test_user_guide_names_the_fleet_section_and_six_of_its_strings():
+    """Six literal strings, not the surface: a subcommand, flag or config key
+    added without a mention in the guide passes here. The drift guard that
+    checks every surface is DOC-12 (API-9 renamed this test so its name
+    stops claiming that job)."""
     text = _read("docs/user-guide.md")
     for needle in ("### Fleet health, 1.0 readiness and notices", "aramid fleet",
                    "aramid notices ack", "fleet_health.jsonl", "fleet.toml",
