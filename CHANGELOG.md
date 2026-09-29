@@ -73,6 +73,15 @@ to publish a tag that disagrees with it.
   - The drain's leftover sweep no longer removes a worktree shell a
     consumer still holds locked when git cannot list the worktrees; it
     skips the sweep and says so.
+- **Two drains started at the same moment could both run.** Taking the
+  drain lock was a check followed by a write: two drains that both found
+  no lock -- or both judged the same one stale -- both wrote one and both
+  ran. Releasing it was the same shape, so a drain finishing just as a
+  newer one replaced its stale lock could delete the newer drain's lock.
+  Taking, releasing and re-dating the lock now each happen under a short
+  operating-system lock on `~/.aramid/drain.lock.mutex` (a new file that
+  is never removed), so exactly one drain gets the lock. A drain that
+  cannot get that lock within 30 seconds does not start.
 
 ## [0.19.1] — 2026-09-28
 

@@ -40,6 +40,15 @@ from aramid.models import Event, EventType, Gate
 from aramid.normalizer import normalize
 from aramid.runners import base as runners_base
 
+try:
+    import msvcrt   # the drain lock's mutex on Windows (FN-19)
+except ImportError:
+    msvcrt = None
+try:
+    import fcntl    # ... and everywhere else
+except ImportError:
+    fcntl = None
+
 import aramid.consumers.regression_pack  # noqa: F401  -- registers the consumer
 from aramid.consumers import llm_review as _llm_review  # noqa: F401  (registers itself)
 from aramid.consumers import mutation as _mutation  # noqa: F401  (registers itself)
@@ -98,40 +107,116 @@ def _read_own_lock(p: Path) -> dict | None:
     return data if isinstance(data, dict) and data.get("pid") == os.getpid() else None
 
 
+_WIN = sys.platform == "win32"
+# FN-19: how long a drain waits for the lock's mutex, and how often it asks.
+# A critical section is a read, a pid probe (`tasklist` on Windows: seconds
+# at worst) and a write; a mutex held past this is a process hung inside
+# one, and a drain that cannot have it starts nothing and removes nothing.
+_MUTEX_TIMEOUT_S = 30.0
+_MUTEX_POLL_S = 0.05
+_sleep = time.sleep     # seam: the poll's wait
+
+
+def _try_lock(fd: int) -> bool:
+    """One non-blocking try at the OS lock on the mutex file. `flock`, not
+    `lockf`: POSIX record locks do not conflict within one process, and a
+    drain's watchdog thread takes the mutex too. On Windows one byte at
+    offset 0 -- an empty file locks past its end."""
+    try:
+        if _WIN:
+            os.lseek(fd, 0, os.SEEK_SET)
+            msvcrt.locking(fd, msvcrt.LK_NBLCK, 1)
+        else:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError:
+        return False
+    return True
+
+
+def _unlock(fd: int) -> None:
+    """Release explicitly: Windows frees a lock on close only eventually."""
+    if _WIN:
+        os.lseek(fd, 0, os.SEEK_SET)
+        msvcrt.locking(fd, msvcrt.LK_UNLCK, 1)
+    else:
+        fcntl.flock(fd, fcntl.LOCK_UN)
+
+
+@contextlib.contextmanager
+def _lock_mutex(lock: Path):
+    """Hold the OS lock on `<lock>.mutex` for one critical section (FN-19),
+    yielding whether it was had: taking the drain lock, releasing it, and
+    re-dating it are each a check-then-act, and two drains -- or a drain's
+    main thread and its watchdog -- interleaved in one of them ran side by
+    side or deleted each other's lock. Tried once, then every
+    `_MUTEX_POLL_S` until `_MUTEX_TIMEOUT_S`. The mutex file is NEVER
+    deleted: unlinking a file another process has open and locked is how a
+    third process ends up locking a different file. Not re-entrant, even in
+    one process: a second handle conflicts, so critical sections stay flat."""
+    path = lock.with_name(f"{lock.name}.mutex")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd = os.open(path, os.O_RDWR | os.O_CREAT)
+    try:
+        held = _try_lock(fd)
+        for _ in range(round(_MUTEX_TIMEOUT_S / _MUTEX_POLL_S)):
+            if held:
+                break
+            _sleep(_MUTEX_POLL_S)
+            held = _try_lock(fd)
+        try:
+            yield held
+        finally:
+            if held:
+                _unlock(fd)
+    finally:
+        os.close(fd)
+
+
 def _acquire_lock(deadline_s: float, *, now: Callable[[], float] = time.time) -> Path | None:
     """Take the drain lock, recording the deadline this drain is armed with
     (FN-15). A lock is held while its pid lives and it is younger than ITS
     OWN recorded deadline plus a margin -- the holder's, not the asker's. A
     lock with no deadline (an aramid <= 0.19.1 wrote it) reads as the
     default one; a lock with no pid or no start is unreadable, so stale --
-    never `_pid_alive(-1)`, which on POSIX asks about every process."""
+    never `_pid_alive(-1)`, which on POSIX asks about every process. The
+    check and the write are one critical section (FN-19): two drains that
+    both saw no lock, or both judged one stale, both ran. A mutex that
+    cannot be had starts no drain."""
     p = _lock_path()
-    if p.exists():
-        try:
-            data = json.loads(p.read_text(encoding="utf-8"))
-            age = now() - float(data["started_at"])
-            held_for = float(data.get("deadline_s", drain_limits.DEFAULT_HARD_DEADLINE_S))
-            if _pid_alive(int(data["pid"])) and age < held_for + _LOCK_MARGIN_S:
-                return None  # genuinely held
-            print("aramid: drain: breaking stale lock", file=sys.stderr)
-        except (json.JSONDecodeError, ValueError, OSError, KeyError, TypeError,
-                AttributeError):
-            pass  # unreadable lock is stale
-    p.parent.mkdir(parents=True, exist_ok=True)
-    _write_lock(p, {"pid": os.getpid(), "started_at": now(),
-                    "deadline_s": float(deadline_s)})
-    return p
+    with _lock_mutex(p) as held:
+        if not held:
+            return None
+        if p.exists():
+            try:
+                data = json.loads(p.read_text(encoding="utf-8"))
+                age = now() - float(data["started_at"])
+                held_for = float(data.get("deadline_s", drain_limits.DEFAULT_HARD_DEADLINE_S))
+                if _pid_alive(int(data["pid"])) and age < held_for + _LOCK_MARGIN_S:
+                    return None  # genuinely held
+                print("aramid: drain: breaking stale lock", file=sys.stderr)
+            except (json.JSONDecodeError, ValueError, OSError, KeyError, TypeError,
+                    AttributeError):
+                pass  # unreadable lock is stale
+        _write_lock(p, {"pid": os.getpid(), "started_at": now(),
+                        "deadline_s": float(deadline_s)})
+        return p
 
 
 def _release_lock(p: Path) -> None:
     """Remove the lock only if this process holds it (FN-15): a drain that
-    outlived its lock must not delete the next drain's."""
-    if _read_own_lock(p) is None:
-        return
-    try:
-        p.unlink()
-    except OSError:
-        pass
+    outlived its lock must not delete the next drain's. "Is it mine?" and
+    the unlink are one critical section (FN-19): read mine, a newer drain
+    breaks it as stale, unlink -- and the newer drain's lock was gone. A
+    mutex that cannot be had removes nothing; a lock whose pid has died is
+    broken as stale by the next drain. The watchdog's exit calls this too,
+    so its wait for the mutex is bounded by `_MUTEX_TIMEOUT_S`."""
+    with _lock_mutex(p) as held:
+        if not held or _read_own_lock(p) is None:
+            return
+        try:
+            p.unlink()
+        except OSError:
+            pass
 
 
 def _bounded(fn: Callable[[], object], timeout_s: float) -> None:
@@ -243,10 +328,11 @@ class _Watchdog:
         records the new deadline too (FN-15): another drain judges this
         one's lock by it."""
         self._deadline_s = float(deadline_s)
-        data = _read_own_lock(self._lock)
-        if data is not None:
-            with contextlib.suppress(OSError):
-                _write_lock(self._lock, {**data, "deadline_s": self._deadline_s})
+        with _lock_mutex(self._lock) as held:     # FN-19: read and rewrite, as one
+            data = _read_own_lock(self._lock) if held else None
+            if data is not None:
+                with contextlib.suppress(OSError):
+                    _write_lock(self._lock, {**data, "deadline_s": self._deadline_s})
 
     def begin(self, root: Path, item_id: str, consumer: str, run_id: str, head: str) -> None:
         with self._mutex:
