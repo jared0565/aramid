@@ -164,8 +164,13 @@ def check_gate(report: dict, venv: Path) -> None:
 
 
 def main(argv: list[str]) -> int:
+    # Every refusal before the first side effect: an unmatched `dist/*.whl`
+    # arrives as the literal pattern, and a venv to install nothing into is
+    # minutes spent to learn it.
+    require(len(argv) == 2, f"usage: installed_smoke.py wheel|sdist <artifact>, not {argv!r}")
     mode, artifact = argv[0], Path(argv[1]).resolve()
     require(mode in ("wheel", "sdist"), f"mode must be wheel or sdist, not {mode!r}")
+    require(artifact.is_file(), f"no such artifact: {artifact}")
     work = Path(tempfile.mkdtemp(prefix=f"aramid-{mode}-smoke-"))
     venv = make_venv(work / "venv")
     python = python_in(venv)
