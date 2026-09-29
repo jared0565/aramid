@@ -53,16 +53,21 @@ class _Dog:
     def __init__(self, deadline_s, *, lock, clock):
         self.calls = [("init", deadline_s)]
         self.lock = lock
+        self.deadline_s = deadline_s
         _Dog.made.append(self)
 
     def start(self):
         self.calls.append(("start",))
 
     def set_deadline(self, s):
+        self.deadline_s = s
         self.calls.append(("set_deadline", s))
 
-    def begin(self, root, item_id, consumer, run_id):
+    def begin(self, root, item_id, consumer, run_id, head):
         self.calls.append(("begin", consumer, item_id))
+
+    def pending(self, run_id, items, after):
+        self.calls.append(("pending", list(items), list(after)))
 
     def finishing(self):
         import contextlib
@@ -161,3 +166,39 @@ def test_the_installed_task_limit_pulls_the_deadline_under_it(tmp_path, seam, mo
     assert cmd_drain([str(r)], clock=CLOCK) == 0
     [dog] = seam.made
     assert ("set_deadline", 3300) in dog.calls
+
+
+def test_the_watchdog_is_told_what_the_drain_has_not_opened_yet(tmp_path, seam):
+    """FN-16: at the deadline the watchdog defers what the drain never
+    reached. Before each item it hears everything after that item and the
+    roots already opened; once the loop is done it hears nothing is left,
+    so a deadline in the rollup after it defers nothing twice."""
+    from aramid import gitutil
+    from aramid.fingerprint import normalize_path
+    r1, r2 = _repo(tmp_path, "r1"), _repo(tmp_path, "r2")
+    i1, i2 = _enqueue(r1, score=50), _enqueue(r2, score=45)
+    assert cmd_drain([str(r1), str(r2)], clock=CLOCK) == 0
+    [dog] = seam.made
+    g1, g2 = (gitutil.repo_root(r.resolve()) for r in (r1, r2))
+    n1, n2 = (normalize_path(str(g)) for g in (g1, g2))
+    assert [c for c in dog.calls if c[0] in ("pending", "begin")] == [
+        ("pending", [(g2, i2.id)], []),
+        ("begin", "c", i1.id),
+        ("pending", [], [n1]),
+        ("begin", "c", i2.id),
+        ("pending", [], [n1, n2]),
+    ]
+
+
+def test_a_budget_stop_leaves_the_watchdog_nothing_to_defer_again(tmp_path, seam):
+    """The budget stop writes its own DEFERRED rows; a deadline after it
+    must not write a second set."""
+    from aramid import gitutil
+    r1, r2 = _repo(tmp_path, "r1"), _repo(tmp_path, "r2")
+    _enqueue(r1, score=50)
+    i2 = _enqueue(r2, score=45)
+    assert cmd_drain([str(r1), str(r2)], max_items=1, clock=CLOCK) == 0
+    [dog] = seam.made
+    pendings = [c for c in dog.calls if c[0] == "pending"]
+    assert pendings[0][1] == [(gitutil.repo_root(r2.resolve()), i2.id)]
+    assert pendings[-1][1] == []

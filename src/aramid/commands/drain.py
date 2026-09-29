@@ -32,6 +32,7 @@ from aramid import fleet, health
 from aramid import gitutil, leftovers, policy, queue, redact, registry, triage
 from aramid import ledger as ledger_mod
 from aramid.commands import schedule as schedule_mod
+from aramid.consumers import base as consumers_base
 from aramid.consumers.base import CONSUMERS, ConsumerResult, DrainContext
 from aramid.fingerprint import normalize_path
 from aramid.ledger import Ledger
@@ -147,6 +148,34 @@ def _bounded(fn: Callable[[], object], timeout_s: float) -> None:
     t.join(timeout_s)
 
 
+# FN-16: deadline kills of one consumer on one item, at one head and under
+# one deadline, before it gives up -- the same three as the other give-ups
+# (consumers.mutation._BASELINE_GIVE_UP).
+_DEADLINE_GIVE_UP = 3
+
+
+def deadline_note_prefix(deadline_s: float, head: str) -> str:
+    """The note family for "stopped at the drain's hard deadline", and a
+    CONTRACT: the give-up in `_consume_item` counts rows by it. It carries
+    the two things that deserve a fresh try -- a new commit, and a deadline
+    the operator raised -- so the advice the give-up prints can work."""
+    return (f"stopped at the drain's hard deadline ([drain].hard_deadline_s = "
+            f"{deadline_s:g}) (last seen @ {head[:12]})")
+
+
+def deadline_note(deadline_s: float, head: str, elapsed_s: float) -> str:
+    """The deadline row's whole note: the counted prefix, then the rest."""
+    return (f"{deadline_note_prefix(deadline_s, head)}, {elapsed_s:.0f} s into the drain; "
+            "the item stays queued")
+
+
+def _deadline_give_up_note(consumer: str, deadline_s: float, head: str) -> str:
+    return (f"{consumer} giving up: stopped at the drain's hard deadline "
+            f"{_DEADLINE_GIVE_UP} times ([drain].hard_deadline_s = {deadline_s:g}, "
+            f"last seen @ {head[:12]}) -- raise [drain].hard_deadline_s or narrow what "
+            f"{consumer} runs; a new commit gets a fresh try")
+
+
 class _Watchdog:
     """The drain's hard deadline (FN-14). A daemon thread that, once the
     deadline falls due, does what an outside kill cannot: writes a
@@ -189,11 +218,24 @@ class _Watchdog:
         self._mutex = threading.Lock()
         self._stop = threading.Event()
         self._in_flight: tuple | None = None
+        self._pending: tuple = (None, [], [])
         self._thread = threading.Thread(target=self._run, name="aramid-drain-deadline",
                                         daemon=True)
 
+    @property
+    def deadline_s(self) -> float:
+        return self._deadline_s
+
     def start(self) -> None:
         self._thread.start()
+
+    def pending(self, run_id: str, items: list, after: list) -> None:
+        """FN-16: the (root, item id) pairs the drain has not opened yet,
+        and the roots it has. At the deadline each gets the DEFERRED row the
+        drain's own budget stop would have written, so the next drain opens
+        them before the item that ran into the deadline."""
+        with self._mutex:
+            self._pending = (run_id, list(items), list(after))
 
     def set_deadline(self, deadline_s: float) -> None:
         """Seconds from this watchdog's start. Armed at the default before
@@ -206,9 +248,9 @@ class _Watchdog:
             with contextlib.suppress(OSError):
                 _write_lock(self._lock, {**data, "deadline_s": self._deadline_s})
 
-    def begin(self, root: Path, item_id: str, consumer: str, run_id: str) -> None:
+    def begin(self, root: Path, item_id: str, consumer: str, run_id: str, head: str) -> None:
         with self._mutex:
-            self._in_flight = (root, item_id, consumer, run_id, self._monotonic())
+            self._in_flight = (root, item_id, consumer, run_id, self._monotonic(), head)
 
     @contextlib.contextmanager
     def finishing(self):
@@ -227,16 +269,23 @@ class _Watchdog:
                 return
 
     def _record(self, flight: tuple, elapsed: float) -> None:
-        root, item_id, consumer, run_id, began = flight
+        root, item_id, consumer, run_id, began, head = flight
         led = self._open_ledger(root)
         try:
             led.append(Event(EventType.CONSUMER_RUN_FINISHED, run_id, self._clock(), payload={
                 "consumer": consumer, "item_id": item_id, "state": "degraded",
                 "duration_s": round(self._monotonic() - began, 3), "cost": 0.0,
                 "finding_count": 0,
-                "note": (f"stopped at the drain's hard deadline, {elapsed:.0f} s into the "
-                         f"drain ([drain].hard_deadline_s = {self._deadline_s:g}); "
-                         "the item stays queued")}))
+                "note": deadline_note(self._deadline_s, head, elapsed)}))
+        finally:
+            led.close()
+
+    def _defer(self, root: Path, item_id: str, run_id: str, after: list,
+               elapsed: float) -> None:
+        led = self._open_ledger(root)
+        try:
+            queue.mark_deferred(led, item_id, run_id, self._clock(), reason="drain deadline",
+                                after=after, elapsed_s=int(elapsed), budget_s=self._deadline_s)
         finally:
             led.close()
 
@@ -247,8 +296,18 @@ class _Watchdog:
             self._stop.set()
             elapsed = self._monotonic() - self._t0
             flight = self._in_flight
+            run_id, items, after = self._pending
             if flight is not None:
                 _bounded(lambda: self._record(flight, elapsed), self._write_timeout_s)
+                in_flight = normalize_path(str(flight[0]))
+                if in_flight not in after:
+                    after = [*after, in_flight]
+            # One bound per repo: a ledger that never answers in one must not
+            # cost another its row. `items` never holds the item in flight --
+            # it was opened, and deferring it would keep it first.
+            for root, item_id in items:
+                _bounded(functools.partial(self._defer, root, item_id, run_id, after, elapsed),
+                         self._write_timeout_s)
             what = f"{flight[2]} on {flight[0]}" if flight is not None else "no consumer"
             print(f"aramid drain: hard deadline reached after {elapsed:.0f} s "
                   f"([drain].hard_deadline_s = {self._deadline_s:g}); stopped {what}; "
@@ -347,6 +406,19 @@ def _sweep_leftovers(root: Path, *, dry_run: bool) -> leftovers.Sweep:
     return report
 
 
+def _stopped_at_the_deadline_too_often(ledger, consumer: str, item,
+                                       watchdog: "_Watchdog | None") -> bool:
+    """FN-16: this consumer ran into the drain's hard deadline on this item,
+    at this head and under this deadline, `_DEADLINE_GIVE_UP` times. A
+    fourth try would only be killed again, holding the item in the queue;
+    giving up is `ok`, so the item drains and `status` names the stand-down.
+    No watchdog, no deadline: nothing to give up on."""
+    if watchdog is None:
+        return False
+    prefix = deadline_note_prefix(watchdog.deadline_s, item.head)
+    return consumers_base.prior_note_count(ledger, consumer, item.id, prefix) >= _DEADLINE_GIVE_UP
+
+
 def _consume_item(root: Path, cfg, ledger, item, clock,
                   watchdog: "_Watchdog | None" = None) -> bool:
     """Run every enabled consumer against one queue item. Returns True if
@@ -360,14 +432,18 @@ def _consume_item(root: Path, cfg, ledger, item, clock,
     def finishing():
         return watchdog.finishing() if watchdog is not None else contextlib.nullcontext()
     for name, module in CONSUMERS.items():
-        if watchdog is not None:
-            watchdog.begin(root, item.id, name, run_id)
         started = time.monotonic()
-        try:
-            result = module.consume(item, DrainContext(root=root, cfg=cfg,
-                                                        ledger=ledger, clock=clock))
-        except Exception as exc:
-            result = ConsumerResult(consumer=name, state="error", note=str(exc))
+        if _stopped_at_the_deadline_too_often(ledger, name, item, watchdog):
+            result = ConsumerResult(consumer=name, state="ok", note=_deadline_give_up_note(
+                name, watchdog.deadline_s, item.head))
+        else:
+            if watchdog is not None:
+                watchdog.begin(root, item.id, name, run_id, item.head)
+            try:
+                result = module.consume(item, DrainContext(root=root, cfg=cfg,
+                                                            ledger=ledger, clock=clock))
+            except Exception as exc:
+                result = ConsumerResult(consumer=name, state="error", note=str(exc))
         duration = time.monotonic() - started
         findings = []
         if result.findings:
@@ -606,6 +682,10 @@ def cmd_drain(targets: list, *, dry_run: bool = False, max_items: int | None = N
                               file=sys.stderr)
                         degraded = True
                 break
+            if watchdog is not None:
+                # FN-16: what a deadline inside this item would have to defer.
+                watchdog.pending(drain_run_id, [(c[1], c[2].id) for c in candidates[idx + 1:]],
+                                 drained_roots)
             ledger = Ledger(root / ".aramid" / "ledger.db")
             try:
                 if not _consume_item(root, cfg, ledger, item, clock, watchdog=watchdog):
@@ -618,6 +698,9 @@ def cmd_drain(targets: list, *, dry_run: bool = False, max_items: int | None = N
             drained += 1
             drained_roots.append(normalize_path(str(root)))
             rolled[str(root)] = (root, cfg)
+        if watchdog is not None:
+            # Every item was opened, or the budget stop deferred it already.
+            watchdog.pending(drain_run_id, [], drained_roots)
 
         # Auto-learn rollup (autolearn spec section 8.3): fold each drained
         # repo's new ledger events into the machine-global state. Fail-open:

@@ -162,7 +162,8 @@ def mark_deferred(ledger: Ledger, item_id: str, run_id: str, at: str, *,
     """Record that a drain stopped with this item still queued.
 
     Written by the drain (`run_id` is the drain's) into THIS repo's ledger:
-    `reason` is "drain budget" or "item limit", `after` the normalized roots
+    `reason` is "drain budget", "item limit" or "drain deadline" (the
+    watchdog, FN-16), `after` the normalized roots
     the drain did open this run, `elapsed_s` / `budget_s` the numbers that
     stopped it. `status` and `drain --dry-run` render it; the next drain
     orders on `QueueItem.deferred` first (round 177)."""

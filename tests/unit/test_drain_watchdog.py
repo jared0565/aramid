@@ -18,6 +18,7 @@ from aramid.ledger import Ledger
 from aramid.models import EventType
 
 NOW = "2026-09-28T00:00:00+00:00"
+HEAD = "a" * 40
 
 
 def _rows(root):
@@ -50,7 +51,7 @@ class _Harness:
 
 def test_the_deadline_records_the_consumer_it_stops_then_kills_releases_and_exits(tmp_path):
     h = _Harness(tmp_path, 0.2)
-    h.dog.begin(h.root, "item-1", "mutation", "run-1")
+    h.dog.begin(h.root, "item-1", "mutation", "run-1", HEAD)
     h.dog.start()
     assert h.exited.wait(10), "the watchdog never fired"
     assert h.exits == [2], "exit 2 is the drain's `degraded`"
@@ -68,7 +69,7 @@ def test_the_row_carries_the_consumers_run_id(tmp_path):
     """The rows a consumer writes share one run id; the deadline's row is
     the same run's last word, not a stray."""
     h = _Harness(tmp_path, 0.1)
-    h.dog.begin(h.root, "item-1", "fuzz", "run-7")
+    h.dog.begin(h.root, "item-1", "fuzz", "run-7", HEAD)
     h.dog.start()
     assert h.exited.wait(10)
     led = Ledger(h.root / ".aramid" / "ledger.db")
@@ -83,7 +84,7 @@ def test_cancel_before_the_deadline_does_nothing(tmp_path):
     # Seconds, not tenths: on a loaded runner a tenth can pass between
     # `start` and `cancel`, and the watchdog would rightly fire.
     h = _Harness(tmp_path, 5.0)
-    h.dog.begin(h.root, "item-1", "mutation", "run-1")
+    h.dog.begin(h.root, "item-1", "mutation", "run-1", HEAD)
     h.dog.start()
     h.dog.cancel()
     assert not h.exited.wait(1.0)
@@ -106,7 +107,7 @@ def test_a_consumer_writing_its_own_rows_is_not_recorded_twice(tmp_path):
     `finishing()`. A deadline that falls inside that window waits for it,
     and then finds nothing in flight: one row per run, never two."""
     h = _Harness(tmp_path, 0.1)
-    h.dog.begin(h.root, "item-1", "mutation", "run-1")
+    h.dog.begin(h.root, "item-1", "mutation", "run-1", HEAD)
     # Inside `finishing` BEFORE the watchdog starts: started first, a 0.1 s
     # deadline can fall due before the block is entered on a loaded runner.
     with h.dog.finishing():
@@ -127,7 +128,7 @@ def test_a_hung_ledger_write_does_not_stop_the_exit(tmp_path):
         never.wait(30)
         raise AssertionError("unreachable")
     h = _Harness(tmp_path, 0.1, open_ledger=stuck, write_timeout_s=0.3)
-    h.dog.begin(h.root, "item-1", "mutation", "run-1")
+    h.dog.begin(h.root, "item-1", "mutation", "run-1", HEAD)
     h.dog.start()
     try:
         assert h.exited.wait(10), "a stuck ledger write held the exit"
@@ -158,7 +159,7 @@ def test_the_deadline_can_be_moved_once_the_configs_are_read(tmp_path):
 
 def test_it_fires_once(tmp_path):
     h = _Harness(tmp_path, 0.05)
-    h.dog.begin(h.root, "item-1", "mutation", "run-1")
+    h.dog.begin(h.root, "item-1", "mutation", "run-1", HEAD)
     h.dog.start()
     assert h.exited.wait(10)
     time.sleep(0.3)
@@ -188,7 +189,7 @@ def test_the_row_rounds_its_duration_to_milliseconds(tmp_path):
     now = {"t": 0.0}
     h = _Harness(tmp_path, 2.0, monotonic=lambda: now["t"])
     now["t"] = 1.0
-    h.dog.begin(h.root, "item-1", "mutation", "run-1")
+    h.dog.begin(h.root, "item-1", "mutation", "run-1", HEAD)
     h.dog.start()
     now["t"] = 2.23456
     assert h.exited.wait(10)
@@ -203,7 +204,7 @@ def test_the_deadline_names_the_consumer_and_the_repo_it_stopped(tmp_path, capsy
     repo) as a survivor, because nothing read the line."""
     now = {"t": 0.0}
     h = _Harness(tmp_path, 7.0, monotonic=lambda: now["t"])
-    h.dog.begin(h.root, "item-1", "mutation", "run-1")
+    h.dog.begin(h.root, "item-1", "mutation", "run-1", HEAD)
     h.dog.start()
     now["t"] = 7.0
     assert h.exited.wait(10)

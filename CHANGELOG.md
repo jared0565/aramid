@@ -29,6 +29,23 @@ to publish a tag that disagrees with it.
     It used to be checked as process `-1`, which on Linux and macOS
     `os.kill` reads as every process the user can signal -- so a lock
     missing its process id counted as held.
+- **An item that could not finish inside the drain's deadline came first
+  at every drain.** The deadline's exit skipped the drain's own deferral
+  step, so the items it never reached got no `deferred` mark and the
+  killed item kept first place; and no consumer counted the deadline's
+  row towards giving up. So one item could be stopped at the deadline at
+  every drain while every other repo's item waited to expiry.
+  - At the deadline, every item the drain had not opened is marked
+    deferred (`drain deadline` in `aramid status`), so the next drain
+    opens those before the item that ran into the deadline.
+  - A consumer stopped at the deadline three times on one item, at one
+    commit and one `[drain].hard_deadline_s`, gives up on it the way the
+    other give-ups do: `ok`, with a note saying so, and `aramid status`
+    lists it as stood down. A new commit or a changed deadline gives it
+    a fresh try.
+  - The deadline's row now names the deadline and the commit:
+    `stopped at the drain's hard deadline ([drain].hard_deadline_s = N)
+    (last seen @ <commit>), ...`.
 
 ## [0.19.1] — 2026-09-28
 
