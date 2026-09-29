@@ -122,12 +122,21 @@ artifact cannot be recalled, only superseded:
 | `twine check` | A package page that renders wrong — or, as was true right up until the 0.2.0 metadata work, one with **no description at all** |
 | Clean-venv **sdist** smoke test | An sdist that publishes fine and fails on install. The wheel and the sdist are built by different code paths, and any consumer whose platform or policy forces a source build gets this artifact |
 
+Both clean-venv smokes also run in CI on every push, one leg per OS
+(`.github/scripts/installed_smoke.py`, PLAT-1), and the wheel's goes further:
+it runs a real pre-push gate from the venv and requires the venv's own semgrep
+to flag a fixture line. A smoke that fails here but passed on the tagged
+commit's CI run means the release job's copy and the script have drifted.
+
 ## The 1.0 gate
 
 A 1.0.0 tag needs two things the release workflow cannot check:
 
 1. **`aramid fleet` reads `ready`** on the maintainer's machine: every registered repo green on every criterion, held for at least 14 days across at least 2 releases, with something armed somewhere (any `*_armed` flag true on a latest row; a semgrep or pack arm counts); a disarm inside the streak restarts it at the disarming row (fleet-readiness spec, `docs/superpowers/specs/2026-09-02-aramid-fleet-readiness-design.md`). The verdict is recomputed by every scheduled drain; the session-start hook and `aramid status` show it, and `readiness-reached` arrives as a notice.
-2. **API freeze** (the manual criterion): the two most recent releases carry no `Changed` or `Removed` entry against the declared compatibility surface -- the CLI names and flags, the exit codes, `check --json` keys, the ledger statuses, and `aramid.toml` keys. Judged by reading `CHANGELOG.md` at release time; not automated.
+2. **API freeze** (the manual criterion): the two most recent releases carry no `Changed` or `Removed` entry against the declared compatibility surface -- the CLI names and flags, the exit codes, `check --json` keys, the ledger statuses, and `aramid.toml` keys. Judged by reading `CHANGELOG.md` at release time. Not automated, but no longer
+   invisible either: `tests/unit/test_cli_surface.py`, `test_config_keys_surface.py`,
+   `test_reporter_json_surface.py` and `test_ledger_status_enum.py` freeze those surfaces
+   (API-2), so a change to one cannot land without a test edit that names it.
 
 Until both hold, the next release is `0.x`. Cutting 1.0.0 on a `not-ready` verdict is a decision to make in the changelog, not silently.
 

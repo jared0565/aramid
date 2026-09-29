@@ -173,9 +173,9 @@ jobs:
       #
       # WHAT IT DOES NOT PROVE: this job installs with `pip install -e .`, so
       # the ruleset is read from the source tree, not from a built wheel. The
-      # "Verify packaged data files" step below checks the wheel CONTAINS the
-      # file; nothing yet loads semgrep against an installed (non-editable)
-      # aramid. Do not read a green run here as wheel-level proof.
+      # wheel-level proof is the PLAT-1 step at the end of the job, which
+      # installs the built wheel into a clean venv and runs this same gate
+      # from it; do not read a green run of THIS step as that proof.
       #
       # COST: the gate's BLOCK-tier `tests` runner re-runs tests/unit (per
       # aramid.toml), so this duplicates part of the suite step above. That is
@@ -287,8 +287,8 @@ jobs:
       - name: Install build backend
         run: pip install build
 
-      - name: Build wheel
-        run: python -m build --wheel
+      - name: Build wheel and sdist
+        run: python -m build
 
       # Closes the "wheel data inclusion verified by inspection only" gap:
       # actually unzip the built wheel and assert the packaged data files
@@ -319,6 +319,26 @@ jobs:
               sys.exit(1)
 
           print(f"OK: {wheel.name} contains all required data files: {required}")
+
+      # PLAT-1: everything above ran the EDITABLE install -- package, ruleset
+      # and semgrep all from the source tree or this job's environment. These
+      # two steps install the artifacts a user gets into clean venvs and prove
+      # them from outside the checkout: the wheel with its dependencies runs a
+      # real `check --gate pre-push --all --strict --json` over a fixture repo,
+      # and the JSON must show the venv's OWN semgrep ran and flagged the
+      # fixture's line; the sdist goes in with `--no-deps`, the release job's
+      # arm and the only one that reproduces 0.17.10's failure. The release
+      # job keeps its own copies of both smokes -- the two must agree. One
+      # leg per OS: semgrep's install into a fresh venv costs minutes.
+      - name: Installed wheel runs a real gate (PLAT-1)
+        if: matrix.python == '3.12'
+        shell: bash
+        run: python -P .github/scripts/installed_smoke.py wheel dist/*.whl
+
+      - name: Installed sdist resolves its ruleset under --no-deps (PLAT-1)
+        if: matrix.python == '3.12'
+        shell: bash
+        run: python -P .github/scripts/installed_smoke.py sdist dist/*.tar.gz
 
   # The one property a rehearsal tag relies on, asserted in seconds instead of
   # re-proven by a 30-minute matrix: the tagged commit is already on main, so
