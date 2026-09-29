@@ -197,6 +197,8 @@ def build_packet(root: Path, cfg, item) -> Packet | None:
     for f in files:
         try:
             content = gitutil.read_for_fingerprint(root, item.head, f)
+        except gitutil.GitTimeout:
+            raise           # FN-17: git said nothing -- not a hole to review around
         except Exception as exc:
             # Named, not counted: a file dropped here is a HOLE in what the
             # reviewer sees, and the reviewer will still answer confidently
@@ -326,6 +328,8 @@ def verify_findings(candidates: list[dict], packet: Packet, root: Path,
             continue
         try:
             content = gitutil.read_for_fingerprint(root, head, cand["file"])
+        except gitutil.GitTimeout:
+            raise           # FN-17: git said nothing -- not a hallucination
         except Exception:
             rejected += 1
             continue
@@ -468,10 +472,14 @@ def auto_resolve_llm(root: Path, ledger, run_id: str, at: str) -> list[str]:
         # never crash the gate and never be silently resolved away. This
         # outer guard wraps the whole body; the inner read_for_fingerprint
         # try/except below keeps its own "unreadable file = gone = resolve"
-        # semantics for WELL-FORMED recs.
+        # semantics for WELL-FORMED recs. A git that did not answer is not an
+        # unreadable file (FN-17): GitTimeout goes up through both, so no
+        # finding is resolved on it and the first timeout is the only one paid.
         try:
             try:
                 content = gitutil.read_for_fingerprint(root, "HEAD", rec.get("file", ""))
+            except gitutil.GitTimeout:
+                raise
             except Exception:
                 content = ""
             # Strip ALL whitespace (not _squash_ws' collapse-runs) on both
@@ -489,6 +497,8 @@ def auto_resolve_llm(root: Path, ledger, run_id: str, at: str) -> list[str]:
             ledger.append(Event(EventType.FINDING_RESOLVED, run_id, at, finding_id=fid,
                                 payload={"auto_resolved": "evidence_gone"}))
             resolved.append(fid)
+        except gitutil.GitTimeout:
+            raise
         except Exception:
             # Counts only what the OUTER guard catches. The inner
             # read_for_fingerprint handler above sets content = "" and carries

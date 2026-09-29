@@ -638,6 +638,26 @@ def test_link_node_modules_on_windows_makes_a_junction_and_reports_its_failure(t
         jsc._link_node_modules(src, wt)
 
 
+def test_link_node_modules_on_windows_bounds_mklink(tmp_path, monkeypatch):
+    """FN-17: `mklink` is a one-shot cmd builtin, so it is bounded rather than
+    registered; a hung one reads as the link failure the caller already
+    handles, never as a drain that waits on it."""
+    src, wt = tmp_path / "src", tmp_path / "wt"
+    (src / "node_modules").mkdir(parents=True)
+    wt.mkdir()
+    monkeypatch.setattr(jsc.sys, "platform", "win32")
+    seen = {}
+
+    def hang(argv, **kw):
+        seen.update(kw)
+        raise subprocess.TimeoutExpired(argv, kw.get("timeout"))
+    monkeypatch.setattr(jsc.subprocess, "run", hang)
+
+    with pytest.raises(OSError, match=r"^mklink /J timed out after 60 s$"):
+        jsc._link_node_modules(src, wt)
+    assert seen["timeout"] == 60
+
+
 def test_link_node_modules_off_windows_symlinks_the_directory(tmp_path, monkeypatch):
     src, wt = tmp_path / "src", tmp_path / "wt"
     (src / "node_modules").mkdir(parents=True)

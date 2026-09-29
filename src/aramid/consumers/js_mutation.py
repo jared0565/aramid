@@ -97,6 +97,9 @@ def _pm_test_argv(pm: str) -> list[str] | None:
     return [binp, "test"]
 
 
+_MKLINK_TIMEOUT_S = 60
+
+
 def _link_node_modules(src_root: Path, wt: Path) -> bool:
     """Junction (Windows) / symlink (Unix) src_root/node_modules into the
     worktree so `<pm> test` resolves deps. Returns False if the source has no
@@ -112,8 +115,14 @@ def _link_node_modules(src_root: Path, wt: Path) -> bool:
         # host. argv is a fixed list; both paths are ones aramid constructed
         # itself (the worktree it just created and the source node_modules),
         # passed as separate argv entries rather than a shell string.
-        cp = subprocess.run(["cmd", "/c", "mklink", "/J", str(dst_nm), str(src_nm)],  # noqa: S603,S607
-                            capture_output=True, text=True)
+        # Bounded, not registered with runners.base (FN-17): a junction is
+        # made in milliseconds, and a hung one reads as the link failure the
+        # caller already handles.
+        try:
+            cp = subprocess.run(["cmd", "/c", "mklink", "/J", str(dst_nm), str(src_nm)],  # noqa: S603,S607
+                                capture_output=True, text=True, timeout=_MKLINK_TIMEOUT_S)
+        except subprocess.TimeoutExpired:
+            raise OSError(f"mklink /J timed out after {_MKLINK_TIMEOUT_S:g} s") from None
         if cp.returncode != 0:
             raise OSError(f"mklink /J failed: {(cp.stderr or '').strip()[:200]}")
     else:

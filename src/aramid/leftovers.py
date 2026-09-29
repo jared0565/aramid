@@ -80,13 +80,17 @@ def shell_of(path) -> Path | None:
 
 def _registrations(root: Path) -> list[tuple[Path, bool]]:
     """``(shell dir, locked)`` for every registered worktree of ``root``
-    that lives in one of our shells; the main worktree is never one."""
-    try:
-        cp = gitutil._run(root, "worktree", "list", "--porcelain")
-    except Exception:
-        return []
+    that lives in one of our shells; the main worktree is never one.
+
+    Raises when git cannot list them (FN-17). The list is the sweep's only
+    view of which shells are LOCKED -- a consumer still running in them --
+    and read as "none registered" it left the temp scan judging every shell
+    by age alone, so a locked shell over six hours old went. The drain's
+    `_sweep_leftovers` says the sweep was skipped instead."""
+    cp = gitutil._run(root, "worktree", "list", "--porcelain")
     if cp.returncode != 0:
-        return []
+        raise RuntimeError(f"git worktree list failed (exit {cp.returncode}): "
+                           f"{(cp.stderr or '').strip()}")
     out: list[tuple[Path, bool]] = []
     path: Path | None = None
     locked = False

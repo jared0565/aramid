@@ -2,14 +2,35 @@ import re
 import subprocess
 from pathlib import Path
 
+from aramid.runners import base as runners_base
+
 class NotARepo(Exception): ...
 
+class GitTimeout(Exception):
+    """git did not answer: it outlived GIT_TIMEOUT_S, or the drain's hard
+    deadline killed it or came before it started. Never an answer."""
+
+GIT_TIMEOUT_S = 600.0
+_GIT: tuple[str, ...] = ("git",)   # test seam: the argv head
+
 def _run(root: Path, *args: str) -> subprocess.CompletedProcess:
-    # S603/S607 justification: aramid's single git wrapper -- "git" is
-    # a fixed literal (never derived from *args) and every call site passes
-    # fixed subcommands (rev-parse, show, rev-list, diff, ls-files, log,
-    # merge-base, symbolic-ref); relying on PATH to resolve "git" is standard
-    # and matches how git itself is invoked by every other tool on the host.
+    """git's answer: its exit code and output, whatever the code. A git that
+    did not ANSWER raises `GitTimeout` instead (FN-17) -- one that outlived
+    GIT_TIMEOUT_S, one the drain's hard deadline killed, one asked for after
+    the deadline -- because the callers read a failed git as an empty answer
+    (`staged_files` -> [], `diff_new_lines` -> {}) and a killed one must not
+    reach them as one. Registered in `runners.base`'s registry while it runs,
+    so the deadline's `kill_live` stops it: before FN-17 a git in flight at
+    the deadline outlived the drain, and a hung one hung whatever asked."""
+    what = " ".join(["git", *args[:1]])
+    if runners_base.closed():
+        raise GitTimeout(f"{what} not started: the drain's hard deadline has passed")
+    # S603/S607 justification: aramid's single git wrapper -- "git" is a
+    # fixed literal (_GIT, never derived from *args; only tests replace it)
+    # and every call site passes fixed subcommands (rev-parse, show,
+    # rev-list, diff, ls-files, log, merge-base, worktree); relying on PATH
+    # to resolve "git" is standard and matches how git itself is invoked by
+    # every other tool on the host.
     # encoding="utf-8": git emits UTF-8 by default regardless of host locale.
     # Without this, text=True decodes with the locale-preferred codec, which
     # mojibakes (or raises UnicodeDecodeError on undefined bytes) on cp1252
@@ -17,8 +38,24 @@ def _run(root: Path, *args: str) -> subprocess.CompletedProcess:
     # errors="replace": never let a decode hiccup crash triage's per-commit
     # diff scan; a best-effort mangled character is acceptable, a raised
     # exception is not.
-    return subprocess.run(["git", *args], cwd=str(root), capture_output=True,  # noqa: S603,S607
-                          text=True, encoding="utf-8", errors="replace")
+    proc = subprocess.Popen([*_GIT, *args], cwd=str(root),  # noqa: S603,S607
+                            stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                            text=True, encoding="utf-8", errors="replace",
+                            **runners_base.own_group())
+    try:
+        with runners_base.live_process(lambda: runners_base._kill_tree(proc)):
+            out, err = proc.communicate(timeout=GIT_TIMEOUT_S)
+    except subprocess.TimeoutExpired:
+        runners_base._kill_tree(proc)
+        try:
+            proc.communicate(timeout=runners_base._POST_KILL_DRAIN_S)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+        raise GitTimeout(f"{what} timed out after {GIT_TIMEOUT_S:g} s and was killed") from None
+    if runners_base.closed():
+        # Killed by the deadline, not finished: its exit code is the kill's.
+        raise GitTimeout(f"{what} was killed at the drain's hard deadline")
+    return subprocess.CompletedProcess(proc.args, proc.returncode, out, err)
 
 def repo_root(path: Path) -> Path:
     cp = _run(path, "rev-parse", "--show-toplevel")

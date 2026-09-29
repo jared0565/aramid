@@ -57,6 +57,22 @@ to publish a tag that disagrees with it.
   that divides 24 the drain runs at the hours cron's `0 */N` does.
   A task an earlier re-install already moved keeps its hours; run
   `aramid schedule remove`, then `install`, to put it back on the grid.
+- **A hung git hung whatever asked, and outlived the drain's deadline.**
+  Every git call aramid makes had no timeout and was invisible to the
+  deadline's kill, so a git in flight at the deadline kept running after
+  the drain exited, and a git that never answered held a commit or push
+  gate open indefinitely.
+  - git calls now stop after 10 minutes and are stopped by the drain's
+    deadline like every other child. A git stopped either way raises
+    instead of answering, so it is never read as "nothing changed".
+  - Where a stopped git would have been read as a verdict, it now fails
+    the step instead: the LLM review no longer resolves a finding as
+    fixed, rejects a finding as unsupported, or reviews with a file
+    missing because git did not answer. The gate reports an engine error;
+    the drain keeps the item queued for the next drain.
+  - The drain's leftover sweep no longer removes a worktree shell a
+    consumer still holds locked when git cannot list the worktrees; it
+    skips the sweep and says so.
 
 ## [0.19.1] — 2026-09-28
 

@@ -252,6 +252,14 @@ class RunContext:
 _WIN = sys.platform == "win32"
 _POST_KILL_DRAIN_S = 5.0   # cap on the post-_kill_tree reap wait (test seam)
 
+def own_group() -> dict:
+    """Popen kwargs that start a child in a process group of its own. On POSIX
+    `_kill_tree` kills the child's GROUP: a child left in aramid's group would
+    take aramid with it -- and, inside a hook, the `git push` that ran it."""
+    return {"creationflags": subprocess.CREATE_NEW_PROCESS_GROUP} if _WIN \
+           else {"start_new_session": True}
+
+
 def _kill_tree(proc: subprocess.Popen):
     try:
         if _WIN:
@@ -267,15 +275,14 @@ def _kill_tree(proc: subprocess.Popen):
         proc.kill()
 
 
-# FN-14: every child the two long-running launchers have alive, as a kill
-# callable -- `run_subprocess` here and `providers.base.run_provider_subprocess`.
-# The drain's hard deadline ends the process with `os._exit`, which runs no
-# `finally`, so a consumer's own cleanup never kills what it started; the
-# deadline calls `kill_live(close=True)` first. NOT registered, and so left
-# running past a deadline: `gitutil._run` (short git calls) and
-# `consumers.js_mutation._link_node_modules`, which call subprocess
-# directly. Module state rather than a parameter because the launchers are
-# reached from deep inside consumers that have no handle on the drain.
+# FN-14: every child aramid's launchers have alive, as a kill callable --
+# `run_subprocess` here, `providers.base.run_provider_subprocess`, and (FN-17)
+# `gitutil._run`. The drain's hard deadline ends the process with `os._exit`,
+# which runs no `finally`, so a consumer's own cleanup never kills what it
+# started; the deadline calls `kill_live(close=True)` first. NOT registered:
+# `consumers.js_mutation._link_node_modules`' one-shot `mklink`, which is
+# bounded instead. Module state rather than a parameter because the launchers
+# are reached from deep inside consumers that have no handle on the drain.
 #
 # CLOSED is what makes the kill stick. Killing only what is registered at
 # that instant leaves a looping consumer (mutation runs one pytest per
@@ -454,8 +461,7 @@ def run_subprocess(argv, cwd: Path, timeout_s: float, env=None, *,
     # Launch by absolute path so the child does not re-resolve against a PATH
     # that may not contain the tool at all.
     argv = [str(resolved), *argv[1:]]
-    kwargs = {"creationflags": subprocess.CREATE_NEW_PROCESS_GROUP} if _WIN \
-             else {"start_new_session": True}
+    kwargs = own_group()
     start = time.monotonic()
     # S603 justification: this is aramid's single generic subprocess
     # launcher -- invoking external static-analysis tools (ruff, semgrep,
