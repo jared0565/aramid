@@ -8,6 +8,8 @@ guarded onto one (os, python) pair that the matrix actually runs, the
 coverage run feeding it carries the same guard and names the same file,
 and both come after the unpatched full-suite step so a red suite is
 reported as a red suite, not as a coverage failure."""
+import importlib.util
+import io
 import json
 import re
 from pathlib import Path
@@ -87,17 +89,28 @@ def test_the_coverage_run_feeding_the_count_has_the_same_guard_and_file():
 def test_the_committed_baseline_is_the_one_the_step_names_and_adds_up():
     """The ratchet is only as honest as the file it compares against: every
     key a src/aramid path, every count a positive int, and `_total` the
-    sum -- a hand edit that forgets the total is caught here, not in CI."""
+    sum -- a hand edit that forgets the total is caught here, not in CI.
+
+    EMPTY IS THE STRICTEST BASELINE, not a vacuous one: `check` holds a file
+    absent from it at 0, so one latent mutant anywhere fails the leg -- the
+    last assertion runs the real `check` to say so. It has been empty since
+    2026-09-29: 49ac152 removed the last latent mutant (`cmd_schedule`'s
+    unreachable inner `return 3`), and the ubuntu/3.12 leg measured 0 on
+    that commit's run, 36509597475."""
     count = _script_step("check")
     named = re.search(r"--baseline (\S+)", count["run"]).group(1)
     assert (REPO / named) == BASELINE and BASELINE.exists()
     base = json.loads(BASELINE.read_text(encoding="utf-8"))
     files = {k: v for k, v in base.items() if k != "_total"}
-    assert files, "an empty baseline ratchets nothing"
     assert all(k.startswith("src/aramid/") and k.endswith(".py") for k in files), list(files)
     assert all(isinstance(v, int) and v > 0 for v in files.values())
     assert base["_total"] == sum(files.values())
     assert list(base) == sorted(base), "write-baseline writes sorted keys; keep it that way"
+    spec = importlib.util.spec_from_file_location("latent_mutants", REPO / SCRIPT)
+    lm = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(lm)
+    assert lm.check({**files, "src/aramid/not_in_the_baseline.py": 1}, base, out=io.StringIO()) == 1, \
+        "the committed baseline let a new latent mutant through"
 
 
 def test_the_baseline_cannot_rise_inside_a_push_because_the_leg_reads_the_pre_push_copy():
