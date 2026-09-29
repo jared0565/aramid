@@ -154,7 +154,7 @@ The two files aramid keeps on disk carry the version of their layout (0.19.0, 1.
 
 ## 2. Configuration Reference
 
-Config file: `aramid.toml` at the repo root. Three-layer merge: package defaults (`src/aramid/data/defaults.toml`) ← `~/.aramid/config.toml` ← `<root>/aramid.toml`. `CURRENT_SCHEMA_VERSION = 1`. `block_rules` is **not** sourced from `defaults.toml` at all — it is always overwritten from the separate packaged, curated file `src/aramid/data/block_rules.toml` and is not a user-facing tunable.
+Config file: `aramid.toml` at the repo root. Three-layer merge: package defaults (`src/aramid/data/defaults.toml`) ← `~/.aramid/config.toml` ← `<root>/aramid.toml`. `CURRENT_SCHEMA_VERSION = 1`. `block_rules` is **not** sourced from `defaults.toml` at all — its base is the separate packaged, curated file `src/aramid/data/block_rules.toml` (`[ruff].block`, `[semgrep].block`, `[deps].block_severity`), and the two layers a person writes merge over it as `[block_rules.<tool>]`. `~/.aramid/config.toml` may demote an entry; a repo's own `aramid.toml` may only add to a list — an entry it drops is restored, with a stderr notice naming it. `block_severity` is a scalar and is not held to that floor (FN-20).
 
 **Validation (0.19.0).** Each layer a person writes (`~/.aramid/config.toml`, `<root>/aramid.toml`) is checked against the keys aramid reads: every key in `defaults.toml`, with its type, plus `config_keys.OPTIONAL` (`test_command`, `bake_started`, `[tests].command`, `[mutation].test_command`, the two `baseline_timeout_s` keys, `[shadow]`); `block_rules` tool tables are left open. An unknown key or table, a key in the wrong table, a wrong type, and a retired key (`scope_subpath`, `[llm].model_openrouter`, `[dast].block_armed`, `[dast].start_command`) each print `aramid: config: <file>: <problem>` on stderr, once per process, and a `WARN` row under `doctor`'s `config:` section. WARN only (DEC-4): what is loaded, and every exit code, are unchanged.
 
@@ -167,6 +167,8 @@ Config file: `aramid.toml` at the repo root. Three-layer merge: package defaults
 | `ignore_paths` | list[str] | the 8 built-ins below (set in `defaults.toml`) | Exclude patterns. The 8 built-ins — `.aramid/`, `graph-out/`, `.graphite*`, `.cache/`, `node_modules/`, `.venv/`, `__pycache__/`, `.git/` — are the default and are always unioned back in regardless of repo config (never removable); a repo's `ignore_paths` adds to them. |
 | `bake_started` | str \| None | `None` (absent from defaults.toml — TOML has no null literal) | ISO date string set by `init`'s repo stub marking when the WARN-only bake period began; reported by `status` as "bake in progress, day N". |
 | `test_command` | str \| None | `None` | **Legacy alias for `[tests].command`.** Shipped in schema v1 documented but with no read site at all; now consumed by `pipeline.run_gate` as the fallback when `[tests].command` is unset. `[tests].command` wins if both are set, by presence: `command = ""` in `[tests]` blocks the fallback. Since 0.19.0 the mutation drain consumer honours it too, after `[mutation].test_command`; the gate, `toolset`, `doctor` and the consumer all resolve it through `config.effective_test_command`. Prefer `[tests].command` in new config. |
+| `tdd_block_armed` | bool | `false` | Arming flag: code-without-test (`tdd`) findings BLOCK at pre-push. A root-table key, although the rest of the TDD gate's config is under `[tdd]`. Flipped via `aramid arm --tdd`. |
+| `agent_block_armed` | bool | `false` | Arms the agent `pre-tool-use` hook: a git commit or push carrying a hook bypass (`--no-verify`, `core.hooksPath`) is REJECTED in an agent session instead of advised against. Changes no finding's tier and nothing a person runs at a terminal. Flipped via `aramid arm --agent`. |
 
 ### `[timeouts]`
 
@@ -271,7 +273,8 @@ Two invariants worth keeping in mind when touching this:
 | `confirm_cap` | int | `3` | Cap on full-suite confirmation runs per item. |
 | `retest_open_survivors` | bool | `true` | When the item's range changes any test file, regenerate each open or `pending_retest` mutation survivor from its fingerprint and re-run it through the same stage-1 / full-suite confirmation (and, on the item the drain synthesizes for a repo with an empty queue, the `pending_retest` rows alone); a confirmed kill is claimed as `mutant_killed`. Survivors bound by `.aramid-suppressions.toml` are skipped; the range's mutation scores are untouched. |
 | `retest_cap` | int | `3` | Re-tests per item. A survivor whose module a changed test in the range maps to (the `gap_addressed` stem rule) is re-tested first, on its own confirm budget (one per re-test) and outside `max_mutants`; every other survivor runs after the range's own mutants, inside the range's budget. One survivor id names every line with that content, and a claim needs every occurrence killed, so a survivor whose occurrences outnumber the mutant or confirm slots a pass has left is skipped before its first run rather than half-tested (a later pass with room, or the empty-queue re-test item, picks it up). The note reads `re-tested N of M open survivor(s), K killed`, plus `C of D survivor(s) named by a changed test re-tested first` when there were any, plus `S survivor(s) not re-tested: occurrences exceed the remaining re-test budget` when any were skipped. |
-
+| `test_command` | str \| list[str] | unset | The whole-suite command for the baseline and every stage-2 confirmation. Unset: `[tests].command`, else the legacy top-level `test_command`, else `python -m pytest -q`. Separate from `[tests].command` on purpose: the gate should run what CI runs, while mutation's baseline has to fit `baseline_timeout_s`. |
+| `baseline_timeout_s` | int (`float()`'d) | `mutant_timeout_s` × 4 (`480`) | Budget for the baseline suite run that establishes green before any mutant. Not in `defaults.toml`, because its default is derived. A timed-out baseline notes `baseline timeout: <suite> did not finish within the <N>s budget`; after repeated timeouts mutation gives up on the repo until this key or `test_command` changes, and the give-up note names both. |
 | `mutation_block_armed` | bool | `false` | Arming flag: surviving-mutant findings BLOCK at pre-push. Flipped via `aramid arm --mutation`. |
 | `score_block_armed` | bool | `false` | Arming flag: mutation-score *transition* regressions BLOCK at pre-push; rate deltas stay WARN. Flipped via `aramid arm --mutation-score`. |
 
@@ -285,6 +288,7 @@ Drain-time survivors are recorded `WARN` either way; the pre-push gate applies t
 | `max_mutants` | int | `20` | Mutants generated-and-tested per queue item. |
 | `wall_budget_s` | int (`float()`'d) | `600` | Whole-item wall clock for the mutant loop. |
 | `mutant_timeout_s` | int (`float()`'d) | `120` | Per `<pm> test` invocation (single-stage — no `confirm_cap` key here). |
+| `baseline_timeout_s` | int (`float()`'d) | `mutant_timeout_s` × 4 (`480`) | Budget for the baseline `<pm> test` run. Not in `defaults.toml`, because its default is derived. |
 
 No arming flag exists in `[js_mutation]`.
 
@@ -309,6 +313,41 @@ No arming flag exists in `[fuzz]`.
 | `base_url` | str | `""` | Target base URL. Empty ⇒ OK-skip. |
 | `paths` | list[str] | `[]` | Extra paths to probe on top of the curated exposed-path set. |
 | `timeout_s` | int (`float()`'d) | `10` | Per-request timeout. |
+
+### `[tdd]`
+
+| Key | Type | Default | Meaning |
+|---|---|---|---|
+| `enabled` | bool | `true` | Master switch for the pre-push code-without-test producer (`tdd`: one finding per changed production `.py` file when the range adds no test line) and for its auto-resolution. Its arming flag is the top-level `tdd_block_armed`. |
+
+### `[red_proof]`
+
+| Key | Type | Default | Meaning |
+|---|---|---|---|
+| `enabled` | bool | `true` | Master switch for the pre-push red-first proof: each test file the range changes is run against the range's base tree, and a file whose tests all pass there was never red (`red-proof` / `test-not-red`). |
+| `red_proof_block_armed` | bool | `false` | Arming flag: never-red findings BLOCK at pre-push. Flipped via `aramid arm --red-proof`. |
+| `wall_budget_s` | int (`float()`'d) | `120` | Wall clock for the whole scan; files left when it runs out are skipped, which means "not scanned", never "clean". |
+| `test_timeout_s` | int (`float()`'d) | `60` | Per pytest invocation against the base tree. |
+
+### `[shadow]`
+
+| Key | Type | Default | Meaning |
+|---|---|---|---|
+| `shadow_block_armed` | bool | `false` | Arming flag for the module-shadow detector: an `aramid.py` or `graphite.py`, or an `aramid/` or `graphite/` directory holding an `__init__.py`, at the repo root is imported instead of the installed package by every `python -m` launched there. The detector runs at every gate, pre-commit included, and ships disarmed (WARN). Flipped via `aramid arm --shadow`. Not in `defaults.toml`. |
+
+### `[deps]`
+
+| Key | Type | Default | Meaning |
+|---|---|---|---|
+| `cargo_audit_warnings` | bool | `false` | Surface cargo-audit's RUSTSEC `warnings` (unmaintained, unsound, yanked crates) as `cargo-audit-warnings` findings. WARN-tier by construction: they can never block, armed or not. Off by default because most carry no fix. |
+
+The dependency BLOCK threshold is not here: it is `block_severity` in `block_rules.toml`'s own `[deps]` table (see the section intro).
+
+### `[hooks]`
+
+| Key | Type | Default | Meaning |
+|---|---|---|---|
+| `pre_push_match_ci` | bool | `false` | The generated pre-push shim runs `check --gate pre-push --all --strict`, what CI runs, instead of the changed-files range, and passes every exit code through instead of mapping `2` to `0`. Takes effect when the shim is regenerated (`aramid init`); turn it on together with `aramid rebaseline`, or the first full scan's never-seen findings are new and the ratchet blocks the push on them. An unreadable config yields the default shim. |
 
 ### Key naming collisions (same name, different meaning)
 
@@ -401,13 +440,14 @@ Onboard a repo: write config, install hooks, seed baseline.
 - `--discover` — walk under `path` (max depth 3) for every directory containing `.git` (skipping `node_modules`, `_tools`, `.venv`, `.git`, `__pycache__`, `.aramid`, `.cache`, `graph-out`, `.graphite*`); runs the full single-repo init flow on each, returning the worst exit code seen.
 - Gates on `aramid doctor`; refuses (exit 3) if a BLOCK-tier tool (gitleaks/semgrep) is missing. Writes `aramid.toml` only if absent; always regenerates `ARAMID.md`; appends missing `.gitignore` entries (`.aramid/`, `graph-out/`, `.graphite*`, `.cache/`); installs idempotent hook shims (chains any pre-existing foreign hook to `<hook>.aramid-chained`); registers the repo in the machine-global registry; runs a one-time full-history gitleaks scan (`git log --all`, non-blocking historical findings); writes the ratchet baseline once.
 
-### `aramid check [--gate pre-commit|pre-push] [--staged|--range|--all] [--strict] [--json] [--accept-degraded] [--reason REASON]`
+### `aramid check [--gate pre-commit|pre-push|all] [--staged|--range|--all] [--strict] [--json] [--accept-degraded] [--reason REASON] [--no-record]`
 Run the gate pipeline.
-- `--gate {pre-commit,pre-push}` (default `pre-commit`).
+- `--gate {pre-commit,pre-push,all}` (default `pre-commit`). `all` runs every tool of both hooks -- ruff runs only at pre-commit and semgrep only at pre-push, so neither hook gate sees both -- in mode `all` unless a mode flag is given. Informational: no shim invokes it, and it never ratchets (the ratchet runs at `pre-push` only).
 - Mode group (mutually exclusive): `--staged`, `--range`, `--all`; default is `staged` for pre-commit, `range` for pre-push.
 - `--strict` — remaps exit code 2 to 1; 3 passes through unchanged.
 - `--json` — render JSON instead of console report.
 - `--accept-degraded` — accept a degraded run; `--reason` (default `None`, falls back to `"no reason given"`) records why. Also settable via `ARAMID_ACCEPT_DEGRADED` env var.
+- `--no-record` — runs the gate against a sqlite-backup snapshot of the ledger (`commands/check.py::_ledger_snapshot`, reaped in `finally`) so the report answers as a recording run would while nothing reaches `.aramid/ledger.db`; logs are still written. A repo with no ledger yet ends the run with none.
 - Fresh-ledger downgrade at `--gate pre-push` with no baseline yet.
 
 ### `aramid doctor [--fix]`
@@ -417,6 +457,15 @@ Probe (and optionally repair) the toolchain and the hook shim's baked interprete
 
 ### `aramid status`
 Read-only report of ledger/config state; never mutates anything. No flags.
+
+### `aramid resolvers [--json]`
+Grades each auto-resolver on what it SAW, not only on what it cleared, which finds a resolver that silently stopped firing. The grades and what each means: the user guide, *`aramid resolvers`*. `--json` prints the machine-readable form. Exits `0` whether or not a resolver is flagged (section 5).
+
+### `aramid notices [list | show <id> | ack <id>]`
+aramid's own notices. `list`, the default, prints the pending ones one per line; `show <id>` prints one; `ack <id>` acknowledges it, and an ack anywhere silences it everywhere. Exit codes: section 5.
+
+### `aramid mutation-score [--json]`
+Advisory per-function mutation-score and regression report. `--json` prints the machine-readable form. Advisory: a regression never changes the exit (section 5).
 
 ### `aramid triage [rev] [--budget SECONDS]`
 Score one commit (or `A..B` range) and enqueue it if risky.
@@ -429,16 +478,16 @@ Sweep registered repos, catch-up-triage, pop the highest-scored queued item(s), 
 - `--dry-run` — read-only preview, no lock, no mutation.
 - `--max-items N` (int, default `None`) — caps items drained this run.
 
-### `aramid ledger list|show <id>|filter [--tool] [--rule] [--status] [--severity]|mark-rotated <id> --reason REASON|mark-not-a-secret <id> --reason REASON|mark-unreachable <id> --reason REASON`
+### `aramid ledger list|show <id>|filter [--tool] [--rule] [--status] [--severity] [--json]|consumers [--consumer NAME] [--last N] [--json]|mark-rotated <id> --reason REASON|mark-not-a-secret <id> --reason REASON|mark-unreachable <id> --reason REASON|resolve <id>... --out-of-scope --reason REASON`
 - `list` — every open/known finding, one line each.
 - `show <id>` — full record fields plus every ledger event tied to that id (exit 3 if id unknown).
-- `filter [--tool] [--rule] [--status] [--severity]` — all optional/AND-combined. `--status` takes the underlying status string with underscores (`not_a_secret`), which differs from the hyphenated `not-a-secret` label `aramid status` displays.
+- `filter [--tool] [--rule] [--status] [--severity] [--json]` — all optional/AND-combined. `--status` takes the underlying status string with underscores (`not_a_secret`), which differs from the hyphenated `not-a-secret` label `aramid status` displays. `--json` prints the machine-readable form (the user guide's *Machine-readable output* table).
+- `consumers [--consumer NAME] [--last N] [--json]` — the drain's consumer runs, newest first. `--consumer` keeps one consumer by its exact name: `regression_pack`, `llm-review`, `mutation`, `fuzz`, `js_mutation` or `dast`. `--last N` keeps the newest N rows; `--json` prints the machine-readable form.
 - `mark-rotated <id> --reason REASON` — `--reason` required; valid when the finding's status is `historical` OR `not_a_secret`, else refuses with exit 3. Accepting `not_a_secret` too is deliberate: a supposed false positive later found to be a real credential can still be rotated — transitions only ever move toward more caution.
 - `mark-not-a-secret <id> --reason REASON` — `--reason` required; valid only when the finding's status is exactly `historical` (never a live `open` finding), else refuses with exit 3. Retires a false-positive historical hit (status becomes `not_a_secret`) without asserting a rotation that never happened. Reporting-only and inert at gate time: a re-detected instance still classifies exactly as before, so this is not a gate-bypass path. Neither mark can be undone.
 - `mark-unreachable <id> --reason REASON` — `--reason` required; valid only when the finding's status is exactly `open` AND its tool is in the retireable universe (runner-produced, never a producer/consumer tool like `tdd`/`mutation`/`llm-review`) AND not currently selected for this repo, else refuses with exit 3 (unknown id; a producer-tool finding; a non-open status, each with its own message; or a tool that still runs here — that's `aramid doctor`'s problem, not this command's). Retires a finding whose tool has left this repo's live selection (de-selected, disabled, or genuinely removed) so no future run can ever resolve it the normal way. If the tool later returns and re-detects the same finding, it re-opens automatically — like `fixed` and `superseded`, a resting state a re-detect leaves. `aramid status`'s "unreachable candidates" section names exactly which open findings currently qualify.
 - `resolve <id> [<id> ...] --out-of-scope --reason REASON` — the other stranded shape: the finding's tool is still selected (so `mark-unreachable` refuses) but its runner will never examine that path again (its file scope narrowed — typecheck to `.py`/`.pyi` in 0.6.1). Records `finding_out_of_scope`, its own event kind; status becomes `out_of_scope`. Refuses with exit 3 when the runner can still examine the path (per the runner's own suffix rule), when the tool has no suffix scope at all (gitleaks, semgrep, tests, deps — "cannot say" is never permission), when the tool is not selected (that is `mark-unreachable`), without `--out-of-scope`, without `--reason`, or for a non-open status. Re-opens on re-detect. `aramid status` lists candidates under "out-of-scope candidates". Several ids per launch: every id is attempted and the exit is the worst of them.
 - Bare `aramid ledger` — usage line, exit 3.
-- `aramid check --no-record` — runs the gate against a sqlite-backup snapshot of the ledger (`commands/check.py::_ledger_snapshot`, reaped in `finally`) so the report answers as a recording run would while nothing reaches `.aramid/ledger.db`; logs are still written. A repo with no ledger yet ends the run with none.
 
 ### `aramid override <id> --reason REASON`
 Suppress a WARN-tier finding, ledger-logged. `--reason` required (non-empty after stripping). Refuses (exit 3) for any BLOCK-tier finding, including a confirmed+critical LLM finding even if unarmed (arming is retroactive) — and prints the ready-to-paste `[[suppress]]` entry (escaped TOML, `id`/`tool`/`rule`/`path`/`reason` filled from the ledger record) for `.aramid-suppressions.toml` instead. The tier limit is on this CHANNEL, not that file: `.aramid/` is gitignored so a ledger decision is unreviewable, while the committed file is tier-agnostic and takes any verdict (design doc §6 amendment, 2026-08-09).
@@ -486,10 +535,16 @@ Register/remove/query a recurring `<interpreter> -P -m aramid drain --all`. Cros
 - `status` — exit `0` if installed, `3` if not.
 - cron has no equivalent of Task Scheduler's `StartWhenAvailable`; the drain sweep already self-heals a fully missed window. macOS uses cron rather than launchd so one implementation covers both POSIX platforms.
 
+### `aramid hooks install|remove|status`
+Manage the machine-wide git hook template (`init.templateDir`), which seeds the hooks into NEW clones and `git init`s; the shims do nothing in a repo without an `aramid.toml`. `install` refuses (exit `3`, nothing written) when `init.templateDir` already points at a directory that is not aramid's. `remove` and `status` exit `0`.
+
 ### `aramid rebaseline [path] [--yes]`
 - `path` (positional, optional, default `.`).
 - `--yes` — required to proceed; without it, reports what would be discarded and refuses with exit 3.
 - With `--yes`: full `Gate.ALL` scan, writes new baseline, prints `old -> new` count.
+
+### `aramid agent-hook <event> [...]`
+The agent-harness hook endpoint (Claude Code) that `aramid init` registers in `.claude/settings.json`. `session-start` prints the live gate posture into the session's context; `pre-tool-use` screens a git command for hook-bypass flags -- advice while baking, a deny once `agent_block_armed` is true; any other event is a silent no-op. Every token after the event is accepted and ignored, so an older aramid does nothing on a newer template's command line. Always exits `0`: a deny travels in the JSON on stdout (section 5).
 
 ---
 
@@ -518,6 +573,8 @@ Register/remove/query a recurring `<interpreter> -P -m aramid drain --all`. Cros
 
 | Command | Exit codes |
 |---|---|
+| `aramid check` | the global engine contract above: `0` clean, `1` BLOCK, `2` degraded/WARN, `3` engine or config error, after the remap layers (`--strict`, the fresh-ledger downgrade) |
+| `aramid status` | `0` for every state it reports, healthy or not; `3` when the config or the ledger cannot be loaded (engine error) |
 | `aramid rebaseline` (no `--yes`) | `3` always (reports what would be discarded) |
 | `aramid doctor` | `2` if either BLOCK-tier tool (gitleaks, semgrep) missing; `0` otherwise. WARN-tier tool absence (ruff, pip-audit) never changes it. |
 | `aramid schedule` | `3` on unknown action, a non-zero `schtasks` result, a failed `crontab` write, or `crontab` missing from `PATH`; `status` returns `3` when the job is not installed |

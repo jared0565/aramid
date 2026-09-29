@@ -83,6 +83,27 @@ to publish a tag that disagrees with it.
   is never removed), so exactly one drain gets the lock. A drain that
   cannot get that lock within 30 seconds does not start.
 
+- **The knowledge base now documents every command, flag and config key,
+  and a test fails when one is missing.** Each entry was read against the
+  code first:
+  - `resolvers`, `notices`, `mutation-score`, `hooks` and `agent-hook` had
+    no reference entry; `ledger consumers`, `ledger filter --json` and
+    `check --gate all` were absent, and `check --no-record` sat under
+    `ledger`.
+  - `[tdd]`, `[red_proof]`, `[shadow]`, `[deps]` and `[hooks]` had no
+    section, and `tdd_block_armed`, `agent_block_armed`,
+    `[mutation].test_command` and both `baseline_timeout_s` keys had no
+    row. A blank line split the `[mutation]` table in two, so its two
+    arming flags rendered as loose text.
+  - The exit-code table had no row for `check` or `status`. `status` exits
+    `3` when the config or the ledger cannot be loaded.
+  - `block_rules` was described as not user-tunable. Both config layers
+    merge over it as `[block_rules.<tool>]`; a repo's own `aramid.toml`
+    may only add to its lists.
+  - The user guide listed `red_proof` among the drain's consumers and left
+    out `regression_pack`. `ledger consumers --consumer` takes `llm-review`,
+    with a hyphen.
+
 ## [0.19.1] — 2026-09-28
 
 ### Added

@@ -44,7 +44,7 @@ NAME = "shadow"
 RULE = "module-shadow"
 
 # Any distribution this machine's tooling launches with `-m`. One rule protects
-# both tools; a repo that launches neither can narrow it in `[shadow] names`.
+# both tools. Not configurable: no config key reads a list of names.
 DEFAULT_NAMES = ("aramid", "graphite")
 
 # The finding is about the file's EXISTENCE, not its contents, so the
