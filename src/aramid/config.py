@@ -15,7 +15,7 @@ import tomli_w
 from aramid import config_keys
 from aramid.fingerprint import compute_fingerprint, normalize_path
 from aramid.models import Finding, Gate, Severity, Source, Verdict
-from aramid.policy import OverrideRecord, load_block_rules
+from aramid.policy import _SEVERITY_ORDER, OverrideRecord, _map_severity, load_block_rules
 
 CURRENT_SCHEMA_VERSION = 1
 
@@ -196,6 +196,28 @@ def _enforce_block_rules_floor(floor: dict, merged: dict) -> dict:
                       f"rule the operator's config already established; demote it in "
                       f"~/.aramid/config.toml instead if that's genuinely wanted).",
                       file=sys.stderr)
+    # The one scalar in block_rules.toml, and the direction that loosens it:
+    # a HIGHER dependency threshold blocks fewer findings (FN-20). The loop
+    # above skips every non-list value, so an operator's tightened
+    # `block_severity` was undone by any repo that set a higher one. Compared
+    # as MAPPED severities: policy reads an unknown word as MEDIUM, so a repo
+    # writing nonsense over an operator's `low` loosens it like a real word.
+    # An ABSENT key loosens too: `[block_rules] deps = 0` replaces the whole
+    # table, the loop above fills in an empty one, and policy then reads its
+    # `critical` fallback -- the loosest there is.
+    floor_deps = floor.get("deps")
+    if isinstance(floor_deps, dict) and "block_severity" in floor_deps:
+        deps = enforced["deps"]  # a table: the loop above made it one
+        was, now = floor_deps["block_severity"], deps.get("block_severity")
+        if now is None or \
+                _SEVERITY_ORDER.index(_map_severity(now)) > _SEVERITY_ORDER.index(_map_severity(was)):
+            deps["block_severity"] = was
+            what = ("replaced block_rules.deps, dropping block_severity" if now is None
+                    else f"raised block_rules.deps.block_severity from {was!r} to {now!r}")
+            print(f"aramid: config: aramid.toml {what} -- kept {was!r} (a repo's own "
+                  f"aramid.toml may lower the dependency BLOCK threshold, never raise it; "
+                  f"raise it in ~/.aramid/config.toml instead if that's genuinely wanted).",
+                  file=sys.stderr)
     return enforced
 
 

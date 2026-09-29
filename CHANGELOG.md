@@ -12,6 +12,18 @@ to publish a tag that disagrees with it.
 
 ### Fixed
 
+- **A repo's `aramid.toml` could loosen the operator's dependency BLOCK
+  threshold.** The floor that stops a repo's own config from removing
+  BLOCK-tier rules restored list entries only, and
+  `[block_rules.deps].block_severity` is a single value: an operator who
+  tightened it to `high` in `~/.aramid/config.toml` was undone by any repo
+  that set `critical`, and high-severity dependency findings stopped
+  blocking its pushes. A repo may now lower the threshold, never raise it
+  above what the layers beneath set; an attempt keeps the operator's value
+  and says so on stderr. Values compare as severities, so an unrecognised
+  word counts as `medium`, as it does when findings are classified. A repo
+  that put a value where the whole `deps` table was, dropping the key and
+  leaving the loosest default, is held the same way.
 - **A second drain could start beside a live one, and delete its lock.**
   `~/.aramid/drain.lock` was treated as stale once it was older than 1200
   seconds (twice a fixed 600 s probe, whatever the drain's own deadline),
