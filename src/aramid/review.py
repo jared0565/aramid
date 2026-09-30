@@ -305,6 +305,29 @@ def _strip_ws(text: str) -> str:
     return re.sub(r"\s+", "", text)
 
 
+def _quote_elsewhere(root: Path, evidence: str, quote: str) -> bool:
+    """Whether some tracked file at HEAD carries the whole quote (FN-22).
+
+    Asked only for a finding whose own path is absent at HEAD, where "the
+    quote is gone" used to mean a `git mv` resolved every finding on the file
+    -- an armed confirmed critical included. `git grep -F` on the quote's
+    longest line narrows the search; the whitespace-stripped whole quote, the
+    same test the file's own content gets, decides. Only a positive find
+    keeps the finding open: a grep that answers with an error leaves the
+    pre-FN-22 answer (resolved); one git cannot start raises into the
+    caller's per-record guard, which leaves the finding open and counts it
+    skipped; a GitTimeout goes up (FN-17)."""
+    needle = max((line.strip() for line in evidence.splitlines()), key=len)
+    cp = gitutil._run(root, "grep", "-F", "-I", "-l", "-z", "-e", needle, "HEAD", "--")
+    if cp.returncode != 0:
+        return False
+    for hit in cp.stdout.split("\0"):
+        rel = hit.removeprefix("HEAD:")
+        if hit and quote in _strip_ws(gitutil.blob_at(root, "HEAD", rel) or ""):
+            return True
+    return False
+
+
 def verify_findings(candidates: list[dict], packet: Packet, root: Path,
                     head: str) -> tuple[list[dict], int]:
     """Mechanical evidence binding (spec section 3): quote verbatim in the
@@ -425,7 +448,10 @@ def auto_resolve_llm(root: Path, ledger, run_id: str, at: str) -> list[str]:
     finding whose verbatim evidence quote no longer exists in the HEAD
     version of its file is fixed -- resolve it BEFORE the block check so a
     dev who fixed the code is never blocked by a stale finding. A missing/
-    unreadable file counts as gone. False-resolve safety net: the edit that
+    unreadable file counts as gone -- except a path absent at HEAD whose
+    quote is still in another tracked file: a `git mv` is not a fix (FN-22,
+    `_quote_elsewhere`). A quote moved into a different file while its own
+    file stays is still resolved. False-resolve safety net: the edit that
     removed the quote is itself a commit, so triage re-enqueues the file and
     the next drain re-reviews it.
 
@@ -493,6 +519,11 @@ def auto_resolve_llm(root: Path, ledger, run_id: str, at: str) -> list[str]:
             # longer appear.
             quote = _strip_ws(rec.get("evidence", ""))
             if quote and quote in _strip_ws(content):
+                continue
+            # FN-22: a path gone from HEAD is a move until the quote is
+            # found nowhere -- a deleted file still resolves.
+            if quote and gitutil.blob_at(root, "HEAD", rec.get("file", "")) is None \
+                    and _quote_elsewhere(root, rec["evidence"], quote):
                 continue
             ledger.append(Event(EventType.FINDING_RESOLVED, run_id, at, finding_id=fid,
                                 payload={"auto_resolved": "evidence_gone"}))

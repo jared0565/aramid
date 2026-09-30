@@ -27,6 +27,13 @@ to publish a tag that disagrees with it.
   repo where this is every run reads red until a mutant reaches a verdict.
   `js_mutation` also gains the "no mutants tested" note the Python consumer
   already had, for a baseline that uses up the whole wall budget.
+- **Moving a file resolved its LLM review findings.** A finding clears when
+  its quoted evidence is no longer in its file, and a file that is no longer
+  there read as empty, so `git mv` cleared every finding on it -- a
+  confirmed critical included, which unblocks a push when LLM blocking is
+  armed -- until a later drain reviewed the new path. A finding whose file
+  has gone now clears only when the quote is in no tracked file at all; a
+  deleted file still clears its findings.
 
 ## [0.19.2] — 2026-09-29
 
