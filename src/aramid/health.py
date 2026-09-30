@@ -35,7 +35,7 @@ _GIVE_UP_MARK = "giving up"
 # the consumer has NOT stopped, it will run again next drain and burn the same
 # time again. `degraded` would pin the queue item, so these runs are
 # legitimately `ok` and would otherwise be invisible.
-_NO_WORK_MARKS = ("no mutants tested", "no cases run")
+_NO_WORK_MARKS = ("no mutants tested", "no cases run", "no mutant reached a verdict")
 
 
 @dataclass(frozen=True)

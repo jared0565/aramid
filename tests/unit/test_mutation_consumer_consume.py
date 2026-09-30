@@ -20,6 +20,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 from aramid import config as config_mod
+from aramid import health
 from aramid import mutation
 from aramid.consumers import mutation as mut_consumer
 from aramid.consumers.base import DrainContext
@@ -596,3 +597,80 @@ def test_a_two_occurrence_survivor_that_does_not_fit_is_skipped_unspent(tmp_path
                         " survivor(s), 0 killed; 0 of 1 survivor(s) named by a changed test"
                         " re-tested first; 1 survivor(s) not re-tested: occurrences exceed"
                         " the remaining re-test budget")
+
+
+# ------------------------------------------------- FN-23: certified nothing --
+# The Python consumer had the `tested == 0` branch since 73e2d1f; a run that
+# tested mutants and reached no verdict on any of them still read as a pass.
+# Its verdicts are stage-1 kills, full-suite kills and confirmed survivors;
+# a timeout or an error at either stage is none of them.
+
+def test_a_run_whose_every_mutant_timed_out_at_stage_1_certifies_nothing(
+        tmp_path, monkeypatch):
+    r, base, head = _repo(tmp_path, head_src=ONE)
+
+    res, _ = _run(r, base, head, monkeypatch,
+                  {("full", "BASE"): Out(rc=0, dur=3.0), ("s1", "g"): TIMEOUT}, original=ONE)
+
+    assert res.state == "ok"
+    _stats(res, generated=1, tested=1, timeouts=1)
+    assert res.note == ("no mutant reached a verdict: 1 tested, 1 timed out, 0 errored -- the"
+                        " baseline took 3s; [mutation].mutant_timeout_s is 120s")
+    assert health._certified_nothing(res.note)
+    assert res.findings == []
+
+
+def test_a_survivor_whose_confirm_timed_out_is_no_verdict_either(tmp_path, monkeypatch):
+    r, base, head = _repo(tmp_path, head_src=ONE)
+
+    res, _ = _run(r, base, head, monkeypatch,
+                  {("s1", "g"): PASS, ("full", "g"): TIMEOUT}, original=ONE)
+
+    _stats(res, generated=1, tested=1, survived=1, timeouts=1)
+    assert res.note.startswith("no mutant reached a verdict: 1 tested, 1 timed out, 0 errored")
+    assert health._certified_nothing(res.note)
+
+
+def test_a_run_of_only_errors_certifies_nothing_and_names_the_configured_timeout(
+        tmp_path, monkeypatch):
+    r, base, head = _repo(tmp_path, TOML.replace("mutant_timeout_s = 120", "mutant_timeout_s = 90"),
+                          head_src=ONE)
+
+    res, _ = _run(r, base, head, monkeypatch,
+                  {("full", "BASE"): Out(rc=0, dur=7.0), ("s1", "g"): Out(rc=3)}, original=ONE)
+
+    _stats(res, generated=1, tested=1, errors=1)
+    assert res.note == ("no mutant reached a verdict: 1 tested, 0 timed out, 1 errored -- the"
+                        " baseline took 7s; [mutation].mutant_timeout_s is 90s")
+
+
+def test_a_full_suite_kill_alone_is_work(tmp_path, monkeypatch):
+    r, base, head = _repo(tmp_path, head_src=ONE)
+
+    res, _ = _run(r, base, head, monkeypatch, {("s1", "g"): PASS, ("full", "g"): OK1},
+                  original=ONE)
+
+    _stats(res, generated=1, tested=1, survived=1, killed_s2=1)
+    assert res.note == "0 confirmed survivor(s) of 1 mutant(s) tested"
+    assert not health._certified_nothing(res.note)
+
+
+def test_a_confirmed_survivor_alone_is_work(tmp_path, monkeypatch):
+    r, base, head = _repo(tmp_path, head_src=ONE)
+
+    res, _ = _run(r, base, head, monkeypatch, {("s1", "g"): PASS, ("full", "g"): PASS},
+                  original=ONE)
+
+    _stats(res, generated=1, tested=1, survived=1, confirmed=1)
+    assert res.note == "1 confirmed survivor(s) of 1 mutant(s) tested"
+    assert not health._certified_nothing(res.note)
+
+
+def test_a_stage_1_kill_alone_is_work(tmp_path, monkeypatch):
+    r, base, head = _repo(tmp_path, head_src=ONE)
+
+    res, _ = _run(r, base, head, monkeypatch, {("s1", "g"): OK1}, original=ONE)
+
+    _stats(res, generated=1, tested=1, killed_s1=1)
+    assert res.note == "0 confirmed survivor(s) of 1 mutant(s) tested"
+    assert not health._certified_nothing(res.note)

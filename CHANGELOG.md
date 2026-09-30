@@ -10,6 +10,24 @@ to publish a tag that disagrees with it.
 
 ## [Unreleased]
 
+### Fixed
+
+- **A mutation run whose every mutant timed out read as a pass.** Both
+  mutation consumers count a mutant as tested before running it, and a
+  timeout is not a verdict, so a run in which no mutant finished reported
+  `ok` with "0 survivor(s) of 2 mutant(s) tested". Nothing said nothing had
+  been certified: every `ok` js_mutation run a downstream repo recorded
+  from 20 to 29 September was one of these, its suite (about 390 seconds,
+  by its own figures) outlasting the 120-second mutant timeout. A run
+  that tests mutants and reaches no verdict now says so -- "no mutant
+  reached a verdict: 2 tested, 2 timed out, 0 errored -- the baseline took
+  390s; [js_mutation].mutant_timeout_s is 120s" -- and `aramid status` lists
+  it under "consumers doing no work". The run stays `ok`, so its queue item
+  still drains, but the fleet row grades it `consumers_healthy: false`: a
+  repo where this is every run reads red until a mutant reaches a verdict.
+  `js_mutation` also gains the "no mutants tested" note the Python consumer
+  already had, for a baseline that uses up the whole wall budget.
+
 ## [0.19.2] — 2026-09-29
 
 ### Fixed

@@ -19,6 +19,7 @@ from pathlib import Path
 from types import SimpleNamespace
 import pytest
 
+from aramid import health
 from aramid import jsmutate
 from aramid.consumers import js_mutation as jsc
 from aramid.consumers import mutation as pymut
@@ -686,3 +687,85 @@ def test_unlink_node_modules_removes_only_a_present_link_and_never_raises(tmp_pa
     (wt / "node_modules").write_text("a file, oddly\n", encoding="utf-8")
     jsc._unlink_node_modules(wt)
     assert not (wt / "node_modules").exists()
+
+
+# ------------------------------------------------- FN-23: certified nothing --
+# A run with no verdict stays `ok` (a degraded row would pin the queue item)
+# but says so in the words `status` reads as "doing no work": before FN-23 a
+# run whose every mutant timed out read "0 survivor(s) of 2 mutant(s) tested"
+# -- a pass -- and pawscout-worker's js_mutation certified nothing on every
+# drain for ten days with nothing anywhere saying so (rounds 280/281/285).
+
+def test_a_run_whose_every_mutant_timed_out_certifies_nothing_and_says_so(
+        tmp_path, monkeypatch):
+    r, base, head = _repo(tmp_path, 2)
+    baseline = RunnerResult(tool="npm", state=ToolState.OK, returncode=0, duration_s=390.4)
+
+    res, oracle = _run(r, base, head, monkeypatch, {}, {"BASE": baseline}, default=TIMEOUT)
+
+    assert res.state == "ok"
+    _stats(res, generated=2, tested=2, timeouts=2)
+    assert res.note == ("no mutant reached a verdict: 2 tested, 2 timed out, 0 errored -- the"
+                        " baseline took 390s; [js_mutation].mutant_timeout_s is 120s")
+    assert health._certified_nothing(res.note)
+    assert res.findings == []
+    assert [lab for lab, _, _ in oracle.calls] == ["BASE", "f1", "f2"]
+
+
+def test_a_run_of_only_errors_certifies_nothing_and_names_the_configured_timeout(
+        tmp_path, monkeypatch):
+    r, base, head = _repo(tmp_path, 1)
+
+    res, _ = _run(r, base, head, monkeypatch, {"mutant_timeout_s": 300}, {"f1": CRASHED})
+
+    _stats(res, generated=1, tested=1, errors=1)
+    assert res.note == ("no mutant reached a verdict: 1 tested, 0 timed out, 1 errored -- the"
+                        " baseline took 0s; [js_mutation].mutant_timeout_s is 300s")
+    assert health._certified_nothing(res.note)
+
+
+def test_one_kill_among_timeouts_is_work(tmp_path, monkeypatch):
+    r, base, head = _repo(tmp_path, 3)
+
+    res, _ = _run(r, base, head, monkeypatch, {}, {"f1": TIMEOUT, "f2": FAIL, "f3": TIMEOUT})
+
+    _stats(res, generated=3, tested=3, killed=1, timeouts=2, killed_fps=[fp(r, "f2")])
+    assert res.note == "0 survivor(s) of 3 mutant(s) tested"
+    assert not health._certified_nothing(res.note)
+
+
+def test_one_survivor_among_timeouts_is_work(tmp_path, monkeypatch):
+    r, base, head = _repo(tmp_path, 2)
+
+    res, _ = _run(r, base, head, monkeypatch, {}, {"f1": TIMEOUT, "f2": PASS})
+
+    _stats(res, generated=2, tested=2, survived=1, timeouts=1)
+    assert res.note == "1 survivor(s) of 2 mutant(s) tested"
+    assert not health._certified_nothing(res.note)
+
+
+def test_a_baseline_that_ate_the_whole_budget_certifies_nothing_and_says_so(
+        tmp_path, monkeypatch):
+    r, base, head = _repo(tmp_path, 3)
+    baseline = RunnerResult(tool="npm", state=ToolState.OK, returncode=0, duration_s=449.6)
+
+    res, oracle = _run(r, base, head, monkeypatch, {"wall_budget_s": 450},
+                       {"BASE": baseline}, clock=(0.0, 450.5))
+
+    assert res.state == "ok"
+    _stats(res, generated=3, tested=0, truncated=True)
+    assert res.note == ("no mutants tested: 3 generated, 0 certified -- the 450s wall budget"
+                        " covers the whole item and the baseline alone took 450s. Raise"
+                        " [js_mutation].wall_budget_s.")
+    assert health._certified_nothing(res.note)
+    assert [lab for lab, _, _ in oracle.calls] == ["BASE"]
+
+
+def test_a_range_with_nothing_to_mutate_is_not_no_work(tmp_path, monkeypatch):
+    r, base, head = _repo(tmp_path, 0)
+
+    res, _ = _run(r, base, head, monkeypatch, {})
+
+    _stats(res)
+    assert res.note == "0 survivor(s) of 0 mutant(s) tested"
+    assert not health._certified_nothing(res.note)

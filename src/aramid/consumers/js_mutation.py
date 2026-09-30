@@ -339,9 +339,22 @@ def consume(item, ctx: DrainContext) -> ConsumerResult:
         except Exception:
             print(f"aramid: js_mutation: worktree cleanup leaked at {wt}", file=sys.stderr)
 
-    note = f"{stats['survived']} survivor(s) of {stats['tested']} mutant(s) tested"
-    if stats["truncated"]:
-        note += " (truncated: budget/cap hit, remainder dropped)"
+    if stats["generated"] and not stats["tested"]:
+        # CERTIFIED NOTHING, the Python consumer's `tested == 0` branch
+        # (73e2d1f) that this clone never got (FN-23): the wall budget's
+        # clock starts before the baseline, so a baseline that fills it
+        # leaves no time for the mutants it just generated.
+        note = (f"no mutants tested: {stats['generated']} generated, 0 certified -- the "
+                f"{wall_budget:.0f}s wall budget covers the whole item and the baseline "
+                f"alone took {base_res.duration_s:.0f}s. Raise [js_mutation].wall_budget_s.")
+    elif stats["tested"] and not (stats["killed"] or stats["survived"]):
+        # Tested, and not one verdict: every mutant timed out or errored.
+        note = mutation.no_verdict_note("js_mutation", stats, base_res.duration_s,
+                                        mutant_timeout)
+    else:
+        note = f"{stats['survived']} survivor(s) of {stats['tested']} mutant(s) tested"
+        if stats["truncated"]:
+            note += " (truncated: budget/cap hit, remainder dropped)"
     # Reported on EVERY completed run, kills or none: `examined` names the
     # open findings this run read, so an empty claim is still a run that
     # looked (consumers.base.Repaired; interop round 180).

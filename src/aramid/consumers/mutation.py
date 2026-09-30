@@ -102,6 +102,26 @@ def missing_note_prefix(argv0: str) -> str:
     return f"baseline command not found: {argv0}"
 
 
+def no_verdict_note(section: str, stats: dict, baseline_s: float,
+                    mutant_timeout: float) -> str:
+    """The note for a run that TESTED mutants and reached a verdict on none
+    of them (FN-23): each timed out, errored, or (Python) passed stage 1 and
+    was cut by the confirm cap before the full suite ran. Shared by both
+    consumers, and `health._NO_WORK_MARKS` carries its opening words, so
+    `status` reports it under "consumers doing no work".
+
+    `0 survivor(s) of 2 mutant(s) tested` is literally true and reads as a
+    pass. Every `ok` js_mutation row a downstream repo recorded from 09-20
+    to 09-29 was one (four rows; each mutant runs the whole suite, about
+    390s by that repo's figures, under a 120s mutant timeout), and nothing
+    anywhere said so (interop rounds 280/281/285). The two numbers that
+    decide it are in the note for that reason. `ok` is kept: `degraded`
+    would pin the queue item, the same trade `no mutants tested` makes."""
+    return (f"no mutant reached a verdict: {stats['tested']} tested, "
+            f"{stats['timeouts']} timed out, {stats['errors']} errored -- the baseline "
+            f"took {baseline_s:.0f}s; [{section}].mutant_timeout_s is {mutant_timeout:.0f}s")
+
+
 _SAFE_STEM = re.compile(r"^[A-Za-z0-9_]+$")
 _K_KEYWORDS = {"not", "and", "or"}   # pytest -k expression keywords
 
@@ -1121,6 +1141,11 @@ def consume(item, ctx: DrainContext) -> ConsumerResult:
                 f" the baseline alone took {baseline_s:.0f}s. Raise"
                 f" [mutation].wall_budget_s, or point [mutation].test_command at a"
                 f" narrower suite.")
+    elif stats["tested"] and not (stats["killed_s1"] or stats["killed_s2"]
+                                  or stats["confirmed"]):
+        # Tested, and not one verdict: a stage-1 kill, a full-suite kill and
+        # a confirmed survivor are the only three (FN-23).
+        note = no_verdict_note("mutation", stats, baseline_s, mutant_timeout)
     else:
         note = (f"{stats['confirmed']} confirmed survivor(s) of "
                 f"{stats['tested']} mutant(s) tested")

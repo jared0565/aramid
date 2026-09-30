@@ -326,3 +326,19 @@ def test_a_failing_baseline_streak_says_where_the_output_went(tmp_path):
         " that commit means the drain's run, not the suite, is what to look at",
     ]
     lg.close()
+
+
+# ------------------------------------------------- FN-23: certified nothing --
+
+def test_a_run_that_reached_no_verdict_is_no_work(tmp_path):
+    lg = Ledger(tmp_path / "l.db")
+    note = ("no mutant reached a verdict: 2 tested, 2 timed out, 0 errored -- the baseline"
+            " took 390s; [js_mutation].mutant_timeout_s is 120s")
+    _consumer(lg, "js_mutation", "ok", note, duration_s=631.2)
+    h = health.snapshot(None, lg)
+    assert h.no_work == (health.ConsumerFault("js_mutation", 1, 631.2, note),)
+    assert health.criteria(h)["consumers_healthy"] is False
+    assert health.no_work_lines(h) == [
+        "  consumers doing no work:",
+        "    js_mutation: 1 run(s) certified nothing, 631s spent -- " + note]
+    lg.close()
