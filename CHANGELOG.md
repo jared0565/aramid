@@ -12,6 +12,17 @@ to publish a tag that disagrees with it.
 
 ### Fixed
 
+- **A push refused by a new warning recorded 0 blocking findings.** At
+  pre-push a warning that is new since the last push refuses the push, but
+  the run's record counted its blocking findings before that happened --
+  and before the LLM and mutation gates added theirs -- so `aramid status`
+  printed `last run: ... 0 blocking` beside a refused push. The record is
+  now written once the exit code is final and counts the findings that
+  refused it: an escalated warning, an armed LLM or mutation block, and
+  none when a fresh ledger waves the first push through. A refusal that no
+  finding caused (a branch that moved while the gate ran, a degraded tool
+  under `--strict`) still counts 0, and the record says why. Only the count
+  changes: an accepted warning is still stored as a warning.
 - **An armed tdd or red-proof check whose git hung let the push through.**
   Both checks read any error as "no finding", so with `tdd_block_armed` or
   `[red_proof].red_proof_block_armed` set, a git that did not answer within

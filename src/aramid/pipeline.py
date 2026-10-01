@@ -801,6 +801,17 @@ def _producer_hung(degraded: dict[str, str], tool: str, rule: str,
         degraded[tool] = f"git did not answer: {exc}"
 
 
+def gating_blocks(findings) -> list[Finding]:
+    """The findings that refuse a gate on their own: every BLOCK but the
+    `tests-tool-missing` explanation of a degradation (step 8 of `run_gate`
+    says why that one is excluded, and why by tool AND rule). `cmd_check`
+    counts them onto the run's row (FN-24), so the count and the exit code
+    share this one predicate rather than two copies of it."""
+    return [f for f in findings
+            if f.verdict is Verdict.BLOCK
+            and not (f.tool == "tests" and f.rule == tests.TOOL_MISSING_RULE)]
+
+
 def _log_body(r: RunnerResult) -> str:
     """What to persist for one runner: stderr, plus stdout when the run had a
     problem -- except for `_NO_STDOUT_TOOLS` above, whose stdout is never kept.
@@ -1388,11 +1399,7 @@ def run_gate(root: Path, gate: Gate, mode: str, cfg: config_mod.Config, ledger: 
     # HERE, before accept_degraded is ever reached; broadening this
     # exclusion to Verdict.BLOCK in general would make every block
     # bypassable, which is not the fix.
-    gating_block_findings = any(
-        f.verdict is Verdict.BLOCK
-        and not (f.tool == "tests" and f.rule == tests.TOOL_MISSING_RULE)
-        for f in findings
-    )
+    gating_block_findings = bool(gating_blocks(findings))
 
     accepted_reason = None
     if gating_block_findings:

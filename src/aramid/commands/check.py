@@ -71,6 +71,7 @@ would corrupt the LATER pre-push's own fresh-clone handling (that pre-push
 scan would then see its own legacy findings as "not in that narrow
 baseline" and re-trigger a false block).
 """
+import contextlib
 import dataclasses
 import os
 import sys
@@ -215,11 +216,20 @@ def cmd_check(root, gate: Gate, mode: str, strict: bool = False, as_json: bool =
         if invalidated:
             print(override_cmd.render_invalidations(invalidated), file=sys.stderr)
 
+        # The run's RUN_FINISHED waits for the exit code (FN-24): its
+        # `blocking` count used to be taken inside record_run, before the
+        # pre-push ratchet escalated a new WARN, before the ledger gates
+        # appended their BLOCKs and before the fresh-ledger rule below waved
+        # any through -- so a push refused by an escalated WARN read
+        # `0 blocking` in `status`. Written below, once nothing can change
+        # what blocked; flushed in `finally` if the gate dies first.
+        ledger.defer_finish = True
         result = pipeline.run_gate(root, gate, mode, cfg, ledger, accept_degraded=accept_degraded,
                                    certified=certified)
         result = dataclasses.replace(result, recorded=record)
 
         exit_code = result.exit_code
+        grandfathered = False
         if fresh:
             ledger.write_baseline(result.run_id, _now(), {f.id for f in result.findings})
             result = dataclasses.replace(result, fresh_ledger_baseline=True)
@@ -229,6 +239,7 @@ def cmd_check(root, gate: Gate, mode: str, strict: bool = False, as_json: bool =
                 # explain itself there (interop rounds 149 s3 / 150).
                 result = dataclasses.replace(
                     result, grandfathered=tuple(getattr(result, "ratchet_escalated", ()) or ()))
+                grandfathered = True
                 print("aramid: check: fresh ledger -- baseline written; legacy findings do "
                       "not block the first pre-push run", file=sys.stderr)
                 exit_code = 2 if result.degraded else 0
@@ -257,6 +268,15 @@ def cmd_check(root, gate: Gate, mode: str, strict: bool = False, as_json: bool =
         # process's actual return code (Important-1, task-7-review.md).
         if exit_code != result.exit_code:
             result = dataclasses.replace(result, exit_code=exit_code)
+
+        # What blocked, by the exit code's own predicate: nothing once the
+        # fresh-ledger rule waved the run through. A refusal no finding
+        # caused -- a ref that moved, a --strict degradation -- counts 0 and
+        # its row says why (`refs_moved`, `degraded`). Only the COUNT moves:
+        # each finding's stored verdict stays as classified, because an
+        # overridden row stored as "block" is re-opened at every gate start.
+        ledger.finish_run(result.run_id, blocking=0 if grandfathered else sum(
+            1 for f in pipeline.gating_blocks(result.findings) if not f.historical))
 
         # The notice COUNT rides the report (fleet-readiness spec section 8);
         # read here, not in the reporter, which touches no filesystem.
@@ -288,6 +308,11 @@ def cmd_check(root, gate: Gate, mode: str, strict: bool = False, as_json: bool =
                                 aramid_version=__version__, now=_now(), engine_error=True)
         return 3
     finally:
+        # A gate that died after record_run keeps the row it always had,
+        # counted as recorded. Suppressed: an error raised here would
+        # replace the exit code already being returned.
+        with contextlib.suppress(Exception):
+            ledger.finish_pending()
         ledger.close()
         tmp_dir = getattr(ledger, "_no_record_dir", None)
         if tmp_dir is not None:

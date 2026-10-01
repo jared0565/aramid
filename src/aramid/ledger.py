@@ -595,6 +595,14 @@ def _materialize(events):
 
 class Ledger:
     def __init__(self, db_path: Path):
+        # FN-24: when set, `record_run` holds each run's RUN_FINISHED back
+        # for `finish_run` (or `finish_pending`) to write. Set by the one
+        # caller that decides an exit code after recording -- `cmd_check`,
+        # whose pre-push ratchet, ledger gates and fresh-ledger rule all run
+        # after record_run and change what blocked. Every other ledger keeps
+        # the row written at once.
+        self.defer_finish = False
+        self._unfinished: dict[str, tuple[str, dict]] = {}
         db_path.parent.mkdir(parents=True, exist_ok=True)
         self._c = sqlite3.connect(str(db_path))
         try:
@@ -813,8 +821,34 @@ class Ledger:
             # push). Empty means every selected tool ran; absent means an
             # aramid too old to record it.
             finished["degraded"] = dict(degraded)
-        self.append(Event(EventType.RUN_FINISHED, run_id, at, payload=finished))
+        if self.defer_finish:
+            self._unfinished[run_id] = (at, finished)
+        else:
+            self.append(Event(EventType.RUN_FINISHED, run_id, at, payload=finished))
         return new_ids
+
+    def finish_run(self, run_id: str, *, blocking: int | None = None) -> bool:
+        """Write a deferred run's RUN_FINISHED, with `blocking` replaced by
+        the caller's count when given -- the findings that actually blocked,
+        which record_run cannot know (FN-24). False, and nothing written,
+        for a run that is not pending: never recorded, or already finished."""
+        pending = self._unfinished.pop(run_id, None)
+        if pending is None:
+            return False
+        at, finished = pending
+        if blocking is not None:
+            finished = {**finished, "blocking": blocking}
+        self.append(Event(EventType.RUN_FINISHED, run_id, at, payload=finished))
+        return True
+
+    def finish_pending(self) -> int:
+        """Write every deferred run still pending, counted as record_run
+        counted it. The crash path: a gate that dies between record_run and
+        finish_run keeps the row it always had."""
+        run_ids = list(self._unfinished)
+        for run_id in run_ids:
+            self.finish_run(run_id)
+        return len(run_ids)
 
     def has_baseline(self) -> bool:
         return any(e.type == EventType.BASELINE_SNAPSHOT for e in self.events())
