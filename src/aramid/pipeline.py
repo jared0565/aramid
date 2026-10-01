@@ -769,7 +769,9 @@ def _degraded_reasons(flat_results: list[RunnerResult]) -> dict[str, str]:
     result in a `_BAD_STATES` state. This is the ONE computation behind
     `GateResult.degraded` (its sorted keys), `degraded_reasons`, the console's
     `skipped (degraded tools)` list and the run row's `degraded` map, so the
-    four cannot disagree about which tools degraded.
+    four cannot disagree about which tools degraded. `run_gate` merges an
+    armed producer's git timeout (`_producer_hung`) into it before any of the
+    four reads it.
 
     A TIMEOUT from `run_subprocess` carries the measured wall time; the bare
     one `_run_selected` builds for a runner abandoned at the gate's budget
@@ -784,6 +786,19 @@ def _degraded_reasons(flat_results: list[RunnerResult]) -> dict[str, str]:
         elif r.state is ToolState.CRASHED:
             reasons[r.tool] = f"crashed (exit {r.returncode})"
     return reasons
+
+
+def _producer_hung(degraded: dict[str, str], tool: str, rule: str,
+                   exc: gitutil.GitTimeout, gate: Gate, cfg) -> None:
+    """FN-21: a pre-push producer whose git did not answer checked nothing.
+    Armed -- `policy.classify` would BLOCK its finding, the question the
+    override refusal asks too -- it is a BLOCK-tier tool that could not vouch,
+    so it joins `degraded`: the push is refused unless the operator accepts
+    the degradation with a reason. Disarmed (the bake) it stays what it always
+    was, no finding: a bake producer cannot refuse a push by finding
+    something, so it must not refuse one by failing to look."""
+    if policy.classify(tool, rule, "medium", gate, cfg)[1] is Verdict.BLOCK:
+        degraded[tool] = f"git did not answer: {exc}"
 
 
 def _log_body(r: RunnerResult) -> str:
@@ -1010,16 +1025,25 @@ def run_gate(root: Path, gate: Gate, mode: str, cfg: config_mod.Config, ledger: 
 
     # TDD gate (1a): synchronous git-fact code-without-test producer. PRE_PUSH
     # only; joins the raw stream so classify/fingerprint/ratchet/overrides all
-    # apply. Fail-open inside tdd.scan -- never raises here.
+    # apply. Fail-open inside tdd.scan for every error but a git that did not
+    # answer, which comes up here and is decided by arming (FN-21).
     rp_proven_red: set[str] = set()
+    producer_degraded: dict[str, str] = {}
     if gate is Gate.PRE_PUSH:
-        all_raws.extend(tdd.scan(ctx, cfg))
+        try:
+            all_raws.extend(tdd.scan(ctx, cfg))
+        except gitutil.GitTimeout as exc:
+            _producer_hung(producer_degraded, tdd._TOOL, tdd.RULE, exc, gate, cfg)
         # Red-first proof (sub-project 3): the range's changed test files run
         # against the range base -- rc 0 there means the test was never red.
-        # Same pre-normalize seam as tdd.scan; fail-open inside red_proof.scan.
+        # Same pre-normalize seam as tdd.scan, and the same one exception to
+        # its fail-open; a hung red-proof proves nothing red.
         # ctx.rng falsy (first push / staged / all) makes it a silent no-op.
-        rp_raws, rp_proven_red = red_proof.scan_scoped(ctx, cfg)
-        all_raws.extend(rp_raws)
+        try:
+            rp_raws, rp_proven_red = red_proof.scan_scoped(ctx, cfg)
+            all_raws.extend(rp_raws)
+        except gitutil.GitTimeout as exc:
+            _producer_hung(producer_degraded, red_proof._TOOL, red_proof.RULE, exc, gate, cfg)
 
     # secrets never land in logs, raw -- collected before writing them out.
     raw_secrets = [r.secret for r in all_raws if r.secret]
@@ -1044,7 +1068,7 @@ def run_gate(root: Path, gate: Gate, mode: str, cfg: config_mod.Config, ledger: 
 
     # 7. record this run; enforce the pre-push no-new-warnings ratchet.
     scope_tools = {r.tool for r in flat_results if r.state is ToolState.OK}
-    degraded_reasons = _degraded_reasons(flat_results)
+    degraded_reasons = {**_degraded_reasons(flat_results), **producer_degraded}
     scope_files = set(files)
     # What each runner can VOUCH for having analyzed. `state is OK` alone
     # conflates "ran and found nothing" with "ran over nothing" -- ruff exits
@@ -1330,7 +1354,7 @@ def run_gate(root: Path, gate: Gate, mode: str, cfg: config_mod.Config, ledger: 
     degraded_tools = sorted(degraded_reasons)
     degraded_block_tier = any(
         key in results and results[key].state in _BAD_STATES for key in BLOCK_TIER_KEYS
-    )
+    ) or bool(producer_degraded)        # only an ARMED producer is ever in it
     # [MUST FIX 2, whole-branch review] `gating_block_findings` -- the BLOCK
     # findings that must hard-gate BEFORE accept_degraded is ever consulted
     # -- deliberately excludes `tool == "tests"` findings carrying the

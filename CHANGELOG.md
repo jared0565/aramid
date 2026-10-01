@@ -10,6 +10,18 @@ to publish a tag that disagrees with it.
 
 ## [Unreleased]
 
+### Fixed
+
+- **An armed tdd or red-proof check whose git hung let the push through.**
+  Both checks read any error as "no finding", so with `tdd_block_armed` or
+  `[red_proof].red_proof_block_armed` set, a git that did not answer within
+  600 seconds let the push through unchecked by that check. That case is
+  now a degraded check, the way a scanner that timed out already is: the
+  pre-push gate refuses the push, naming the check and "git did not
+  answer", unless `--accept-degraded` is given with a reason, and the fleet
+  row grades the run `no_self_inflicted_block: false`. Unarmed, during the
+  bake, it is still no finding.
+
 ## [0.19.3] — 2026-09-30
 
 ### Fixed

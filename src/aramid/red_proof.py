@@ -125,7 +125,10 @@ def scan_scoped(ctx, cfg) -> tuple[list[RawFinding], set[str]]:
     tdd.scan), scoped: returns (findings, proven_red) so callers can
     auto-resolve open red-proof findings on definitively-red files without
     re-running the scan. Fail-open: any error yields no findings -- a broken
-    producer must never block a push or crash the gate.
+    producer must never block a push or crash the gate -- except
+    `gitutil.GitTimeout`, from the diff or the worktree, which goes up: a git
+    that did not answer checked nothing, and `run_gate` decides by arming
+    whether that refuses the push (FN-21).
 
     proven_red contains ONLY files whose base-tree pytest run exited rc 1/2
     (see the loop below). rc 5 (nothing collected), a wall-budget break, and
@@ -228,6 +231,8 @@ def scan_scoped(ctx, cfg) -> tuple[list[RawFinding], set[str]]:
                 print(f"aramid: red-proof: worktree cleanup leaked at {wt}",
                       file=sys.stderr)
         return out, proven_red
+    except gitutil.GitTimeout:
+        raise           # FN-21: not "no finding" -- run_gate decides by arming
     except Exception:
         return [], set()
 

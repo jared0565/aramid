@@ -1,8 +1,8 @@
 """tdd -- synchronous 'code-without-test' producer for the pre-push gate
 (design 1a sections 3-4). Pure git-diff analysis: one WARN-tier RawFinding per
 changed production .py file when the range adds no new test lines. No
-subprocess; never raises into run_gate (fail-open); the block rests only on
-git facts. The graph note is an inert no-op stub that lights up once Graphite
+subprocess; fail-open into run_gate for every error but a git that did not
+answer (FN-21); the block rests only on git facts. The graph note is an inert no-op stub that lights up once Graphite
 is decision-grade."""
 from pathlib import Path
 
@@ -40,7 +40,10 @@ def _graph_advisory_note(root: Path, rel: str) -> str:
 def scan(ctx, cfg) -> list[RawFinding]:
     """Return code-without-test RawFindings for the pre-push range. `ctx.files`
     is the already-changed, already-ignore-filtered file set. Fail-open: any
-    error yields no findings (never blocks a push, never crashes the gate)."""
+    error yields no findings (never blocks a push, never crashes the gate) --
+    except `gitutil.GitTimeout`, which goes up: a git that did not answer
+    checked nothing, and `run_gate` decides by arming whether that refuses
+    the push (FN-21)."""
     try:
         if not getattr(cfg, "tdd", {}).get("enabled", True):
             return []
@@ -69,6 +72,8 @@ def scan(ctx, cfg) -> list[RawFinding]:
             out.append(RawFinding(tool=_TOOL, rule=RULE, severity_raw="medium",
                                   file=rel, line=0, message=message))
         return out
+    except gitutil.GitTimeout:
+        raise           # FN-21: not "no finding" -- run_gate decides by arming
     except Exception:
         return []
 
