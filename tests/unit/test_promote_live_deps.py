@@ -171,6 +171,25 @@ def test_an_analyzer_missing_after_install_fails_when_it_was_found_before(
     assert "ruff" in capsys.readouterr().err
 
 
+def test_an_analyzer_the_probe_did_not_report_counts_as_not_checked(
+        pl, monkeypatch, tmp_path, capsys):
+    """A probe answer that omits a tool is not evidence the tool runs. Found
+    by the llm-review consumer on the first version of this check, which
+    only looked at the tools the answer named."""
+    partial = {k: v for k, v in OK_TOOLS.items() if k != "pip-audit"}
+    rc, _ = _promote(pl, monkeypatch, tmp_path, ["--confirm"], tools=(OK_TOOLS, partial))
+    err = capsys.readouterr().err
+    assert rc == 3
+    assert "pip-audit: not reported by the probe" in err, err
+
+
+def test_the_probe_and_the_check_name_the_same_tools(pl):
+    """The probe source is a string; the check reads a tuple. One list feeds
+    both, or a tool added to one is silently unchecked by the other."""
+    for name in pl.PROBED_TOOLS:
+        assert repr(name) in pl._TOOL_PROBE, name
+
+
 def test_a_probe_that_cannot_run_after_install_fails_promotion(
         pl, monkeypatch, tmp_path, capsys):
     """An empty answer is not "every tool is fine"; it is "nothing was checked"."""
@@ -221,11 +240,13 @@ def test_the_drain_lock_is_the_one_the_drain_writes(pl):
 
 # --- the seams, against faked subprocesses ----------------------------------------
 
-def _report_run(report: dict, installed: dict, calls: list, rc: int = 0):
+def _report_run(report: dict, installed: dict, calls: list, rc: int = 0, write=None):
+    """`write` defaults to "pip wrote its report iff it succeeded"; the two
+    tests that pin each half of that guard set it the other way."""
     def _run(argv, **kw):
         calls.append(list(argv))
         if "--dry-run" in argv:
-            if rc == 0:
+            if (rc == 0) if write is None else write:
                 Path(argv[argv.index("--report") + 1]).write_text(json.dumps(report),
                                                                   encoding="utf-8")
             return _cp(rc)
@@ -258,6 +279,20 @@ def test_dep_changes_with_only_aramid_planned_is_empty(pl, monkeypatch, tmp_path
 
 def test_dep_changes_refuses_to_guess_when_pip_fails(pl, monkeypatch, tmp_path):
     monkeypatch.setattr(pl, "_run", _report_run({}, {}, [], rc=1))
+    assert pl._dep_changes(tmp_path / "w.whl") is None
+
+
+def test_dep_changes_refuses_a_report_from_a_pip_that_failed(pl, monkeypatch, tmp_path):
+    """pip exited non-zero but left a report behind: a half-finished
+    resolution is not an answer. (Kills `or -> and` in the guard.)"""
+    report = {"install": [{"metadata": {"name": "semgrep", "version": "1.179.0"}}]}
+    monkeypatch.setattr(pl, "_run", _report_run(report, {"semgrep": "1.178.0"}, [],
+                                                rc=1, write=True))
+    assert pl._dep_changes(tmp_path / "w.whl") is None
+
+
+def test_dep_changes_refuses_a_pip_that_succeeded_without_a_report(pl, monkeypatch, tmp_path):
+    monkeypatch.setattr(pl, "_run", _report_run({}, {}, [], rc=0, write=False))
     assert pl._dep_changes(tmp_path / "w.whl") is None
 
 

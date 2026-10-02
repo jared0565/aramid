@@ -55,6 +55,10 @@ from pathlib import Path
 
 WHEEL_ASSET = "aramid-{version}-py3-none-any.whl"
 
+# The analyzers the post-install check requires. One tuple feeds both the probe
+# source and the check, so a tool added to one cannot go unchecked by the other.
+PROBED_TOOLS = ("semgrep", "ruff", "pip-audit")
+
 # What the post-install probe runs, resolved exactly as the gate resolves it
 # (`aramid.toolpath.resolve`, through the LIVE install in a clean interpreter).
 # `--version` is enough for the failure this exists for: semgrep 1.179.0 built
@@ -64,7 +68,7 @@ _TOOL_PROBE = (
     "import json, subprocess\n"
     "from aramid import toolpath\n"
     "out = {}\n"
-    "for name in ('semgrep', 'ruff', 'pip-audit'):\n"
+    f"for name in {PROBED_TOOLS!r}:\n"
     "    exe = toolpath.resolve(name)\n"
     "    if exe is None:\n"
     "        out[name] = [None, 'not found']\n"
@@ -388,7 +392,10 @@ def main() -> int:
               "  by hand before telling anyone this promotion is done.", file=sys.stderr)
         return 3
     broken = []
-    for name, (ok, detail) in sorted(tools_after.items()):
+    # Every required tool, not just the ones the answer named: an answer that
+    # omits a tool is not evidence it runs (llm-review, 2026-10-02).
+    for name in PROBED_TOOLS:
+        ok, detail = tools_after.get(name, (None, "not reported by the probe"))
         if ok:
             continue
         before = tools_before.get(name)
