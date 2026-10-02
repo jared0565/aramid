@@ -10,6 +10,8 @@ to publish a tag that disagrees with it.
 
 ## [Unreleased]
 
+## [0.19.5] — 2026-10-02
+
 ### Fixed
 
 - **A Windows install no longer gets a semgrep that cannot run.** semgrep
@@ -5228,7 +5230,8 @@ Stated plainly because each one changes how you should deploy this:
 - **PyPI publishing is not set up.** Install from a GitHub Release artifact or
   from git; `pip install aramid` does not work.
 
-[Unreleased]: https://github.com/jared0565/aramid/compare/v0.19.4...HEAD
+[Unreleased]: https://github.com/jared0565/aramid/compare/v0.19.5...HEAD
+[0.19.5]: https://github.com/jared0565/aramid/releases/tag/v0.19.5
 [0.19.4]: https://github.com/jared0565/aramid/releases/tag/v0.19.4
 [0.19.3]: https://github.com/jared0565/aramid/releases/tag/v0.19.3
 [0.19.2]: https://github.com/jared0565/aramid/releases/tag/v0.19.2
