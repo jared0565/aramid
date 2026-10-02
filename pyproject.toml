@@ -67,7 +67,9 @@ dependencies = [
     "tomli-w>=1.0,<2",
     "pip-audit>=2.7,<3",
     "ruff>=0.6,<0.17",
-    "semgrep>=1.137,<2",
+    # !=1.179.0: that release shipped no Windows wheel, and its sdist builds
+    # without semgrep-core.exe (FN-27; tests/unit/test_dependency_floors.py).
+    "semgrep>=1.137,<2,!=1.179.0",
 ]
 
 [project.urls]

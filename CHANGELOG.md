@@ -10,6 +10,30 @@ to publish a tag that disagrees with it.
 
 ## [Unreleased]
 
+### Fixed
+
+- **A Windows install no longer gets a semgrep that cannot run.** semgrep
+  1.179.0 (2026-10-02) shipped no Windows wheel, so pip built it from its
+  sdist, which carries no `semgrep-core.exe`, and every semgrep run exited 2
+  ("Failed to find semgrep-core.exe in PATH or in the semgrep package"):
+  semgrep went degraded in every gate, and a pre-push refused. aramid's
+  dependency now reads `semgrep>=1.137,<2,!=1.179.0`. The exclusion is that
+  one version; 1.178.0 and the next release stay installable. Measured on CI
+  run 36983535922: both Windows legs red, every Linux and macOS leg green.
+- **`scripts/promote_live.py` no longer upgrades every analyzer on the
+  machine when it promotes aramid.** It ran `pip install --force-reinstall
+  <wheel>`, which re-resolves aramid's whole dependency tree to the newest
+  versions allowed; promoting 0.19.4 that way built the semgrep above on this
+  machine and broke semgrep for every repo here for two hours, while the
+  script printed OK. aramid itself is now reinstalled with `--no-deps`; any
+  dependency version pip would change is printed first and refused unless
+  named with `--allow-dep-change NAME`; and the promotion fails if an
+  analyzer (semgrep, ruff, pip-audit, resolved the way the gate resolves
+  them) ran before it and does not after, or if `pip check` reports a
+  conflict that was not there before. It also refuses while a drain is
+  running, and every `-m pip` it launches carries `-P`, so a `pip.py` at the
+  repo root cannot run in pip's place.
+
 ## [0.19.4] — 2026-10-01
 
 ### Fixed

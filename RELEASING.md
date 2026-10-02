@@ -154,6 +154,25 @@ Without `--confirm` it resolves the release, downloads the wheel and verifies
 its sha256 against the digest GitHub recorded, then stops without installing —
 so the rehearsal exercises the part that can actually be wrong.
 
+**It promotes aramid, not its dependencies.** aramid itself is reinstalled
+with `--no-deps`. Before installing, the script asks pip
+(`--dry-run --report`) which installed dependency versions a plain install
+would change, prints them -- the dry run included -- and refuses if there are
+any unless each is named with `--allow-dep-change NAME`. After installing, it
+runs semgrep, ruff and pip-audit through the live install's own tool
+resolution and compares `pip check` before and after: an analyzer that ran
+before and does not now, or a new conflict, fails the promotion (exit 3).
+Why: promoting 0.19.4 with `pip install --force-reinstall` upgraded semgrep to
+a release with no Windows wheel, built it without its core binary, and broke
+semgrep for every repo on this machine from 04:50Z to 06:46Z on 2026-10-02,
+while the script printed OK. Before passing `--allow-dep-change`, check that
+the new version has a wheel for this platform.
+
+It refuses while a drain runs (`~/.aramid/drain.lock` exists). It does not
+detect another repo's gate: check that none is running before `--confirm`,
+because swapping packages under a running gate can hand it a half-installed
+tool.
+
 ### Two aramids share this machine, and they must not converge
 
 | | is | resolved by |

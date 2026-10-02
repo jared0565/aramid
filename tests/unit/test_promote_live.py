@@ -93,6 +93,13 @@ def _main(pl, monkeypatch, argv, lives, digest=None, run=None):
     monkeypatch.setattr(pl, "_release_digest", _digest)
     if run is not None:
         monkeypatch.setattr(pl, "_run", run)
+    # FN-26's checks, neutral here: these tests are about the version/path
+    # predicate. tests/unit/test_promote_live_deps.py pins the checks.
+    ok = {"semgrep": (True, "ok"), "ruff": (True, "ok"), "pip-audit": (True, "ok")}
+    monkeypatch.setattr(pl, "_dep_changes", lambda wheel: [], raising=False)
+    monkeypatch.setattr(pl, "_probe_tools", lambda: ok, raising=False)
+    monkeypatch.setattr(pl, "_pip_check", lambda: set(), raising=False)
+    monkeypatch.setattr(pl, "_drain_lock", lambda: REPO / "no-such-drain.lock", raising=False)
     return pl.main(), calls
 
 

@@ -33,3 +33,18 @@ def test_semgrep_floor_excludes_the_pkg_resources_generation():
     spec = _requirement("semgrep").specifier
     assert not spec.contains("1.136.0"), spec
     assert spec.contains("1.137.0"), spec
+
+
+def test_semgrep_excludes_the_release_with_no_windows_wheel():
+    # semgrep 1.179.0 (2026-10-02 00:10Z) shipped macOS and Linux wheels and an
+    # sdist, and no win_amd64 wheel. pip takes the newest version even when only
+    # its sdist fits the platform, so a Windows install built it from source --
+    # without semgrep-core.exe -- and every semgrep run exited 2 ("Failed to
+    # find semgrep-core.exe in PATH or in the semgrep package"). Measured on CI
+    # run 36983535922: both Windows legs red on the semgrep tests, every Linux
+    # and macOS leg green. The exclusion is that one version, on purpose:
+    # 1.178.0 and the next release stay installable.
+    spec = _requirement("semgrep").specifier
+    assert not spec.contains("1.179.0"), spec
+    assert spec.contains("1.178.0"), spec
+    assert spec.contains("1.180.0"), spec
