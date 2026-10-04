@@ -9,8 +9,10 @@ than trusting partial output.
 
 The consumer never trusts this process with anything but a subprocess
 boundary: a hung target is killed by the consumer's run_subprocess timeout."""
+import contextlib
 import importlib.util
 import json
+import os
 import random
 import sys
 import traceback
@@ -150,10 +152,39 @@ def _crash_line(exc, abs_path: str, fn) -> int:
     return line
 
 
+@contextlib.contextmanager
+def _targets_write_to_stderr():
+    """Point stdout at stderr while targets run, at the FILE-DESCRIPTOR level.
+
+    stdout is the verdict channel: one JSON object, parsed whole by the
+    consumer. The targets run in this process, so anything they print -- or
+    any child process they start, which inherits fd 1 rather than
+    `sys.stdout` -- landed in front of the verdict and made the whole batch
+    "no parseable output". promote_live.main() did exactly that at 645617b,
+    three drains degraded, and the consumer stood down (fleet notice
+    4b572e60a018). Their output is moved to stderr, not discarded, and the
+    protocol is unchanged: the consumer that reads this verdict may be a
+    different aramid than this driver (aramid's own drains import the driver
+    from the worktree), so the fix stays on this side."""
+    sys.stdout.flush()
+    saved_fd = os.dup(1)
+    saved_stdout = sys.stdout
+    try:
+        os.dup2(2, 1)
+        sys.stdout = sys.stderr
+        yield
+    finally:
+        sys.stderr.flush()
+        sys.stdout = saved_stdout
+        os.dup2(saved_fd, 1)
+        os.close(saved_fd)
+
+
 def main(argv):
     try:
         spec = json.loads(Path(argv[0]).read_text(encoding="utf-8"))
-        out = run_spec(spec)
+        with _targets_write_to_stderr():
+            out = run_spec(spec)
     except Exception as exc:  # noqa: BLE001
         print(f"fuzzdriver: {exc}", file=sys.stderr)
         return 1

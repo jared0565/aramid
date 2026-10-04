@@ -10,6 +10,20 @@ to publish a tag that disagrees with it.
 
 ## [Unreleased]
 
+### Fixed
+
+- **A fuzz target that prints no longer breaks the whole fuzz batch.** The
+  fuzz driver reports its verdict as one JSON object on stdout, and the
+  functions it fuzzes run in the same process. Anything a target printed, or
+  any child process it started, landed in front of the verdict, and the drain
+  recorded "fuzz driver broken: no parseable output". After three of those at
+  one head, the fuzz consumer stood down, and `aramid status` showed it stood
+  down until the next head. The driver now points stdout at stderr, at the
+  file-descriptor level so child processes follow, while targets run. The
+  verdict is unchanged, so a mixed-version driver and consumer still agree.
+  Measured on aramid itself: `scripts/promote_live.py`'s `main()` broke three
+  drains on 2026-10-02 and 03.
+
 ### Changed
 
 - **`scripts/promote_live.py` no longer tells the operator to announce a

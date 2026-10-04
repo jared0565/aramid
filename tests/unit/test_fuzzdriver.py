@@ -172,6 +172,86 @@ def test_main_prints_the_verdict_as_json_and_exits_0(tmp_path, capsys):
     assert verdict["cases_run"] == 3 and verdict["fuzzed"] == [["okmod.py", "f"]]
 
 
+# --- a target that writes to stdout must not corrupt the verdict ------------
+#
+# The verdict is ONE JSON object on the driver's stdout, and the targets run in
+# the same process. promote_live.main() (fuzzed as a zero-argument function at
+# 645617b) printed "live now: ..." before it, three drains read "no parseable
+# output", and the consumer stood down (fleet notice 4b572e60a018). A child
+# process the target launches inherits the same stdout, so redirecting only
+# sys.stdout is not enough -- the child arm is the one that tells them apart.
+
+def _run_driver_from_source(tmp_path, spec):
+    """The driver under test, not the installed wheel: a child does not inherit
+    pytest's pythonpath, so the source dir is pinned explicitly and checked."""
+    import os
+    from pathlib import Path
+
+    import aramid
+    src = Path(aramid.__file__).resolve().parents[1]
+    spec_path = tmp_path / "spec.json"
+    spec_path.write_text(json.dumps(spec), encoding="utf-8")
+    env = {**os.environ, "PYTHONPATH": str(src)}
+    which = subprocess.run(
+        [sys.executable, "-c", "import aramid.fuzzdriver as d; print(d.__file__)"],
+        cwd=tmp_path, capture_output=True, text=True, env=env)
+    assert Path(which.stdout.strip()).resolve().parents[1] == src, which
+    return subprocess.run([sys.executable, "-m", "aramid.fuzzdriver", str(spec_path)],
+                          cwd=tmp_path, capture_output=True, text=True, env=env)
+
+
+def test_a_quiet_target_leaves_stdout_as_the_verdict_alone(tmp_path):
+    _module(tmp_path, "quiet", """
+        def f(a: int) -> int:
+            return a
+    """)
+    cp = _run_driver_from_source(tmp_path, _spec(tmp_path, "quiet.py", ["f"], cases=3))
+    assert cp.returncode == 0, cp.stderr
+    assert json.loads(cp.stdout)["cases_run"] == 3
+
+
+def test_a_target_that_prints_does_not_corrupt_the_verdict(tmp_path):
+    _module(tmp_path, "chatty", """
+        def f(a: int) -> int:
+            print("chatty says hi")
+            return a
+    """)
+    cp = _run_driver_from_source(tmp_path, _spec(tmp_path, "chatty.py", ["f"], cases=3))
+    assert cp.returncode == 0, cp.stderr
+    assert json.loads(cp.stdout)["cases_run"] == 3
+    assert "chatty says hi" in cp.stderr, "the target's output is moved, not lost"
+
+
+def test_a_child_process_writing_to_stdout_does_not_corrupt_the_verdict(tmp_path):
+    _module(tmp_path, "spawner", """
+        import subprocess
+        import sys
+        def f(a: int) -> int:
+            subprocess.run([sys.executable, "-c", "print('child-noise')"])
+            return a
+    """)
+    cp = _run_driver_from_source(tmp_path, _spec(tmp_path, "spawner.py", ["f"], cases=2))
+    assert cp.returncode == 0, cp.stderr
+    assert json.loads(cp.stdout)["cases_run"] == 2
+    assert "child-noise" in cp.stderr
+
+
+def test_main_in_process_keeps_a_printing_target_off_the_verdict(tmp_path, capsys):
+    _module(tmp_path, "chatty2", """
+        def f(a: int) -> int:
+            print("in-process chatter")
+            return a
+    """)
+    spec_path = tmp_path / "spec.json"
+    spec_path.write_text(json.dumps(_spec(tmp_path, "chatty2.py", ["f"], cases=2)),
+                         encoding="utf-8")
+
+    assert main([str(spec_path)]) == 0
+    out, err = capsys.readouterr()
+    assert json.loads(out)["cases_run"] == 2
+    assert "in-process chatter" in err
+
+
 def test_main_reports_a_bad_spec_on_stderr_and_exits_1(tmp_path, capsys):
     assert main([str(tmp_path / "missing.json")]) == 1
     out, err = capsys.readouterr()
