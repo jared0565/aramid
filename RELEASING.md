@@ -221,7 +221,7 @@ That check reads the installed distribution's `direct_url.json`, not
 `aramid.__file__` — this repo's own suite imports the tree on purpose, so a
 `__file__` check would fire on every legitimate run and be trained away.
 
-### After promoting, push a throwaway annotated tag before telling anyone
+### After promoting, push a throwaway annotated tag
 
 The pre-push gate on every checkout runs the wheel that is LIVE, never the
 candidate, so a release's own `vX.Y.Z` tag push (step 5) is certified by the
@@ -238,7 +238,7 @@ gh api -X DELETE repos/jared0565/aramid/git/refs/tags/rehearsal-vX.Y.Z && git ta
 ```
 
 An annotated tag is the object git hands the hook UNPEELED; a branch push
-proves nothing about it. Only then tell the consumers.
+proves nothing about it. Only then is the promotion done.
 
 Two things the first run of this step (0.13.0, 2026-09-05) taught:
 

@@ -389,7 +389,7 @@ def main() -> int:
     if not tools_after:
         print("\nFAILED: could not check that the analyzers still run (the probe\n"
               "  through the live install failed). Check semgrep, ruff and pip-audit\n"
-              "  by hand before telling anyone this promotion is done.", file=sys.stderr)
+              "  by hand before treating this promotion as done.", file=sys.stderr)
         return 3
     broken = []
     # Every required tool, not just the ones the answer named: an answer that
@@ -416,8 +416,9 @@ def main() -> int:
         return 3
 
     print(f"\nOK. Consumers now run {args.version}.")
-    print("Tell them: their pinned version moved, what changed, and that anything\n"
-          "they measured against the old one is a lead rather than a fact.")
+    print("Do not announce it on the agent channel (RELEASING.md): consumers learn of\n"
+          "a release from the tool itself -- the CHANGELOG, `aramid --version` and,\n"
+          "when ARAMID.md or the agent block changed, `aramid doctor` / `aramid init`.")
     return 0
 
 

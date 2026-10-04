@@ -10,6 +10,17 @@ to publish a tag that disagrees with it.
 
 ## [Unreleased]
 
+### Changed
+
+- **`scripts/promote_live.py` no longer tells the operator to announce a
+  promotion.** It printed "Tell them: their pinned version moved, ..." after
+  a successful promotion. Under the tools-only rule (0.20.0) the agent channel
+  takes only bug reports and improvement suggestions, so it now says not to
+  announce on the channel: consumers learn of a release from the CHANGELOG,
+  `aramid --version` and, when templates changed, `aramid doctor` /
+  `aramid init`. RELEASING.md's two remaining "tell the consumers" phrases
+  are gone too.
+
 ## [0.20.0] — 2026-10-04
 
 ### Changed

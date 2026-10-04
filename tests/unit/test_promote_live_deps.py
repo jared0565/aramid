@@ -91,6 +91,22 @@ def test_aramid_is_reinstalled_without_touching_its_dependencies(
         assert argv[1:4] == ["-P", "-m", "pip"], f"-m pip from the repo root without -P: {argv}"
 
 
+def test_a_successful_promotion_does_not_tell_the_operator_to_announce_it(
+        pl, monkeypatch, tmp_path, capsys):
+    """Operator rule, 2026-10-04: the agent channel takes only bug reports and
+    improvement suggestions, so the closing advice may not send anyone to
+    announce the release; consumers learn of it from the tool itself."""
+    rc, _ = _promote(pl, monkeypatch, tmp_path, ["--confirm"])
+    out = capsys.readouterr().out
+    assert rc == 0, out
+    assert "Tell them" not in out
+    assert out.endswith(
+        "\nOK. Consumers now run 0.5.1.\n"
+        "Do not announce it on the agent channel (RELEASING.md): consumers learn of\n"
+        "a release from the tool itself -- the CHANGELOG, `aramid --version` and,\n"
+        "when ARAMID.md or the agent block changed, `aramid doctor` / `aramid init`.\n")
+
+
 # --- what pip would change ------------------------------------------------------
 
 def test_a_dependency_change_is_refused_before_anything_is_installed(
