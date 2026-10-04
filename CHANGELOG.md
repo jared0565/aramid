@@ -10,6 +10,27 @@ to publish a tag that disagrees with it.
 
 ## [Unreleased]
 
+### Changed
+
+- **aramid now tells every consumer that it is a tool, not an agent to talk
+  to** (operator rule, 2026-10-04). An installation ships the tool, never its
+  agent. Use aramid only through its commands, its MCP tools and `ARAMID.md`.
+  The shared agent channel takes only two things for aramid: a bug report or
+  a suggestion for improvement. Fixes reach you in a release, not as a reply.
+  The rule is stated in three places:
+  - the session-start agent hook prints it as its second line. A Claude Code
+    session in a repo whose `.claude/settings.json` carries aramid's
+    SessionStart entry sees it as soon as this release is installed, before
+    any `aramid init`;
+  - `ARAMID.md` gains a section, "aramid is a tool, not an agent";
+  - the managed aramid block in `CLAUDE.md` and `AGENTS.md` gains one bullet.
+    This is how Codex and other agents without that hook learn the rule, so
+    for them it arrives only with `aramid init`.
+- **Re-run `aramid init` after upgrading.** Until you do, `aramid doctor`
+  reports both agent files as stale, telling you to re-run `aramid init`, and
+  `aramid status` leaves them out of the `blocks N/2` count on its `agent
+  surfaces` line. The same `init` regenerates `ARAMID.md`.
+
 ## [0.19.5] — 2026-10-02
 
 ### Fixed

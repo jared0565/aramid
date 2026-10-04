@@ -76,7 +76,13 @@ def test_session_start_prints_posture_in_onboarded_repo(tmp_path, monkeypatch, c
     lines = out.splitlines()
     assert lines[0] == ("aramid: this repo is GATED (pre-commit + pre-push"
                         " hooks). Read ARAMID.md; NEVER pass --no-verify.")
-    assert lines[1].startswith("aramid: open findings:")
+    # Operator mandate 2026-10-04: every consumer session learns that aramid
+    # is a tool -- this line reaches them the moment the wheel is upgraded,
+    # before anyone re-runs `aramid init` to refresh ARAMID.md and the block.
+    assert lines[1] == ("aramid: aramid is a tool, not an agent to talk to --"
+                        " the agent channel takes only bug reports and"
+                        " improvement suggestions for aramid.")
+    assert lines[2].startswith("aramid: open findings:")
     assert lines[-1] == ('aramid: commands: aramid check --staged | aramid'
                          ' ledger filter --status open | aramid override'
                          ' <id> --reason "..."')

@@ -20,4 +20,24 @@ This repo is gated by aramid. Read `ARAMID.md` before your first commit.
   Armed repos reject the call outright.
 - To suppress a WARN finding, use `aramid override <id> --reason "..."`
   (ledger-logged); never edit findings away by hand.
+- aramid is a tool: use it only through its commands and MCP tools, never
+  by talking to aramid's agent. The shared agent channel takes only bug
+  reports and improvement suggestions for aramid. See `ARAMID.md`.
 <!-- aramid:end -->
+
+## Tools, not their agents (operator rule, 2026-10-04)
+
+graphite is used in this repo only as a tool: its CLI, its MCP query tools
+and its graph. Do not talk to graphite's agent: no answers to its questions,
+no requests, no replies. The shared agent channel takes only two things from
+this repo: a bug report or an improvement suggestion addressed to a tool.
+Reading the channel (`list`, `read`, one `inbox` per session) is fine;
+receiving a question is not a reason to answer it. This narrows the
+"findings go to its agent as a recommendation" wording in the graphite
+section above.
+
+The same rule holds for aramid toward every repo where it is installed:
+consumers use aramid only as a tool and send its agent only bug reports and
+improvement suggestions (stated to them in `ARAMID.md` and in the aramid
+block that `aramid init` writes). aramid's agent likewise posts only bug
+reports and improvement suggestions: no release announcements, no replies.

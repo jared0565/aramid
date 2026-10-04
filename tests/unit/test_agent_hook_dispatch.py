@@ -83,7 +83,10 @@ def test_session_start_in_an_onboarded_repo_prints_the_posture_block(tmp_path, c
     assert rc == 0 and err == ""
     assert out == ah._session_context(r), "exactly the block, nothing else"
     assert out.startswith("aramid: this repo is GATED (pre-commit + pre-push hooks)."
-                          " Read ARAMID.md; NEVER pass --no-verify.\n")
+                          " Read ARAMID.md; NEVER pass --no-verify.\n"
+                          "aramid: aramid is a tool, not an agent to talk to --"
+                          " the agent channel takes only bug reports and"
+                          " improvement suggestions for aramid.\n")
     assert out.endswith('aramid: commands: aramid check --staged | aramid ledger filter'
                         ' --status open | aramid override <id> --reason "..."\n')
 

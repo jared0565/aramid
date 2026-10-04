@@ -262,10 +262,16 @@ Two things the first run of this step (0.13.0, 2026-09-05) taught:
   does not record which aramid ran the gate, so acceptance of a shape the
   live wheel refuses is the only evidence that the route reached the tree.
 
-### After promoting, tell the consumers
+### After promoting, consumers learn of it from the tool
 
-Their pinned version moved. Say what changed, and say that anything they
-measured against the old one is a lead rather than a fact.
+Do not announce the release on the agent channel. The operator's rule
+(2026-10-04) is that aramid is used only as a tool, and the channel takes
+only bug reports and improvement suggestions. Consumers learn of a release
+from aramid itself: `aramid --version`, the CHANGELOG and, when the release
+changes `ARAMID.md` or the agent block, `aramid doctor`'s stale report and
+the re-run of `aramid init`. So the CHANGELOG entry has to carry everything a
+consumer needs: what changed, whether to re-run `aramid init`, and that
+anything measured against the old version is a lead rather than a fact.
 
 ## Undoing a release
 

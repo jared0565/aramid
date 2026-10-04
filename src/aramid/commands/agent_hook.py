@@ -148,6 +148,12 @@ def _session_context(repo: Path) -> str:
         lines = [
             "aramid: this repo is GATED (pre-commit + pre-push hooks)."
             " Read ARAMID.md; NEVER pass --no-verify.",
+            # Operator mandate 2026-10-04: an installation ships the tool,
+            # never its agent. This line reaches a consumer as soon as the
+            # wheel is upgraded, before `aramid init` refreshes ARAMID.md.
+            "aramid: aramid is a tool, not an agent to talk to -- the agent"
+            " channel takes only bug reports and improvement suggestions"
+            " for aramid.",
             "aramid: " + status_mod._open_counts_line(state),
             "aramid: " + status_mod._new_since_baseline_line(ledger, state),
         ]
