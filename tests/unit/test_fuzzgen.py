@@ -41,6 +41,17 @@ def test_supported_params_none_on_varargs():
     assert supported_params(f) is None
 
 
+def test_supported_params_none_for_a_function_with_no_parameters():
+    """Nothing to derive an input from, so nothing to fuzz: fifty calls with no
+    arguments only repeat the function's side effects. At 645617b the one such
+    candidate was promote_live.main(), which read the DRIVER's argv as its own
+    command line. "Every parameter has a supported hint" is vacuously true for
+    zero parameters; that is the edge this closes."""
+    def main() -> int:
+        return 0
+    assert supported_params(main) is None
+
+
 def test_supported_params_optional_ok():
     def f(a: Optional[int]) -> int:
         return a or 0

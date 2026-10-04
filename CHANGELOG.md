@@ -23,6 +23,11 @@ to publish a tag that disagrees with it.
   verdict is unchanged, so a mixed-version driver and consumer still agree.
   Measured on aramid itself: `scripts/promote_live.py`'s `main()` broke three
   drains on 2026-10-02 and 03.
+- **The fuzzer no longer calls functions that take no parameters.** There is
+  no input to vary, so every case was the same call, repeating only its side
+  effects: `promote_live.main()` ran fifty times per drain with the fuzz
+  driver's own command line as its arguments. Such a function now counts as
+  unfuzzable, like an unhinted one.
 
 ### Changed
 

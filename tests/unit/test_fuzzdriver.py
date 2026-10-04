@@ -252,6 +252,19 @@ def test_main_in_process_keeps_a_printing_target_off_the_verdict(tmp_path, capsy
     assert "in-process chatter" in err
 
 
+def test_a_function_with_no_parameters_is_counted_unfuzzable_and_never_called(tmp_path):
+    marker = tmp_path / "called.txt"
+    _module(tmp_path, "entry", f"""
+        from pathlib import Path
+        def main() -> int:
+            Path({str(marker)!r}).write_text("called", encoding="utf-8")
+            return 0
+    """)
+    out = run_spec(_spec(tmp_path, "entry.py", ["main"], cases=5))
+    assert out["unfuzzable"] == 1 and out["cases_run"] == 0 and out["fuzzed"] == []
+    assert not marker.exists(), "a zero-parameter target must not be called at all"
+
+
 def test_main_reports_a_bad_spec_on_stderr_and_exits_1(tmp_path, capsys):
     assert main([str(tmp_path / "missing.json")]) == 1
     out, err = capsys.readouterr()

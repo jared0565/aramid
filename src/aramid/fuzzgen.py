@@ -44,8 +44,9 @@ def _is_supported(hint) -> bool:
 
 
 def supported_params(fn):
-    """Param names when EVERY parameter has a supported hint and there is no
-    *args/**kwargs; None otherwise (including when hint resolution raises)."""
+    """Param names when there is at least one parameter, EVERY parameter has a
+    supported hint, and there is no *args/**kwargs; None otherwise (including
+    when hint resolution raises)."""
     import inspect
     # The ENTIRE body is guarded: _is_supported does `hint in SUPPORTED_ATOMS`
     # -> hash(hint), which raises TypeError for an unhashable annotation
@@ -64,7 +65,11 @@ def supported_params(fn):
             if hint is None or not _is_supported(hint):
                 return None
             names.append(name)
-        return names
+        # No parameters, nothing to derive an input from: every case would be
+        # the same call, repeating only its side effects. "Every parameter has
+        # a supported hint" is vacuously true here, and that let 645617b fuzz
+        # promote_live.main() fifty times with the driver's own argv.
+        return names or None
     except Exception:
         return None
 
