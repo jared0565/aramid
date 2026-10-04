@@ -46,11 +46,12 @@ def _cp(rc: int, stdout: str = "") -> subprocess.CompletedProcess:
 
 
 def _promote(pl, monkeypatch, tmp_path, argv, *, changes=(), tools=(OK_TOOLS, OK_TOOLS),
-             conflicts=(set(), set()), drain_lock=None, digest=DIGEST):
+             conflicts=(set(), set()), drain_lock=None, digest=DIGEST,
+             download_rc=0, wheel_bytes=WHEEL_BYTES, install_rc=0, live_after="0.5.1"):
     """Run main() with the release, the download and every new seam faked.
     Returns (rc, the argv of every `pip install` that was not a dry run)."""
     site = str(tmp_path / "site-packages" / "aramid" / "__init__.py")
-    lives = iter([("0.5.0", site, False), ("0.5.1", site, False)])
+    lives = iter([("0.5.0", site, False), (live_after, site, False)])
     monkeypatch.setattr(sys, "argv", ["promote_live.py", "0.5.1", *argv])
     monkeypatch.setattr(pl, "_live", lambda: next(lives))
     monkeypatch.setattr(pl, "_release_digest", lambda tag, asset: digest)
@@ -58,10 +59,13 @@ def _promote(pl, monkeypatch, tmp_path, argv, *, changes=(), tools=(OK_TOOLS, OK
 
     def _run(argv, **kw):
         if "download" in argv:
+            if download_rc:
+                return _cp(download_rc)
             out = Path(argv[argv.index("--dir") + 1])
-            (out / pl.WHEEL_ASSET.format(version="0.5.1")).write_bytes(WHEEL_BYTES)
+            (out / pl.WHEEL_ASSET.format(version="0.5.1")).write_bytes(wheel_bytes)
         elif "pip" in argv and "install" in argv and "--dry-run" not in argv:
             installs.append(list(argv))
+            return _cp(install_rc)
         return _cp(0)
     monkeypatch.setattr(pl, "_run", _run)
     monkeypatch.setattr(pl, "_dep_changes",
@@ -101,6 +105,52 @@ def test_a_release_without_a_sha256_is_refused_with_exit_3_and_installs_nothing(
     assert rc == 3
     assert installs == []
     assert "refusing: no sha256 for aramid-0.5.1-py3-none-any.whl on release v0.5.1." in out.err
+    assert "Consumers now run" not in out.out
+
+
+# Every refusal and failure in main() returns 3, and the mutation drain fingerprints
+# `return 3 -> return 4` by line CONTENT, so one unpinned refusal keeps the one
+# finding open for all of them (ad415f34 moved from line 296 to 304 once 296 was
+# pinned). Each path below is pinned to exit 3 exactly.
+
+def test_a_failed_download_is_refused_with_exit_3_and_installs_nothing(
+        pl, monkeypatch, tmp_path, capsys):
+    rc, installs = _promote(pl, monkeypatch, tmp_path, ["--confirm"], download_rc=1)
+    out = capsys.readouterr()
+    assert rc == 3
+    assert installs == []
+    assert "refusing: download failed" in out.err
+    assert "Consumers now run" not in out.out
+
+
+def test_a_wheel_that_does_not_match_the_release_digest_is_refused_with_exit_3(
+        pl, monkeypatch, tmp_path, capsys):
+    rc, installs = _promote(pl, monkeypatch, tmp_path, ["--confirm"],
+                            wheel_bytes=b"not the released bytes")
+    out = capsys.readouterr()
+    assert rc == 3
+    assert installs == [], "a mismatched wheel may never be installed"
+    assert f"refusing: sha256 mismatch\n  release {DIGEST}\n" in out.err
+    assert "Consumers now run" not in out.out
+
+
+def test_a_failed_pip_install_fails_promotion_with_exit_3_and_stops_there(
+        pl, monkeypatch, tmp_path, capsys):
+    rc, installs = _promote(pl, monkeypatch, tmp_path, ["--confirm"], install_rc=1)
+    out = capsys.readouterr()
+    assert rc == 3
+    assert len(installs) == 1, f"the second install ran after the first failed: {installs}"
+    assert "--force-reinstall" in installs[0]
+    assert "\ninstall failed\n" in out.err
+    assert "Consumers now run" not in out.out
+
+
+def test_a_different_version_live_after_install_fails_promotion_with_exit_3(
+        pl, monkeypatch, tmp_path, capsys):
+    rc, _ = _promote(pl, monkeypatch, tmp_path, ["--confirm"], live_after="0.5.0")
+    out = capsys.readouterr()
+    assert rc == 3
+    assert "FAILED: expected 0.5.1, got 0.5.0" in out.err
     assert "Consumers now run" not in out.out
 
 
