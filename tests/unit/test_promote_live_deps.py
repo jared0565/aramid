@@ -46,14 +46,14 @@ def _cp(rc: int, stdout: str = "") -> subprocess.CompletedProcess:
 
 
 def _promote(pl, monkeypatch, tmp_path, argv, *, changes=(), tools=(OK_TOOLS, OK_TOOLS),
-             conflicts=(set(), set()), drain_lock=None):
+             conflicts=(set(), set()), drain_lock=None, digest=DIGEST):
     """Run main() with the release, the download and every new seam faked.
     Returns (rc, the argv of every `pip install` that was not a dry run)."""
     site = str(tmp_path / "site-packages" / "aramid" / "__init__.py")
     lives = iter([("0.5.0", site, False), ("0.5.1", site, False)])
     monkeypatch.setattr(sys, "argv", ["promote_live.py", "0.5.1", *argv])
     monkeypatch.setattr(pl, "_live", lambda: next(lives))
-    monkeypatch.setattr(pl, "_release_digest", lambda tag, asset: DIGEST)
+    monkeypatch.setattr(pl, "_release_digest", lambda tag, asset: digest)
     installs = []
 
     def _run(argv, **kw):
@@ -89,6 +89,19 @@ def test_aramid_is_reinstalled_without_touching_its_dependencies(
             f"a force-reinstall that re-resolves dependencies: {argv}")
         assert "--upgrade" not in argv and "-U" not in argv, argv
         assert argv[1:4] == ["-P", "-m", "pip"], f"-m pip from the repo root without -P: {argv}"
+
+
+def test_a_release_without_a_sha256_is_refused_with_exit_3_and_installs_nothing(
+        pl, monkeypatch, tmp_path, capsys):
+    """Promotion installs a RELEASED artifact or nothing. Exit 3 exactly: it is
+    the refusal code every other refusal in the script uses, and the mutation
+    drain found `return 3 -> return 4` here survived the whole unit suite."""
+    rc, installs = _promote(pl, monkeypatch, tmp_path, ["--confirm"], digest=None)
+    out = capsys.readouterr()
+    assert rc == 3
+    assert installs == []
+    assert "refusing: no sha256 for aramid-0.5.1-py3-none-any.whl on release v0.5.1." in out.err
+    assert "Consumers now run" not in out.out
 
 
 def test_a_successful_promotion_does_not_tell_the_operator_to_announce_it(
