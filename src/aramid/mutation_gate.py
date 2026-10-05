@@ -126,7 +126,8 @@ def _has_mapped_test(module_path: str, test_stems) -> bool:
 
 def auto_resolve_mutation(ledger, run_id: str, at: str, changed_files, *,
                           suppressed=frozenset(),
-                          changed_since: Callable[[str], set | None] | None = None
+                          changed_since: Callable[[str], set | None] | None = None,
+                          unretestable: Callable[[str, dict], int | None] | None = None
                           ) -> list[str]:
     """Optimistically resolve open mutation findings the push addresses, BEFORE
     the block check (mirrors review.auto_resolve_llm's call site), so a dev who
@@ -167,13 +168,25 @@ def auto_resolve_mutation(ledger, run_id: str, at: str, changed_files, *,
     head is unknown, not an ancestor, or git failed) -- None, and a record
     with no head at all, keep the liberal rule over the whole push. The
     resolve is still optimistic: it only stops crediting changes the drain
-    had already seen."""
+    had already seen.
+
+    `unretestable` -- FAIL CLOSED WHERE NO RE-TEST CAN COME, added
+    2026-10-05 (llm-review 88b420f9). `pending_retest` is a promise that a
+    drain re-test will verify the move, and a re-test is atomic: every
+    occurrence of the id must die, inside one drain item's budget. A
+    survivor with more occurrences than that (ad415f34: eleven identical
+    `return 3` lines, room 3) can never be verified, so moving it took a
+    test gap out of the counts for good on the strength of a touch. When
+    `unretestable(id, record)` answers an occurrence count, the row stays
+    open and the refusal is counted as `declined` in the yield. None --
+    the row fits, or the count is unknown -- keeps the old rule."""
     changed_norm = {normalize_path(c) for c in changed_files}
     changed_test_stems = {Path(c).stem for c in changed_files
                           if gitutil.is_test_file(c)}
     resolved = []
     skipped = 0
     considered = 0
+    declined = 0
     for fid, rec in ledger.open_findings().items():
         if rec.get("tool") != TOOL or rec.get("status") != "open":
             continue
@@ -194,6 +207,9 @@ def auto_resolve_mutation(ledger, run_id: str, at: str, changed_files, *,
             source_touched = normalize_path(path) in norm
             test_added = _has_mapped_test(path, stems)
             if source_touched or test_added:
+                if unretestable is not None and unretestable(fid, rec) is not None:
+                    declined += 1
+                    continue
                 ledger.append(Event(EventType.FINDING_RESOLVED, run_id, at,
                                     finding_id=fid,
                                     payload={"auto_resolved": "gap_addressed",
@@ -204,8 +220,57 @@ def auto_resolve_mutation(ledger, run_id: str, at: str, changed_files, *,
             continue
     diagnostics.note_skipped("mutation-resolve", skipped)
     note_yield(ledger, run_id, at, resolver="gap_addressed", tool=TOOL,
-               considered=considered, resolved=len(resolved))
+               considered=considered, resolved=len(resolved),
+               declined=declined if unretestable is not None else None)
     return resolved
+
+
+def reopen_unretestable(ledger, run_id: str, at: str, *, root, cfg) -> list[str]:
+    """Reopen every `pending_retest` mutation survivor that no drain item can
+    re-test -- the rows `gap_addressed` parked before it learned to refuse
+    them (see its `unretestable`), or that a lowered knob stranded since.
+    Nothing would ever verify them, so the optimistic move is undone: the
+    row is open again and counts, until its knobs give a re-test room or an
+    operator overrides it with a reason.
+
+    The reopen is a FINDING_DETECTED -- the event a re-test writes when a
+    survivor is re-reported -- and a detect rebuilds the record from its
+    payload. So the payload is the row's LAST REAL DETECTION, not its
+    materialized record: the record also carries what later transitions
+    added (`reason`, an invalidated override's `invalidated_*`), and a
+    detect must not re-assert those as findings data. Only `line` is taken
+    from the record, because FINDING_MOVED updates it there and nowhere
+    else. `reopened`, `occurrences` and `room` say why, so `ledger show`
+    can tell it from a real detection. Runs before `gap_addressed` in
+    `run_gate`, which then refuses to park the row again. Never raises
+    into `run_gate`."""
+    # Imported here: consumers.mutation imports this module.
+    from aramid.consumers import mutation as mutation_consumer
+
+    reopened: list[str] = []
+    try:
+        room = mutation_consumer.empty_queue_retest_room(cfg)
+        stuck = mutation_consumer.unretestable_survivors(ledger, root, cfg,
+                                                         statuses=("pending_retest",))
+        if not stuck:
+            return reopened
+        ids = {fid for fid, *_ in stuck}
+        detected: dict[str, dict] = {}
+        for e in ledger.events():
+            if e.type is EventType.FINDING_DETECTED and e.finding_id in ids:
+                detected[e.finding_id] = e.payload
+        state = ledger.open_findings()
+        for fid, _rel, need, _status in stuck:
+            if fid not in detected or fid not in state:
+                continue
+            payload = {**detected[fid], "line": state[fid].get("line"),
+                       "reopened": "unretestable", "occurrences": need, "room": room}
+            ledger.append(Event(EventType.FINDING_DETECTED, run_id, at,
+                                finding_id=fid, payload=payload))
+            reopened.append(fid)
+    except Exception as exc:
+        diagnostics.note_failed("mutation-reopen", "unretestable survivors", exc)
+    return reopened
 
 
 def auto_resolve_line_departed(ledger, run_id: str, at: str, *, root,

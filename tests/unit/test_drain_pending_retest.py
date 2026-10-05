@@ -256,12 +256,16 @@ def test_status_names_a_pending_row_no_drain_can_re_test(tmp_path):
         lines = status_mod._unfittable_retest_lines(r, _cfg(), led)
     finally:
         led.close()
+    # Open rows are named too since 88b420f9 -- the gate now keeps such a
+    # survivor open -- so the row carries its status and the override exit.
     assert lines == [
-        "  mutation re-test impossible: 1 pending survivor(s) have more occurrences "
+        "  mutation re-test impossible: 1 survivor(s) have more occurrences "
         "than one drain item can test (min(max_mutants 20, confirm_cap 3) = 3):",
-        f"    {FOUR[:8]} calc.py: 4 occurrences -- stays pending_retest until "
-        "[mutation].max_mutants and confirm_cap are both >= 4 and wall_budget_s "
-        "covers 5 full-suite runs (the baseline and one confirm per occurrence)",
+        f"    {FOUR[:8]} calc.py (pending_retest): 4 occurrences -- a re-test needs "
+        "[mutation].max_mutants and confirm_cap both >= 4 and wall_budget_s for 5 "
+        "full-suite runs (the baseline and one confirm per occurrence)",
+        "      or, once every occurrence's kill is verified by hand: "
+        f'aramid override {FOUR} --reason "..."',
     ]
 
 

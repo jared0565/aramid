@@ -1265,6 +1265,13 @@ def run_gate(root: Path, gate: Gate, mode: str, cfg: config_mod.Config, ledger: 
         # question. See the resolver's docstring.
         mutation_gate.auto_resolve_line_departed(
             ledger, run_id, at, root=root, revs=_certified_revs(certified))
+        # ...and undo the parking no re-test can ever verify: a pending
+        # survivor with more occurrences at HEAD than one drain item has room
+        # for goes back to open (llm-review 88b420f9). After departed-line, so
+        # a survivor whose line is gone resolves rather than reopens; before
+        # gap_addressed, which now refuses to park it again. Ranges nothing,
+        # so it sits outside the resolve_scope guard below.
+        mutation_gate.reopen_unretestable(ledger, run_id, at, root=root, cfg=cfg)
         # RESOLUTION SCOPE IS NOT SCAN SCOPE. These resolvers need the push's
         # genuine delta; `scope_files` is whatever was SCANNED, and the two
         # coincide only under mode "range" with an upstream.
@@ -1293,13 +1300,18 @@ def run_gate(root: Path, gate: Gate, mode: str, cfg: config_mod.Config, ledger: 
         # evidence quote still exists at HEAD, deriving no range at all.
         resolve_scope = _resolution_scope(root, mode, rng, scope_files)
         if resolve_scope:
+            # Imported here: the consumer registers itself on import.
+            from aramid.consumers import mutation as _mutation_consumer
             mutation_gate.auto_resolve_mutation(
                 ledger, run_id, at, resolve_scope,
                 # An adjudicated equivalent mutant has no gap to address.
                 suppressed={r.id for r in suppress_records},
                 # ...and a change the drain already graded against cannot
                 # address the gap it reported (see the resolver's docstring).
-                changed_since=_changed_since(root))
+                changed_since=_changed_since(root),
+                # ...and a survivor no drain item can re-test is never parked
+                # on a promise nothing will keep (see the resolver's docstring).
+                unretestable=_mutation_consumer.unretestable_check(root, cfg))
             # 1a-F2: the two synchronous producers resolve too. present_ids
             # skips anything re-fired THIS run (these producers, unlike the
             # drain's, fire in the run being resolved).

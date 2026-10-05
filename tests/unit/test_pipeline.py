@@ -2017,6 +2017,45 @@ def test_gate_resolves_a_mutation_survivor_whose_line_left_the_file(tmp_path, mo
         led.close()
 
 
+def test_the_gate_reopens_a_parked_survivor_no_drain_can_re_test_and_keeps_it_open(
+        tmp_path, monkeypatch):
+    """THE WIRING for llm-review 88b420f9, unit-tested in
+    test_mutation_unretestable.py. four.py holds the survivor's line four
+    times, one drain item has room for three, so no re-test can verify the
+    `pending_retest` move: `reopen_unretestable` puts it back to open, and
+    `gap_addressed` -- handed a push that touches four.py -- must not park it
+    again. Either half unwired leaves it pending. real.py's one-occurrence
+    survivor is the control that `gap_addressed` ran on that scope at all.
+    The scope is patched in: `_resolution_scope` has its own tests above,
+    and an upstream would only re-derive the same set."""
+    four_src = ("def f(x):\n" + "".join(f"    if x == {n}:\n        return 3\n"
+                                         for n in (1, 2, 5, 7)) + "    return 0\n")
+    r = _mut_repo(tmp_path)
+    (r / "src" / "four.py").write_text(four_src, encoding="utf-8")
+    subprocess.run(["git", "add", "src/four.py"], cwd=r, check=True)
+    subprocess.run(["git", "commit", "-q", "-m", "four"], cwd=r, check=True)
+    monkeypatch.setattr(pipeline, "GATE_RUNNER_KEYS",
+                        {**pipeline.GATE_RUNNER_KEYS, Gate.PRE_PUSH: []})
+    monkeypatch.setattr(pipeline, "_resolution_scope",
+                        lambda *_a: {"src/four.py", "src/real.py"})
+    cfg = config.load_config(r)
+    led = Ledger(r / ".aramid" / "ledger.db")
+    try:
+        stuck = _seed_mut(led, fid=_mut_fid("src/four.py", content="        return 3",
+                                            op="int-bound"),
+                          file="src/four.py", line=3, op="int-bound")
+        led.append(Event(EventType.FINDING_RESOLVED, "g0", _MUT_NOW, finding_id=stuck,
+                         payload={"auto_resolved": "gap_addressed", "pending_retest": True}))
+        fits = _seed_mut(led, file="src/real.py")
+        assert led.open_findings()[stuck]["status"] == "pending_retest"
+        pipeline.run_gate(r, Gate.PRE_PUSH, "all", cfg, led)
+        state = led.open_findings()
+        assert state[stuck]["status"] == "open"
+        assert state[fits]["status"] == "pending_retest"
+    finally:
+        led.close()
+
+
 def test_the_gate_resolves_against_the_certified_refs_not_head_alone(tmp_path, monkeypatch):
     """THE WIRING for llm-review 64df2b3d: `run_gate` hands the resolver the
     revisions it certifies -- the pushed refs' local shas and HEAD -- not

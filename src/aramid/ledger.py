@@ -202,7 +202,7 @@ def _departed(root: Path | None, file: str | None,
 
 
 def note_yield(ledger, run_id: str, at: str, *, resolver: str, tool: str,
-               considered: int, resolved: int) -> None:
+               considered: int, resolved: int, declined: int | None = None) -> None:
     """Record what a resolver LOOKED AT, alongside what it cleared.
 
     A resolution writes itself into the ledger; a non-resolution writes
@@ -236,12 +236,18 @@ def note_yield(ledger, run_id: str, at: str, *, resolver: str, tool: str,
     diagnostic. A yield event lost to a broken ledger reads downstream as
     "not called", which is the safe direction: it over-reports rather than
     conceals.
+
+    `declined` counts candidates the resolver matched and then deliberately
+    REFUSED -- `gap_addressed` keeping open a survivor no drain can re-test.
+    Without it a refusal reads as "matched nothing". Written only when the
+    caller supplies it, so the key's absence means "not asked", not zero.
     """
     try:
-        ledger.append(Event(EventType.RESOLVER_YIELD, run_id, at,
-                            payload={"resolver": resolver, "tool": tool,
-                                     "considered": int(considered),
-                                     "resolved": int(resolved)}))
+        payload = {"resolver": resolver, "tool": tool,
+                   "considered": int(considered), "resolved": int(resolved)}
+        if declined is not None:
+            payload["declined"] = int(declined)
+        ledger.append(Event(EventType.RESOLVER_YIELD, run_id, at, payload=payload))
     except Exception:
         diagnostics.note_skipped(f"{resolver}-yield", 1, noun="record")
 

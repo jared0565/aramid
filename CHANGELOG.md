@@ -10,6 +10,40 @@ to publish a tag that disagrees with it.
 
 ## [Unreleased]
 
+### Changed
+
+- **A mutation survivor that no drain can re-test now stays open instead of
+  moving to `pending_retest`.** A push that touches a survivor's module, or
+  adds a test mapped to it, moves the survivor to `pending_retest`, out of
+  the open count. That move relies on a later drain re-test to verify it,
+  and a re-test must kill every occurrence of the survivor's fingerprint
+  within one drain item's room: min(`max_mutants`, `confirm_cap`), 3 by
+  default. A survivor with more occurrences can never be re-tested. In
+  0.20.2 the drain stopped cutting an item for such a survivor, but the
+  survivor stayed `pending_retest` with nothing to verify it. A test gap
+  left the counts permanently because a push touched its file (llm-review
+  88b420f9, on `scripts/promote_live.py`'s eleven identical `return 3`
+  lines). The pre-push gate now refuses that move when the survivor's
+  occurrence count at HEAD is known to exceed the room. It counts each
+  refusal as `declined` in the `gap_addressed` yield event. The gate also
+  reopens a `pending_retest` survivor already in this state. The reopen is a
+  `FINDING_DETECTED` that repeats the survivor's last detection, with its
+  current line, and names the cause (`reopened: "unretestable"`, the
+  occurrence count and the room). The survivor counts as open again,
+  including in `aramid status`'s `NEW since baseline` when the baseline
+  predates it.
+  `aramid status` lists such survivors, open or pending, with both ways
+  out. One is to raise both knobs to the occurrence count and
+  `wall_budget_s` to that many full-suite runs plus one. The other is
+  `aramid override <id> --reason "..."` once every occurrence's kill has
+  been verified by hand. **The cost:** a push touching the file, even a
+  test-only push, no longer clears such a finding; only those two ways do.
+  In a repo with `[mutation].mutation_block_armed = true`, a reopened
+  survivor is a BLOCK, so the first push after upgrading can stop on a
+  finding that had been `pending_retest`. A survivor whose occurrences
+  cannot be counted keeps the old behaviour, for example when git cannot
+  read its file at HEAD.
+
 ## [0.20.2] — 2026-10-05
 
 ### Fixed

@@ -478,31 +478,73 @@ def empty_queue_retest_room(cfg) -> int:
     return _retest_room(empty_queue_retest_budget(cfg))
 
 
-def unfittable_pending(ledger, root: Path, cfg) -> list[tuple[str, str, int]]:
-    """(id, file, occurrences at HEAD) of each `pending_retest` survivor, under
-    `pending_retests`' eligibility, with more occurrences than
-    `empty_queue_retest_room`. No empty-queue item can re-test one: the claim
-    is atomic, so the consumer skips it unspent, every drain. Excluded only on
-    POSITIVE evidence: a file git cannot read at HEAD, or a regeneration that
-    raises, is left out of this list (unknown is not too big), and the
-    consumer then answers for it as before. Never raises."""
+def _occurrences_beyond_room(root: Path, fid: str, rel: str, op: str | None,
+                             room: int) -> int | None:
+    """The ONE predicate for "no drain item is guaranteed room to re-test this
+    survivor": its occurrence count at HEAD when that exceeds `room`, else
+    None. The empty-queue item is the only verifier guaranteed to run for a
+    `pending_retest` row, so its room is the bound (`empty_queue_retest_room`).
+
+    POSITIVE EVIDENCE ONLY. A file git cannot read at HEAD, or a
+    regeneration that raises, answers None -- unknown is not too big -- so
+    every caller keeps its old, liberal behaviour for that row and the
+    consumer answers for it as before. Never raises."""
+    try:
+        text = gitutil.blob_at(root, "HEAD", rel)
+        if text is None:
+            return None
+        need = len(_survivor_mutants(rel, fid, text, op))
+    except Exception:
+        return None
+    return need if need > room else None
+
+
+def unretestable_survivors(ledger, root: Path, cfg, statuses: tuple[str, ...] = RETEST_STATUSES,
+                           ) -> list[tuple[str, str, int, str]]:
+    """(id, file, occurrences at HEAD, status) of each survivor in `statuses`,
+    under the re-test's own eligibility (`_retest_candidates`: unsuppressed,
+    a file and line to regenerate from), that no drain item can re-test. The
+    claim is atomic, so the consumer skips such a survivor unspent, every
+    drain. Never raises."""
     try:
         room = empty_queue_retest_room(cfg)
-        pending = pending_retests(ledger, root)
+        state = ledger.open_findings()
+        candidates = _retest_candidates(ledger, root, statuses=statuses)
     except Exception:
         return []
-    out: list[tuple[str, str, int]] = []
-    for fid, rel, _line, op in pending:
-        try:
-            text = gitutil.blob_at(root, "HEAD", rel)
-            if text is None:
-                continue
-            need = len(_survivor_mutants(rel, fid, text, op))
-        except Exception:  # noqa: S112 -- unknown is not too big: the row stays eligible and the consumer answers for it.
-            continue
-        if need > room:
-            out.append((fid, rel, need))
+    out: list[tuple[str, str, int, str]] = []
+    for fid, rel, _line, op in candidates:
+        need = _occurrences_beyond_room(root, fid, rel, op, room)
+        if need is not None:
+            out.append((fid, rel, need, str(state.get(fid, {}).get("status", ""))))
     return out
+
+
+def unfittable_pending(ledger, root: Path, cfg) -> list[tuple[str, str, int]]:
+    """(id, file, occurrences at HEAD) of the `pending_retest` survivors no
+    empty-queue item can re-test -- the drain cuts no item for them."""
+    return [(fid, rel, need) for fid, rel, need, _status
+            in unretestable_survivors(ledger, root, cfg, statuses=PENDING_ONLY)]
+
+
+def unretestable_check(root: Path, cfg):
+    """For the gate's `gap_addressed` (`mutation_gate.auto_resolve_mutation`):
+    a callable(id, record) answering the same predicate for an OPEN row
+    about to be moved to `pending_retest` -- its occurrences when no drain
+    can ever verify that move, else None. Memoised per id: one gate run asks
+    once per candidate. Never raises."""
+    try:
+        room = empty_queue_retest_room(cfg)
+    except Exception:
+        return lambda fid, rec: None
+    cache: dict[str, int | None] = {}
+
+    def check(fid: str, rec: dict) -> int | None:
+        if fid not in cache:
+            cache[fid] = _occurrences_beyond_room(
+                root, fid, str(rec.get("file") or ""), str(rec.get("rule") or "") or None, room)
+        return cache[fid]
+    return check
 
 
 def _retest_candidates(ledger, root: Path,

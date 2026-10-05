@@ -289,28 +289,32 @@ def _queue_lines(ledger: Ledger) -> list[str]:
 
 
 def _unfittable_retest_lines(root: Path, cfg, ledger: Ledger) -> list[str]:
-    """`pending_retest` mutation survivors no drain item can re-test: more
-    occurrences at HEAD than min(max_mutants, confirm_cap). The drain stops
-    cutting an item for them, and the ledger keeps them out of `open`, so
-    without this line they would sit pending with nothing anywhere saying
-    so. The remedy names every knob it takes: each occurrence is one
-    stage-1 run AND one full-suite confirm, and the wall clock starts
-    before the baseline, which is one more full-suite run."""
+    """Mutation survivors no drain item can re-test: more occurrences at HEAD
+    than min(max_mutants, confirm_cap). The gate keeps them open rather than
+    parking them in `pending_retest` (`mutation_gate.reopen_unretestable`),
+    so without this line they would sit open with no way out named. There
+    are two. The re-test names every knob it takes: each occurrence is one
+    stage-1 run AND one full-suite confirm, and the wall clock starts before
+    the baseline, which is one more full-suite run. The override, with the
+    full id so it pastes, is for an operator who has verified every kill by
+    hand -- the one judgement the drain cannot make for them."""
     from aramid.consumers import mutation as mutation_consumer
 
-    stuck = mutation_consumer.unfittable_pending(ledger, root, cfg)
+    stuck = mutation_consumer.unretestable_survivors(ledger, root, cfg)
     if not stuck:
         return []
     budget = mutation_consumer.empty_queue_retest_budget(cfg)
     room = mutation_consumer.empty_queue_retest_room(cfg)
-    lines = [f"  mutation re-test impossible: {len(stuck)} pending survivor(s) have more "
+    lines = [f"  mutation re-test impossible: {len(stuck)} survivor(s) have more "
              f"occurrences than one drain item can test (min(max_mutants "
              f"{budget['mutants']}, confirm_cap {budget['confirms']}) = {room}):"]
-    lines.extend(f"    {fid[:8]} {rel}: {need} occurrences -- stays pending_retest until "
-                 f"[mutation].max_mutants and confirm_cap are both >= {need} and "
-                 f"wall_budget_s covers {need + 1} full-suite runs (the baseline and "
-                 f"one confirm per occurrence)"
-                 for fid, rel, need in stuck)
+    for fid, rel, need, status in stuck:
+        lines.append(f"    {fid[:8]} {rel} ({status}): {need} occurrences -- a re-test "
+                     f"needs [mutation].max_mutants and confirm_cap both >= {need} and "
+                     f"wall_budget_s for {need + 1} full-suite runs (the baseline and "
+                     f"one confirm per occurrence)")
+        lines.append("      or, once every occurrence's kill is verified by hand: "
+                     f'aramid override {fid} --reason "..."')
     return lines
 
 
