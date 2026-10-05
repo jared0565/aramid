@@ -30,6 +30,20 @@ to publish a tag that disagrees with it.
   knobs at least that count, and a wall budget for one full-suite run per
   occurrence plus the baseline.
 
+### Changed
+
+- **`[js_mutation].mutant_timeout_s` is now a floor: each JS mutant gets at
+  least 1.5 times the measured baseline.** JS mutation is single-stage, so
+  every mutant runs the whole suite, and the baseline has just timed it. A
+  fixed 120-second default against a slower suite timed every mutant out:
+  pawscout-worker's suite took 427 seconds, both of its mutants timed out,
+  nothing was certified, and the repo went red on `consumers_healthy`. Each
+  mutant now gets max(`mutant_timeout_s`, 1.5 x the baseline) -- 640.5
+  seconds there. The cost: a slow suite's drain now spends that long per mutant
+  instead of giving up at 120 seconds, and `wall_budget_s` still decides how
+  many mutants start. The "no mutant reached a verdict" note now names the
+  raised timeout as well as the knob.
+
 ## [0.20.1] — 2026-10-05
 
 ### Fixed

@@ -33,6 +33,12 @@ TOOL = "js-mutation"
 _BASELINE_GIVE_UP = 3
 _LINK_GIVE_UP = 3
 _TIMEOUT_GIVE_UP = 3
+# Every mutant runs the WHOLE suite (single stage), which the baseline has just
+# timed, so each gets at least this multiple of it; `mutant_timeout_s` is the
+# floor. A fixed 120s against a 427s suite timed every mutant out
+# (pawscout-worker, 2026-10-02: 2 of 2, red on consumers_healthy). The margin
+# is for a machine busier during the mutants than during the baseline.
+_MUTANT_BASELINE_FACTOR = 1.5
 _JS_SUFFIXES = (".js", ".jsx", ".mjs", ".cjs", ".ts", ".tsx", ".mts", ".cts")
 
 # See consumers/mutation.py: budget-truncated batches -> pin occurrence_index 0.
@@ -254,6 +260,8 @@ def consume(item, ctx: DrainContext) -> ConsumerResult:
                                         f"{base_res.returncode}: {mutation.last_line(base_res)}"),
                                   duration_s=time.monotonic() - started)
 
+        per_mutant = max(mutant_timeout,
+                         _MUTANT_BASELINE_FACTOR * float(base_res.duration_s or 0.0))
         done = False
         for rel in files:
             if done:
@@ -281,7 +289,7 @@ def consume(item, ctx: DrainContext) -> ConsumerResult:
                 stats["tested"] += 1
                 try:
                     src_path.write_text(m.source, encoding="utf-8")
-                    res = run_subprocess(test_argv, wt, mutant_timeout, env=_marker(wt))
+                    res = run_subprocess(test_argv, wt, per_mutant, env=_marker(wt))
                     if res.state is ToolState.TIMEOUT:
                         stats["timeouts"] += 1
                     elif res.state is ToolState.OK and res.returncode == 0:
@@ -350,7 +358,7 @@ def consume(item, ctx: DrainContext) -> ConsumerResult:
     elif stats["tested"] and not (stats["killed"] or stats["survived"]):
         # Tested, and not one verdict: every mutant timed out or errored.
         note = mutation.no_verdict_note("js_mutation", stats, base_res.duration_s,
-                                        mutant_timeout)
+                                        mutant_timeout, per_mutant)
     else:
         note = f"{stats['survived']} survivor(s) of {stats['tested']} mutant(s) tested"
         if stats["truncated"]:

@@ -706,10 +706,39 @@ def test_a_run_whose_every_mutant_timed_out_certifies_nothing_and_says_so(
     assert res.state == "ok"
     _stats(res, generated=2, tested=2, timeouts=2)
     assert res.note == ("no mutant reached a verdict: 2 tested, 2 timed out, 0 errored -- the"
-                        " baseline took 390s; [js_mutation].mutant_timeout_s is 120s")
+                        " baseline took 390s; [js_mutation].mutant_timeout_s is 120s,"
+                        " raised to 586s for this suite")
     assert health._certified_nothing(res.note)
     assert res.findings == []
     assert [lab for lab, _, _ in oracle.calls] == ["BASE", "f1", "f2"]
+
+
+# Every mutant runs the WHOLE suite (single stage), so a per-mutant timeout
+# below the suite's own time times every mutant out. pawscout-worker,
+# 2026-10-02: baseline 427s, `mutant_timeout_s` 120s, 2 of 2 timed out and the
+# repo went red on consumers_healthy. The baseline has just measured the
+# suite, so each mutant now gets at least 1.5x that; the knob is a floor.
+
+def test_a_mutant_gets_one_and_a_half_times_a_baseline_longer_than_the_knob(
+        tmp_path, monkeypatch):
+    r, base, head = _repo(tmp_path, 2)
+    baseline = RunnerResult(tool="npm", state=ToolState.OK, returncode=0, duration_s=427.0)
+
+    res, oracle = _run(r, base, head, monkeypatch, {}, {"BASE": baseline})
+
+    assert [(lab, t) for lab, t, _ in oracle.calls] == [
+        ("BASE", 480.0), ("f1", 640.5), ("f2", 640.5)]
+    _stats(res, generated=2, tested=2, killed=2,
+           killed_fps=[fp(r, "f1"), fp(r, "f2")])
+
+
+def test_the_configured_mutant_timeout_is_a_floor_for_a_fast_suite(tmp_path, monkeypatch):
+    r, base, head = _repo(tmp_path, 1)
+    baseline = RunnerResult(tool="npm", state=ToolState.OK, returncode=0, duration_s=10.0)
+
+    _, oracle = _run(r, base, head, monkeypatch, {"mutant_timeout_s": 90}, {"BASE": baseline})
+
+    assert [(lab, t) for lab, t, _ in oracle.calls] == [("BASE", 360.0), ("f1", 90.0)]
 
 
 def test_a_run_of_only_errors_certifies_nothing_and_names_the_configured_timeout(

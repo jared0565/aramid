@@ -103,7 +103,7 @@ def missing_note_prefix(argv0: str) -> str:
 
 
 def no_verdict_note(section: str, stats: dict, baseline_s: float,
-                    mutant_timeout: float) -> str:
+                    mutant_timeout: float, per_mutant: float | None = None) -> str:
     """The note for a run that TESTED mutants and reached a verdict on none
     of them (FN-23): each timed out, errored, or (Python) passed stage 1 and
     was cut by the confirm cap before the full suite ran. Shared by both
@@ -116,10 +116,17 @@ def no_verdict_note(section: str, stats: dict, baseline_s: float,
     390s by that repo's figures, under a 120s mutant timeout), and nothing
     anywhere said so (interop rounds 280/281/285). The two numbers that
     decide it are in the note for that reason. `ok` is kept: `degraded`
-    would pin the queue item, the same trade `no mutants tested` makes."""
-    return (f"no mutant reached a verdict: {stats['tested']} tested, "
+    would pin the queue item, the same trade `no mutants tested` makes.
+
+    `per_mutant` is the timeout the mutants actually ran under when the
+    consumer raised it above the knob (js_mutation sizes it from the
+    baseline), so the note never names the knob as the number that applied."""
+    note = (f"no mutant reached a verdict: {stats['tested']} tested, "
             f"{stats['timeouts']} timed out, {stats['errors']} errored -- the baseline "
             f"took {baseline_s:.0f}s; [{section}].mutant_timeout_s is {mutant_timeout:.0f}s")
+    if per_mutant is not None and per_mutant > mutant_timeout:
+        note += f", raised to {per_mutant:.0f}s for this suite"
+    return note
 
 
 _SAFE_STEM = re.compile(r"^[A-Za-z0-9_]+$")
