@@ -28,6 +28,18 @@ to publish a tag that disagrees with it.
   effects: `promote_live.main()` ran fifty times per drain with the fuzz
   driver's own command line as its arguments. Such a function now counts as
   unfuzzable, like an unhinted one.
+- **`aramid mutation-score` no longer reports a regression when nothing
+  changed.** Identical lines in one function share a mutant fingerprint, so a
+  run where some of their mutants die and others survive lists that
+  fingerprint as both killed and survived. The transition check read it as
+  "killed" and compared it with the next run's survivors: two runs with the
+  same counts reported "1 mutant(s) regressed", and with
+  `score_block_armed` the pre-push gate blocks on that unless the push touches
+  the function's mapped test. On aramid's
+  own ledger this was the only transition reported, and it had stood since
+  2026-08-30. A transition now needs the earlier run to have killed every
+  occurrence. The trade-off: an extra occurrence of an already-mixed
+  fingerprint regressing shows only as a kill-rate drop.
 
 ### Changed
 

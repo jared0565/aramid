@@ -128,6 +128,38 @@ def test_transition_fires_against_partial_current_run():
     assert not any(r.kind == "rate" for r in regs)   # rate skipped: current partial
 
 
+# --- one id, several identical lines -------------------------------------------
+#
+# The fingerprint pins occurrence 0, so identical mutable lines in one function
+# (eleven `return 3` in scripts/promote_live.py::main) share ONE id. When some of
+# those mutants die and others survive, the id is in BOTH lists of one run. The
+# live ledger's only transition from 2026-08-30 to 2026-10-04
+# (cmd_ledger_mark_unreachable) was exactly this: two runs, identical counts,
+# reported as "1 mutant(s) regressed".
+
+def test_an_id_mixed_in_both_runs_is_not_a_transition():
+    FP = "0074afbe"
+    events = [
+        _crf(0, "m.py::f", 10, 1, True, killed_fps=[FP] * 10, survivor_fps=[FP]),
+        _crf(1, "m.py::f", 10, 1, True, killed_fps=[FP] * 10, survivor_fps=[FP]),
+    ]
+    assert mutation_score.latest_regressions(events) == []
+
+
+def test_an_id_killed_everywhere_before_and_surviving_somewhere_now_still_transitions():
+    """Every occurrence died in the baseline; one survives now while another
+    still dies. That IS a previously-killed mutant surviving, and it must stay
+    a transition even though the current run also lists the id as killed."""
+    FP = "ad415f34"
+    events = [
+        _crf(0, "m.py::f", 11, 0, True, killed_fps=[FP] * 11),
+        _crf(1, "m.py::f", 10, 1, True, killed_fps=[FP] * 10, survivor_fps=[FP]),
+    ]
+    trans = [r for r in mutation_score.latest_regressions(events) if r.kind == "transition"]
+    assert len(trans) == 1
+    assert trans[0].transition_fps == frozenset({FP})
+
+
 def test_rate_regression_full_to_partial_kill():
     events = [
         _crf(0, "m.py::f", 3, 0, True),   # rate 1.00

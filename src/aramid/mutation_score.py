@@ -100,7 +100,15 @@ def detect(current, baseline) -> list[Regression]:
     if baseline is None:
         return []
     out = []
-    trans = baseline.killed_fps & current.survivor_fps
+    # A transition needs the baseline to have killed EVERY occurrence of the id.
+    # The fingerprint pins occurrence 0, so identical lines in one function
+    # share an id, and a run where some of them die and some survive lists it
+    # in both sets; read as "killed", two identical runs reported a regression
+    # (cmd_ledger_mark_unreachable, 2026-08-30 to 2026-10-04). The cost: an id
+    # mixed in the baseline can never transition, so a further occurrence of
+    # it regressing is caught only by the rate check, and only between two
+    # fully-mutated runs.
+    trans = (baseline.killed_fps - baseline.survivor_fps) & current.survivor_fps
     if trans:
         out.append(Regression(
             target=current.target, kind="transition",

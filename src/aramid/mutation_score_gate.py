@@ -26,9 +26,14 @@ and suppressing against it would suppress everything).
 
 Fail-open contract identical to mutation_gate: NEVER raises into run_gate.
 Documented limitations (spec s10): the fingerprint pins occurrence to 0, so
-two same-op mutants on one identical line share an fp and a transition may
-conflate them; findings are ephemeral (invisible to aramid status and to
-apply_overrides -- escape = mapped test or disarm); a function rewritten
+same-op mutants on identical lines share an fp. A transition therefore needs
+the baseline to have killed EVERY occurrence (mutation_score.detect): an fp
+the baseline also lists as a survivor never transitions, so a further
+occurrence of it regressing shows only as a rate regression, and only
+between two fully-mutated runs. Before 0.20.1 such an fp read as "killed" and
+two identical runs reported a transition. Findings are ephemeral (invisible
+to aramid status and to apply_overrides -- escape = mapped test or disarm);
+a function rewritten
 without its mapped test blocks until a re-drain re-measures, which is why
 [mutation].enabled = false disables the seam entirely (engine off = no
 re-drain backstop = an armed stale regression could never clear).
