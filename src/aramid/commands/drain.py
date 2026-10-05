@@ -462,10 +462,14 @@ def _pending_retest_item(root: Path, cfg, ledger, at: str) -> queue.QueueItem | 
     (suppressed, or nothing to regenerate from -- an item for those would
     cut a worktree to re-test nothing); or the mutation consumer has
     STOOD DOWN here (a give-up returns `ok` and would again, every four
-    hours, forever). Rows a re-test kills go `fixed`; rows that survive
-    are re-reported open and stop triggering; rows a timeout or the cap
-    left pending get the next drain. Never raises past the caller's
-    per-repo isolation."""
+    hours, forever); or every pending row has more occurrences at HEAD than
+    the item's budget can test (`unfittable_pending`): the claim is atomic,
+    so the consumer would skip each one unspent after paying for a baseline
+    -- 13 minutes per drain on this repo for ad415f34, eleven identical
+    lines against a room of 3 (2026-10-05). `aramid status` names those
+    rows. Rows a re-test kills go `fixed`; rows that survive are re-reported
+    open and stop triggering; rows a timeout or the cap left pending get the
+    next drain. Never raises past the caller's per-repo isolation."""
     if not _mutation.retests_enabled(cfg):
         return None
     pending = _mutation.pending_retests(ledger, root)
@@ -473,11 +477,15 @@ def _pending_retest_item(root: Path, cfg, ledger, at: str) -> queue.QueueItem | 
         return None
     if any(f.name == _mutation.NAME for f in health.stood_down(ledger)):
         return None
+    unfittable = {fid for fid, _rel, _need in _mutation.unfittable_pending(ledger, root, cfg)}
+    fitting = [p for p in pending if p[0] not in unfittable]
+    if not fitting:
+        return None
     head = gitutil.rev_sha(root, "HEAD")
     if head is None:
         return None
     return queue.enqueue(ledger, at, head, head, int(cfg.triage.get("min_score", 40)),
-                         [queue.pending_retest_reason(len(pending))])
+                         [queue.pending_retest_reason(len(fitting))])
 
 
 def _sweep_leftovers(root: Path, *, dry_run: bool) -> leftovers.Sweep:

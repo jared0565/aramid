@@ -288,6 +288,32 @@ def _queue_lines(ledger: Ledger) -> list[str]:
     return lines
 
 
+def _unfittable_retest_lines(root: Path, cfg, ledger: Ledger) -> list[str]:
+    """`pending_retest` mutation survivors no drain item can re-test: more
+    occurrences at HEAD than min(max_mutants, confirm_cap). The drain stops
+    cutting an item for them, and the ledger keeps them out of `open`, so
+    without this line they would sit pending with nothing anywhere saying
+    so. The remedy names every knob it takes: each occurrence is one
+    stage-1 run AND one full-suite confirm, and the wall clock starts
+    before the baseline, which is one more full-suite run."""
+    from aramid.consumers import mutation as mutation_consumer
+
+    stuck = mutation_consumer.unfittable_pending(ledger, root, cfg)
+    if not stuck:
+        return []
+    budget = mutation_consumer.empty_queue_retest_budget(cfg)
+    room = mutation_consumer.empty_queue_retest_room(cfg)
+    lines = [f"  mutation re-test impossible: {len(stuck)} pending survivor(s) have more "
+             f"occurrences than one drain item can test (min(max_mutants "
+             f"{budget['mutants']}, confirm_cap {budget['confirms']}) = {room}):"]
+    lines.extend(f"    {fid[:8]} {rel}: {need} occurrences -- stays pending_retest until "
+                 f"[mutation].max_mutants and confirm_cap are both >= {need} and "
+                 f"wall_budget_s covers {need + 1} full-suite runs (the baseline and "
+                 f"one confirm per occurrence)"
+                 for fid, rel, need in stuck)
+    return lines
+
+
 def _last_drain_line(ledger: Ledger) -> str:
     """The newest of a consumer's run and the drain's own visit row: an
     idle drain writes only the visit, so the line moves every drain and a
@@ -425,6 +451,7 @@ def cmd_status(root) -> int:
 
         # --- Phase 2a: queue / drain / registry / schedule (spec section 2) ---
         lines.extend(_queue_lines(ledger))
+        lines.extend(_unfittable_retest_lines(root, cfg, ledger))
         lines.append(_last_drain_line(ledger))
         lines.append(_registry_line(root))
         lines.append(_scheduled_drain_line())

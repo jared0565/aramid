@@ -440,9 +440,62 @@ def _fits_retest_budget(need: int, budget: dict) -> bool:
     and full-suite confirm spent (five minutes) and the row left pending.
     Zero occurrences always fit: nothing to run, and the caller must still
     see the empty regeneration (`gap_addressed` / `file_departed` own it)."""
-    room = min(budget["mutants"] - budget["tested"],
-               budget["confirms"] - budget["confirmed"])
-    return need <= max(room, 0)
+    return need <= _retest_room(budget)
+
+
+def _retest_room(budget: dict) -> int:
+    """How many occurrences one survivor may still have under `budget`."""
+    return max(min(budget["mutants"] - budget["tested"],
+                   budget["confirms"] - budget["confirmed"]), 0)
+
+
+def _range_budget(knobs: dict) -> dict:
+    """A fresh RANGE budget: `max_mutants` stage-1 runs and `confirm_cap`
+    full-suite runs. `consume` builds the item's budget here, and
+    `empty_queue_retest_room` reads the drain's room from it, so the two
+    cannot disagree about what an empty-queue item can re-test."""
+    return {"mutants": knobs["max_mutants"], "confirms": knobs["confirm_cap"],
+            "tested": 0, "confirmed": 0}
+
+
+def empty_queue_retest_budget(cfg) -> dict:
+    """The budget the drain's empty-queue item re-tests on. That item has an
+    empty range and no changed test, so there is no claimed pass: its
+    re-tests run in the hygiene pass on a fresh range budget."""
+    return _range_budget(_knobs(getattr(cfg, "mutation", None) or {}))
+
+
+def empty_queue_retest_room(cfg) -> int:
+    """The most occurrences a `pending_retest` survivor can have and still be
+    re-tested on the drain's empty-queue item: min(max_mutants, confirm_cap)."""
+    return _retest_room(empty_queue_retest_budget(cfg))
+
+
+def unfittable_pending(ledger, root: Path, cfg) -> list[tuple[str, str, int]]:
+    """(id, file, occurrences at HEAD) of each `pending_retest` survivor, under
+    `pending_retests`' eligibility, with more occurrences than
+    `empty_queue_retest_room`. No empty-queue item can re-test one: the claim
+    is atomic, so the consumer skips it unspent, every drain. Excluded only on
+    POSITIVE evidence: a file git cannot read at HEAD, or a regeneration that
+    raises, is left out of this list (unknown is not too big), and the
+    consumer then answers for it as before. Never raises."""
+    try:
+        room = empty_queue_retest_room(cfg)
+        pending = pending_retests(ledger, root)
+    except Exception:
+        return []
+    out: list[tuple[str, str, int]] = []
+    for fid, rel, _line, op in pending:
+        try:
+            text = gitutil.blob_at(root, "HEAD", rel)
+            if text is None:
+                continue
+            need = len(_survivor_mutants(rel, fid, text, op))
+        except Exception:  # noqa: S112 -- unknown is not too big: the row stays eligible and the consumer answers for it.
+            continue
+        if need > room:
+            out.append((fid, rel, need))
+    return out
 
 
 def _retest_candidates(ledger, root: Path,
@@ -653,7 +706,6 @@ def consume(item, ctx: DrainContext) -> ConsumerResult:
     if not mcfg.get("enabled", True):
         return ConsumerResult(consumer=NAME, state="ok", note="disabled")
     knobs = _knobs(mcfg)
-    max_mutants = knobs["max_mutants"]
     wall_budget = knobs["wall_budget_s"]
     mutant_timeout = knobs["mutant_timeout_s"]
     confirm_cap = knobs["confirm_cap"]
@@ -820,8 +872,7 @@ def consume(item, ctx: DrainContext) -> ConsumerResult:
         # survivor re-reported -- both need one, so a cap below the count
         # would only buy stage-1 runs that can claim nothing). The wall
         # budget is shared by everything.
-        range_budget = {"mutants": max_mutants, "confirms": confirm_cap,
-                        "tested": 0, "confirmed": 0}
+        range_budget = _range_budget(knobs)
         claimed_budget = {"mutants": retest_cap, "confirms": retest_cap,
                           "tested": 0, "confirmed": 0}
 
@@ -1181,8 +1232,10 @@ def consume(item, ctx: DrainContext) -> ConsumerResult:
     if stats["retest_skipped"]:
         # Never started: every occurrence of the id must die for a claim,
         # and no pass had that many slots left. Nothing was spent on it and
-        # nothing re-reports it; a quieter item (the empty-queue re-test)
-        # or a higher `retest_cap` gives it room.
+        # nothing re-reports it. A quieter item may give it room, but only up
+        # to min(max_mutants, confirm_cap) (`empty_queue_retest_room`); a row
+        # with more occurrences than that never fits, and the drain no longer
+        # cuts an empty-queue item for it (`unfittable_pending`).
         note += (f"; {stats['retest_skipped']} survivor(s) not re-tested: "
                  f"occurrences exceed the remaining re-test budget")
     extra = dict(stats)

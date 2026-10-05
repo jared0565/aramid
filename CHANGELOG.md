@@ -10,6 +10,26 @@ to publish a tag that disagrees with it.
 
 ## [Unreleased]
 
+### Fixed
+
+- **A pending mutation survivor that no drain can re-test no longer costs a
+  drain every four hours, and `aramid status` now names it.** A mutant's
+  fingerprint is shared by identical lines, and a re-test must kill every
+  occurrence before it can close the finding, so the consumer starts one
+  only when all its occurrences fit the item's budget. The drain's
+  empty-queue re-test item has room for min(`max_mutants`, `confirm_cap`)
+  occurrences, 3 by default. A `pending_retest` survivor with more never
+  fits, but the drain kept cutting an item for it whenever the queue was
+  empty; the consumer then ran the baseline suite and skipped it. On this
+  repo that was 13 minutes per drain for `scripts/promote_live.py`'s eleven
+  identical `return 3` lines (2026-10-05), with the finding left
+  `pending_retest`, outside the open count, for good. The drain now counts
+  each pending survivor's occurrences at HEAD and cuts no item for one that
+  cannot fit. `aramid status` adds a `mutation re-test impossible` line with
+  the id, the occurrence count, and what would make it re-testable: both
+  knobs at least that count, and a wall budget for one full-suite run per
+  occurrence plus the baseline.
+
 ## [0.20.1] — 2026-10-05
 
 ### Fixed

@@ -15,7 +15,9 @@ from types import SimpleNamespace
 
 from aramid import queue
 from aramid.commands import drain as drain_mod
+from aramid.commands import status as status_mod
 from aramid.consumers import mutation as mut_consumer
+from aramid.fingerprint import compute_fingerprint
 from aramid.ledger import Ledger
 from aramid.models import Event, EventType, Finding, Gate, Severity, Verdict
 
@@ -179,6 +181,96 @@ def test_mutation_disabled_or_re_tests_off_means_no_item(tmp_path):
         assert drain_mod._pending_retest_item(r, _cfg(enabled=False), led, "t") is None
         assert drain_mod._pending_retest_item(r, _cfg(retest_open_survivors=False), led, "t") is None
         assert queue.queued_item(queue.materialize_queue(led.events())) is None
+    finally:
+        led.close()
+
+
+#
+# A pending row whose occurrences outnumber the room the empty-queue item has
+# can never be re-tested there: the claim is atomic, so `_fits_retest_budget`
+# skips it unspent, and the next empty-queue item does the same. On this repo
+# (2026-10-05 10:00Z) that was 13 minutes of baseline suite per drain for
+# ad415f34 -- eleven identical `return 3` lines against a room of 3 -- with
+# the row left pending_retest for good. The drain now counts occurrences at
+# HEAD and does not cut an item for a row that cannot fit; `aramid status`
+# names the row instead.
+
+FOUR_IDENTICAL = ("def f(x):\n"
+                  "    if x == 1:\n        return 3\n"
+                  "    if x == 2:\n        return 3\n"
+                  "    if x == 5:\n        return 3\n"
+                  "    if x == 7:\n        return 3\n"
+                  "    return 0\n")
+FOUR = compute_fingerprint("mutation", "int-bound", "calc.py", "        return 3", 0)
+
+
+def _commit(r, rel, text):
+    (r / rel).write_text(text, encoding="utf-8")
+    subprocess.run(["git", "add", rel], cwd=r, check=True)
+    subprocess.run(["git", "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q",
+                    "-m", "add " + rel], cwd=r, check=True)
+
+
+def test_a_pending_row_with_more_occurrences_than_the_room_triggers_no_item(tmp_path):
+    r = _repo(tmp_path)
+    _commit(r, "calc.py", FOUR_IDENTICAL)
+    led = _ledger(r, pending=(FOUR,))
+    try:
+        assert drain_mod._pending_retest_item(r, _cfg(), led, "t") is None
+        assert queue.queued_item(queue.materialize_queue(led.events())) is None
+    finally:
+        led.close()
+
+
+def test_the_room_is_the_smaller_of_max_mutants_and_confirm_cap(tmp_path):
+    # Both limbs, firing and not: four occurrences fit once confirm_cap is 4,
+    # and stop fitting again when max_mutants drops to 3.
+    r = _repo(tmp_path)
+    _commit(r, "calc.py", FOUR_IDENTICAL)
+    led = _ledger(r, pending=(FOUR,))
+    try:
+        assert drain_mod._pending_retest_item(r, _cfg(confirm_cap=4, max_mutants=3), led, "t") is None
+        item = drain_mod._pending_retest_item(r, _cfg(confirm_cap=4), led, "t")
+    finally:
+        led.close()
+    assert item is not None and queue.is_pending_retest_item(item)
+
+
+def test_only_the_rows_that_fit_are_counted_on_the_item(tmp_path):
+    r = _repo(tmp_path)
+    _commit(r, "calc.py", FOUR_IDENTICAL)
+    led = _ledger(r, pending=(FOUR, A))     # A regenerates nothing: zero always fits
+    try:
+        item = drain_mod._pending_retest_item(r, _cfg(), led, "t")
+    finally:
+        led.close()
+    assert item is not None
+    assert item.reasons == (queue.pending_retest_reason(1),)
+
+
+def test_status_names_a_pending_row_no_drain_can_re_test(tmp_path):
+    r = _repo(tmp_path)
+    _commit(r, "calc.py", FOUR_IDENTICAL)
+    led = _ledger(r, pending=(FOUR,))
+    try:
+        lines = status_mod._unfittable_retest_lines(r, _cfg(), led)
+    finally:
+        led.close()
+    assert lines == [
+        "  mutation re-test impossible: 1 pending survivor(s) have more occurrences "
+        "than one drain item can test (min(max_mutants 20, confirm_cap 3) = 3):",
+        f"    {FOUR[:8]} calc.py: 4 occurrences -- stays pending_retest until "
+        "[mutation].max_mutants and confirm_cap are both >= 4 and wall_budget_s "
+        "covers 5 full-suite runs (the baseline and one confirm per occurrence)",
+    ]
+
+
+def test_status_is_silent_when_every_pending_row_fits(tmp_path):
+    r = _repo(tmp_path)
+    _commit(r, "calc.py", FOUR_IDENTICAL)
+    led = _ledger(r, pending=(FOUR,))
+    try:
+        assert status_mod._unfittable_retest_lines(r, _cfg(confirm_cap=4), led) == []
     finally:
         led.close()
 
