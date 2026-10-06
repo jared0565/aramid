@@ -658,6 +658,7 @@ class Ledger:
                    finished_at: str | None = None,
                    certified=None, refs_moved=None, head_at_exit: str | None = None,
                    degraded: dict[str, str] | None = None,
+                   stalled: list[str] | None = None,
                    head: str | None = None):
         state, seen = _materialize(self.events())
         present = {f.id for f in findings}
@@ -827,6 +828,11 @@ class Ledger:
             # push). Empty means every selected tool ran; absent means an
             # aramid too old to record it.
             finished["degraded"] = dict(degraded)
+        if stalled is not None:
+            # The degraded tools the stall watchdog killed (0.20.4): no CPU
+            # and no output for [timeouts].stall_s. Empty = none stalled;
+            # absent = an aramid too old to know.
+            finished["stalled"] = sorted(stalled)
         if self.defer_finish:
             self._unfinished[run_id] = (at, finished)
         else:

@@ -12,6 +12,13 @@ to publish a tag that disagrees with it.
 
 ### Added
 
+- **A stalled tool reads as stalled everywhere a timeout is reported.** The gate's
+  degraded reason, `GateResult.stalled`, the ledger run row (`stalled`), `aramid
+  status`, health and fleet (`stalled_tools`, `tool (stalled)` in the red detail)
+  name it, and the mutation and js_mutation baseline note says `baseline stalled`
+  outside the `timeout_note_prefix` family, so a hung child never feeds the
+  budget give-up counter or advises raising the budget.
+
 - **`[timeouts].stall_s` sets the stall window (default 300, `0` = off).** It
   is read once per `aramid check` and, in the drain, applied per repo just
   before that repo's consumers run.

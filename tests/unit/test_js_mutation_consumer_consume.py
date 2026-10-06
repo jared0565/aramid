@@ -367,6 +367,20 @@ def test_a_baseline_timeout_degrades_with_the_budget_the_suite_and_the_head(
     assert _no_worktrees(r)
 
 
+def test_a_stalled_baseline_degrades_outside_the_budget_give_up_family(tmp_path, monkeypatch):
+    r, base, head = _repo(tmp_path)
+    stalled = RunnerResult(tool="npm", state=ToolState.TIMEOUT, stalled_s=301.0,
+                           duration_s=312.0)
+
+    res, _ = _run(r, base, head, monkeypatch, {}, {"BASE": stalled})
+
+    assert res.state == "degraded"
+    assert res.note == ("baseline stalled: no CPU or output for 301 s -- a hung child, not a"
+                        " slow suite; raise [timeouts].stall_s only if the suite legitimately"
+                        f" idles that long (last seen @ {head[:12]})")
+    assert not res.note.startswith(pymut.timeout_note_prefix(480.0, "npm test"))
+
+
 def test_a_red_baseline_degrades_with_the_shared_prefix(tmp_path, monkeypatch):
     r, base, head = _repo(tmp_path)
 

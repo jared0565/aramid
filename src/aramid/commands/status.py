@@ -53,6 +53,9 @@ def _last_run_line(ledger: Ledger) -> str:
             line += f", took {took:.0f}s"
         except (TypeError, ValueError):
             pass
+    stalled = last.payload.get("stalled")
+    if stalled:
+        line += ", stalled: " + ", ".join(stalled)
     return line + ")"
 
 

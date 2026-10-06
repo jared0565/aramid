@@ -119,6 +119,7 @@ class Out:
     raw: str = ""
     stderr: str = ""
     dur: float = 0.5
+    stalled: float | None = None
 
 
 OK1, OK2, PASS = Out(rc=1), Out(rc=2), Out(rc=0)
@@ -157,7 +158,8 @@ class Oracle:
         if callable(spec):
             spec = spec(Path(cwd))
         return RunnerResult(tool=str(argv[0]), state=spec.state, raw=spec.raw,
-                            stderr=spec.stderr, duration_s=spec.dur, returncode=spec.rc)
+                            stderr=spec.stderr, duration_s=spec.dur, returncode=spec.rc,
+                            stalled_s=spec.stalled)
 
 
 def _run(r, base, head, monkeypatch, outcomes, *, default=PASS, item_id="q1",
@@ -393,6 +395,23 @@ def test_a_baseline_timeout_is_degraded_with_the_budget_and_the_head(tmp_path, m
     assert res.state == "degraded"
     assert res.note == (f"{mut_consumer.timeout_note_prefix(480.0, suite)}"
                         f" (last seen @ {head[:12]})")
+
+
+def test_a_stalled_baseline_is_degraded_outside_the_budget_give_up_family(
+        tmp_path, monkeypatch):
+    r, base, head = _repo(tmp_path)
+    cfg = config_mod.load_config(r)
+    suite = mut_consumer._suite_label(mut_consumer._full_argv(cfg, r))
+
+    res, _ = _run(r, base, head, monkeypatch,
+                  {("full", "BASE"): Out(rc=5, state=ToolState.TIMEOUT, stalled=301.0)})
+
+    assert res.state == "degraded"
+    assert res.note == ("baseline stalled: no CPU or output for 301 s -- a hung child, not a"
+                        " slow suite; raise [timeouts].stall_s only if the suite legitimately"
+                        f" idles that long (last seen @ {head[:12]})")
+    assert not res.note.startswith(mut_consumer.timeout_note_prefix(480.0, suite))
+    assert res.note == mut_consumer.stalled_note(301.0, head)
 
 
 def test_a_red_baseline_is_degraded_with_the_rc_and_the_last_line_and_a_log(

@@ -147,6 +147,7 @@ def build_row(root, h: health_mod.Health, *, aramid_version: str, now: str) -> d
             "no_work": [f.name for f in h.no_work],
             "resolver_defects": [f"{r}/{t} {v}" for r, t, v in h.resolver_defects],
             "bad_tools": list(h.bad_tools),
+            "stalled_tools": list(h.stalled_tools),
             "degraded_block_tier": h.degraded_block_tier,
             "armed": dict(h.armed),
             "open": h.open,
@@ -305,7 +306,10 @@ def _red_detail(row: dict) -> str:
         elif k == "resolvers_ok":
             what = ", ".join(ev.get("resolver_defects") or [])
         elif k == "no_self_inflicted_block":
-            what = "engine error" if row.get("engine_error") else ", ".join(ev.get("bad_tools") or [])
+            stalled = set(ev.get("stalled_tools") or [])
+            what = ("engine error" if row.get("engine_error") else
+                    ", ".join(f"{t} (stalled)" if t in stalled else t
+                              for t in (ev.get("bad_tools") or [])))
         else:
             what = "pip-audit did not run"
         parts.append(f"{k}: {what}" if what else k)

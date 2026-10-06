@@ -241,6 +241,12 @@ def consume(item, ctx: DrainContext) -> ConsumerResult:
 
         base_res = run_subprocess(test_argv, wt, baseline_budget, env=_marker(wt))
         if base_res.state is ToolState.TIMEOUT:
+            if base_res.stalled_s is not None:
+                # Not a budget problem; see mutation.stalled_note.
+                return ConsumerResult(
+                    consumer=NAME, state="degraded",
+                    note=mutation.stalled_note(base_res.stalled_s, item.head),
+                    duration_s=time.monotonic() - started)
             # A timeout is a property of the repo's suite and budget, not of
             # this commit -- see consumers/mutation.py for the full account.
             return ConsumerResult(

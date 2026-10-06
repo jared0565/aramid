@@ -46,7 +46,7 @@ def test_build_row_has_exactly_the_spec_shape(tmp_path):
     assert set(row) == {"schema_version", "at", "repo", "name", "aramid_version", "gate",
                         "run_id", "exit_code", "engine_error", "criteria", "evidence"}
     assert set(row["evidence"]) == {"skip_streaks", "degraded_consumers", "stood_down",
-                                    "no_work", "resolver_defects", "bad_tools",
+                                    "no_work", "resolver_defects", "bad_tools", "stalled_tools",
                                     "degraded_block_tier", "armed", "open", "blocking"}
     assert row["schema_version"] == 1
     assert row["repo"] == normalize_path(str(tmp_path.resolve()))

@@ -62,6 +62,7 @@ class Health:
     exit_code: int | None = None
     blocking: int = 0
     bad_tools: tuple = ()
+    stalled_tools: tuple = ()
     degraded_block_tier: bool = False
     engine_error: bool = False
     dep_audit_ran: bool | None = None
@@ -360,6 +361,7 @@ def snapshot(cfg, ledger, result=None, *, gate=None, engine_error: bool = False)
                   exit_code=result.exit_code,
                   blocking=sum(1 for f in result.findings if f.verdict is Verdict.BLOCK),
                   bad_tools=tuple(result.degraded),
+                  stalled_tools=tuple(getattr(result, "stalled", ()) or ()),
                   degraded_block_tier=bool(result.degraded_block_tier),
                   dep_audit_ran=_dep_audit_ran(gate, result, tools_ran))
 

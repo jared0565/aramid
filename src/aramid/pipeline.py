@@ -108,6 +108,8 @@ class GateResult:
     # degraded BLOCK-tier tool had no surface saying which budget it blew
     # (2026-09-04). Same keys as `degraded`; see `_degraded_reasons`.
     degraded_reasons: dict = field(default_factory=dict)
+    # Tools the stall watchdog killed (no CPU, no output); a subset of `degraded`.
+    stalled: tuple = ()
     # The `--accept-degraded` / `ARAMID_ACCEPT_DEGRADED` reason when this run's
     # degradation was ACCEPTED: exit 0 with an `infrastructure_bypass` row.
     # None on every other run. On the result so the console and the JSON can
@@ -779,13 +781,24 @@ def _degraded_reasons(flat_results: list[RunnerResult]) -> dict[str, str]:
     reasons: dict[str, str] = {}
     for r in flat_results:
         if r.state is ToolState.TIMEOUT:
-            reasons[r.tool] = (f"timeout after {r.duration_s:.0f} s" if r.duration_s
-                               else "timeout (gate budget expired)")
+            if r.stalled_s is not None:
+                reasons[r.tool] = (f"stalled: no CPU or output for {r.stalled_s:.0f} s "
+                                   f"(killed after {r.duration_s:.0f} s)")
+            else:
+                reasons[r.tool] = (f"timeout after {r.duration_s:.0f} s" if r.duration_s
+                                   else "timeout (gate budget expired)")
         elif r.state is ToolState.MISSING:
             reasons[r.tool] = "not found"
         elif r.state is ToolState.CRASHED:
             reasons[r.tool] = f"crashed (exit {r.returncode})"
     return reasons
+
+
+def _stalled_tools(flat_results: list[RunnerResult]) -> tuple[str, ...]:
+    """The tools the stall watchdog killed this run, from the FIELD -- never
+    from reason text, which a tool's own stderr could imitate."""
+    return tuple(sorted({r.tool for r in flat_results
+                         if r.state is ToolState.TIMEOUT and r.stalled_s is not None}))
 
 
 def _producer_hung(degraded: dict[str, str], tool: str, rule: str,
@@ -1084,6 +1097,7 @@ def run_gate(root: Path, gate: Gate, mode: str, cfg: config_mod.Config, ledger: 
     # 7. record this run; enforce the pre-push no-new-warnings ratchet.
     scope_tools = {r.tool for r in flat_results if r.state is ToolState.OK}
     degraded_reasons = {**_degraded_reasons(flat_results), **producer_degraded}
+    stalled = _stalled_tools(flat_results)
     scope_files = set(files)
     # What each runner can VOUCH for having analyzed. `state is OK` alone
     # conflates "ran and found nothing" with "ran over nothing" -- ruff exits
@@ -1128,7 +1142,8 @@ def run_gate(root: Path, gate: Gate, mode: str, cfg: config_mod.Config, ledger: 
                                 finished_at=clock(),
                                 certified=certified, refs_moved=moved,
                                 head_at_exit=head_at_exit,
-                                degraded=degraded_reasons)
+                                degraded=degraded_reasons,
+                                stalled=list(stalled))
 
     # record_run above can NEVER resolve a whole-suite finding: those carry the
     # synthetic `<test-suite>` marker, which is not a path and so is never in
@@ -1445,6 +1460,7 @@ def run_gate(root: Path, gate: Gate, mode: str, cfg: config_mod.Config, ledger: 
                        new_ids=new_ids, stale_overrides=stale, run_id=run_id,
                        degraded_block_tier=degraded_block_tier,
                        degraded_reasons=degraded_reasons,
+                       stalled=stalled,
                        accepted_reason=accepted_reason,
                        tool_provenance=_tool_provenance(selected),
                        ratchet_escalated=ratchet_escalated,

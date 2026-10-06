@@ -35,6 +35,16 @@ _MISSING_GIVE_UP = 3    # repo-scoped like the timeout family: no commit fixes a
 _LOG_TAIL_LINES = 60    # of stdout and of stderr, in the baseline log
 
 
+def stalled_note(idle_s: float, head: str) -> str:
+    """The note for a baseline the stall watchdog killed: no CPU and no
+    output for `idle_s`. Deliberately NOT the `timeout_note_prefix` family --
+    that family feeds the repo-scoped budget give-up, and raising a budget
+    cannot fix a child that stopped working."""
+    return (f"baseline stalled: no CPU or output for {idle_s:.0f} s -- a hung"
+            f" child, not a slow suite; raise [timeouts].stall_s only if the"
+            f" suite legitimately idles that long (last seen @ {head[:12]})")
+
+
 def timeout_note_prefix(budget: float, suite: str) -> str:
     """The note family for "this suite does not fit this budget".
 
@@ -864,6 +874,13 @@ def consume(item, ctx: DrainContext) -> ConsumerResult:
                                        "pytest collected no tests at this head)",
                                   duration_s=time.monotonic() - started)
         if base_res.state is ToolState.TIMEOUT:
+            if base_res.stalled_s is not None:
+                # A hung child is not a budget problem: keep it out of the
+                # timeout-note family the give-up counter matches.
+                return ConsumerResult(
+                    consumer=NAME, state="degraded",
+                    note=stalled_note(base_res.stalled_s, item.head),
+                    duration_s=time.monotonic() - started)
             # A TIMEOUT IS NOT A FAILURE, and merging them is what made this
             # invisible downstream for three days: 11 runs clustered inside 1%
             # of each other -- the signature of a budget, not of a red suite --
