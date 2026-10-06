@@ -103,7 +103,11 @@ to publish a tag that disagrees with it.
     archived with `done` or replaced.
   - **CLI.** `aramid handover write` takes the body from stdin or `--file`
     (`--author`, `--replace`); `show` prints the pending one; `done` archives
-    it. Exit `2` is a refusal (including a body or author holding a lone
+    it. Every subcommand acts on the root of the git repository it runs in,
+    from any subdirectory, and refuses (exit `2`) outside a repository where
+    `aramid init` has run: the file is always where the hook and the MCP
+    tools read it, and never in an `.aramid/` that nothing gitignores.
+    Exit `2` is a refusal (including a body or author holding a lone
     surrogate, which only MCP or a direct call can produce: it is not valid
     Unicode text, so it is never signed), `3` is a pending file that cannot be
     delivered as verified. `show` prints a file that parsed but could not be

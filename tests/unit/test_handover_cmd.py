@@ -387,7 +387,7 @@ def test_render_pending_is_what_show_prints(tmp_path):
 
 def test_cli_wires_the_subcommand(tmp_path, monkeypatch, capsys):
     from aramid import cli
-    monkeypatch.chdir(tmp_path)
+    monkeypatch.chdir(_git_repo(tmp_path / "repo"))
     assert cli.main(["handover", "show"]) == 0
     assert capsys.readouterr().out == "no pending handover\n"
     assert cli.main(["handover"]) == 0                      # the default action is show
@@ -396,14 +396,16 @@ def test_cli_wires_the_subcommand(tmp_path, monkeypatch, capsys):
 
 def test_cli_write_takes_stdin_author_and_replace(tmp_path, monkeypatch, capsys):
     from aramid import cli
-    monkeypatch.chdir(tmp_path)
+    repo = _git_repo(tmp_path / "repo")
+    monkeypatch.chdir(repo)
     monkeypatch.setattr("sys.stdin", io.StringIO("via cli\n"))
     assert cli.main(["handover", "write", "--author", "bot"]) == 0
+    assert handover.read(repo).author == "bot"
     monkeypatch.setattr("sys.stdin", io.StringIO("again\n"))
     assert cli.main(["handover", "write"]) == 2
     monkeypatch.setattr("sys.stdin", io.StringIO("again\n"))
     assert cli.main(["handover", "write", "--replace"]) == 0
-    assert handover.read(tmp_path).body == "again\n"
+    assert handover.read(repo).body == "again\n"
     capsys.readouterr()
     assert cli.main(["handover", "done"]) == 0
     assert capsys.readouterr().out.startswith("aramid: handover consumed; archived to ")
@@ -472,3 +474,76 @@ def test_write_of_a_lone_surrogate_author_is_rc_2(tmp_path, capsys):
                                    stdin=io.StringIO("ok"), now=THEN)
     assert rc == 2
     assert "not valid Unicode text" in capsys.readouterr().err
+
+
+# ---- I1 (final review): the CLI writes where the hook reads ----
+
+NOT_ARMED = ("aramid: handover: not in an aramid-armed repo (run it inside a repo"
+             " where aramid init has run)\n")
+
+
+def _git_repo(path, *, onboarded=True):
+    import subprocess
+    path.mkdir(parents=True, exist_ok=True)
+    subprocess.run(["git", "init", "-q", "-b", "main"], cwd=path, check=True)
+    if onboarded:
+        (path / "aramid.toml").write_text("schema_version = 1\n", encoding="utf-8")
+    return path
+
+
+def test_cli_write_from_a_subdirectory_lands_at_the_root_and_the_hook_sees_it(
+        tmp_path, monkeypatch, capsys):
+    from aramid import cli
+    from aramid.commands import agent_hook
+    repo = _git_repo(tmp_path / "repo")
+    sub = repo / "src" / "pkg"
+    sub.mkdir(parents=True)
+    monkeypatch.chdir(sub)
+    monkeypatch.setattr("sys.stdin", io.StringIO("resume from the root\n"))
+    assert cli.main(["handover", "write"]) == 0
+    assert (repo / ".aramid" / "handover.json").is_file()
+    assert not (sub / ".aramid").exists()
+    lines = agent_hook._handover_lines(repo, NOW)
+    assert lines[0].startswith("aramid: PENDING HANDOVER written ")
+    assert lines[1] == "aramid: | resume from the root"
+
+
+def test_cli_show_and_done_from_a_subdirectory_act_on_the_root_file(
+        tmp_path, monkeypatch, capsys):
+    from aramid import cli
+    repo = _git_repo(tmp_path / "repo")
+    sub = repo / "deep" / "er"
+    sub.mkdir(parents=True)
+    handover.write(repo, "root body\n", now=THEN)
+    monkeypatch.chdir(sub)
+    capsys.readouterr()
+    assert cli.main(["handover", "show"]) == 0
+    assert capsys.readouterr().out.endswith("root body\n")
+    assert cli.main(["handover", "done"]) == 0
+    assert capsys.readouterr().out.startswith("aramid: handover consumed; archived to ")
+    assert not (repo / ".aramid" / "handover.json").exists()
+    assert len(list((repo / ".aramid" / "handovers").iterdir())) == 1
+    assert not (sub / ".aramid").exists()
+
+
+@pytest.mark.parametrize("argv", [["handover", "write"], ["handover", "show"],
+                                  ["handover", "done"], ["handover"]])
+def test_cli_handover_in_a_repo_without_aramid_toml_is_rc_2_and_writes_nothing(
+        tmp_path, monkeypatch, capsys, argv):
+    from aramid import cli
+    repo = _git_repo(tmp_path / "repo", onboarded=False)
+    monkeypatch.chdir(repo)
+    monkeypatch.setattr("sys.stdin", io.StringIO("x\n"))
+    assert cli.main(argv) == 2
+    out = capsys.readouterr()
+    assert out.err == NOT_ARMED and out.out == ""
+    assert not (repo / ".aramid").exists()
+
+
+def test_cli_handover_outside_git_is_rc_2(tmp_path, monkeypatch, capsys):
+    from aramid import cli
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr("sys.stdin", io.StringIO("x\n"))
+    assert cli.main(["handover", "write"]) == 2
+    assert capsys.readouterr().err == NOT_ARMED
+    assert not (tmp_path / ".aramid").exists()
