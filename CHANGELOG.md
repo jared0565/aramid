@@ -39,6 +39,25 @@ to publish a tag that disagrees with it.
   time. A tree that cannot be measured counts as active, so the worst case is
   today's wall-clock timeout.
 
+### Fixed
+
+- **Output with no newline counts as activity, and a child's last line is
+  kept when a process it started still holds the pipe.** `run_subprocess`
+  reads its pipes as bytes in chunks as they arrive, instead of line by
+  line, and decodes them to exactly the text the old pipes produced (UTF-8,
+  invalid bytes replaced, universal newlines). Before this fix, the stall
+  watchdog read a child printing progress dots with no newline as silent
+  and killed it as stalled. A child that wrote an unterminated last line
+  (its JSON report, say) and exited while a grandchild kept stdout open
+  came back `ok` with empty output. When such a holder outlives the child,
+  aramid now waits at most 5 s in total for both pipes, uses the output
+  read so far, and prints one line on its own stderr: `aramid: <tool>: a
+  process it started still holds its output pipe after it exited; using the
+  output read so far`. That line does not change the result, and the holder
+  is not killed. In 0.20.3 the same run waited out its whole budget and was
+  reported as a timeout (or, under the test runner's progress tap, lost its
+  unterminated last line).
+
 ## [0.20.3] — 2026-10-06
 
 ### Security

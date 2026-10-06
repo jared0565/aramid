@@ -1,5 +1,9 @@
+import subprocess
 import sys
 import time
+
+import pytest
+
 from aramid.runners import base
 from types import SimpleNamespace
 from aramid.runners.base import (CONTENT_UNREADABLE, run_subprocess, ToolState,
@@ -105,6 +109,39 @@ def test_invalid_utf8_output_never_raises(tmp_path):
     assert r.state is ToolState.OK
     assert "pre" in r.raw and "post" in r.raw
     assert "�" in r.raw  # replaced, never raised
+
+# Each piece is a separate flushed write with a pause after it, so the reader
+# meets the boundaries the old text-mode pipes hid: a \r\n split across two
+# reads, a lone \r, an `é` whose two bytes arrive apart, an invalid byte, and
+# (second script) a \r that only the final flush can resolve.
+_PIECES = {
+    "mixed": (b"a\r", b"\nb\rc\n", b"\xc3", b"\xa9", b"\xff"),
+    "trailing-cr": (b"x\r",),
+}
+
+
+@pytest.mark.parametrize("name", sorted(_PIECES))
+def test_the_binary_reader_decodes_exactly_like_text_mode_pipes(tmp_path, name):
+    """Runners parse JSON out of `raw`: the chunked binary reader must give the
+    same string the old `text=True, encoding="utf-8", errors="replace"` pipes
+    gave for the same bytes, and the tap the same lines."""
+    code = ("import sys, time\n"
+            f"for piece in {_PIECES[name]!r}:\n"
+            "    sys.stdout.buffer.write(piece); sys.stdout.buffer.flush(); time.sleep(0.2)\n")
+    argv = [sys.executable, "-c", code]
+    want = subprocess.run(argv, cwd=tmp_path, capture_output=True, text=True,  # noqa: S603
+                          encoding="utf-8", errors="replace").stdout
+    # Control: the reference really does translate newlines and replace bytes.
+    assert want == {"mixed": "a\nb\nc\né�", "trailing-cr": "x\n"}[name]
+    lines = []
+    r = run_subprocess(argv, tmp_path, 30, on_stdout_line=lines.append)
+    assert r.state is ToolState.OK and r.returncode == 0, r.stderr
+    assert r.raw == want
+    expected = want.split("\n")
+    if expected[-1] == "":
+        expected.pop()
+    assert lines == expected
+
 
 def test_timeout_returns_promptly_and_bounded(tmp_path):
     # Confirms the happy path still returns TIMEOUT promptly after the

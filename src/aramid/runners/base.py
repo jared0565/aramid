@@ -1,4 +1,6 @@
+import codecs
 import contextlib
+import io
 import itertools
 import os
 import subprocess
@@ -415,7 +417,7 @@ def worktree_import_env(wt: Path) -> dict[str, str]:
 # a full stderr pipe (Windows pipes hold 4096 bytes; pip-audit reads stdout
 # to EOF before touching stderr) sat at zero CPU for 97 minutes on
 # 2026-10-06. Every SAMPLE_S the launcher compares the child TREE's
-# {pid: (created, cpu)} and the characters read so far; no change in any of
+# {pid: (created, cpu)} and the bytes read so far; no change in any of
 # them for the stall window = stalled. Module state, like the drain's
 # `closed()`: the launchers are reached from inside consumers that hold no
 # config. `cmd_check` and the drain set it from `[timeouts].stall_s`.
@@ -441,6 +443,18 @@ class _Stalled(Exception):
         self.procs = procs
 
 
+_READ_CHUNK = 65536
+
+
+def _text_decoder() -> io.IncrementalNewlineDecoder:
+    """What `text=True, encoding="utf-8", errors="replace"` pipes decode with:
+    UTF-8 with U+FFFD for a bad byte, and universal newlines (`\\r\\n` and a
+    lone `\\r` both become `\\n`). Incremental, so a multibyte character or a
+    `\\r\\n` split across two reads decodes as if it had arrived whole."""
+    return io.IncrementalNewlineDecoder(
+        codecs.getincrementaldecoder("utf-8")(errors="replace"), translate=True)
+
+
 def _watched_communicate(proc: subprocess.Popen, timeout_s: float, on_stdout_line):
     """Drain both pipes on daemon threads (a single-threaded read of one pipe
     lets the other fill its OS buffer and wedge the child -- exactly the bug
@@ -449,20 +463,53 @@ def _watched_communicate(proc: subprocess.Popen, timeout_s: float, on_stdout_lin
     clock and `_Stalled` when neither the tree's CPU/membership nor the
     output moved for the stall window. An unmeasurable tree (sample() ->
     None) counts as activity, so a watchdog that cannot see is today's
-    timeout, never a false stall. Returns (stdout, stderr) whole."""
+    timeout, never a false stall.
+
+    The pipes are BINARY and read in chunks as the bytes arrive, never by
+    line: a line reader counted nothing until a newline, so a child printing
+    progress dots read as silent and was killed as stalled, and an
+    unterminated last line sat inside a `readline` that a still-running
+    grandchild kept blocked. Each stream is decoded on its reader thread,
+    exactly as the old text-mode pipes decoded it (`_text_decoder`).
+
+    Returns (stdout, stderr, held). `held` is True when a reader was still
+    blocked after the child exited and the `_POST_KILL_DRAIN_S` join ran out:
+    a process the child started holds the pipe, and the strings are what
+    had arrived by then."""
     chunks: dict[str, list[str]] = {"out": [], "err": []}
-    seen = [0]
+    # Bytes read per stream. Each counter is written by its own reader thread
+    # only, so no update is lost; the watch compares their sum.
+    seen = {"out": 0, "err": 0}
 
     def pump(name, stream, tap):
-        for line in iter(stream.readline, ""):
-            chunks[name].append(line)
-            seen[0] += len(line)
-            if tap is not None:
+        decoder = _text_decoder()
+        pending = ""   # tapped text after its last newline: a line not yet complete
+
+        def deliver(text: str, final: bool = False) -> None:
+            nonlocal tap, pending
+            chunks[name].append(text)
+            if tap is None:
+                return
+            pending += text
+            if "\n" not in text and not final:
+                return   # no line completed; never rescan a long unterminated one
+            lines = pending.split("\n")
+            pending = lines.pop()
+            if final and pending:
+                # `readline` handed over an unterminated last line at EOF too.
+                lines.append(pending)
+            for line in lines:
                 try:
-                    tap(line.rstrip("\r\n"))
+                    tap(line)
                 except Exception as exc:  # noqa: BLE001 -- decoration never fails the run
                     print(f"aramid: progress reporting stopped: {exc!r}", file=sys.stderr)
                     tap = None
+                    return
+
+        while chunk := stream.read1(_READ_CHUNK):
+            seen[name] += len(chunk)
+            deliver(decoder.decode(chunk))
+        deliver(decoder.decode(b"", final=True), final=True)
         stream.close()
 
     readers = [threading.Thread(target=pump, args=("out", proc.stdout, on_stdout_line), daemon=True),
@@ -487,14 +534,21 @@ def _watched_communicate(proc: subprocess.Popen, timeout_s: float, on_stdout_lin
             tree = proctree.sample(proc.pid)
         except Exception:  # noqa: BLE001 -- a sampler that raises is unmeasurable, i.e. active
             tree = None
-        if tree is None or last_tree is None or tree != last_tree or seen[0] != last_seen:
+        read = seen["out"] + seen["err"]
+        if tree is None or last_tree is None or tree != last_tree or read != last_seen:
             quiet_since = now
-        last_tree, last_seen = tree, seen[0]
+        last_tree, last_seen = tree, read
         if now - quiet_since >= window:
             raise _Stalled(now - quiet_since, len(tree))
+    # One shared bound for both readers: joined one after the other with a
+    # full bound each, a holder of BOTH pipes cost twice the bound.
+    drained_by = time.monotonic() + _POST_KILL_DRAIN_S
     for t in readers:
-        t.join(timeout=_POST_KILL_DRAIN_S)
-    return "".join(chunks["out"]), "".join(chunks["err"])
+        t.join(timeout=max(0.0, drained_by - time.monotonic()))
+    held = any(t.is_alive() for t in readers)
+    # A reader still blocked owns its decoder, so only what it has already
+    # handed over is used: a `\r` or half a character it holds back is lost.
+    return "".join(chunks["out"]), "".join(chunks["err"]), held
 
 
 def run_subprocess(argv, cwd: Path, timeout_s: float, env=None, *,
@@ -529,13 +583,14 @@ def run_subprocess(argv, cwd: Path, timeout_s: float, env=None, *,
     # entire purpose of this function, not attacker-controlled input. Every
     # `argv` is built by a runner's own `_build_argv()` from fixed tool names
     # and repo-relative file paths, never from untrusted external strings.
+    # BINARY pipes: `_watched_communicate` reads bytes as they arrive and
+    # decodes them itself, to exactly what text=True/utf-8/replace gave.
     proc = subprocess.Popen(argv, cwd=str(cwd), stdout=subprocess.PIPE,  # noqa: S603
-                            stderr=subprocess.PIPE, text=True,
-                            encoding="utf-8", errors="replace",
+                            stderr=subprocess.PIPE,
                             env={**os.environ, **(env or {})}, **kwargs)
     try:
         with live_process(lambda: _kill_tree(proc)):
-            out, err = _watched_communicate(proc, timeout_s, on_stdout_line)
+            out, err, held = _watched_communicate(proc, timeout_s, on_stdout_line)
     except (subprocess.TimeoutExpired, _Stalled) as stop:
         _kill_tree(proc)
         try:
@@ -568,6 +623,13 @@ def run_subprocess(argv, cwd: Path, timeout_s: float, env=None, *,
         return RunnerResult(tool, ToolState.TIMEOUT,
                             stderr=f"aramid: {tool} was killed at the drain's hard deadline",
                             duration_s=time.monotonic()-start)
+    if held:
+        # Said on aramid's own stderr and nowhere else: the child finished,
+        # so the result stands as it is. Refusing it would refuse every push
+        # whose `npm test` leaves a server holding stdout. The holder is not
+        # killed (parked: it outlived the run in 0.20.3 as well).
+        print(f"aramid: {tool}: a process it started still holds its output pipe after it "
+              f"exited; using the output read so far", file=sys.stderr)
     return RunnerResult(tool, ToolState.OK, out, err, time.monotonic()-start, proc.returncode)
 
 class Runner(Protocol):

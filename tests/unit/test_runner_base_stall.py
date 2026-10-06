@@ -2,7 +2,9 @@
 output for the stall window is killed early and reported as stalled (still
 ToolState.TIMEOUT, carrying stalled_s). Windows are shrunk through the
 module seams so each test runs in seconds."""
+import os
 import re
+import signal
 import sys
 import time
 
@@ -57,6 +59,51 @@ def test_a_busy_grandchild_keeps_an_idle_child_alive(tmp_path, fast_watch):
     r = run_subprocess([sys.executable, "-c", code], tmp_path, 4)
     assert r.state is ToolState.TIMEOUT
     assert r.stalled_s is None, "descendant CPU must count as activity"
+
+
+def test_output_with_no_newline_is_activity_and_is_kept(tmp_path, fast_watch):
+    # The reader counts BYTES as they arrive. A line reader saw nothing until
+    # a newline, so a child printing progress dots read as silent and was
+    # killed as stalled (a 2 s window killed exactly this child).
+    code = ("import sys, time\n"
+            "for _ in range(12):\n"
+            "    sys.stdout.write('.'); sys.stdout.flush(); time.sleep(0.25)\n")
+    r = run_subprocess([sys.executable, "-c", code], tmp_path, 30)
+    assert r.state is ToolState.OK and r.returncode == 0, r.stderr
+    assert r.stalled_s is None
+    assert r.raw == "." * 12
+
+
+def test_a_grandchild_holding_stdout_neither_hides_the_childs_last_line_nor_blocks(
+        tmp_path, monkeypatch, capfd):
+    # The child writes its JSON with no trailing newline and exits; the
+    # grandchild it started still holds stdout. A line reader left that last
+    # line inside a blocked readline and the run came back OK with raw ''.
+    monkeypatch.setattr(base, "_POST_KILL_DRAIN_S", 1.0)
+    pidfile = tmp_path / "grandchild.pid"
+    code = ("import pathlib, subprocess, sys\n"
+            "g = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(30)'],\n"
+            "                     stdin=subprocess.DEVNULL, stdout=sys.stdout,\n"
+            "                     stderr=subprocess.DEVNULL)\n"
+            "pathlib.Path(sys.argv[1]).write_text(str(g.pid))\n"
+            "sys.stdout.write('{\"a\": 1}'); sys.stdout.flush()\n")
+    start = time.monotonic()
+    try:
+        r = run_subprocess([sys.executable, "-c", code, str(pidfile)], tmp_path, 60)
+        elapsed = time.monotonic() - start
+    finally:
+        if pidfile.exists():
+            try:
+                os.kill(int(pidfile.read_text()), signal.SIGTERM)
+            except OSError:
+                pass
+    assert pidfile.exists(), "control: the grandchild was started"
+    assert r.state is ToolState.OK and r.returncode == 0, r.stderr
+    assert r.raw == '{"a": 1}'
+    assert elapsed < 1.0 + 5, f"the held pipe was waited on: {elapsed:.1f}s"
+    assert capfd.readouterr().err == (
+        f"aramid: {r.tool}: a process it started still holds its output pipe after it"
+        f" exited; using the output read so far\n")
 
 
 def test_a_child_flooding_stderr_completes_and_is_not_stalled(tmp_path, fast_watch):
