@@ -35,14 +35,33 @@ _MISSING_GIVE_UP = 3    # repo-scoped like the timeout family: no commit fixes a
 _LOG_TAIL_LINES = 60    # of stdout and of stderr, in the baseline log
 
 
+def stalled_note_prefix(head: str) -> str:
+    """The note family for "the stall watchdog killed the baseline at this
+    commit": the COMPLETE prefix, which both `stalled_note` and the give-up
+    counter in `_give_up_note` use, so no spelling of the note escapes it.
+
+    Head-scoped like `failing_note_prefix`, not repo-scoped like the timeout
+    family, and on purpose. A stall can be non-deterministic -- the
+    2026-10-06 pip-audit deadlock was a pipe race, not a property of the
+    suite -- so a repo-scoped latch would stand mutation down for good on
+    luck, and it would have no sensible release valve: `stall_s` is not the
+    thing to change when a child hangs. Per head, a hang costs at most three
+    stall windows per item, and queue coalescing gives each new commit a
+    fresh count. The stable part comes first, in the failing family's
+    `(last seen @ ...)` grammar; the measured seconds follow it.
+    """
+    return f"baseline stalled (last seen @ {head[:12]})"
+
+
 def stalled_note(idle_s: float, head: str) -> str:
     """The note for a baseline the stall watchdog killed: no CPU and no
     output for `idle_s`. Deliberately NOT the `timeout_note_prefix` family --
     that family feeds the repo-scoped budget give-up, and raising a budget
-    cannot fix a child that stopped working."""
-    return (f"baseline stalled: no CPU or output for {idle_s:.0f} s -- a hung"
+    cannot fix a child that stopped working. It has a give-up of its own,
+    keyed on `stalled_note_prefix`."""
+    return (f"{stalled_note_prefix(head)}: no CPU or output for {idle_s:.0f} s -- a hung"
             f" child, not a slow suite; raise [timeouts].stall_s only if the"
-            f" suite legitimately idles that long (last seen @ {head[:12]})")
+            f" suite legitimately idles that long")
 
 
 def timeout_note_prefix(budget: float, suite: str) -> str:
@@ -725,10 +744,10 @@ def _nothing_to_run(files, retests) -> bool:
 
 
 def _give_up_note(ledger, item, suite: str, baseline_budget: float, argv0: str):
-    """The note `consume` returns instead of running, or None. Three
+    """The note `consume` returns instead of running, or None. Four
     give-ups, each keyed on a load-bearing note prefix and a threshold met
     (`>=`) rather than exceeded -- the first two are REPO-scoped
-    (`note_count_any_item`), the third is scoped to this item at this head.
+    (`note_count_any_item`), the last two are scoped to this item at this head.
     Every one stays `ok`: `degraded` stops the drain marking the item
     drained, which would pin the queue and re-run every other consumer on
     it forever. Loud in `status`, not in the drain state."""
@@ -757,6 +776,14 @@ def _give_up_note(ledger, item, suite: str, baseline_budget: float, argv0: str):
         # try -- only the same code state failing 3x gives up. Keys on the
         # literal note below -- both strings load-bearing.
         return "mutation giving up: baseline persistently failing"
+    if base.prior_note_count(ledger, NAME, item.id,
+                             stalled_note_prefix(item.head)) >= _BASELINE_GIVE_UP:
+        # A baseline the stall watchdog keeps killing is `degraded` every
+        # time, which pins the queue item exactly as a red one would. Same
+        # threshold and the same head scope -- see `stalled_note_prefix`.
+        return (f"mutation giving up: baseline persistently stalls (last seen @ "
+                f"{item.head[:12]}) -- fix the hang, or raise [timeouts].stall_s "
+                f"if the suite legitimately idles that long")
     return None
 
 

@@ -211,6 +211,17 @@ def consume(item, ctx: DrainContext) -> ConsumerResult:
         return ConsumerResult(consumer=NAME, state="ok",
                               note="js mutation giving up: baseline persistently failing")
 
+    # The Python consumer's family and counter, for the same reason: a
+    # stalled baseline is `degraded` and would pin the item forever. See
+    # `mutation.stalled_note_prefix` for why it is head-scoped.
+    if base.prior_note_count(ctx.ledger, NAME, item.id,
+                             mutation.stalled_note_prefix(item.head)) >= _BASELINE_GIVE_UP:
+        return ConsumerResult(
+            consumer=NAME, state="ok",
+            note=(f"js mutation giving up: baseline persistently stalls (last seen @ "
+                  f"{item.head[:12]}) -- fix the hang, or raise [timeouts].stall_s "
+                  f"if the suite legitimately idles that long"))
+
     if base.prior_note_count(ctx.ledger, NAME, item.id,
                              link_note_prefix(item.head)) >= _LINK_GIVE_UP:
         return ConsumerResult(consumer=NAME, state="ok",

@@ -176,3 +176,22 @@ def test_failing_baseline_give_up_is_scoped_to_this_item_and_head(tmp_path):
     assert mut_consumer._give_up_note(other_item, _item(head), *args) is None
     assert mut_consumer._give_up_note(at, _item(head), *args) == \
         "mutation giving up: baseline persistently failing"
+
+
+def test_stalled_baseline_give_up_is_scoped_to_this_item_and_head(tmp_path):
+    head = "c" * 40
+    note = mut_consumer.stalled_note(301.0, head)
+    assert note.startswith(mut_consumer.stalled_note_prefix(head)), "one helper, both ends"
+    n = 3
+    below = _ledger_with_notes(tmp_path / "b", [("item-1", note)] * (n - 1))
+    other_item = _ledger_with_notes(tmp_path / "o", [("item-9", note)] * n)
+    other_head = _ledger_with_notes(
+        tmp_path / "h", [("item-1", mut_consumer.stalled_note(301.0, "d" * 40))] * n)
+    at = _ledger_with_notes(tmp_path / "a", [("item-1", note)] * n)
+    args = ("pytest -q", 480.0, "python")
+    assert mut_consumer._give_up_note(below, _item(head), *args) is None
+    assert mut_consumer._give_up_note(other_item, _item(head), *args) is None
+    assert mut_consumer._give_up_note(other_head, _item(head), *args) is None
+    assert mut_consumer._give_up_note(at, _item(head), *args) == (
+        "mutation giving up: baseline persistently stalls (last seen @ cccccccccccc) -- fix"
+        " the hang, or raise [timeouts].stall_s if the suite legitimately idles that long")

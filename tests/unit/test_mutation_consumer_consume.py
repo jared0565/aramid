@@ -100,13 +100,16 @@ def _record_survivors(r, funcs, *, pending=()):
         led.close()
 
 
-def _seed_notes(r, n, note):
+def _seed_notes(r, n, note, item_id=None):
+    """`item_id` None spreads the notes over n other items (the repo-scoped
+    families); a name puts all n on that one item (the head-scoped ones)."""
     led = Ledger(r / ".aramid" / "ledger.db")
     try:
         for k in range(n):
             led.append(Event(EventType.CONSUMER_RUN_FINISHED, f"d{k}",
                              f"2026-09-01T0{k}:00:00+00:00",
-                             payload={"consumer": "mutation", "item_id": f"old{k}",
+                             payload={"consumer": "mutation",
+                                      "item_id": item_id or f"old{k}",
                                       "state": "degraded", "note": note, "duration_s": 1.0}))
     finally:
         led.close()
@@ -407,11 +410,40 @@ def test_a_stalled_baseline_is_degraded_outside_the_budget_give_up_family(
                   {("full", "BASE"): Out(rc=5, state=ToolState.TIMEOUT, stalled=301.0)})
 
     assert res.state == "degraded"
-    assert res.note == ("baseline stalled: no CPU or output for 301 s -- a hung child, not a"
-                        " slow suite; raise [timeouts].stall_s only if the suite legitimately"
-                        f" idles that long (last seen @ {head[:12]})")
+    assert res.note == (f"baseline stalled (last seen @ {head[:12]}): no CPU or output for"
+                        " 301 s -- a hung child, not a slow suite; raise [timeouts].stall_s"
+                        " only if the suite legitimately idles that long")
     assert not res.note.startswith(mut_consumer.timeout_note_prefix(480.0, suite))
     assert res.note == mut_consumer.stalled_note(301.0, head)
+    assert res.note.startswith(mut_consumer.stalled_note_prefix(head))
+
+
+def test_three_stalled_baselines_at_this_head_give_up_before_cutting_a_worktree(
+        tmp_path, monkeypatch):
+    # A stall can be non-deterministic (the 2026-10-06 pip-audit deadlock
+    # was), so the count is head-scoped like the failing family: a degraded
+    # result pins the queue item, and without this a hang retried forever.
+    r, base, head = _repo(tmp_path)
+    _seed_notes(r, 3, mut_consumer.stalled_note(301.0, head), item_id="q1")
+
+    res, oracle = _run(r, base, head, monkeypatch, {})
+
+    assert res.state == "ok"
+    assert res.note == (f"mutation giving up: baseline persistently stalls (last seen @"
+                        f" {head[:12]}) -- fix the hang, or raise [timeouts].stall_s if the"
+                        f" suite legitimately idles that long")
+    assert oracle.calls == []
+    assert _no_worktrees(r)
+
+
+def test_three_stalled_baselines_at_another_head_do_not_give_up(tmp_path, monkeypatch):
+    r, base, head = _repo(tmp_path)
+    _seed_notes(r, 3, mut_consumer.stalled_note(301.0, "f" * 40), item_id="q1")
+
+    res, oracle = _run(r, base, head, monkeypatch, {})
+
+    assert "giving up" not in res.note
+    assert oracle.calls[0] == ("full", "BASE", 480.0), "the baseline ran at the new head"
 
 
 def test_a_red_baseline_is_degraded_with_the_rc_and_the_last_line_and_a_log(

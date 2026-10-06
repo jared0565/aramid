@@ -57,6 +57,18 @@ to publish a tag that disagrees with it.
   is not killed. In 0.20.3 the same run waited out its whole budget and was
   reported as a timeout (or, under the test runner's progress tap, lost its
   unterminated last line).
+- **A mutation baseline that keeps stalling gives up instead of pinning the
+  drain queue.** The mutation and js_mutation stalled-baseline note now
+  reads `baseline stalled (last seen @ <sha>): no CPU or output for <s> s
+  -- ...`, the stable part first, in the failing-baseline note's grammar.
+  Three such notes for one queue item at one head make the consumer stand
+  down with `ok` and `mutation giving up: baseline persistently stalls (last
+  seen @ <sha>) -- fix the hang, or raise [timeouts].stall_s if the suite
+  legitimately idles that long` (`js mutation giving up: ...` for
+  js_mutation). Before this, the stalled note matched no give-up counter, so
+  the item stayed `degraded` and was retried on every drain. The count is
+  per head, like the failing-baseline one: a stall can be a race rather than
+  a property of the suite, and a new commit gets a fresh count.
 
 ## [0.20.3] — 2026-10-06
 

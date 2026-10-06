@@ -273,6 +273,29 @@ def test_three_failing_baselines_at_this_item_give_up(tmp_path, monkeypatch):
     assert oracle.calls == []
 
 
+def test_three_stalled_baselines_at_this_item_and_head_give_up(tmp_path, monkeypatch):
+    r, base, head = _repo(tmp_path)
+    _seed_notes(r, 3, pymut.stalled_note(301.0, head))
+
+    res, oracle = _run(r, base, head, monkeypatch, {})
+
+    assert (res.state, res.note) == (
+        "ok", f"js mutation giving up: baseline persistently stalls (last seen @ {head[:12]})"
+              " -- fix the hang, or raise [timeouts].stall_s if the suite legitimately idles"
+              " that long")
+    assert oracle.calls == []
+
+
+def test_three_stalled_baselines_at_another_head_do_not_give_up(tmp_path, monkeypatch):
+    r, base, head = _repo(tmp_path)
+    _seed_notes(r, 3, pymut.stalled_note(301.0, "f" * 40))
+
+    res, oracle = _run(r, base, head, monkeypatch, {})
+
+    assert res.state == "ok" and "giving up" not in res.note
+    assert len(oracle.calls) == 4, "baseline + 3 mutants"
+
+
 def test_three_link_failures_at_this_item_give_up(tmp_path, monkeypatch):
     r, base, head = _repo(tmp_path)
     _seed_notes(r, 3, jsc.link_note_prefix(head) + ": mklink /J failed")
@@ -289,6 +312,7 @@ def test_two_of_each_do_not_give_up(tmp_path, monkeypatch):
     _seed_notes(r, 2, pymut.timeout_note_prefix(480.0, "npm test"), item_id="older")
     _seed_notes(r, 2, pymut.failing_note_prefix(head))
     _seed_notes(r, 2, jsc.link_note_prefix(head))
+    _seed_notes(r, 2, pymut.stalled_note(301.0, head))
 
     res, oracle = _run(r, base, head, monkeypatch, {})
 
@@ -375,10 +399,11 @@ def test_a_stalled_baseline_degrades_outside_the_budget_give_up_family(tmp_path,
     res, _ = _run(r, base, head, monkeypatch, {}, {"BASE": stalled})
 
     assert res.state == "degraded"
-    assert res.note == ("baseline stalled: no CPU or output for 301 s -- a hung child, not a"
-                        " slow suite; raise [timeouts].stall_s only if the suite legitimately"
-                        f" idles that long (last seen @ {head[:12]})")
+    assert res.note == (f"baseline stalled (last seen @ {head[:12]}): no CPU or output for"
+                        " 301 s -- a hung child, not a slow suite; raise [timeouts].stall_s"
+                        " only if the suite legitimately idles that long")
     assert not res.note.startswith(pymut.timeout_note_prefix(480.0, "npm test"))
+    assert res.note.startswith(pymut.stalled_note_prefix(head))
 
 
 def test_a_red_baseline_degrades_with_the_shared_prefix(tmp_path, monkeypatch):
