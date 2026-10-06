@@ -913,3 +913,35 @@ def test_a_regular_file_at_dot_aramid_is_unsafe_on_write(tmp_path):
         handover.write(tmp_path, "b", now=NOW)
     assert exc.value.reason == "it is not a directory"
     assert handover.read(tmp_path) is None
+
+
+# ---- C1 (final review): a lone surrogate is escaped on print and refused on write ----
+
+@pytest.mark.parametrize("cp", [0xD800, 0xD83D, 0xDC80, 0xDFFF])
+def test_printable_body_escapes_a_lone_surrogate_as_a_u_sequence(cp):
+    assert handover.printable_body("a" + chr(cp) + "b") == "a" + chr(92) + f"u{cp:04x}b"
+
+
+@pytest.mark.parametrize("cp", [0xD800, 0xDFFF])
+def test_printable_escapes_a_lone_surrogate_as_a_u_sequence(cp):
+    assert handover.printable("a" + chr(cp) + "b") == "a" + chr(92) + f"u{cp:04x}b"
+
+
+def test_printable_body_keeps_the_code_points_either_side_of_the_surrogates():
+    text = "a" + chr(0xD7FF) + chr(0xE000) + "b"
+    assert handover.printable_body(text) == text
+
+
+@pytest.mark.parametrize("field", ["body", "author"])
+def test_write_refuses_a_lone_surrogate_and_writes_nothing(tmp_path, field):
+    kwargs = {"body": "ok", "author": None}
+    kwargs[field] = "x" + chr(0xD83D) + "y"
+    with pytest.raises(handover.InvalidText):
+        handover.write(tmp_path, kwargs["body"], author=kwargs["author"], now=NOW)
+    assert not (tmp_path / ".aramid" / "handover.json").exists()
+    assert not handover.key_path().exists()          # refused before the key is touched
+
+
+def test_a_valid_astral_character_is_not_a_lone_surrogate(tmp_path):
+    handover.write(tmp_path, "rocket " + chr(0x1F680), author="me " + chr(0x1F680), now=NOW)
+    assert handover.read(tmp_path).body == "rocket " + chr(0x1F680)

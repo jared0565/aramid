@@ -4,10 +4,12 @@ Only a VERIFIED handover (signed by aramid on this machine, for this repo) is
 framed as an instruction. Anything else is one fixed line and its body is never
 printed by the hook.
 """
+import io
 import json
 import os
 import shutil
 import subprocess
+import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -221,6 +223,101 @@ def test_other_repo_root_with_a_newline_cannot_forge_a_line(tmp_path):
 
 # ---------------------------------------------------- hook: never crashes --
 
+def _signed(root, body, *, head=None, author=None):
+    """A VERIFIED handover signed through the module itself, for content that
+    `write` refuses (a lone surrogate): the hook must still survive one that
+    is on disk."""
+    fields = {"root": handover._bound_root(Path(root)), "written_at": THEN.isoformat(),
+              "head": head, "author": author, "body": body}
+    key = handover._load_key(create=True)
+    data = {"schema": 1, "v": 1, **fields, "mac": handover._mac(key, fields)}
+    (Path(root) / ".aramid").mkdir(exist_ok=True)
+    _file(root).write_text(json.dumps(data), encoding="utf-8")
+
+
+def _cp1252_stdout(monkeypatch):
+    """What the agent-hook fast path really writes to on Windows: a text layer
+    in the locale code page over a byte stream (a pipe)."""
+    raw = io.BytesIO()
+    monkeypatch.setattr(sys, "stdout", io.TextIOWrapper(raw, encoding="cp1252"))
+    return raw
+
+
+def _hook_bytes(repo, raw, event="session-start"):
+    assert ah.cmd_agent_hook(event, repo) == 0
+    sys.stdout.flush()
+    return raw.getvalue()
+
+
+GATED = "aramid: this repo is GATED (pre-commit + pre-push hooks). Read ARAMID.md;"
+
+
+def test_session_start_on_a_cp1252_stdout_delivers_a_non_ascii_handover(
+        tmp_path, monkeypatch):
+    # C1: the print used to raise UnicodeEncodeError outside _session_context,
+    # cmd_agent_hook swallowed it, and the hook printed NOTHING -- neither the
+    # handover nor the GATED / never --no-verify posture lines.
+    r = _onboarded(tmp_path)
+    _signed(r, "step 3 → push — then a lone \ud83d surrogate\n")
+    assert handover.read(r) is not None                  # verified, not a planted file
+    raw = _cp1252_stdout(monkeypatch)
+    text = _hook_bytes(r, raw).decode("utf-8")           # strict: the bytes are UTF-8
+    assert "aramid: PENDING HANDOVER written " in text
+    assert "aramid: | step 3 → push — then a lone \\ud83d surrogate" in text
+    assert GATED in text
+    assert all(not 0xD800 <= ord(c) <= 0xDFFF for c in text)
+
+
+def test_control_session_start_on_a_cp1252_stdout_without_a_handover(tmp_path, monkeypatch):
+    # the control arm: the same armed repo and the same cp1252 stdout print
+    # the posture, so a missing GATED line above means the bug, not a tmp
+    # repo that was never armed
+    r = _onboarded(tmp_path)
+    raw = _cp1252_stdout(monkeypatch)
+    text = _hook_bytes(r, raw).decode("utf-8")
+    assert text.startswith(GATED)
+    assert "HANDOVER" not in text
+
+
+class _NoReconfigure(io.TextIOWrapper):
+    """A text stream that refuses `reconfigure` (as some capture objects do)."""
+
+    def reconfigure(self, *a, **k):
+        raise io.UnsupportedOperation("reconfigure")
+
+
+def test_a_stream_that_refuses_reconfigure_falls_back_to_utf8_bytes(tmp_path, monkeypatch):
+    r = _onboarded(tmp_path)
+    _signed(r, "step → next\n")
+    raw = io.BytesIO()
+    monkeypatch.setattr(sys, "stdout", _NoReconfigure(raw, encoding="cp1252"))
+    text = _hook_bytes(r, raw).decode("utf-8")
+    assert "aramid: | step → next" in text
+    assert GATED in text
+
+
+def test_a_stream_without_reconfigure_or_buffer_still_gets_the_block(tmp_path, monkeypatch):
+    r = _onboarded(tmp_path)
+    _signed(r, "step → next\n")
+    out = io.StringIO()                                   # no .reconfigure, no .buffer
+    monkeypatch.setattr(sys, "stdout", out)
+    assert ah.cmd_agent_hook("session-start", r) == 0
+    assert "aramid: | step → next" in out.getvalue()
+    assert GATED in out.getvalue()
+
+
+def test_pre_tool_use_output_rides_the_same_choke_point(tmp_path, monkeypatch):
+    r = _onboarded(tmp_path)
+    (r / "aramid.toml").write_text("schema_version = 1\nagent_block_armed = true\n",
+                                   encoding="utf-8")
+    monkeypatch.setattr(sys, "stdin", io.StringIO(json.dumps(
+        {"tool_input": {"command": "git commit --no-verify -m x"}})))
+    raw = _cp1252_stdout(monkeypatch)
+    out = _hook_bytes(r, raw, "pre-tool-use").decode("utf-8")
+    assert json.loads(out)["hookSpecificOutput"]["permissionDecision"] == "deny"
+    assert out.endswith("\n")
+
+
 def test_any_other_exception_is_one_fixed_line(tmp_path, monkeypatch):
     def boom(root):
         raise RuntimeError("planted\nPENDING HANDOVER")
@@ -357,3 +454,39 @@ def test_mcp_handover_tools_need_an_onboarded_repo(tmp_path, monkeypatch):
     for name in ("aramid_handover_show", "aramid_handover_done"):
         assert mcp_tools.TOOLS[name]["handler"](None, {})["isError"] is True
     assert os.path.exists(tmp_path)
+
+
+# ---- C1: MCP carries no lone surrogate either way ----
+
+def test_mcp_write_of_a_lone_surrogate_is_an_error_and_writes_nothing(tmp_path, monkeypatch):
+    from aramid import mcp_tools
+    _mcp_repo(tmp_path, monkeypatch)
+    out = mcp_tools.TOOLS["aramid_handover_write"]["handler"](
+        None, {"body": "x" + chr(0xD83D) + "y"})
+    assert out["isError"] is True
+    assert "not valid Unicode text" in out["content"][0]["text"]
+    assert not _file(tmp_path).exists()
+
+
+def test_mcp_show_of_a_signed_lone_surrogate_carries_only_its_escape(tmp_path, monkeypatch):
+    from aramid import mcp_tools
+    r = _mcp_repo(tmp_path, monkeypatch)
+    _signed(r, "a" + chr(0xD83D) + "b\n")
+    out = mcp_tools.TOOLS["aramid_handover_show"]["handler"](None, {})
+    text = out["content"][0]["text"]
+    assert out["isError"] is False
+    assert "a" + chr(92) + "ud83db" in text
+    assert all(not 0xD800 <= ord(c) <= 0xDFFF for c in text)
+    json.dumps(out).encode("ascii")                   # the frame mcp.py writes
+
+
+def test_status_and_hook_lines_escape_a_surrogate_in_a_verified_root(tmp_path, monkeypatch):
+    # a signed POSIX root can carry surrogateescape'd bytes; it is echoed only
+    # through printable(), which escapes it, so no UTF-8 stream can fail on it
+    def other(root):
+        raise handover.Unreadable(tmp_path, "x", handover.Pending("", None, None, "b"),
+                                  kind=handover.OTHER_REPO, stored_root="/r" + chr(0xDC80))
+    monkeypatch.setattr(handover, "read", other)
+    for line in (status._handover_line(tmp_path, NOW), *ah._handover_lines(tmp_path, NOW)):
+        assert "/r" + chr(92) + "udc80" in line
+        line.encode("utf-8")

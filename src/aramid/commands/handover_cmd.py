@@ -1,8 +1,9 @@
 """`aramid handover write | show | done` -- see aramid/handover.py.
 
-Exit codes: 0 done / nothing to do; 2 a refusal (empty or oversized body, one
-already pending, an unsafe path, a corrupt key, an unreadable input, an OS
-error); 3 `show` found a pending file that cannot be delivered as verified.
+Exit codes: 0 done / nothing to do; 2 a refusal (empty or oversized body, a
+lone surrogate in the body or author, one already pending, an unsafe path, a
+corrupt key, an unreadable input, an OS error); 3 `show` found a pending file
+that cannot be delivered as verified.
 """
 import sys
 from datetime import datetime, timezone
@@ -70,6 +71,10 @@ def _write(root: Path, file, author, replace, now, stdin) -> int:
         path = handover.write(root, body, author=author, replace=replace, now=now)
     except handover.EmptyBody:
         _err("refusing an empty handover")
+        return 2
+    except handover.InvalidText:
+        _err("refusing a handover that is not valid Unicode text"
+             " (a lone surrogate in the body or author)")
         return 2
     except handover.BodyTooLarge:
         _err(f"refusing a handover over {handover.MAX_BYTES} bytes")

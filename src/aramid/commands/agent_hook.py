@@ -50,6 +50,7 @@ from pathlib import Path
 
 def cmd_agent_hook(event: str, root: Path | None = None) -> int:
     try:
+        _utf8_stdout()
         if event == "session-start":
             return _session_start(root)
         if event == "pre-tool-use":
@@ -57,6 +58,41 @@ def cmd_agent_hook(event: str, root: Path | None = None) -> int:
         return 0
     except Exception:
         return 0
+
+
+def _utf8_stdout() -> None:
+    """THE encoding choke point for every agent-hook output (final review C1).
+
+    `__main__`'s fast path never reaches `cli._force_utf8_on_redirect`, so on
+    Windows the hook printed to a pipe in the locale code page: a verified
+    handover holding an arrow raised UnicodeEncodeError in the print, the
+    fail-open catch above swallowed it, and the session got NOTHING -- not
+    the handover and not the GATED / never --no-verify posture lines. A lone
+    surrogate did the same on every OS. Reconfiguring the text layer (rather
+    than writing raw bytes) keeps the platform's newline translation, so
+    every byte the hook emitted before is unchanged. A stream that has no
+    `reconfigure`, or refuses it, is left alone; `_emit` covers it."""
+    import sys
+    try:
+        sys.stdout.reconfigure(encoding="utf-8", errors="backslashreplace")
+    except (AttributeError, TypeError, ValueError, OSError):
+        pass        # no reconfigure, or a stream refusing it (UnsupportedOperation)
+
+
+def _emit(text: str) -> None:
+    """Every agent-hook print goes through here, after `_utf8_stdout`. Only a
+    stream that could not be reconfigured can still fail to encode: then the
+    text layer is flushed and the same text goes to its byte buffer as UTF-8
+    with backslash escapes (no newline translation there -- the price of a
+    stream that refused the choke point, never the normal path)."""
+    import sys
+    out = sys.stdout
+    try:
+        out.write(text)
+    except UnicodeEncodeError:
+        out.flush()
+        out.buffer.write(text.encode("utf-8", "backslashreplace"))
+        out.buffer.flush()
 
 
 def _repo_with_aramid(root: Path | None) -> Path | None:
@@ -75,7 +111,7 @@ def _session_start(root: Path | None) -> int:
     repo = _repo_with_aramid(root)
     if repo is None:
         return 0
-    print(_session_context(repo), end="")
+    _emit(_session_context(repo))
     return 0
 
 
@@ -99,7 +135,7 @@ def _pre_tool_use(root: Path | None) -> int:
         return 0
     from aramid import config as config_mod
     cfg = config_mod.load_config(repo)
-    print(_decision_json(bypass, armed=cfg.agent_block_armed))
+    _emit(_decision_json(bypass, armed=cfg.agent_block_armed) + "\n")
     return 0
 
 

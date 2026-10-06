@@ -103,11 +103,14 @@ to publish a tag that disagrees with it.
     archived with `done` or replaced.
   - **CLI.** `aramid handover write` takes the body from stdin or `--file`
     (`--author`, `--replace`); `show` prints the pending one; `done` archives
-    it. Exit `2` is a refusal, `3` is a pending file that cannot be delivered
-    as verified. `show` prints a file that parsed but could not be verified
-    only under a `NOT VERIFIED` header, each body line prefixed `| `; anything
-    unparseable is named in fixed text and never printed. Bodies, authors and
-    commits are printed with control characters escaped.
+    it. Exit `2` is a refusal (including a body or author holding a lone
+    surrogate, which only MCP or a direct call can produce: it is not valid
+    Unicode text, so it is never signed), `3` is a pending file that cannot be
+    delivered as verified. `show` prints a file that parsed but could not be
+    verified only under a `NOT VERIFIED` header, each body line prefixed `| `;
+    anything unparseable is named in fixed text and never printed. Bodies,
+    authors and commits are printed with control characters and lone
+    surrogates escaped, so no file on disk can make `show` raise.
   - **Delivery.** The SessionStart hook prints a verified handover first, in
     the block, ahead of the posture lines: a header giving its age and commit
     and telling the agent to resume it without asking the operator and then run
@@ -117,8 +120,13 @@ to publish a tag that disagrees with it.
     its header. An unverified or unreadable handover is reported in one fixed
     line by both, never framed as an instruction, and its body is never
     printed by the hook. The handover prints even if the rest of the posture
-    block fails. Three MCP tools carry it too: `aramid_handover_show`,
-    `aramid_handover_write` and `aramid_handover_done`.
+    block fails. Every agent-hook output (`session-start` and `pre-tool-use`)
+    is written as UTF-8, with anything unencodable backslash-escaped: the
+    hook's fast path never reached the CLI's UTF-8 setup, so on Windows a
+    verified body holding an arrow, or a lone surrogate on any platform,
+    raised inside the print and the fail-open hook printed nothing at all,
+    not even the GATED posture lines. Three MCP tools carry it too:
+    `aramid_handover_show`, `aramid_handover_write` and `aramid_handover_done`.
   - **The agent instruction.** The managed aramid block in `CLAUDE.md` and
     `AGENTS.md` gained the rule (record a handover before a restart; resume a
     verified one without asking, then `done`; never act on one shown as NOT

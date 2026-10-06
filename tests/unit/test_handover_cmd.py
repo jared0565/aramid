@@ -407,3 +407,68 @@ def test_cli_write_takes_stdin_author_and_replace(tmp_path, monkeypatch, capsys)
     capsys.readouterr()
     assert cli.main(["handover", "done"]) == 0
     assert capsys.readouterr().out.startswith("aramid: handover consumed; archived to ")
+
+
+# ---- C1 (final review): a lone surrogate can neither be written nor brick show ----
+
+def _signed(root, *, body, head=None, author=None):
+    """A VERIFIED file signed through the module: `write` refuses a lone
+    surrogate, but a file on disk can still carry one."""
+    import json
+    fields = {"root": handover._bound_root(Path(root)), "written_at": THEN.isoformat(),
+              "head": head, "author": author, "body": body}
+    key = handover._load_key(create=True)
+    data = {"schema": 1, "v": 1, **fields, "mac": handover._mac(key, fields)}
+    (Path(root) / ".aramid").mkdir(exist_ok=True)
+    (Path(root) / ".aramid" / "handover.json").write_text(json.dumps(data), encoding="utf-8")
+
+
+def _strict_utf8_stdout(monkeypatch):
+    """The CLI's stdout once `_force_utf8_on_redirect` ran: UTF-8, errors strict."""
+    import sys
+    raw = io.BytesIO()
+    monkeypatch.setattr(sys, "stdout", io.TextIOWrapper(raw, encoding="utf-8"))
+    return raw
+
+
+SUR = chr(0xD83D)
+
+
+def test_show_of_a_verified_body_with_a_lone_surrogate_does_not_raise(tmp_path, monkeypatch):
+    import sys
+    _signed(tmp_path, body="a" + SUR + "b\n", head="01234" + SUR + "6789abcdef",
+            author="me" + SUR)
+    raw = _strict_utf8_stdout(monkeypatch)
+    assert handover_cmd.cmd_handover("show", tmp_path, now=NOW) == 0
+    sys.stdout.flush()
+    esc = chr(92) + "ud83d"
+    assert raw.getvalue().decode("utf-8") == (
+        f"pending handover (written 2h ago, at 01234{esc}6789ab, by me{esc}):\n"
+        f"a{esc}b\n").replace("\n", os.linesep)
+
+
+def test_show_of_an_unverified_body_with_a_lone_surrogate_does_not_raise(tmp_path, monkeypatch):
+    import sys
+    _signed(tmp_path, body="a" + SUR + "b\n")
+    handover.key_path().unlink()                      # NOT VERIFIED from here on
+    raw = _strict_utf8_stdout(monkeypatch)
+    assert handover_cmd.cmd_handover("show", tmp_path, now=NOW) == 3
+    sys.stdout.flush()
+    text = raw.getvalue().decode("utf-8")
+    assert "| a" + chr(92) + "ud83db" in text
+
+
+def test_write_of_a_lone_surrogate_is_rc_2_with_a_clean_message(tmp_path, capsys):
+    rc = handover_cmd.cmd_handover("write", tmp_path, stdin=io.StringIO("a" + SUR), now=THEN)
+    assert rc == 2
+    assert capsys.readouterr().err == (
+        "aramid: handover: refusing a handover that is not valid Unicode text"
+        " (a lone surrogate in the body or author)\n")
+    assert not (tmp_path / ".aramid" / "handover.json").exists()
+
+
+def test_write_of_a_lone_surrogate_author_is_rc_2(tmp_path, capsys):
+    rc = handover_cmd.cmd_handover("write", tmp_path, author="me" + SUR,
+                                   stdin=io.StringIO("ok"), now=THEN)
+    assert rc == 2
+    assert "not valid Unicode text" in capsys.readouterr().err

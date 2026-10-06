@@ -76,6 +76,13 @@ class BodyTooLarge(ValueError):
     it would be written and then never delivered."""
 
 
+class InvalidText(ValueError):
+    """The body or author holds a lone surrogate (U+D800-U+DFFF), which is not
+    valid Unicode text. The CLI cannot produce one (stdin and `--file` are
+    decoded as strict UTF-8); MCP and a direct call can. Refused, so what is
+    signed is always text every UTF-8 consumer can print."""
+
+
 class Unreadable(RuntimeError):
     """The file at `path` is not delivered. `kind` is one of KINDS. `reason`
     is a human string built ONLY from fixed text, except the escaped root for
@@ -249,8 +256,9 @@ def _check_dirs(root: Path, *, archive: bool = False) -> None:
 
 def printable(text: str) -> str:
     """Escape every control or line-breaking character (LF, CR, NEL, U+2028/9,
-    ESC ...) AND backslashes, so a literal backslash-n in a path cannot look
-    like an escaped newline."""
+    ESC ...), every other non-printable one (a lone surrogate comes out as a
+    backslash-u sequence, so no UTF-8 stream can fail on it) AND backslashes,
+    so a literal backslash-n in a path cannot look like an escaped newline."""
     out = []
     for c in text:
         if c == chr(92):
@@ -264,21 +272,26 @@ def printable(text: str) -> str:
 
 def printable_body(text: str) -> str:
     """The body made safe to print to a terminal, line by line: C0 controls
-    except TAB (ESC, a lone CR, ...), DEL, C1 controls (NEL ...) and U+2028 /
-    U+2029 are escaped as a backslash-x or backslash-u sequence, so a planted
-    body cannot move the cursor, erase or overwrite a line, or break a line
-    it should not. Unlike `printable` it KEEPS backslashes (Windows paths in
-    a body are normal; the line prefix, not the escape, carries the
-    structure) and newlines. Task 3's SessionStart hook uses it for its
-    `aramid: | <line>` output."""
+    except TAB (ESC, a lone CR, ...), DEL, C1 controls (NEL ...), U+2028 /
+    U+2029 and lone surrogates (U+D800-U+DFFF, which no UTF-8 stream can
+    encode) are escaped as a backslash-x or backslash-u sequence, so a
+    planted body cannot move the cursor, erase or overwrite a line, break a
+    line it should not, or make the print itself raise. Unlike `printable`
+    it KEEPS backslashes (Windows paths in a body are normal; the line
+    prefix, not the escape, carries the structure) and newlines. The
+    SessionStart hook uses it for its `aramid: | <line>` output."""
     bs = chr(92)
     out = []
     for line in text.split(chr(10)):
         buf = []
         for c in line:
             o = ord(c)
-            if c != chr(9) and (o < 0x20 or 0x7F <= o <= 0x9F or o in (0x2028, 0x2029)):
-                buf.append(f"{bs}x{o:02x}" if o <= 0xFF else f"{bs}u{o:04x}")
+            if c != chr(9) and (o < 0x20 or 0x7F <= o <= 0x9F or 0xD800 <= o <= 0xDFFF
+                                or o in (0x2028, 0x2029)):
+                # one rule derived from the value: two hex digits when the code
+                # point fits in two, the four-digit u form when it does not
+                digits = f"{o:02x}"
+                buf.append(f"{bs}x{digits}" if len(digits) == 2 else f"{bs}u{o:04x}")
             else:
                 buf.append(c)
         out.append("".join(buf))
@@ -448,6 +461,11 @@ def write(root: Path, body: str, *, author: str | None = None, replace: bool = F
           now: datetime | None = None) -> Path:
     if not body.strip():
         raise EmptyBody("a handover needs a body")
+    for text in (body, author or ""):
+        try:
+            text.encode("utf-8")              # strict: fails exactly on a lone surrogate
+        except UnicodeEncodeError:
+            raise InvalidText("a handover body or author must be valid Unicode text") from None
     path = Path(root) / PATH
     stamp = (now or datetime.now(timezone.utc)).isoformat()
     fields = {"root": _bound_root(Path(root)), "written_at": stamp,

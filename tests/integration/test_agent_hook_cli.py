@@ -103,3 +103,27 @@ def test_no_event_token_is_a_silent_noop(tmp_path, checkout_env):
 
     assert out.returncode == 0
     assert out.stdout == b""
+
+
+def test_session_start_delivers_a_non_ascii_handover_through_the_real_pipe(
+        tmp_path, checkout_env):
+    """C1 (final review), end to end: on Windows the fast path's stdout is a
+    pipe in the locale code page (cp1252). A verified body holding an arrow
+    used to raise UnicodeEncodeError in the hook's print, which the fail-open
+    catch swallowed -- the session got NOTHING, not even the GATED line. The
+    handover is written in-process; the child verifies it with the same key
+    (ARAMID_HANDOVER_KEY_FILE, set by the autouse fixture, is inherited)."""
+    from aramid import handover
+    r = _armed_repo(tmp_path)
+    handover.write(r, "step 3 → push — done\n")
+    env = {k: v for k, v in checkout_env.items()
+           if k not in ("PYTHONUTF8", "PYTHONIOENCODING", "PYTHONLEGACYWINDOWSSTDIO")}
+    out = _run(r, env, "agent-hook", "session-start")
+
+    assert out.returncode == 0
+    text = out.stdout.decode("utf-8")
+    lines = text.splitlines()
+    assert lines[0].startswith("aramid: PENDING HANDOVER written ")
+    assert lines[1] == "aramid: | step 3 → push — done"
+    assert lines[2] == ("aramid: this repo is GATED (pre-commit + pre-push hooks)."
+                        " Read ARAMID.md; NEVER pass --no-verify.")
