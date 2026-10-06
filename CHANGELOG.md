@@ -10,6 +10,14 @@ to publish a tag that disagrees with it.
 
 ## [Unreleased]
 
+### Added
+
+- **`aramid.proctree.sample(pid)` measures a child process tree.** It returns
+  each live member's creation time and CPU time, using only the standard
+  library (`/proc`, `ps`, or Win32 through ctypes), and returns `None` when the
+  tree cannot be measured, never raising. It is the measurement the stall
+  watchdog compares between two wakes.
+
 ## [0.20.3] — 2026-10-06
 
 ### Security
