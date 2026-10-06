@@ -82,9 +82,10 @@ to publish a tag that disagrees with it.
   the mutation baseline notes), so a baseline that hit its budget still
   counts toward the budget give-up.
 - **A suspended or starved machine no longer reads as a stalled tool.** When
-  the stall watchdog wakes more than two sample intervals late, nothing was
-  observed in between, so it restarts the quiet clock from that wake instead
-  of counting the gap as idle time.
+  the stall watchdog wakes more than two sample intervals late, or a single
+  sample itself takes that long, nothing was observed in between, so it
+  restarts the quiet clock from the end of that stretch instead of counting
+  it as idle time.
 - **A `timeouts` value that is not a table no longer stops the drain.** With
   `timeouts = 5` in a repo's `aramid.toml`, reading the stall window raised
   outside the drain's per-repo error handling, so every repo still waiting

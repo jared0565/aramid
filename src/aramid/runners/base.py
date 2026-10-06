@@ -495,7 +495,8 @@ def _watched_communicate(proc: subprocess.Popen, timeout_s: float, on_stdout_lin
     nor the output moved for the stall window. An unmeasurable tree
     (sample() -> None) counts as activity, so a watchdog that cannot see is
     today's timeout, never a false stall; so is a wake more than two sample
-    intervals late, which restarts the quiet clock. At the wall clock the watch takes
+    intervals late, or a sample that itself took that long, either of which
+    restarts the quiet clock. At the wall clock the watch takes
     one last sample, so `_TimedOut.idle_s` runs to the deadline rather than
     to the previous wake; the deadline still wins over a stall there.
 
@@ -577,6 +578,12 @@ def _watched_communicate(proc: subprocess.Popen, timeout_s: float, on_stdout_lin
         except Exception:  # noqa: BLE001 -- a sampler that raises is unmeasurable, i.e. active
             tree = None
         sampled_at = time.monotonic()
+        if sampled_at - now > 2 * _SAMPLE_S:
+            # The same suspend or starvation, landing INSIDE the sample call:
+            # unobserved as well. The quiet clock restarts where the sample
+            # ENDED -- restarting it at `now` would hand the whole stretch to
+            # the next wake as idle time.
+            unobserved, now = True, sampled_at
         read = seen["out"] + seen["err"]
         if (unobserved or tree is None or last_tree is None or tree != last_tree
                 or read != last_seen):

@@ -26,12 +26,22 @@ def fast_watch(monkeypatch):
     base.set_stall_window(old)
 
 
-def test_an_idle_child_is_stalled_long_before_its_budget(tmp_path, fast_watch):
-    start = time.monotonic()
-    r = run_subprocess([sys.executable, "-c", "import time; time.sleep(60)"], tmp_path, 60)
-    elapsed = time.monotonic() - start
+def test_an_idle_child_is_stalled_long_before_its_budget(tmp_path, monkeypatch):
+    # Its own, wider sample interval: a wake or a sample more than
+    # 2 x _SAMPLE_S long restarts the quiet clock, and at 0.25 s that is a
+    # 0.6 s `ps` on a loaded CI leg -- every sample, so it never stalls.
+    # At 0.5 s the same leg still stalls in about 4 s (measured).
+    monkeypatch.setattr(base, "_SAMPLE_S", 0.5)
+    old = base.stall_window()
+    base.set_stall_window(2.0)
+    try:
+        start = time.monotonic()
+        r = run_subprocess([sys.executable, "-c", "import time; time.sleep(60)"], tmp_path, 60)
+        elapsed = time.monotonic() - start
+    finally:
+        base.set_stall_window(old)
     assert r.state is ToolState.TIMEOUT
-    assert r.stalled_s is not None and r.stalled_s >= 1.5
+    assert r.stalled_s is not None and r.stalled_s >= 2.0
     assert elapsed < 15, f"stall not detected early: {elapsed:.1f}s"
     # The process count is not asserted as 1: on Windows a venv's python.exe
     # can be a redirector that spawns the real interpreter, a tree of 2.
@@ -156,7 +166,12 @@ def test_an_unmeasurable_tree_is_active_not_stalled(tmp_path, fast_watch, monkey
 
 @pytest.fixture
 def long_window(monkeypatch):
-    monkeypatch.setattr(base, "_SAMPLE_S", 0.25)
+    """A window the budget always beats, and a 1 s sample interval. Any wake
+    or sample more than 2 x _SAMPLE_S long in the last interval before the
+    deadline restarts the quiet clock and leaves no idle figure; at 0.25 s
+    that is one 0.6 s hiccup on a starved CI leg (measured: idle_s None).
+    At 1 s it takes a hiccup over 1 s, and the same 0.6 s leaves idle_s 4."""
+    monkeypatch.setattr(base, "_SAMPLE_S", 1.0)
     old = base.stall_window()
     base.set_stall_window(100)
     yield
@@ -164,18 +179,18 @@ def long_window(monkeypatch):
 
 
 def test_an_idle_child_at_the_wall_clock_reports_its_idle_time(tmp_path, long_window):
-    r = run_subprocess([sys.executable, "-c", "import time; time.sleep(60)"], tmp_path, 2)
+    r = run_subprocess([sys.executable, "-c", "import time; time.sleep(60)"], tmp_path, 5)
     assert r.state is ToolState.TIMEOUT
     assert r.stalled_s is None, "the wall clock killed it, not the watchdog"
-    assert r.idle_s is not None and 0.25 <= r.idle_s <= 2.0, r.idle_s
+    assert r.idle_s is not None and base._SAMPLE_S <= r.idle_s <= 5.0, r.idle_s
     assert re.fullmatch(
-        rf"aramid: {re.escape(r.tool)} timed out after 2 s and was killed; whatever it had"
+        rf"aramid: {re.escape(r.tool)} timed out after 5 s and was killed; whatever it had"
         r" written is discarded -- no CPU or output for the last \d+ s, which looks hung,"
         r" not slow", r.stderr), r.stderr
 
 
 def test_a_busy_child_at_the_wall_clock_reports_no_idle_time(tmp_path, long_window):
-    r = run_subprocess([sys.executable, "-c", "x = 0\nwhile True: x += 1"], tmp_path, 2)
+    r = run_subprocess([sys.executable, "-c", "x = 0\nwhile True: x += 1"], tmp_path, 5)
     assert r.state is ToolState.TIMEOUT
     assert r.stalled_s is None and r.idle_s is None
     assert r.stderr.endswith("whatever it had written is discarded"), r.stderr
@@ -244,6 +259,25 @@ def test_a_gap_longer_than_two_samples_restarts_the_quiet_clock(fake_clock):
     with pytest.raises(base._Stalled) as exc:
         base._watched_communicate(_Proc(fake_clock, [1, 1, 50]), 1000, None)
     assert (fake_clock.t, exc.value.idle_s) == (55.0, 3.0)
+
+
+def test_a_suspend_inside_the_sampler_restarts_the_quiet_clock(fake_clock, monkeypatch):
+    # The same 50 s, but landing INSIDE the third sample call (taken at 3 s,
+    # returning at 53 s). Unobserved too: the window starts again where the
+    # sample ended, so the stall is 3 s later (56 s), not on the next wake.
+    calls = []
+
+    def suspended_on_the_third_call(pid):
+        calls.append(fake_clock.t)
+        if len(calls) == 3:
+            fake_clock.t += 50
+        return {pid: (1, 7)}
+
+    monkeypatch.setattr(base.proctree, "sample", suspended_on_the_third_call)
+    with pytest.raises(base._Stalled) as exc:
+        base._watched_communicate(_Proc(fake_clock), 1000, None)
+    assert calls[:3] == [1.0, 2.0, 3.0], "control: the suspend landed in the third sample"
+    assert (fake_clock.t, exc.value.idle_s) == (56.0, 3.0)
 
 
 def test_a_raising_sampler_is_active_not_a_crash(tmp_path, fast_watch, monkeypatch):
