@@ -70,9 +70,9 @@ def _tracked(root: Path) -> bool:
     """True only when git positively says the handover file is tracked. Any
     git failure (missing, not a repo, timeout) is NOT tracked."""
     try:
-        run = subprocess.run(  # noqa: S603,S607
-            ["git", "ls-files", "--error-unmatch", "--", PATH.as_posix()],
-            cwd=root, capture_output=True, text=True, timeout=10)
+        run = subprocess.run(["git", "ls-files", "--error-unmatch", "--",  # noqa: S603,S607
+                              PATH.as_posix()],
+                             cwd=root, capture_output=True, text=True, timeout=10)
     except (OSError, subprocess.SubprocessError):
         return False
     return run.returncode == 0
