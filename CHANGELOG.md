@@ -12,6 +12,27 @@ to publish a tag that disagrees with it.
 
 ## [0.20.3] — 2026-10-06
 
+### Security
+
+- **semgrep 1.179.0 is allowed again, which moves PyJWT from 2.13.0 to
+  2.15.x and clears fourteen advisories.** 0.19.5 excluded semgrep 1.179.0
+  because that release first shipped without a Windows wheel, and a
+  Windows install built it from source without `semgrep-core.exe` (FN-27).
+  The exclusion held semgrep at 1.178.0. Because 1.178.0 pins
+  `pyjwt~=2.13.0`, it also held PyJWT at 2.13.0. Thirteen advisories
+  against that version had been accepted by override, since aramid's own
+  code does not use PyJWT. A fourteenth, CVE-2026-102275 (PyJWT accepts an
+  OKP private JWK whose `x` does not match its `d`; fixed in 2.15.0),
+  refused this release's push. semgrep 1.179.0 has had a Windows wheel
+  since 2026-10-02 and requires `pyjwt>=2.15.0`. It was verified on
+  Windows before the exclusion was lifted: installed from its wheel only,
+  it ran a scan that found its control rule's match, and the four semgrep
+  integration test files that failed on Windows under the wheel-less
+  release passed. pip-audit over aramid's dependencies now resolves semgrep
+  1.179.0 and PyJWT 2.15.1 with no advisories, against fourteen before.
+  Fresh installs get the new versions. An existing install keeps its
+  semgrep and PyJWT until it upgrades them.
+
 ### Changed
 
 - **A mutation survivor that no drain can re-test now stays open instead of

@@ -67,9 +67,10 @@ dependencies = [
     "tomli-w>=1.0,<2",
     "pip-audit>=2.7,<3",
     "ruff>=0.6,<0.17",
-    # !=1.179.0: that release shipped no Windows wheel, and its sdist builds
-    # without semgrep-core.exe (FN-27; tests/unit/test_dependency_floors.py).
-    "semgrep>=1.137,<2,!=1.179.0",
+    # 1.179.0 is admitted again: its Windows wheel arrived after the FN-27
+    # exclusion, and it moves PyJWT to >=2.15.0, clearing fourteen advisories
+    # against 2.13.0 (see tests/unit/test_dependency_floors.py).
+    "semgrep>=1.137,<2",
 ]
 
 [project.urls]
