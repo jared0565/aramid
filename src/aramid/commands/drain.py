@@ -786,6 +786,12 @@ def cmd_drain(targets: list, *, dry_run: bool = False, max_items: int | None = N
                 # FN-16: what a deadline inside this item would have to defer.
                 watchdog.pending(drain_run_id, [(c[1], c[2].id) for c in candidates[idx + 1:]],
                                  drained_roots)
+            # Read once per launch and held module-level, so it is set HERE,
+            # beside this repo's consumers: every config is loaded in the
+            # candidate loop above, and setting it there would leave the last
+            # repo's value governing all of them.
+            from aramid.commands.check import apply_stall_window
+            apply_stall_window(cfg)
             ledger = Ledger(root / ".aramid" / "ledger.db")
             try:
                 if not _consume_item(root, cfg, ledger, item, clock, watchdog=watchdog):

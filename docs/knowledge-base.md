@@ -176,6 +176,7 @@ Config file: `aramid.toml` at the repo root. Three-layer merge: package defaults
 |---|---|---|---|
 | `pre_commit` | int (s) | `5` | Wall-clock budget for the pre-commit gate. |
 | `pre_push` | int (s) | `300` | Wall-clock budget for the pre-push gate. |
+| `stall_s` | number (s) | `300` | Seconds a child process tree may show no CPU and write no output before aramid kills it as stalled instead of waiting out the wall-clock budget. `0` turns the watchdog off. Set it above the longest quiet wait your suite legitimately has. |
 
 Code's own ultimate fallback if the section were entirely absent: `60.0`.
 

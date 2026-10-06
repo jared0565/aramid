@@ -12,6 +12,10 @@ to publish a tag that disagrees with it.
 
 ### Added
 
+- **`[timeouts].stall_s` sets the stall window (default 300, `0` = off).** It
+  is read once per `aramid check` and, in the drain, applied per repo just
+  before that repo's consumers run.
+
 - **`aramid.proctree.sample(pid)` measures a child process tree.** It returns
   each live member's creation time and CPU time, using only the standard
   library (`/proc`, `ps`, or Win32 through ctypes), and returns `None` when the

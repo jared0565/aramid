@@ -103,6 +103,7 @@ KNOWN = {
     "timeouts": "table",
     "timeouts.pre_commit": "number",
     "timeouts.pre_push": "number",
+    "timeouts.stall_s": "number",
     "triage": "table",
     "triage.extra_security_paths": "list",
     "triage.min_score": "number",

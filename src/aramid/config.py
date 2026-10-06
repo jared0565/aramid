@@ -55,6 +55,16 @@ class Config:
     shadow: dict = field(default_factory=dict)
 
 
+def stall_window_s(cfg: "Config") -> float:
+    """[timeouts].stall_s as seconds; a missing or non-numeric value is the
+    launcher's default (bool is not a number here, though it is an int)."""
+    from aramid.runners.base import DEFAULT_STALL_S
+    value = cfg.timeouts.get("stall_s", DEFAULT_STALL_S)
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return DEFAULT_STALL_S
+    return float(value)
+
+
 def arming_state(cfg: "Config") -> dict:
     """Every tier-affecting `*_armed` flag in force, as a plain dict.
 

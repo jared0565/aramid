@@ -24,6 +24,11 @@ ignore_paths = [
 # Wall-clock budget in seconds, per gate (design doc section 3).
 pre_commit = 5
 pre_push = 300
+# Seconds a child process TREE may show no CPU and write no output before
+# aramid kills it as STALLED rather than waiting out the budget above
+# (0.20.4). 0 = off (wall clock only). Set it above the longest quiet wait
+# your test suite legitimately has (a container or service starting).
+stall_s = 300
 
 # --- The repo's own test suite: the BLOCK-tier `tests` gate (pre-push) ---
 [tests]

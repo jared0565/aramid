@@ -164,12 +164,18 @@ def _ledger_snapshot(root: Path) -> Ledger:
     return ledger
 
 
+def apply_stall_window(cfg) -> None:
+    from aramid.runners import base
+    base.set_stall_window(config_mod.stall_window_s(cfg))
+
+
 def cmd_check(root, gate: Gate, mode: str, strict: bool = False, as_json: bool = False,
               accept_degraded: str | None = None, record: bool = True) -> int:
     root = Path(root)
 
     try:
         cfg = config_mod.load_config(root)
+        apply_stall_window(cfg)
         # `record=False` (interop round 149 c): a whole-tree measurement used
         # to write every finding it saw into the ledger -- 683 rows for one
         # consumer's look. The gate now runs against a snapshot instead.

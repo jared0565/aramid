@@ -445,3 +445,27 @@ def test_sweep_anchor_prefers_the_newest_head_that_descends_from_the_rest(tmp_pa
         assert drain_mod._sweep_anchor(tmp_path, led, "h2") == "h2", "HEAD itself: stop there"
     finally:
         led.close()
+
+
+def test_each_repos_stall_window_is_set_just_before_its_own_consumers_run(tmp_path, seam, monkeypatch):
+    """Configs are all loaded before any consumer runs, so the window must be
+    applied per item at consume time; set in the loading loop, the LAST repo's
+    value would govern every repo."""
+    from aramid.runners import base
+    a = _repo(tmp_path, "a")
+    _enqueue(a, score=60)
+    (a / "aramid.toml").write_text("schema_version = 1\n[timeouts]\nstall_s = 11\n",
+                                   encoding="utf-8")
+    b = _repo(tmp_path, "b")
+    _enqueue(b, score=50)
+    (b / "aramid.toml").write_text("schema_version = 1\n[timeouts]\nstall_s = 22\n",
+                                   encoding="utf-8")
+    seen = []
+    monkeypatch.setattr(seam, "consume", classmethod(
+        lambda cls, item, ctx: (seen.append(base.stall_window()),
+                                ConsumerResult(consumer="fake", state="ok", findings=[]))[1]))
+    monkeypatch.setattr(base, "_STALL_S", base.stall_window(), raising=False)
+
+    cmd_drain([], dry_run=False, clock=CLOCK)
+
+    assert seen == [11.0, 22.0]
