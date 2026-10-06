@@ -176,7 +176,7 @@ Config file: `aramid.toml` at the repo root. Three-layer merge: package defaults
 |---|---|---|---|
 | `pre_commit` | int (s) | `5` | Wall-clock budget for the pre-commit gate. |
 | `pre_push` | int (s) | `300` | Wall-clock budget for the pre-push gate. |
-| `stall_s` | number (s) | `300` | Seconds a child process tree may show no CPU and write no output before aramid kills it as stalled instead of waiting out the wall-clock budget. `0` turns the watchdog off. Set it above the longest quiet wait your suite legitimately has. |
+| `stall_s` | number (s) | `300` | Seconds a child process tree may show no CPU and write no output before aramid kills it as stalled instead of waiting out the wall-clock budget. `0` turns the watchdog off. The tree is sampled every 15 s (`SAMPLE_S`), so the kill comes after between `stall_s` and `stall_s` + 15 s of idleness -- never earlier than about 315 s from launch at the default -- and a run whose budget is at or under that reads as a `timeout` (whose text ends with the trailing idle time), not a stall: at the defaults that is every gate runner, so a stall verdict is for the long-budget callers (the mutation and js_mutation baselines, the drain's consumers) or a lowered `stall_s`. A negative value turns the watchdog off, like `0` (`set_stall_window` clamps it to 0); a non-numeric value, a bool, or a `timeouts` that is not a table falls back to `300`. Set it above the longest quiet wait your suite legitimately has. |
 
 Code's own ultimate fallback if the section were entirely absent: `60.0`.
 

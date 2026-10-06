@@ -27,7 +27,11 @@ pre_push = 300
 # Seconds a child process TREE may show no CPU and write no output before
 # aramid kills it as STALLED rather than waiting out the budget above
 # (0.20.4). 0 = off (wall clock only). Set it above the longest quiet wait
-# your test suite legitimately has (a container or service starting).
+# your test suite legitimately has (a container or service starting). The
+# tree is sampled every 15 s, so the kill comes between stall_s and
+# stall_s + 15 s of idleness (never before ~315 s from launch at 300), and a
+# run whose budget is at or under that reads as a timeout, not a stall. A
+# negative value is off, like 0.
 stall_s = 300
 
 # --- The repo's own test suite: the BLOCK-tier `tests` gate (pre-push) ---

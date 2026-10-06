@@ -24,6 +24,16 @@ Budgets are named rather than fixed here because a repo can raise them in
 `aramid.toml`, and this file is regenerated from a template that cannot see
 that config -- a hardcoded number would silently drift out of date.
 
+A tool that has stopped working is not waited out to its budget.
+`[timeouts].stall_s` (default 300s, `0` turns it off) kills a tool whose
+whole process tree shows no CPU and writes no output for that long, and
+reports it as `stalled` instead of `timeout`. It is checked every 15s, so the
+kill comes between `stall_s` and `stall_s` + 15s of idleness; a tool with a
+gate budget at or under that (every gate budget at its default) hits the
+budget first and reads as a timeout, with the idle time at the end of its
+reason. Set `stall_s` above the longest quiet wait your suite legitimately
+has; a negative value turns the watchdog off, like `0`.
+
 Secrets (gitleaks) always **BLOCK**. Everything else is severity-tiered:
 security-relevant findings block, quality findings warn.
 
