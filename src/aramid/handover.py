@@ -262,6 +262,29 @@ def printable(text: str) -> str:
     return "".join(out)
 
 
+def printable_body(text: str) -> str:
+    """The body made safe to print to a terminal, line by line: C0 controls
+    except TAB (ESC, a lone CR, ...), DEL, C1 controls (NEL ...) and U+2028 /
+    U+2029 are escaped as a backslash-x or backslash-u sequence, so a planted
+    body cannot move the cursor, erase or overwrite a line, or break a line
+    it should not. Unlike `printable` it KEEPS backslashes (Windows paths in
+    a body are normal; the line prefix, not the escape, carries the
+    structure) and newlines. Task 3's SessionStart hook uses it for its
+    `aramid: | <line>` output."""
+    bs = chr(92)
+    out = []
+    for line in text.split(chr(10)):
+        buf = []
+        for c in line:
+            o = ord(c)
+            if c != chr(9) and (o < 0x20 or 0x7F <= o <= 0x9F or o in (0x2028, 0x2029)):
+                buf.append(f"{bs}x{o:02x}" if o <= 0xFF else f"{bs}u{o:04x}")
+            else:
+                buf.append(c)
+        out.append("".join(buf))
+    return chr(10).join(out)
+
+
 def _verify(path: Path, root: Path, data: dict, pending: Pending) -> None:
     """Raise Unreadable unless aramid on this machine signed `data`. The MAC is
     checked over the STORED fields (stored root included) FIRST; only then is

@@ -101,7 +101,8 @@ to publish a tag that disagrees with it.
   `--file` (`--author`, `--replace`); `show` prints the pending one, and a
   file that parsed but could not be verified only under a `NOT VERIFIED`
   header, with its author and commit escaped, while anything unparseable is
-  named with fixed text and never printed; `done` archives it. Exit `2` is a
+  named with fixed text and never printed, and the body is shown with control
+  characters escaped; `done` archives it. Exit `2` is a
   refusal, `3` is a pending file that cannot be delivered. The SessionStart
   and `aramid status` lines that print it follow.
 
