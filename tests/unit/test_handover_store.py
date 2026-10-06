@@ -387,7 +387,8 @@ def test_route_a_genuine_handover_copied_into_another_repo_is_refused(tmp_path):
     (b / ".aramid" / "handover.json").write_bytes((a / ".aramid" / "handover.json").read_bytes())
     err = _unreadable(b)
     assert "written for another repo" in err.reason
-    assert os.path.normcase(os.path.realpath(a)) in err.reason
+    assert err.stored_root == os.path.normcase(os.path.realpath(a))
+    assert err.display_root in err.reason
     assert err.pending.body == "from a"
 
 
@@ -485,8 +486,8 @@ def _sign_over(root, data):
 def test_kinds_are_a_small_fixed_documented_set():
     assert {handover.CORRUPT, handover.TOO_LARGE, handover.SYMLINK, handover.NOT_REGULAR,
             handover.UNSIGNED, handover.NO_KEY, handover.KEY_CORRUPT,
-            handover.KEY_UNREADABLE, handover.MISMATCH, handover.OTHER_REPO} == set(
-                handover.KINDS) and len(handover.KINDS) == 10
+            handover.KEY_UNREADABLE, handover.MISMATCH, handover.OTHER_REPO,
+            handover.IO_ERROR} == set(handover.KINDS) and len(handover.KINDS) == 11
 
 
 def test_a_forged_multiline_root_in_an_unsigned_file_echoes_nothing(tmp_path):
@@ -693,3 +694,127 @@ def test_key_creation_falls_back_when_hard_links_are_unavailable(tmp_path, monke
     assert len(handover._load_key(create=True)) == 32
     assert sorted(p.name for p in handover.key_path().parent.glob("handover.key*")) == [
         "handover.key"]
+
+
+# ---- fix round 5: type-check every MAC-covered field before the MAC runs ----
+
+def _signed_shape(tmp_path, **changes):
+    """A well-formed v=1 file (key present) with the given field replaced by an
+    arbitrary (possibly wrongly typed) value. The mac is a placeholder: the
+    type check must fire before any MAC computation."""
+    handover._load_key(create=True)                          # a key now exists
+    data = {"schema": 1, "v": 1, "root": os.path.normcase(os.path.realpath(tmp_path)),
+            "written_at": "2026-10-06T08:00:00+00:00", "head": None, "author": None,
+            "body": "x", "mac": "ab" * 32}
+    data.update(changes)
+    _raw(tmp_path, json.dumps(data))
+
+
+@pytest.mark.parametrize("field,value", [
+    ("written_at", [1]), ("written_at", 5), ("written_at", {"a": 1}),
+    ("root", [1]), ("root", 5), ("root", None),
+    ("body", [1]), ("body", 5), ("head", [1]), ("head", 5),
+    ("author", {"a": 1}), ("author", 5)])
+def test_a_wrongly_typed_covered_field_is_corrupt_with_a_key_present(tmp_path, field, value):
+    _signed_shape(tmp_path, **{field: value})
+    assert _unreadable(tmp_path).kind == handover.CORRUPT
+
+
+def test_a_missing_or_non_str_mac_is_still_unsigned_not_corrupt(tmp_path):
+    _signed_shape(tmp_path, mac=[1])
+    assert _unreadable(tmp_path).kind == handover.UNSIGNED
+
+
+def test_the_recursion_window_case_is_corrupt_not_a_crash(tmp_path):
+    # nested just under the depth json.loads can parse: it used to reach the
+    # MAC's json.dumps and raise RecursionError out of read()
+    handover.write(tmp_path / "keyholder", "x", now=NOW)
+    depth = 15500
+    text = ('{"v":1,"mac":"x","root":"x","body":"b","written_at":'
+            + "[" * depth + "1" + "]" * depth + "}")
+    _raw(tmp_path, text)
+    assert _unreadable(tmp_path).kind == handover.CORRUPT
+
+
+def test_a_recursion_error_in_the_mac_is_corrupt_defence_in_depth(tmp_path, monkeypatch):
+    handover.write(tmp_path, "x", now=NOW)
+
+    def boom(*a, **k):
+        raise RecursionError("deep")
+
+    monkeypatch.setattr(handover, "_mac", boom)
+    assert _unreadable(tmp_path).kind == handover.CORRUPT
+
+
+def test_done_and_replace_archive_a_file_whose_written_at_is_a_list(tmp_path):
+    _signed_shape(tmp_path, written_at=[[1]])
+    archived = handover.done(tmp_path)
+    assert archived.name.startswith("unreadable")
+    _signed_shape(tmp_path, written_at=[[1]])
+    handover.write(tmp_path, "fresh", replace=True, now=NOW)
+    assert handover.read(tmp_path).body == "fresh"
+    assert len(list((tmp_path / ".aramid" / "handovers").iterdir())) == 2
+
+
+@pytest.mark.parametrize("text,expected", [
+    ("a" + chr(10) + "b", "a" + chr(92) + "nb"),
+    ("a" + chr(13) + "b", "a" + chr(92) + "rb"),
+    ("a" + chr(0x85) + "b", "a" + chr(92) + "x85b"),
+    ("a" + chr(0x2028) + "b", "a" + chr(92) + "u2028b"),
+    ("a" + chr(0x2029) + "b", "a" + chr(92) + "u2029b"),
+    ("a" + chr(27) + "[2Jb", "a" + chr(92) + "x1b[2Jb"),
+    ("a" + chr(92) + "b", "a" + chr(92) + chr(92) + "b"),
+    ("a" + chr(92) + "nb", "a" + chr(92) + chr(92) + "nb")])
+def test_printable_escapes_controls_and_backslashes(text, expected):
+    assert handover.printable(text) == expected
+
+
+def test_a_literal_backslash_n_cannot_look_like_an_escaped_newline():
+    literal = "p" + chr(92) + "nq"
+    real = "p" + chr(10) + "q"
+    assert handover.printable(literal) != handover.printable(real)
+
+
+def test_display_root_is_the_escaped_stored_root(tmp_path):
+    a, b = tmp_path / "a", tmp_path / "b"
+    handover.write(a, "x", now=NOW)
+    (b / ".aramid").mkdir(parents=True)
+    (b / ".aramid" / "handover.json").write_bytes((a / ".aramid" / "handover.json").read_bytes())
+    err = _unreadable(b)
+    assert err.display_root == handover.printable(err.stored_root)
+    assert err.display_root in err.reason
+
+
+def test_display_root_is_none_unless_other_repo(tmp_path):
+    _raw(tmp_path, json.dumps({"body": "x"}))
+    assert _unreadable(tmp_path).display_root is None
+
+
+@pytest.mark.parametrize("seam", ["_lstat", "_fstat"])
+def test_an_oserror_stat_or_fstat_is_io_error_not_corrupt(tmp_path, monkeypatch, seam):
+    handover.write(tmp_path, "x", now=NOW)
+
+    def denied(*a, **k):
+        raise PermissionError("sharing violation")
+
+    monkeypatch.setattr(handover, seam, denied)
+    assert _unreadable(tmp_path).kind == handover.IO_ERROR
+
+
+def test_an_oserror_opening_the_file_is_io_error(tmp_path, monkeypatch):
+    handover.write(tmp_path, "x", now=NOW)
+    real_open = os.open
+
+    def deny_open(path, *a, **k):
+        if str(path).endswith("handover.json"):
+            raise PermissionError("locked")
+        return real_open(path, *a, **k)
+
+    monkeypatch.setattr(handover.os, "open", deny_open)
+    assert _unreadable(tmp_path).kind == handover.IO_ERROR
+
+
+def test_kind_is_required_to_construct_an_unreadable(tmp_path):
+    with pytest.raises(TypeError):
+        handover.Unreadable(tmp_path, "r")
+    assert handover.Unreadable(tmp_path, "r", kind=handover.CORRUPT).kind == "corrupt"

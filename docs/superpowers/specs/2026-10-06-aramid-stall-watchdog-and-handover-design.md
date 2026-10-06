@@ -234,8 +234,10 @@ behind `@_onboarded`, like the existing seven tools.
   covers every route authenticates the file's ORIGIN.
 - **Provenance.** `write` signs the file; `read` delivers it only when the
   signature verifies, with no git subprocess and no network. The key is 32
-  bytes from `secrets.token_bytes`, created on the first `write` (0600,
-  `O_EXCL`) at `~/.aramid/handover.key`, or at `$ARAMID_HANDOVER_KEY_FILE`
+  bytes from `secrets.token_bytes`, created on the first `write` at `~/.aramid/handover.key`
+  (written complete to a temp file, fsynced, then published with `os.link`,
+  which never replaces; where hard links are unavailable it falls back to
+  `O_EXCL` creation), or at `$ARAMID_HANDOVER_KEY_FILE`
   when set (an env var, so spawned test processes see the same path). `read`
   never creates it. The file gains `"v": 1`, `"root"` (the repo's
   `os.path.normcase(os.path.realpath(root))`) and `"mac"`, an HMAC-SHA256 over
@@ -253,18 +255,24 @@ behind `@_onboarded`, like the existing seven tools.
   not `1.0`).
 - **An unverified file is visible, never an instruction.** `read` raises
   `Unreadable(path, reason, pending, kind, stored_root)`. `kind` is one of a
-  fixed set (`corrupt`, `too_large`, `symlink`, `not_regular`, `unsigned`,
-  `no_key`, `key_corrupt`, `key_unreadable`, `mismatch`, `other_repo`).
+  fixed set of eleven (`corrupt`, `too_large`, `symlink`, `not_regular`,
+  `unsigned`, `no_key`, `key_corrupt`, `key_unreadable`, `mismatch`,
+  `other_repo`, `io_error`; an `OSError` such as a sharing violation is
+  `io_error`, not corruption).
   Consumers print FIXED text per kind, never the free-form `reason`; the one
   variable they may print is `stored_root`, set only for `other_repo` after
-  the MAC verified it, with control characters escaped (a signed POSIX path
-  can legally contain a newline). `pending` carries the parsed body when only
+  the MAC verified it, and only through `Unreadable.display_root` (or
+  `handover.printable`), which escapes every control or line-breaking
+  character and backslashes (a signed POSIX path can legally contain a
+  newline, and a literal backslash-n must not look like an escaped one). `pending` carries the parsed body when only
   provenance failed, so `show` can print it under a NOT VERIFIED header for a
   human; the hook never prints the body. A file over 1 MiB, or one that is not
   a regular file, is refused before it is parsed (on POSIX the open uses
   `O_NOFOLLOW|O_NONBLOCK` and re-checks type and size on the fd), so a planted
-  FIFO or huge file cannot stall session start; a deeply nested JSON file is
-  `corrupt`, not a crash, and `done` or `--replace` still archives it.
+  FIFO or huge file cannot stall session start. Every field the MAC covers is
+  type-checked BEFORE it is hashed, so a deeply nested JSON file, or a field
+  of the wrong type, reads as `corrupt` and nothing nested reaches the MAC;
+  `done` or `--replace` still archives any such file.
 - **Trade-off.** The root is part of the signature, so renaming or moving
   the repo turns its pending handover into "written for another repo" until
   it is done or replaced. `done` and `--replace` archive an unverified file

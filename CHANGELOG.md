@@ -87,8 +87,9 @@ to publish a tag that disagrees with it.
   atomic; a second write refuses while one is pending unless replacing, which
   archives the old one first; consuming it archives it under
   `.aramid/handovers/` and never deletes it. A corrupt, oversized or
-  deeply nested file, or one with a non-string field, reads as unreadable
-  (with a fixed `kind`), never as a crash, and `done` still archives it. A handover is signed (HMAC-SHA256,
+  deeply nested file, or one whose body, timestamp or root is not a string,
+  reads as unreadable with a fixed `kind`, and `done` still archives it. A
+  handover is signed (HMAC-SHA256,
   with a machine key under `~/.aramid`, bound to the repo's real path) and
   delivered only when the signature verifies, so a file planted by a clone,
   a zip or a copy is never mistaken for one aramid wrote; a symlink, a
