@@ -727,7 +727,9 @@ def test_a_missing_or_non_str_mac_is_still_unsigned_not_corrupt(tmp_path):
 
 def test_the_recursion_window_case_is_corrupt_not_a_crash(tmp_path):
     # nested just under the depth json.loads can parse: it used to reach the
-    # MAC's json.dumps and raise RecursionError out of read()
+    # MAC's json.dumps and raise RecursionError out of read(). 15500 is the
+    # window as MEASURED on this platform/interpreter, so it is not portable;
+    # the shallow wrong-type tests above and below are the stack-independent guard.
     handover.write(tmp_path / "keyholder", "x", now=NOW)
     depth = 15500
     text = ('{"v":1,"mac":"x","root":"x","body":"b","written_at":'
@@ -818,3 +820,96 @@ def test_kind_is_required_to_construct_an_unreadable(tmp_path):
     with pytest.raises(TypeError):
         handover.Unreadable(tmp_path, "r")
     assert handover.Unreadable(tmp_path, "r", kind=handover.CORRUPT).kind == "corrupt"
+
+
+# ---- describe(): the one source of fixed per-kind text (Ruling R7 AMENDED) ----
+
+DESCRIBE = {
+    handover.CORRUPT: "the file is not valid handover JSON",
+    handover.TOO_LARGE: "the file is too large",
+    handover.SYMLINK: "the file or its directory is a symlink or escapes the repository",
+    handover.NOT_REGULAR: "the file is not a regular file",
+    handover.UNSIGNED: "the file was not written by aramid on this machine (unsigned)",
+    handover.NO_KEY: "there is no handover key on this machine, so it cannot be verified",
+    handover.KEY_CORRUPT: "the handover key is corrupt, so it cannot be verified",
+    handover.KEY_UNREADABLE: "the handover key could not be read, so it cannot be verified",
+    handover.MISMATCH: "the signature does not match",
+    handover.IO_ERROR: "the file could not be read (I/O error)",
+}
+
+
+@pytest.mark.parametrize("kind", sorted(DESCRIBE))
+def test_describe_is_fixed_text_per_kind(tmp_path, kind):
+    exc = handover.Unreadable(tmp_path, "FREE-FORM REASON", kind=kind)
+    assert handover.describe(exc) == DESCRIBE[kind]
+
+
+def test_describe_other_repo_names_the_escaped_stored_root(tmp_path):
+    exc = handover.Unreadable(tmp_path, "r", kind=handover.OTHER_REPO,
+                              stored_root="/a\nforged line")
+    assert handover.describe(exc) == "written for another repo: /a\\nforged line"
+
+
+def test_describe_covers_every_kind(tmp_path):
+    assert set(DESCRIBE) | {handover.OTHER_REPO} == set(handover.KINDS)
+    for kind in handover.KINDS:
+        exc = handover.Unreadable(tmp_path, "r", kind=kind, stored_root="x")
+        assert "\n" not in handover.describe(exc)
+
+
+# ---- the body-size cap: a handover write() produces must stay deliverable ----
+
+def _size(root):
+    return (Path(root) / ".aramid" / "handover.json").stat().st_size
+
+
+def test_a_body_at_the_cap_round_trips_and_one_byte_more_is_refused(tmp_path):
+    # the serialized file is root-dependent, so measure in the same directory
+    handover.write(tmp_path, "a", now=NOW)
+    overhead = _size(tmp_path) - 1
+    handover.done(tmp_path)
+    fit = handover.MAX_BYTES - overhead
+    handover.write(tmp_path, "a" * fit, now=NOW)
+    assert _size(tmp_path) == handover.MAX_BYTES
+    assert handover.read(tmp_path).body == "a" * fit
+    handover.done(tmp_path)
+    with pytest.raises(handover.BodyTooLarge):
+        handover.write(tmp_path, "a" * (fit + 1), now=NOW)
+    assert not (tmp_path / ".aramid" / "handover.json").exists()
+
+
+def test_the_cap_counts_the_serialized_file_not_the_utf8_body(tmp_path):
+    # 200000 x "e-acute" is 400 KB of UTF-8 but 1.2 MB once JSON-escaped
+    with pytest.raises(handover.BodyTooLarge):
+        handover.write(tmp_path, "é" * 200_000, now=NOW)
+    assert not (tmp_path / ".aramid" / "handover.json").exists()
+
+
+def test_an_oversized_replace_leaves_the_pending_one_in_place(tmp_path):
+    handover.write(tmp_path, "keep", now=NOW)
+    with pytest.raises(handover.BodyTooLarge):
+        handover.write(tmp_path, "a" * handover.MAX_BYTES, replace=True, now=NOW)
+    assert handover.read(tmp_path).body == "keep"
+    assert not (tmp_path / ".aramid" / "handovers").exists()
+
+
+# ---- a planted non-directory where aramid needs a directory ----
+
+def test_a_regular_file_at_the_archive_dir_is_unsafe_and_leaves_the_pending_one(tmp_path):
+    handover.write(tmp_path, "keep", now=NOW)
+    (tmp_path / ".aramid" / "handovers").write_text("planted", encoding="utf-8")
+    with pytest.raises(handover.UnsafePath) as exc:
+        handover.done(tmp_path)
+    assert exc.value.path == tmp_path / ".aramid" / "handovers"
+    assert exc.value.reason == "it is not a directory"
+    with pytest.raises(handover.UnsafePath):
+        handover.write(tmp_path, "b", replace=True, now=NOW)
+    assert handover.read(tmp_path).body == "keep"
+
+
+def test_a_regular_file_at_dot_aramid_is_unsafe_on_write(tmp_path):
+    (tmp_path / ".aramid").write_text("planted", encoding="utf-8")
+    with pytest.raises(handover.UnsafePath) as exc:
+        handover.write(tmp_path, "b", now=NOW)
+    assert exc.value.reason == "it is not a directory"
+    assert handover.read(tmp_path) is None

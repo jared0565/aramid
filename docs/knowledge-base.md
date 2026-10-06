@@ -469,6 +469,9 @@ Grades each auto-resolver on what it SAW, not only on what it cleared, which fin
 ### `aramid notices [list | show <id> | ack <id>]`
 aramid's own notices. `list`, the default, prints the pending ones one per line; `show <id>` prints one; `ack <id>` acknowledges it, and an ack anywhere silences it everywhere. Exit codes: section 5.
 
+### `aramid handover [write | show | done]`
+The per-repo session handover: an agent writes one before a restart or a long pause, and a fresh session resumes it without the operator. `write` reads the body from stdin, or from `--file FILE` (`-` is stdin); `--author NAME` records who wrote it; `--replace` archives a pending one and writes this one, where without it a second `write` is refused. `show`, the default, prints the pending handover, or `no pending handover`. `done` archives the file under `.aramid/handovers/` and says where; it never deletes, it archives an unreadable or unverified file too, and a second `done` is `0`. The file is signed with a machine key, so one that did not come from aramid on this machine, or was written for another repo, is printed by `show` only under a `NOT VERIFIED` header, and anything unparseable is named but never printed. Exit codes: section 5.
+
 ### `aramid mutation-score [--json]`
 Advisory per-function mutation-score and regression report. `--json` prints the machine-readable form. Advisory: a regression never changes the exit (section 5).
 
@@ -595,6 +598,7 @@ The agent-harness hook endpoint (Claude Code) that `aramid init` registers in `.
 | `aramid fleet` | always `0`, including when the verdict or policy cannot be read (one stderr line) -- a report has nothing to block |
 | `aramid fleet deregister` | `0` once the repo is removed; `3` when the target names no registered repo or more than one, or the registry cannot be rewritten |
 | `aramid notices` | `0`; `3` for an id the channel has never seen (`show`, `ack`) or an internal failure. `ack` of an already-acked id is `0` |
+| `aramid handover` | `0`; `2` for a refusal (`write` of an empty body, a body whose file would exceed 1 MiB, a second `write` without `--replace`, an unsafe or non-directory `.aramid`, a corrupt key, an unreadable `--file`, or an OS error from `write` or `done`); `3` when `show` finds a pending file that cannot be delivered as verified (the body, if it parsed, prints under a `NOT VERIFIED` header) |
 | `aramid resolvers` | `0` whether or not a resolver is flagged -- it follows `status`'s contract, not `check`'s, so a false flag can never block; `3` on an engine error |
 | `aramid mutation-score` | `0`, including an empty history; `3` on an engine error. Advisory: a regression never changes the exit |
 | `aramid agent-hook <event>` | always `0` -- a deny or an advisory is carried in the JSON on stdout, never in the exit code, and an internal failure fails open. `python -P -m aramid agent-hook` with no event also exits `0`; the `aramid` console script needs the event like any argument and exits `3` without it |

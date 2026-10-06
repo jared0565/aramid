@@ -108,6 +108,18 @@ def build_parser() -> argparse.ArgumentParser:
     p_nack = notices_sub.add_parser("ack")
     p_nack.add_argument("id")
 
+    p_handover = sub.add_parser("handover",
+                                help="session handover for restarts: write (stdin or --file),"
+                                     " show, done (archives it)")
+    handover_sub = p_handover.add_subparsers(dest="handover_command")
+    p_hw = handover_sub.add_parser("write")
+    p_hw.add_argument("--file", default=None, help="read the body from FILE ('-' = stdin)")
+    p_hw.add_argument("--author", default=None)
+    p_hw.add_argument("--replace", action="store_true",
+                      help="archive a pending handover and write this one")
+    handover_sub.add_parser("show")
+    handover_sub.add_parser("done")
+
     p_ms = sub.add_parser("mutation-score",
                           help="advisory per-function mutation-score + regression report")
     p_ms.add_argument("--json", action="store_true")
@@ -335,6 +347,13 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.command == "notices":
         return cmd_notices(args.notices_command or "list", getattr(args, "id", None), root)
+
+    if args.command == "handover":
+        from aramid.commands.handover_cmd import cmd_handover
+        return cmd_handover(args.handover_command or "show", root,
+                            file=getattr(args, "file", None),
+                            author=getattr(args, "author", None),
+                            replace=getattr(args, "replace", False))
 
     if args.command == "mutation-score":
         return cmd_mutation_score(root, as_json=args.json)

@@ -271,7 +271,8 @@ behind `@_onboarded`, like the existing seven tools.
   `O_NOFOLLOW|O_NONBLOCK` and re-checks type and size on the fd), so a planted
   FIFO or huge file cannot stall session start. Every field the MAC covers is
   type-checked BEFORE it is hashed, so a deeply nested JSON file, or a field
-  of the wrong type, reads as `corrupt` and nothing nested reaches the MAC;
+  of the wrong type (except `v`/`mac`, which read as `unsigned`), reads as
+  `corrupt` and nothing nested reaches the MAC;
   `done` or `--replace` still archives any such file.
 - **Trade-off.** The root is part of the signature, so renaming or moving
   the repo turns its pending handover into "written for another repo" until

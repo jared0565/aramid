@@ -27,7 +27,7 @@ KB = Path(__file__).resolve().parents[2] / "docs" / "knowledge-base.md"
 
 SURFACE = {
     "": ["--version", "agent-hook", "arm", "autolearn", "check", "doctor", "drain", "fleet",
-         "hooks", "init", "ledger", "mutation-score", "notices", "override", "pack",
+         "handover", "hooks", "init", "ledger", "mutation-score", "notices", "override", "pack",
          "rebaseline", "resolvers", "schedule", "status", "triage", "uninstall",
          "update-rules"],
     "agent-hook": ["<event>", "<rest>"],
@@ -41,6 +41,10 @@ SURFACE = {
     "drain": ["--all", "--dry-run", "--max-items", "--repo"],
     "fleet": ["--json", "deregister"],
     "fleet deregister": ["<target>"],
+    "handover": ["done", "show", "write"],
+    "handover done": [],
+    "handover show": [],
+    "handover write": ["--author", "--file", "--replace"],
     "hooks": ["<action>", "<action>=install", "<action>=remove", "<action>=status"],
     "init": ["--discover", "<path>"],
     "ledger": ["consumers", "filter", "list", "mark-not-a-secret", "mark-rotated",

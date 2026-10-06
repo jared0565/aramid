@@ -41,7 +41,7 @@ CORRUPT = "corrupt"          # not JSON, deeply nested, or a wrong shape / field
 TOO_LARGE = "too_large"      # over MAX_BYTES (checked on the stat and after the read)
 SYMLINK = "symlink"          # the file, `.aramid`, or the archive dir is a symlink / escapes the repo
 NOT_REGULAR = "not_regular"  # a directory, FIFO, device ...
-UNSIGNED = "unsigned"        # no usable `v` / `mac` / `root`: not written by aramid
+UNSIGNED = "unsigned"        # no usable `v` / `mac`: not written by aramid (a non-str root is `corrupt`)
 NO_KEY = "no_key"            # no handover key on this machine, so nothing can verify
 KEY_CORRUPT = "key_corrupt"  # the key file is not exactly KEY_BYTES
 KEY_UNREADABLE = "key_unreadable"  # an OSError reading the key
@@ -71,6 +71,11 @@ class AlreadyPending(RuntimeError):
     pass
 
 
+class BodyTooLarge(ValueError):
+    """The serialized handover would exceed MAX_BYTES, which `read()` refuses:
+    it would be written and then never delivered."""
+
+
 class Unreadable(RuntimeError):
     """The file at `path` is not delivered. `kind` is one of KINDS. `reason`
     is a human string built ONLY from fixed text, except the escaped root for
@@ -94,6 +99,30 @@ class Unreadable(RuntimeError):
         """`stored_root` escaped for printing (control characters and
         backslashes); the only form a consumer may echo."""
         return None if self.stored_root is None else printable(self.stored_root)
+
+
+_DESCRIBE = {
+    CORRUPT: "the file is not valid handover JSON",
+    TOO_LARGE: "the file is too large",
+    SYMLINK: "the file or its directory is a symlink or escapes the repository",
+    NOT_REGULAR: "the file is not a regular file",
+    UNSIGNED: "the file was not written by aramid on this machine (unsigned)",
+    NO_KEY: "there is no handover key on this machine, so it cannot be verified",
+    KEY_CORRUPT: "the handover key is corrupt, so it cannot be verified",
+    KEY_UNREADABLE: "the handover key could not be read, so it cannot be verified",
+    MISMATCH: "the signature does not match",
+    IO_ERROR: "the file could not be read (I/O error)",
+}
+
+
+def describe(exc: Unreadable) -> str:
+    """One line of FIXED text for an Unreadable, chosen by `kind`. The only
+    variable is the escaped stored root of OTHER_REPO (MAC-verified). Every
+    consumer (show, the SessionStart hook, status) prints this and never
+    `exc.reason` or anything else from the file."""
+    if exc.kind == OTHER_REPO:
+        return f"written for another repo: {exc.display_root}"
+    return _DESCRIBE.get(exc.kind, "the file could not be delivered")
 
 
 class KeyCorrupt(RuntimeError):
@@ -208,6 +237,8 @@ def _check_dirs(root: Path, *, archive: bool = False) -> None:
         if d.is_symlink():
             raise UnsafePath(d, "it is a symlink")
         if os.path.lexists(d):
+            if not d.is_dir():
+                raise UnsafePath(d, "it is not a directory")
             try:
                 inside = d.resolve().is_relative_to(real_root)
             except (OSError, RuntimeError):
@@ -344,6 +375,10 @@ def read(root: Path) -> Pending | None:
     return pending
 
 
+def _serialize(data: dict) -> str:
+    return json.dumps(data, indent=2) + "\n"
+
+
 def _atomic_write(path: Path, data: dict) -> None:
     """Random exclusive temp name (never a fixed one a repo could pre-plant a
     symlink at), fsynced, then os.replace."""
@@ -351,7 +386,7 @@ def _atomic_write(path: Path, data: dict) -> None:
     fd, tmp = tempfile.mkstemp(dir=path.parent, prefix="handover.", suffix=".tmp")
     try:
         with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as fh:
-            fh.write(json.dumps(data, indent=2) + "\n")
+            fh.write(_serialize(data))
             fh.flush()
             os.fsync(fh.fileno())
         os.replace(tmp, path)
@@ -391,6 +426,14 @@ def write(root: Path, body: str, *, author: str | None = None, replace: bool = F
     if not body.strip():
         raise EmptyBody("a handover needs a body")
     path = Path(root) / PATH
+    stamp = (now or datetime.now(timezone.utc)).isoformat()
+    fields = {"root": _bound_root(Path(root)), "written_at": stamp,
+              "head": _head(Path(root)), "author": author, "body": body}
+    # the MAC is always 64 hex chars, so a placeholder sizes the file exactly;
+    # refuse BEFORE the key, the archive or any write
+    shape = {"schema": SCHEMA, "v": MAC_VERSION, **fields, "mac": "0" * 64}
+    if len(_serialize(shape).encode("utf-8")) > MAX_BYTES:
+        raise BodyTooLarge(f"a handover file over {MAX_BYTES} bytes would never be delivered")
     key = _load_key(create=True)
     _check_dirs(root)
     if path.is_symlink():
@@ -399,9 +442,6 @@ def write(root: Path, body: str, *, author: str | None = None, replace: bool = F
         if not replace:
             raise AlreadyPending(str(path))
         _archive(root)
-    stamp = (now or datetime.now(timezone.utc)).isoformat()
-    fields = {"root": _bound_root(Path(root)), "written_at": stamp,
-              "head": _head(Path(root)), "author": author, "body": body}
     _atomic_write(path, {"schema": SCHEMA, "v": MAC_VERSION, **fields,
                          "mac": _mac(key, fields)})
     return path

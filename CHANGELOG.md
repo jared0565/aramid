@@ -80,7 +80,7 @@ to publish a tag that disagrees with it.
   for 97 minutes at zero CPU, which only a no-progress check can tell from a
   slow audit. The pip-audit defect has not been reported upstream.
 
-- **A per-repo session handover store (storage only so far).**
+- **A per-repo session handover, and `aramid handover write | show | done`.**
   `aramid.handover` keeps one never-committed file, `.aramid/handover.json`
   (`init` already gitignores `.aramid/`), that an agent writes before a
   restart so a fresh session can resume without the operator. Writes are
@@ -94,8 +94,16 @@ to publish a tag that disagrees with it.
   delivered only when the signature verifies, so a file planted by a clone,
   a zip or a copy is never mistaken for one aramid wrote; a symlink, a
   non-regular or oversized file, and a symlinked `.aramid` or archive
-  directory are refused rather than followed. The `aramid handover` command and the
-  SessionStart and `aramid status` lines that print it follow.
+  directory are refused rather than followed, as is a regular file planted
+  where `.aramid` or `.aramid/handovers` should be, and a body whose signed
+  file would exceed the 1 MiB read cap is refused rather than written and
+  never delivered. `aramid handover write` takes the body from stdin or
+  `--file` (`--author`, `--replace`); `show` prints the pending one, and a
+  file that parsed but could not be verified only under a `NOT VERIFIED`
+  header, with its author and commit escaped, while anything unparseable is
+  named with fixed text and never printed; `done` archives it. Exit `2` is a
+  refusal, `3` is a pending file that cannot be delivered. The SessionStart
+  and `aramid status` lines that print it follow.
 
 ### Fixed
 
