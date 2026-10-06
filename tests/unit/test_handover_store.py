@@ -986,3 +986,44 @@ def test_a_mismatched_file_is_archived_under_the_fixed_stamp(tmp_path):
 def test_a_verified_file_keeps_its_written_at_stamp(tmp_path):
     handover.write(tmp_path, "x", now=NOW)
     assert handover.done(tmp_path).name == "2026-10-06T08-00-00+00-00.json"
+
+
+# ---- M3 (final review): the branches the review found unexercised ----
+
+def test_kind_symlinked_aramid_dir_with_a_file_behind_it(tmp_path, monkeypatch):
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    (elsewhere / "handover.json").write_text(json.dumps({"body": "planted"}),
+                                             encoding="utf-8")
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _link(monkeypatch, repo / ".aramid", elsewhere)
+    if not (repo / ".aramid" / "handover.json").exists():   # the stand-in is a plain dir
+        (repo / ".aramid" / "handover.json").write_text("{}", encoding="utf-8")
+    err = _unreadable(repo)
+    assert err.kind == handover.SYMLINK and err.pending is None
+
+
+@pytest.mark.parametrize("how", ["outside", "loop"])
+def test_an_aramid_dir_resolving_outside_the_repo_is_refused(tmp_path, monkeypatch, how):
+    repo = tmp_path / "repo"
+    handover.write(repo, "x", now=NOW)
+    real_resolve = Path.resolve
+
+    def resolve(self, *a, **k):
+        if self == repo / ".aramid":
+            if how == "loop":
+                raise RuntimeError("symlink loop")
+            return tmp_path / "outside"
+        return real_resolve(self, *a, **k)
+
+    monkeypatch.setattr(Path, "resolve", resolve)
+    with pytest.raises(handover.UnsafePath) as exc:
+        handover.write(repo, "y", replace=True, now=NOW)
+    assert exc.value.path == repo / ".aramid"
+    assert exc.value.reason == "it resolves outside the repository"
+    assert _unreadable(repo).kind == handover.SYMLINK
+
+
+def test_age_reads_a_naive_written_at_as_utc():
+    assert handover.age("2026-10-06T07:59:00", NOW) == "1m"

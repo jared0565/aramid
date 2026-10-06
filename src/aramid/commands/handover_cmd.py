@@ -49,10 +49,13 @@ def _read_body(file: str | None, stdin) -> str | None:
         stream = stdin or sys.stdin
         raw = getattr(stream, "buffer", None)
         if raw is None:
-            return stream.read()
-        # bytes + strict UTF-8: the text layer would decode with the locale
-        # code page on Windows and turn an em dash into mojibake, silently
-        return raw.read().decode("utf-8").replace("\r\n", "\n")
+            text = stream.read()               # MCP: already str
+        else:
+            # bytes + strict UTF-8: the text layer would decode with the locale
+            # code page on Windows and turn an em dash into mojibake, silently
+            text = raw.read().decode("utf-8")
+        # one normalization for both, so MCP and the CLI store the same body
+        return text.replace("\r\n", "\n")
     except UnicodeDecodeError:
         if not file or file == "-":
             _err("stdin is not valid UTF-8 -- write the body to a file and pass --file")

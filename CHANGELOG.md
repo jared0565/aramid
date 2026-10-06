@@ -120,7 +120,9 @@ to publish a tag that disagrees with it.
     verified only under a `NOT VERIFIED` header, each body line prefixed `| `;
     anything unparseable is named in fixed text and never printed. Bodies,
     authors and commits are printed with control characters and lone
-    surrogates escaped, so no file on disk can make `show` raise.
+    surrogates escaped, so no file on disk can make `show` raise. A body is
+    stored with CRLF line endings turned into LF, whether it came through the
+    CLI or the `aramid_handover_write` MCP tool.
   - **Delivery.** The SessionStart hook prints a verified handover first, in
     the block, ahead of the posture lines: a header giving its age and commit
     and telling the agent to resume it without asking the operator and then run
@@ -136,8 +138,12 @@ to publish a tag that disagrees with it.
     withholding the commit, author and body. The CLI `show` still prints the
     body, quoted under that header, for a human (an agent with a shell can run
     it too; aramid only declines to hand it over unasked or as an
-    instruction). The handover prints even if the rest of the posture
-    block fails. Every agent-hook output (`session-start` and `pre-tool-use`)
+    instruction). The handover survives a failing rest of the report in both
+    places: the SessionStart hook still prints its handover lines when the
+    posture block raises (a locked or corrupt ledger), and `aramid status`
+    computes its handover line before it opens the config or the ledger and
+    prints `aramid status:` and that line before its engine error (exit `3`)
+    when either fails. Every agent-hook output (`session-start` and `pre-tool-use`)
     is written as UTF-8, with anything unencodable backslash-escaped: the
     hook's fast path never reached the CLI's UTF-8 setup, so on Windows a
     verified body holding an arrow, or a lone surrogate on any platform,

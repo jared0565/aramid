@@ -611,3 +611,52 @@ def test_describe_other_repo_echoes_only_the_verified_root(tmp_path):
     exc = handover.Unreadable(tmp_path, "PLANTED-REASON", planted,
                               kind=handover.OTHER_REPO, stored_root="/verified/root")
     assert handover.describe(exc) == "written for another repo: /verified/root"
+
+
+# ---- M1 (final review): status prints the handover line on its error paths ----
+
+def _raise(*a, **k):
+    raise RuntimeError("ledger locked")
+
+
+@pytest.mark.parametrize("where", ["open_findings", "load_config"])
+def test_cmd_status_prints_the_handover_line_when_the_rest_fails(
+        tmp_path, monkeypatch, capsys, where):
+    from aramid.ledger import Ledger
+    r = _onboarded(tmp_path)
+    handover.write(r, "x")
+    if where == "open_findings":
+        monkeypatch.setattr(Ledger, "open_findings", _raise)
+    else:
+        monkeypatch.setattr(status.config_mod, "load_config", _raise)
+    assert status.cmd_status(r) == 3
+    out = capsys.readouterr()
+    lines = out.out.splitlines()
+    assert lines[0] == "aramid status:"
+    assert lines[1].startswith("  handover: PENDING, written ")
+    assert len(lines) == 2
+    assert out.err == "aramid: status: engine error: ledger locked\n"
+
+
+def test_cmd_status_failing_with_no_handover_prints_only_the_error(
+        tmp_path, monkeypatch, capsys):
+    from aramid.ledger import Ledger
+    r = _onboarded(tmp_path)
+    monkeypatch.setattr(Ledger, "open_findings", _raise)
+    assert status.cmd_status(r) == 3
+    out = capsys.readouterr()
+    assert out.out == ""
+    assert out.err == "aramid: status: engine error: ledger locked\n"
+
+
+# ---- M2 (final review): MCP stores the same body the CLI does ----
+
+def test_mcp_write_normalizes_crlf_like_the_cli(tmp_path, monkeypatch):
+    from aramid import mcp_tools
+    r = _mcp_repo(tmp_path, monkeypatch)
+    out = mcp_tools.TOOLS["aramid_handover_write"]["handler"](
+        None, {"body": "a" + chr(13) + chr(10) + "b" + chr(13) + chr(10)})
+    assert out["isError"] is False
+    assert handover.read(r).body == "a" + chr(10) + "b" + chr(10)
+    text = mcp_tools.TOOLS["aramid_handover_show"]["handler"](None, {})["content"][0]["text"]
+    assert chr(92) + "x0d" not in text and chr(13) not in text

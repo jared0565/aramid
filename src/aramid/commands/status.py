@@ -427,21 +427,32 @@ def _handover_line(root: Path, now) -> str | None:
             " -- 'aramid handover show'")
 
 
+def _engine_error(exc: Exception, handover_line: str | None) -> int:
+    """The error path still carries a pending handover (Ruling R2 for the
+    non-Claude path: `aramid_status` is how every MCP agent finds one, and a
+    locked or corrupt ledger after a crash is exactly when it matters)."""
+    if handover_line:
+        print("aramid status:\n" + handover_line)
+    print(f"aramid: status: engine error: {exc}", file=sys.stderr)
+    return 3
+
+
 def cmd_status(root) -> int:
     root = Path(root)
+    # computed BEFORE anything that can fail (config, ledger, open_findings)
+    handover_line = _handover_line(root, datetime.now(timezone.utc))
     try:
         cfg = config_mod.load_config(root)
         ledger = Ledger(root / ".aramid" / "ledger.db")
     except Exception as exc:
-        print(f"aramid: status: engine error: {exc}", file=sys.stderr)
-        return 3
+        return _engine_error(exc, handover_line)
 
     try:
         state = ledger.open_findings()
 
         lines = [
             "aramid status:",
-            *([hv] if (hv := _handover_line(root, datetime.now(timezone.utc))) else []),
+            *([handover_line] if handover_line else []),
             f"  {_last_run_line(ledger)}",
             f"  {_open_counts_line(state)}",
             f"  {_new_since_baseline_line(ledger, state)}",
@@ -494,7 +505,6 @@ def cmd_status(root) -> int:
         print("\n".join(lines))
         return 0
     except Exception as exc:
-        print(f"aramid: status: engine error: {exc}", file=sys.stderr)
-        return 3
+        return _engine_error(exc, handover_line)
     finally:
         ledger.close()
