@@ -83,11 +83,14 @@ def test_sample_sees_a_live_child_and_its_cpu_advance():
     child = subprocess.Popen([sys.executable, "-c", burn])
     try:
         time.sleep(0.5)
-        me = os.getpid()
-        first = proctree.sample(me)
+        # Rooted at the CHILD, not at pytest: any unrelated descendant of
+        # pytest that exits between the listing and its timing makes a
+        # pytest-rooted sample None (by design), which made this test flaky.
+        first = proctree.sample(child.pid)
         assert first is not None and child.pid in first
         time.sleep(1.5)
-        second = proctree.sample(me)
+        second = proctree.sample(child.pid)
+        assert second is not None, "the busy child is still alive and measurable"
         assert second[child.pid][1] > first[child.pid][1], "a busy child's CPU must advance"
     finally:
         child.kill()

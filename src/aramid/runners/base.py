@@ -430,7 +430,8 @@ def worktree_import_env(wt: Path) -> dict[str, str]:
 # {pid: (created, cpu)} and the bytes read so far; no change in any of
 # them for the stall window = stalled. Module state, like the drain's
 # `closed()`: the launchers are reached from inside consumers that hold no
-# config. `cmd_check` and the drain set it from `[timeouts].stall_s`.
+# config. `apply_stall_window` sets it from `[timeouts].stall_s`, called by
+# `pipeline.run_gate` (check, init, rebaseline) and by the drain per repo.
 _SAMPLE_S = 15.0
 DEFAULT_STALL_S = 300.0
 _STALL_S = DEFAULT_STALL_S
@@ -444,6 +445,17 @@ def set_stall_window(seconds: float) -> None:
 
 def stall_window() -> float:
     return _STALL_S
+
+
+def apply_stall_window(cfg) -> None:
+    """Set the window from the repo's `[timeouts].stall_s`. It must run before
+    any runner or consumer launches; `pipeline.run_gate` and the drain call it.
+    Here, below the commands, so neither has to import a command module.
+    `aramid.config` is imported inside: this module imports nothing outside
+    the standard library at import time (config needs `tomli_w`, and the
+    release's sdist smoke imports the runners with `--no-deps`)."""
+    from aramid import config as config_mod
+    set_stall_window(config_mod.stall_window_s(cfg))
 
 
 class _Stalled(Exception):

@@ -85,6 +85,10 @@ to publish a tag that disagrees with it.
   the stall watchdog wakes more than two sample intervals late, nothing was
   observed in between, so it restarts the quiet clock from that wake instead
   of counting the gap as idle time.
+- **A `timeouts` value that is not a table no longer stops the drain.** With
+  `timeouts = 5` in a repo's `aramid.toml`, reading the stall window raised
+  outside the drain's per-repo error handling, so every repo still waiting
+  in that drain was skipped. That repo now gets the default 300 s window.
 
 ## [0.20.3] — 2026-10-06
 

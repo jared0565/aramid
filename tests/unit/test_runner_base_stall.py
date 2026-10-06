@@ -56,12 +56,23 @@ def test_a_quiet_child_that_prints_is_never_stalled(tmp_path, fast_watch):
     assert r.stalled_s is None
 
 
-def test_a_busy_grandchild_keeps_an_idle_child_alive(tmp_path, fast_watch):
+def test_a_busy_grandchild_keeps_an_idle_child_alive(tmp_path, fast_watch, monkeypatch):
+    real, samples = base.proctree.sample, []
+
+    def spy(pid):
+        s = real(pid)
+        samples.append(s)
+        return s
+
+    monkeypatch.setattr(base.proctree, "sample", spy)
     code = ("import subprocess, sys\n"
             "subprocess.run([sys.executable, '-c', 'x = 0\\nwhile True: x += 1'])")
     r = run_subprocess([sys.executable, "-c", code], tmp_path, 4)
     assert r.state is ToolState.TIMEOUT
     assert r.stalled_s is None, "descendant CPU must count as activity"
+    # Without this the test passes when every sample is None (unmeasurable
+    # reads as active too): it must have SEEN the grandchild at least once.
+    assert any(s is not None and len(s) >= 2 for s in samples), samples
 
 
 def test_output_with_no_newline_is_activity_and_is_kept(tmp_path, fast_watch):

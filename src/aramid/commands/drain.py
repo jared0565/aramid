@@ -790,8 +790,7 @@ def cmd_drain(targets: list, *, dry_run: bool = False, max_items: int | None = N
             # beside this repo's consumers: every config is loaded in the
             # candidate loop above, and setting it there would leave the last
             # repo's value governing all of them.
-            from aramid.commands.check import apply_stall_window
-            apply_stall_window(cfg)
+            runners_base.apply_stall_window(cfg)
             ledger = Ledger(root / ".aramid" / "ledger.db")
             try:
                 if not _consume_item(root, cfg, ledger, item, clock, watchdog=watchdog):

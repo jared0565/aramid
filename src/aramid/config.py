@@ -57,9 +57,13 @@ class Config:
 
 def stall_window_s(cfg: "Config") -> float:
     """[timeouts].stall_s as seconds; a missing or non-numeric value is the
-    launcher's default (bool is not a number here, though it is an int)."""
+    launcher's default (bool is not a number here, though it is an int).
+    So is a `timeouts` that is not a table (`timeouts = 5`): the drain
+    applies the window outside its per-item try, so raising here aborted
+    every remaining repo, not just the misconfigured one."""
     from aramid.runners.base import DEFAULT_STALL_S
-    value = cfg.timeouts.get("stall_s", DEFAULT_STALL_S)
+    timeouts = cfg.timeouts if isinstance(cfg.timeouts, dict) else {}
+    value = timeouts.get("stall_s", DEFAULT_STALL_S)
     if isinstance(value, bool) or not isinstance(value, (int, float)):
         return DEFAULT_STALL_S
     return float(value)

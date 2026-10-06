@@ -44,7 +44,7 @@ from aramid.pack import RULES_REL_PATH
 from aramid.policy import OverrideRecord
 from aramid.runners import clippy, deps, eslint, gitleaks, ruff, semgrep, tests, typecheck
 from aramid.runners import shadow  # noqa: F401  (registry member)
-from aramid.runners.base import RunContext, RunnerResult, ToolState
+from aramid.runners.base import RunContext, RunnerResult, ToolState, apply_stall_window
 
 # --------------------------------------------------------------- registry ----
 # Monkeypatchable: tests replace entries/keys here to inject fake runner
@@ -953,7 +953,6 @@ def run_gate(root: Path, gate: Gate, mode: str, cfg: config_mod.Config, ledger: 
     tip as of hook EXIT, so a commit made during the gate ships ungated)."""
     # The one gate-side source of the launcher's stall window: check, init and
     # rebaseline all reach runners through here. Before anything can launch.
-    from aramid.commands.check import apply_stall_window
     apply_stall_window(cfg)
     run_id = run_id if run_id is not None else uuid.uuid4().hex
     at = clock()

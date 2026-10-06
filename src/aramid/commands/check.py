@@ -164,12 +164,6 @@ def _ledger_snapshot(root: Path) -> Ledger:
     return ledger
 
 
-def apply_stall_window(cfg) -> None:
-    """Set the launcher's module-level stall window from [timeouts].stall_s; it must run before any runner or consumer launches."""
-    from aramid.runners import base
-    base.set_stall_window(config_mod.stall_window_s(cfg))
-
-
 def cmd_check(root, gate: Gate, mode: str, strict: bool = False, as_json: bool = False,
               accept_degraded: str | None = None, record: bool = True) -> int:
     root = Path(root)
