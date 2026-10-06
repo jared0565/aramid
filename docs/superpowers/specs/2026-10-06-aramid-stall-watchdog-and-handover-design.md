@@ -244,19 +244,37 @@ behind `@_onboarded`, like the existing seven tools.
   repo on the same machine fails on `root`; an edited field fails the MAC; a
   missing or corrupt key (not exactly 32 bytes, never regenerated silently)
   means nothing can be verified.
+- **The MAC covers exactly the delivered fields.** `v`, `root`, `written_at`,
+  `head`, `author` and `body` are authenticated; any other field in the file
+  is ignored and never delivered. The MAC is checked over the STORED fields
+  first, with the stored root as part of the input, and only then is the
+  stored root compared with this repo's, so nothing read from the file is
+  echoed before it is authenticated. `v` must be the integer 1 (not `true`,
+  not `1.0`).
 - **An unverified file is visible, never an instruction.** `read` raises
-  `Unreadable(reason, pending)`. `pending` carries the parsed body when only
+  `Unreadable(path, reason, pending, kind, stored_root)`. `kind` is one of a
+  fixed set (`corrupt`, `too_large`, `symlink`, `not_regular`, `unsigned`,
+  `no_key`, `key_corrupt`, `key_unreadable`, `mismatch`, `other_repo`).
+  Consumers print FIXED text per kind, never the free-form `reason`; the one
+  variable they may print is `stored_root`, set only for `other_repo` after
+  the MAC verified it, with control characters escaped (a signed POSIX path
+  can legally contain a newline). `pending` carries the parsed body when only
   provenance failed, so `show` can print it under a NOT VERIFIED header for a
-  human; the hook prints one warning line with the reason and never the body.
-  A file over 1 MiB, or one that is not a regular file, is refused before it
-  is read, so a planted FIFO or huge file cannot stall session start.
+  human; the hook never prints the body. A file over 1 MiB, or one that is not
+  a regular file, is refused before it is parsed (on POSIX the open uses
+  `O_NOFOLLOW|O_NONBLOCK` and re-checks type and size on the fd), so a planted
+  FIFO or huge file cannot stall session start; a deeply nested JSON file is
+  `corrupt`, not a crash, and `done` or `--replace` still archives it.
 - **Trade-off.** The root is part of the signature, so renaming or moving
   the repo turns its pending handover into "written for another repo" until
   it is done or replaced. `done` and `--replace` archive an unverified file
   like any other and never delete it.
-- **Out of reach.** Anyone who can already read `~/.aramid/handover.key` or
-  run code as the operator can sign a handover; this defends against a
-  repository's contents, not against the operator's own account.
+- **Out of reach.** The MAC proves "aramid on this machine wrote it", not
+  "the operator meant it": a prompt-injected agent with shell access can run
+  `aramid handover write`, and an archived handover moved back into place
+  verifies. Anyone who can read `~/.aramid/handover.key` or run code as the
+  operator can sign a handover too; all of these fall under the operator's own
+  account. This defends against a repository's contents, not against that.
 
 ### B.5 Out of scope
 

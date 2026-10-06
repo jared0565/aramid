@@ -11,6 +11,7 @@ Operator, 2026-10-06: "this must be true to all repo where Aramid is
 running" -- per-agent memory exists in one repo for one agent; aramid is
 already in every armed repo, so it carries the state.
 """
+import errno
 import hashlib
 import hmac
 import json
@@ -31,6 +32,26 @@ KEY_ENV = "ARAMID_HANDOVER_KEY_FILE"
 KEY_BYTES = 32
 MAX_BYTES = 1_048_576
 
+# `Unreadable.kind`: why a file at the handover path was not delivered. A
+# consumer (hook, status, show) prints FIXED text chosen by kind, never the
+# free-form `reason`; the only variable it may print is `stored_root`, and only
+# for OTHER_REPO, where the MAC has verified it.
+CORRUPT = "corrupt"          # not JSON, deeply nested, wrong shape or field types
+TOO_LARGE = "too_large"      # over MAX_BYTES (checked on the stat and after the read)
+SYMLINK = "symlink"          # the file, `.aramid`, or the archive dir is a symlink / escapes the repo
+NOT_REGULAR = "not_regular"  # a directory, FIFO, device ...
+UNSIGNED = "unsigned"        # no usable `v` / `mac` / `root`: not written by aramid
+NO_KEY = "no_key"            # no handover key on this machine, so nothing can verify
+KEY_CORRUPT = "key_corrupt"  # the key file is not exactly KEY_BYTES
+KEY_UNREADABLE = "key_unreadable"  # an OSError reading the key
+MISMATCH = "mismatch"        # the MAC does not verify (edited, forged, other machine/key)
+OTHER_REPO = "other_repo"    # a genuine handover (MAC verified) written for another repo
+KINDS = (CORRUPT, TOO_LARGE, SYMLINK, NOT_REGULAR, UNSIGNED, NO_KEY, KEY_CORRUPT,
+         KEY_UNREADABLE, MISMATCH, OTHER_REPO)
+
+_lstat = os.lstat
+_fstat = os.fstat
+
 
 @dataclass(frozen=True)
 class Pending:
@@ -49,25 +70,31 @@ class AlreadyPending(RuntimeError):
 
 
 class Unreadable(RuntimeError):
-    """The file at `path` is not delivered. `pending` is set when it parsed
-    into a well-formed Pending and only provenance failed, so `show` can print
-    the body for a human under a NOT VERIFIED header; it is None for a corrupt
-    or oversized file."""
+    """The file at `path` is not delivered. `kind` is one of KINDS. `reason`
+    is a human string built ONLY from fixed text, except the escaped root for
+    OTHER_REPO. `pending` is set when the file parsed into a well-formed
+    Pending and only provenance failed, so `show` can print the body for a
+    human under a NOT VERIFIED header; it is None for a corrupt, oversized or
+    non-regular file. `stored_root` is set ONLY for OTHER_REPO, after the MAC
+    verified it."""
 
     def __init__(self, path: Path, reason: str = "it is not valid handover JSON",
-                 pending: "Pending | None" = None):
+                 pending: "Pending | None" = None, kind: str = CORRUPT,
+                 stored_root: str | None = None):
         super().__init__(f"{path} is not a readable handover: {reason}")
         self.path = path
         self.reason = reason
         self.pending = pending
+        self.kind = kind
+        self.stored_root = stored_root
 
 
 class KeyCorrupt(RuntimeError):
     def __init__(self, path: Path):
         super().__init__(
             f"the handover key {path} is not {KEY_BYTES} bytes; it is never "
-            "regenerated silently. Remove it to start a new key; a pending "
-            "handover written under the old key then reads as unverified.")
+            "regenerated silently. Removing it makes every pending handover "
+            "signed under it unverified, and the next write starts a new key.")
         self.path = path
 
 
@@ -97,6 +124,42 @@ def key_path() -> Path:
     return Path.home() / ".aramid" / "handover.key"
 
 
+def _create_key(path: Path) -> bytes:
+    """Publish a complete 32-byte key without ever exposing a short one: write
+    it to a temp file in the key dir, fsync, then `os.link` it into place
+    (no-replace: FileExistsError means another writer won, so read the
+    winner). Where hard links are unavailable, fall back to O_EXCL creation."""
+    key = secrets.token_bytes(KEY_BYTES)
+    fd, tmp = tempfile.mkstemp(dir=path.parent, prefix="handover.key.", suffix=".tmp")
+    try:
+        with os.fdopen(fd, "wb") as fh:
+            fh.write(key)
+            fh.flush()
+            os.fsync(fh.fileno())
+        try:
+            os.link(tmp, path)
+            return key
+        except FileExistsError:
+            return path.read_bytes()  # another writer won the race
+        except OSError:
+            pass
+    finally:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+    flags = os.O_CREAT | os.O_EXCL | os.O_WRONLY | getattr(os, "O_BINARY", 0)
+    try:
+        fd = os.open(path, flags, 0o600)
+    except FileExistsError:
+        return path.read_bytes()
+    with os.fdopen(fd, "wb") as fh:
+        fh.write(key)
+        fh.flush()
+        os.fsync(fh.fileno())
+    return key
+
+
 def _load_key(*, create: bool) -> bytes | None:
     """The machine key, or None when absent and not creating. A key that is not
     exactly KEY_BYTES is corrupt: KeyCorrupt, never regenerated."""
@@ -109,18 +172,7 @@ def _load_key(*, create: bool) -> bytes | None:
         if not create:
             return None
         path.parent.mkdir(parents=True, exist_ok=True)
-        flags = os.O_CREAT | os.O_EXCL | os.O_WRONLY | getattr(os, "O_BINARY", 0)
-        try:
-            fd = os.open(path, flags, 0o600)
-        except FileExistsError:
-            key = path.read_bytes()  # another writer won the race
-        else:
-            key = secrets.token_bytes(KEY_BYTES)
-            with os.fdopen(fd, "wb") as fh:
-                fh.write(key)
-                fh.flush()
-                os.fsync(fh.fileno())
-            return key
+        key = _create_key(path)
     if len(key) != KEY_BYTES:
         raise KeyCorrupt(path)
     return key
@@ -157,26 +209,82 @@ def _check_dirs(root: Path, *, archive: bool = False) -> None:
                 raise UnsafePath(d, "it resolves outside the repository")
 
 
+def _printable(text: str) -> str:
+    """Escape control characters so a (signed) root cannot span lines."""
+    return "".join(c if c.isprintable() else c.encode("unicode_escape").decode("ascii")
+                   for c in text)
+
+
 def _verify(path: Path, root: Path, data: dict, pending: Pending) -> None:
-    """Raise Unreadable unless aramid on this machine signed `data` for this
-    repo. No git, no network."""
+    """Raise Unreadable unless aramid on this machine signed `data`. The MAC is
+    checked over the STORED fields (stored root included) FIRST; only then is
+    the stored root compared with this repo's, so nothing from the file is
+    echoed before it is authenticated. No git, no network."""
     stored_root, mac = data.get("root"), data.get("mac")
-    if data.get("v") != MAC_VERSION or not isinstance(mac, str) or not isinstance(stored_root, str):
-        raise Unreadable(path, "not written by aramid on this machine (unsigned)", pending)
+    v = data.get("v")
+    if (type(v) is not int or v != MAC_VERSION or not isinstance(mac, str)
+            or not isinstance(stored_root, str)):
+        raise Unreadable(path, "not written by aramid on this machine (unsigned)",
+                         pending, UNSIGNED)
     try:
         key = _load_key(create=False)
     except KeyCorrupt as exc:
-        raise Unreadable(path, "cannot verify: handover key corrupt", pending) from exc
+        raise Unreadable(path, "cannot verify: handover key corrupt", pending,
+                         KEY_CORRUPT) from exc
+    except OSError as exc:
+        raise Unreadable(path, "cannot verify: handover key unreadable", pending,
+                         KEY_UNREADABLE) from exc
     if key is None:
-        raise Unreadable(path, "cannot verify: no handover key on this machine", pending)
-    if stored_root != _bound_root(root):
-        raise Unreadable(path, f"written for another repo: {stored_root}", pending)
+        raise Unreadable(path, "cannot verify: no handover key on this machine", pending,
+                         NO_KEY)
     fields = {"root": stored_root, "written_at": data.get("written_at"),
               "head": data.get("head"), "author": data.get("author"),
               "body": data.get("body")}
-    if not hmac.compare_digest(mac.encode("ascii", "replace"), _mac(key, fields).encode("ascii")):
+    if not hmac.compare_digest(mac.encode("ascii", "replace"),
+                               _mac(key, fields).encode("ascii")):
         raise Unreadable(path, "not written by aramid on this machine "
-                               "(signature does not match)", pending)
+                               "(signature does not match)", pending, MISMATCH)
+    if stored_root != _bound_root(root):
+        raise Unreadable(path, f"written for another repo: {_printable(stored_root)}",
+                         pending, OTHER_REPO, stored_root)
+
+
+def _read_capped(path: Path) -> bytes:
+    """At most MAX_BYTES of a regular file, or Unreadable. Where O_NOFOLLOW /
+    O_NONBLOCK exist the open is hardened and the type and size are checked on
+    the fd (closing the lstat -> open window); the lstat checks always run."""
+    try:
+        st = _lstat(path)
+    except OSError as exc:
+        raise Unreadable(path) from exc
+    if not stat.S_ISREG(st.st_mode):
+        raise Unreadable(path, "it is not a regular file", kind=NOT_REGULAR)
+    if st.st_size > MAX_BYTES:
+        raise Unreadable(path, f"it is too large (over {MAX_BYTES} bytes)", kind=TOO_LARGE)
+    flags = (os.O_RDONLY | getattr(os, "O_BINARY", 0) | getattr(os, "O_NOFOLLOW", 0)
+             | getattr(os, "O_NONBLOCK", 0))
+    try:
+        fd = os.open(path, flags)
+    except OSError as exc:
+        if exc.errno == errno.ELOOP:
+            raise Unreadable(path, "it is a symlink", kind=SYMLINK) from exc
+        raise Unreadable(path) from exc
+    try:
+        fst = _fstat(fd)
+        if not stat.S_ISREG(fst.st_mode):
+            raise Unreadable(path, "it is not a regular file", kind=NOT_REGULAR)
+        if fst.st_size > MAX_BYTES:
+            raise Unreadable(path, f"it is too large (over {MAX_BYTES} bytes)",
+                             kind=TOO_LARGE)
+        with os.fdopen(fd, "rb", closefd=False) as fh:
+            raw = fh.read(MAX_BYTES + 1)
+    except OSError as exc:
+        raise Unreadable(path) from exc
+    finally:
+        os.close(fd)
+    if len(raw) > MAX_BYTES:
+        raise Unreadable(path, f"it is too large (over {MAX_BYTES} bytes)", kind=TOO_LARGE)
+    return raw
 
 
 def read(root: Path) -> Pending | None:
@@ -186,25 +294,14 @@ def read(root: Path) -> Pending | None:
     try:
         _check_dirs(root)
     except UnsafePath as exc:
-        raise Unreadable(path, f"{exc.path.name} is a symlink or escapes the "
-                               "repository") from exc
+        raise Unreadable(path, "a symlinked or escaping handover directory",
+                         kind=SYMLINK) from exc
     if not os.path.lexists(path):
         return None
     if path.is_symlink():
-        raise Unreadable(path, "it is a symlink")
+        raise Unreadable(path, "it is a symlink", kind=SYMLINK)
+    raw = _read_capped(path)
     try:
-        st = os.lstat(path)
-    except OSError as exc:
-        raise Unreadable(path) from exc
-    if not stat.S_ISREG(st.st_mode):
-        raise Unreadable(path, "it is not a regular file")
-    if st.st_size > MAX_BYTES:
-        raise Unreadable(path, f"it is too large (over {MAX_BYTES} bytes)")
-    try:
-        with open(path, "rb") as fh:
-            raw = fh.read(MAX_BYTES + 1)
-        if len(raw) > MAX_BYTES:
-            raise Unreadable(path, f"it is too large (over {MAX_BYTES} bytes)")
         data = json.loads(raw.decode("utf-8"))
         body = data["body"]
         if not isinstance(body, str):
@@ -214,7 +311,7 @@ def read(root: Path) -> Pending | None:
             if value is not None and not isinstance(value, str):
                 raise TypeError(name)
         pending = Pending(str(data.get("written_at") or ""), head, author, body)
-    except (OSError, ValueError, KeyError, TypeError, AttributeError) as exc:
+    except (ValueError, KeyError, TypeError, AttributeError, RecursionError) as exc:
         raise Unreadable(path) from exc
     _verify(path, Path(root), data, pending)
     return pending
@@ -245,8 +342,8 @@ def _archive(root: Path) -> Path:
     if src.is_symlink():
         raise UnsafePath(src, "it is a symlink")
     try:
-        stamp = json.loads(src.read_text(encoding="utf-8")).get("written_at") or "unknown"
-    except (OSError, ValueError, AttributeError):
+        stamp = json.loads(_read_capped(src).decode("utf-8")).get("written_at") or "unknown"
+    except (Unreadable, ValueError, AttributeError, RecursionError):
         stamp = "unreadable"
     safe = "".join(c if c.isalnum() or c in "+-" else "-" for c in str(stamp))[:40]
     dest_dir = Path(root) / ARCHIVE
