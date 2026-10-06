@@ -17,6 +17,16 @@ to publish a tag that disagrees with it.
   library (`/proc`, `ps`, or Win32 through ctypes), and returns `None` when the
   tree cannot be measured, never raising. It is the measurement the stall
   watchdog compares between two wakes.
+- **A child that has stopped working is killed after a stall window, not
+  after its whole budget.** `run_subprocess` now drains both pipes on threads
+  for every caller and, every 15 s, compares the child tree's CPU time and the
+  output read so far. A tree with neither moving for the window (300 s by
+  default; `0` disables it) is killed and reported as
+  `aramid: <tool> stalled: no CPU in any of its <n> processes and no output
+  for <s> s; killed after <s> s`. It is still `ToolState.TIMEOUT`, so no
+  caller's control flow changes; `RunnerResult.stalled_s` carries the idle
+  time. A tree that cannot be measured counts as active, so the worst case is
+  today's wall-clock timeout.
 
 ## [0.20.3] — 2026-10-06
 

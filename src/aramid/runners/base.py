@@ -10,7 +10,7 @@ from enum import StrEnum
 from pathlib import Path
 from typing import Callable, Protocol
 
-from aramid import toolpath
+from aramid import proctree, toolpath
 
 # Set, to the worktree, in every subprocess a consumer runs
 # (`worktree_import_env` below; `consumers/js_mutation.py` builds its own
@@ -107,6 +107,12 @@ class RunnerResult:
     # config skips it (`--force-exclude`), so resolution credited ruff for a
     # file it never opened. See tests/unit/test_resolution_requires_examination.py.
     examined: frozenset[str] | None = None
+    # Seconds of NO CPU in the child's whole process tree and NO output on
+    # either pipe when the stall watchdog killed it; None when it was not
+    # stalled. A stall is still ToolState.TIMEOUT -- a dozen sites branch on
+    # TIMEOUT (a killed mutation run must never read as a killed mutant), so
+    # only the REPORT differs, never the control flow.
+    stalled_s: float | None = None
 
 @dataclass
 class RunContext:
@@ -404,24 +410,53 @@ def worktree_import_env(wt: Path) -> dict[str, str]:
             CONSUMER_WORKTREE_ENV: str(wt)}
 
 
-def _tapped_communicate(proc: subprocess.Popen, timeout_s: float, on_stdout_line):
-    """`proc.communicate(timeout=...)` with a tap on stdout.
+# Stall watchdog (0.20.4). A wall-clock timeout alone cannot tell a slow
+# child from one that stopped working: a pip-audit whose inner pip blocked on
+# a full stderr pipe (Windows pipes hold 4096 bytes; pip-audit reads stdout
+# to EOF before touching stderr) sat at zero CPU for 97 minutes on
+# 2026-10-06. Every SAMPLE_S the launcher compares the child TREE's
+# {pid: (created, cpu)} and the characters read so far; no change in any of
+# them for the stall window = stalled. Module state, like the drain's
+# `closed()`: the launchers are reached from inside consumers that hold no
+# config. `cmd_check` and the drain set it from `[timeouts].stall_s`.
+_SAMPLE_S = 15.0
+DEFAULT_STALL_S = 300.0
+_STALL_S = DEFAULT_STALL_S
 
-    One daemon reader per pipe (a single-threaded read of stdout would let
-    a chatty stderr fill its OS buffer and wedge the child). Each stdout
-    line reaches `on_stdout_line` as it is written, newline stripped; the
-    first time the tap raises it is switched off for the rest of the run,
-    with one stderr line saying so -- a progress reporter is decoration
-    and must never fail a gate, nor spam one line per test. Both
-    buffers are returned whole, so the result is what `communicate` gave.
-    Raises `subprocess.TimeoutExpired` exactly where `communicate` would;
-    the readers are daemon threads, so a killed child cannot pin the
-    interpreter at exit (runners/base.py `_kill_tree` doctrine)."""
+
+def set_stall_window(seconds: float) -> None:
+    """0 disables the watchdog (wall clock only); negatives clamp to 0."""
+    global _STALL_S
+    _STALL_S = max(0.0, float(seconds))
+
+
+def stall_window() -> float:
+    return _STALL_S
+
+
+class _Stalled(Exception):
+    def __init__(self, idle_s: float, procs: int):
+        super().__init__(f"stalled for {idle_s:.0f} s")
+        self.idle_s = idle_s
+        self.procs = procs
+
+
+def _watched_communicate(proc: subprocess.Popen, timeout_s: float, on_stdout_line):
+    """Drain both pipes on daemon threads (a single-threaded read of one pipe
+    lets the other fill its OS buffer and wedge the child -- exactly the bug
+    that hung pip-audit), tap stdout lines to `on_stdout_line` when given, and
+    wait in SAMPLE_S slices. Raises `subprocess.TimeoutExpired` at the wall
+    clock and `_Stalled` when neither the tree's CPU/membership nor the
+    output moved for the stall window. An unmeasurable tree (sample() ->
+    None) counts as activity, so a watchdog that cannot see is today's
+    timeout, never a false stall. Returns (stdout, stderr) whole."""
     chunks: dict[str, list[str]] = {"out": [], "err": []}
+    seen = [0]
 
     def pump(name, stream, tap):
         for line in iter(stream.readline, ""):
             chunks[name].append(line)
+            seen[0] += len(line)
             if tap is not None:
                 try:
                     tap(line.rstrip("\r\n"))
@@ -434,7 +469,26 @@ def _tapped_communicate(proc: subprocess.Popen, timeout_s: float, on_stdout_line
                threading.Thread(target=pump, args=("err", proc.stderr, None), daemon=True)]
     for t in readers:
         t.start()
-    proc.wait(timeout=timeout_s)        # TimeoutExpired propagates to the caller
+    deadline = time.monotonic() + timeout_s
+    window = _STALL_S
+    last_tree, last_seen = None, -1
+    quiet_since = time.monotonic()
+    while True:
+        try:
+            proc.wait(timeout=max(0.0, min(_SAMPLE_S, deadline - time.monotonic())))
+            break
+        except subprocess.TimeoutExpired:
+            if time.monotonic() >= deadline:
+                raise subprocess.TimeoutExpired(proc.args, timeout_s) from None
+        if not window:
+            continue
+        now = time.monotonic()
+        tree = proctree.sample(proc.pid)
+        if tree is None or last_tree is None or tree != last_tree or seen[0] != last_seen:
+            quiet_since = now
+        last_tree, last_seen = tree, seen[0]
+        if now - quiet_since >= window:
+            raise _Stalled(now - quiet_since, len(tree))
     for t in readers:
         t.join(timeout=_POST_KILL_DRAIN_S)
     return "".join(chunks["out"]), "".join(chunks["err"])
@@ -444,8 +498,11 @@ def run_subprocess(argv, cwd: Path, timeout_s: float, env=None, *,
                    on_stdout_line=None) -> RunnerResult:
     """Launch `argv` and capture it. `on_stdout_line`, when given, is called
     with every stdout line AS IT ARRIVES (the gate's test suite ran ~19 min
-    with nothing on screen because output was only read at exit); without
-    it this is the plain `communicate` path, unchanged."""
+    with nothing on screen because output was only read at exit). Both pipes
+    are ALWAYS drained on threads, tap or not, and the wait is watched: past
+    the wall clock `timeout_s`, or once the child tree shows no CPU and no
+    output for the stall window (`stall_window()`), it is killed and the
+    result is ToolState.TIMEOUT -- with `stalled_s` set in the second case."""
     tool = Path(argv[0]).name
     if closed():
         return RunnerResult(tool, ToolState.TIMEOUT,
@@ -475,21 +532,24 @@ def run_subprocess(argv, cwd: Path, timeout_s: float, env=None, *,
                             env={**os.environ, **(env or {})}, **kwargs)
     try:
         with live_process(lambda: _kill_tree(proc)):
-            if on_stdout_line is None:
-                out, err = proc.communicate(timeout=timeout_s)
-            else:
-                out, err = _tapped_communicate(proc, timeout_s, on_stdout_line)
-    except subprocess.TimeoutExpired:
+            out, err = _watched_communicate(proc, timeout_s, on_stdout_line)
+    except (subprocess.TimeoutExpired, _Stalled) as stop:
         _kill_tree(proc)
         try:
-            if on_stdout_line is None:
-                proc.communicate(timeout=_POST_KILL_DRAIN_S)
-            else:
-                # The reader threads own the pipes; `communicate` here would
-                # race them for a stream one of them may already have closed.
-                proc.wait(timeout=_POST_KILL_DRAIN_S)
+            # The reader threads own the pipes; `communicate` here would race
+            # them for a stream one of them may already have closed.
+            proc.wait(timeout=_POST_KILL_DRAIN_S)
         except subprocess.TimeoutExpired:
             proc.kill()
+        elapsed = time.monotonic() - start
+        if isinstance(stop, _Stalled):
+            return RunnerResult(tool, ToolState.TIMEOUT,
+                                stderr=(f"aramid: {tool} stalled: no CPU in any of its "
+                                        f"{stop.procs} processes and no output for "
+                                        f"{stop.idle_s:.0f} s; killed after {elapsed:.0f} s. "
+                                        f"A child blocked on a full pipe or on a read with "
+                                        f"no timeout looks like this; a slow one does not."),
+                                duration_s=elapsed, stalled_s=stop.idle_s)
         # The result says what happened, because nothing else can: a killed
         # child leaves no report and no exit code, so a bare TIMEOUT wrote a
         # 0-byte log and the gate named the tool with no reason (2026-09-04,
@@ -497,7 +557,7 @@ def run_subprocess(argv, cwd: Path, timeout_s: float, env=None, *,
         return RunnerResult(tool, ToolState.TIMEOUT,
                             stderr=(f"aramid: {tool} timed out after {timeout_s:g} s and was "
                                     f"killed; whatever it had written is discarded"),
-                            duration_s=time.monotonic()-start)
+                            duration_s=elapsed)
     if closed():
         # Killed by the drain's hard deadline, not finished: its exit code
         # is the kill's, and a killed test run must not read as a failing
