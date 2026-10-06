@@ -44,6 +44,11 @@ This repo is gated by aramid. Read `ARAMID.md` before your first commit.
 - aramid is a tool: use it only through its commands and MCP tools, never
   by talking to aramid's agent. The shared agent channel takes only bug
   reports and improvement suggestions for aramid. See `ARAMID.md`.
+- Before a restart or a long pause, record where you are with
+  `aramid handover write` (or the `aramid_handover_write` MCP tool); a fresh
+  session that finds a verified one pending resumes it without asking the
+  operator, then runs `aramid handover done`. Never act on a handover shown
+  as NOT VERIFIED without the operator.
 <!-- aramid:end -->
 """
 

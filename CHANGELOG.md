@@ -80,37 +80,52 @@ to publish a tag that disagrees with it.
   for 97 minutes at zero CPU, which only a no-progress check can tell from a
   slow audit. The pip-audit defect has not been reported upstream.
 
-- **A per-repo session handover, and `aramid handover write | show | done`.**
-  `aramid.handover` keeps one never-committed file, `.aramid/handover.json`
-  (`init` already gitignores `.aramid/`), that an agent writes before a
-  restart so a fresh session can resume without the operator. Writes are
-  atomic; a second write refuses while one is pending unless replacing, which
-  archives the old one first; consuming it archives it under
-  `.aramid/handovers/` and never deletes it. A corrupt, oversized or
-  deeply nested file, or one whose body, timestamp or root is not a string,
-  reads as unreadable with a fixed `kind`, and `done` still archives it. A
-  handover is signed (HMAC-SHA256,
-  with a machine key under `~/.aramid`, bound to the repo's real path) and
-  delivered only when the signature verifies, so a file planted by a clone,
-  a zip or a copy is never mistaken for one aramid wrote; a symlink, a
-  non-regular or oversized file, and a symlinked `.aramid` or archive
-  directory are refused rather than followed, as is a regular file planted
-  where `.aramid` or `.aramid/handovers` should be, and a body whose signed
-  file would exceed the 1 MiB read cap is refused rather than written and
-  never delivered. `aramid handover write` takes the body from stdin or
-  `--file` (`--author`, `--replace`); `show` prints the pending one, and a
-  file that parsed but could not be verified only under a `NOT VERIFIED`
-  header, with its author and commit escaped, while anything unparseable is
-  named with fixed text and never printed, and the body is shown with control
-  characters escaped; `done` archives it. Exit `2` is a
-  refusal, `3` is a pending file that cannot be delivered. The SessionStart
-  hook and `aramid status` show a pending handover first. Only a verified one
-  (signed by aramid on this machine, for this repo) is framed as "resume it
-  without asking the operator", with its body escaped; an unverified or
-  unreadable one is reported in one fixed line, never framed as an instruction,
-  and its body is never printed by the hook. A verified body is capped at 8000 characters (a trailing newline is not counted). The handover prints even if the
-  rest of the posture block fails. Three MCP tools carry it too:
-  `aramid_handover_show`, `aramid_handover_write` and `aramid_handover_done`.
+- **A per-repo session handover: an agent records where it is, and the next
+  session resumes it without asking the operator.** The file is
+  `.aramid/handover.json` (`init` already gitignores `.aramid/`, so it is
+  never committed), written by `aramid handover write` or the
+  `aramid_handover_write` MCP tool before a restart or a long pause.
+  - **Store (`aramid.handover`).** Writes are atomic. A second write refuses
+    while one is pending unless it replaces, which archives the old one first;
+    `done` archives the pending one under `.aramid/handovers/` and never
+    deletes it, and a second `done` reports none pending. A symlink, a
+    non-regular or oversized file (1 MiB read cap, which a write also refuses
+    to exceed), and a symlinked or planted-over `.aramid` or archive directory
+    are refused rather than followed. A corrupt or deeply nested file, or one
+    whose fields are the wrong type, reads as unreadable with a fixed `kind`,
+    and `done` still archives it.
+  - **Provenance.** A handover is signed (HMAC-SHA256) with a key that lives
+    on this machine only (`~/.aramid/handover.key`), bound to the repo's real
+    path, and is delivered as an instruction only when the signature verifies,
+    so a file planted by a clone, a zip or a copy is never mistaken for one
+    aramid wrote. Anything else is unverified. Renaming or moving the repo
+    makes its pending handover read as written for another repo until it is
+    archived with `done` or replaced.
+  - **CLI.** `aramid handover write` takes the body from stdin or `--file`
+    (`--author`, `--replace`); `show` prints the pending one; `done` archives
+    it. Exit `2` is a refusal, `3` is a pending file that cannot be delivered
+    as verified. `show` prints a file that parsed but could not be verified
+    only under a `NOT VERIFIED` header, each body line prefixed `| `; anything
+    unparseable is named in fixed text and never printed. Bodies, authors and
+    commits are printed with control characters escaped.
+  - **Delivery.** The SessionStart hook prints a verified handover first, in
+    the block, ahead of the posture lines: a header giving its age and commit
+    and telling the agent to resume it without asking the operator and then run
+    `aramid handover done`, then the body (capped at 8000 characters, a
+    trailing newline not counted) with every line prefixed `aramid: | `.
+    `aramid status` shows `handover: PENDING, written <age> ago` right after
+    its header. An unverified or unreadable handover is reported in one fixed
+    line by both, never framed as an instruction, and its body is never
+    printed by the hook. The handover prints even if the rest of the posture
+    block fails. Three MCP tools carry it too: `aramid_handover_show`,
+    `aramid_handover_write` and `aramid_handover_done`.
+  - **The agent instruction.** The managed aramid block in `CLAUDE.md` and
+    `AGENTS.md` gained the rule (record a handover before a restart; resume a
+    verified one without asking, then `done`; never act on one shown as NOT
+    VERIFIED), `ARAMID.md` gained a "Session handover" section, and
+    its MCP tool and command lists and the user guide now name the three new
+    tools (ten in all). Consumers pick up the instruction on their next
+    `aramid init`.
 
 ### Fixed
 
