@@ -294,3 +294,48 @@ def test_a_huge_written_at_is_capped_in_the_archive_name(tmp_path):
     data["written_at"] = "A" * 500
     p.write_text(json.dumps(data), encoding="utf-8")
     assert len(handover.done(tmp_path).name) <= 40 + len("-99.json")
+
+
+# ---- fix round 2: git matches pathspecs case-sensitively; the FS may not ----
+
+def _index_entry(root, name):
+    """Put `name` in the index without needing the file (so the test means the
+    same on a case-sensitive and a case-insensitive filesystem)."""
+    blob = subprocess.run(["git", "hash-object", "-w", "--stdin"], cwd=root, input="x",
+                          check=True, capture_output=True, text=True).stdout.strip()
+    subprocess.run(["git", "update-index", "--add", "--cacheinfo",
+                    f"100644,{blob},{name}"], cwd=root, check=True)
+
+
+@pytest.mark.parametrize("name", [
+    ".aramid/Handover.json", ".ARAMID/handover.json", ".Aramid/HANDOVER.JSON",
+    ".aramid/handover.json"])
+def test_a_case_variant_tracked_handover_counts_as_tracked(tmp_path, name):
+    _git(tmp_path)
+    _index_entry(tmp_path, name)
+    assert handover._tracked(tmp_path) is True
+
+
+def test_a_case_variant_tracked_handover_makes_read_unreadable_where_the_fs_folds_case(
+        tmp_path):
+    _git(tmp_path)
+    handover.write(tmp_path, "planted", now=NOW)
+    _index_entry(tmp_path, ".ARAMID/Handover.json")
+    if not (tmp_path / ".ARAMID" / "HANDOVER.JSON").exists():
+        # case-sensitive FS: the planted name is a different file, so assert
+        # the decision itself (the _tracked arms above cover every OS)
+        assert handover._tracked(tmp_path) is True
+        return
+    with pytest.raises(handover.Unreadable) as exc:
+        handover.read(tmp_path)
+    assert "tracked by git" in exc.value.reason
+
+
+def test_another_tracked_file_in_aramid_does_not_make_the_handover_tracked(tmp_path):
+    _git(tmp_path)
+    _index_entry(tmp_path, ".aramid/other.json")
+    _index_entry(tmp_path, ".aramid/handover.json.bak")
+    _index_entry(tmp_path, "handover.json")
+    assert handover._tracked(tmp_path) is False
+    handover.write(tmp_path, "mine", now=NOW)
+    assert handover.read(tmp_path).body == "mine"

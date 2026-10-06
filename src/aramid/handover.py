@@ -67,15 +67,25 @@ def _head(root: Path) -> str | None:
 
 
 def _tracked(root: Path) -> bool:
-    """True only when git positively says the handover file is tracked. Any
-    git failure (missing, not a repo, timeout) is NOT tracked."""
+    """True only when git positively lists the handover file as tracked. git
+    matches pathspecs case-sensitively but Windows and default macOS
+    filesystems do not, so list everything under `.aramid` with an icase
+    pathspec and compare casefolded. Any git failure (missing, not a repo,
+    timeout) is NOT tracked."""
     try:
-        run = subprocess.run(["git", "ls-files", "--error-unmatch", "--",  # noqa: S603,S607
-                              PATH.as_posix()],
-                             cwd=root, capture_output=True, text=True, timeout=10)
+        run = subprocess.run(["git", "ls-files", "-z", "--cached", "--",  # noqa: S603,S607
+                              ":(icase)" + PATH.parent.as_posix()],
+                             cwd=root, capture_output=True, timeout=10)
     except (OSError, subprocess.SubprocessError):
         return False
-    return run.returncode == 0
+    if run.returncode != 0:
+        return False
+    want = PATH.as_posix().casefold()
+    for raw in run.stdout.split(b"\0"):
+        entry = raw.decode("utf-8", "replace").replace("\\", "/")
+        if entry.casefold() == want:
+            return True
+    return False
 
 
 def _check_dirs(root: Path, *, archive: bool = False) -> None:
