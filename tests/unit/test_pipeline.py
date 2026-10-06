@@ -2986,3 +2986,26 @@ def test_changed_since_answers_none_for_a_head_that_is_not_an_ancestor(tmp_path)
     assert since(side) is None, "not an ancestor of HEAD"
     assert since("0" * 40) is None
     assert since(base) == {"a.py"}, "memoised"
+
+
+def test_run_gate_applies_the_configured_stall_window_before_any_runner(tmp_path, monkeypatch):
+    """init and rebaseline reach the launcher through run_gate too, so the
+    window is applied here, not only in cmd_check."""
+    from aramid.runners import base
+    root = _repo(tmp_path)
+    cfg = _cfg(root, tmp_path, monkeypatch)
+    cfg.timeouts["stall_s"] = 0
+    ledger = _ledger(tmp_path)
+    order = []
+    monkeypatch.setattr(base, "set_stall_window", lambda s: order.append(("window", s)))
+    inner = _fake(RunnerResult("fake", ToolState.OK))
+    real_run = inner.run
+    inner.run = lambda ctx: (order.append(("runner", None)), real_run(ctx))[1]
+    monkeypatch.setitem(pipeline.RUNNERS, "fake", inner)
+    monkeypatch.setitem(pipeline.GATE_RUNNER_KEYS, Gate.PRE_COMMIT, ["fake"])
+
+    pipeline.run_gate(root, Gate.PRE_COMMIT, "staged", cfg, ledger, run_id="run-stall")
+
+    assert order[0] == ("window", 0.0)
+    assert [o for o in order if o[0] == "window"] == [("window", 0.0)]
+    ledger.close()

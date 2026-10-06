@@ -932,6 +932,10 @@ def run_gate(root: Path, gate: Gate, mode: str, cfg: config_mod.Config, ledger: 
     carried on `GateResult.refs_moved` and on the run row, and `cmd_check`
     fails the gate on it (interop round 176: over smart HTTP git ships the
     tip as of hook EXIT, so a commit made during the gate ships ungated)."""
+    # The one gate-side source of the launcher's stall window: check, init and
+    # rebaseline all reach runners through here. Before anything can launch.
+    from aramid.commands.check import apply_stall_window
+    apply_stall_window(cfg)
     run_id = run_id if run_id is not None else uuid.uuid4().hex
     at = clock()
 

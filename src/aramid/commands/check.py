@@ -165,6 +165,7 @@ def _ledger_snapshot(root: Path) -> Ledger:
 
 
 def apply_stall_window(cfg) -> None:
+    """Set the launcher's module-level stall window from [timeouts].stall_s; it must run before any runner or consumer launches."""
     from aramid.runners import base
     base.set_stall_window(config_mod.stall_window_s(cfg))
 
@@ -175,7 +176,6 @@ def cmd_check(root, gate: Gate, mode: str, strict: bool = False, as_json: bool =
 
     try:
         cfg = config_mod.load_config(root)
-        apply_stall_window(cfg)
         # `record=False` (interop round 149 c): a whole-tree measurement used
         # to write every finding it saw into the ledger -- 683 rows for one
         # consumer's look. The gate now runs against a snapshot instead.
