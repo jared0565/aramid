@@ -29,10 +29,10 @@ def test_walk_keeps_a_child_when_creation_time_is_unknown():
     assert proctree.walk(10, parent_of, times) == {10: (0, 5), 11: (0, 6)}
 
 
-def test_a_pid_that_vanishes_mid_walk_is_skipped():
+def test_an_untimeable_listed_descendant_makes_the_sample_unmeasurable():
     parent_of = {10: 1, 11: 10, 12: 10}
-    times = {10: (100, 5), 12: (102, 7)}.get        # 11 exited after the listing
-    assert proctree.walk(10, parent_of, times) == {10: (100, 5), 12: (102, 7)}
+    times = {10: (100, 5), 12: (102, 7)}.get        # 11 cannot be timed
+    assert proctree.walk(10, parent_of, times) is None
 
 
 def test_walk_of_a_missing_root_is_none():

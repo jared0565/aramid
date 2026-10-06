@@ -9,9 +9,13 @@ with --no-deps.
 None is "not measured", NEVER "idle": the stall watchdog treats it as
 activity, so a sampler that cannot see degrades to the wall-clock timeout
 instead of inventing a stall. Every error inside this module leans the same
-way: a pid that vanishes mid-walk is skipped (the tree changed = activity),
-a reused pid created before its "parent" is not a descendant, and a
+way: a reused pid created before its "parent" is not a descendant, and a
 platform with no creation time records 0 and keeps the child.
+
+A LISTED descendant that cannot be timed (exited after the listing, or access
+denied) makes the whole sample None rather than a smaller tree: a child we
+cannot read could be the one doing the work, and one unmeasurable sample
+costs only that sample's stall evidence.
 """
 import subprocess
 import sys
@@ -28,7 +32,10 @@ def walk(root_pid: int, parent_of: dict[int, int],
     """The root and every descendant reachable through `parent_of`, each
     with `times(pid)`. None when the root is not in the listing or cannot be
     timed (on Windows an exited child whose handle is still open can be
-    timed, so the LISTING is what says it is gone)."""
+    timed, so the LISTING is what says it is gone). A listed descendant that
+    cannot be timed makes the whole sample None: a child we cannot read could
+    be the one doing the work, and one unmeasurable sample costs only that
+    sample's stall evidence."""
     if root_pid not in parent_of:
         return None
     root = times(root_pid)
@@ -47,8 +54,8 @@ def walk(root_pid: int, parent_of: dict[int, int],
             if kid in out:
                 continue
             t = times(kid)
-            if t is None:                       # exited after the listing
-                continue
+            if t is None:                       # unreadable: cannot call it idle
+                return None
             if t[0] and born and t[0] < born:   # a reused pid, not our child
                 continue
             out[kid] = t
@@ -70,7 +77,7 @@ def parse_proc_stat(text: str) -> tuple[int, int, int] | None:
         return None
 
 
-def _cpu_centis(field: str) -> int | None:
+def _cpu_centis(field: str) -> int:
     """`ps -o time` -> centiseconds: [[dd-]hh:]mm:ss[.cc]."""
     days = 0
     if "-" in field:
