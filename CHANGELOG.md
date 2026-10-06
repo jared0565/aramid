@@ -80,6 +80,17 @@ to publish a tag that disagrees with it.
   for 97 minutes at zero CPU, which only a no-progress check can tell from a
   slow audit. The pip-audit defect has not been reported upstream.
 
+- **A per-repo session handover store (storage only so far).**
+  `aramid.handover` keeps one never-committed file, `.aramid/handover.json`
+  (`init` already gitignores `.aramid/`), that an agent writes before a
+  restart so a fresh session can resume without the operator. Writes are
+  atomic; a second write refuses while one is pending unless replacing, which
+  archives the old one first; consuming it archives it under
+  `.aramid/handovers/` and never deletes it. A corrupt file, a missing or
+  non-string body, or a `head` or `author` that is neither a string nor null
+  reads as unreadable, not as a crash. The `aramid handover` command and the
+  SessionStart and `aramid status` lines that print it follow.
+
 ### Fixed
 
 - **A process the child started no longer costs the run its output.** When
