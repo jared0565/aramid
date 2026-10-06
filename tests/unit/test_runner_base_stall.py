@@ -2,11 +2,14 @@
 output for the stall window is killed early and reported as stalled (still
 ToolState.TIMEOUT, carrying stalled_s). Windows are shrunk through the
 module seams so each test runs in seconds."""
+import io
 import os
 import re
 import signal
+import subprocess
 import sys
 import time
+from types import SimpleNamespace
 
 import pytest
 
@@ -123,12 +126,96 @@ def test_window_zero_disables_the_watchdog(tmp_path, monkeypatch):
         base.set_stall_window(old)
     assert r.state is ToolState.TIMEOUT and r.stalled_s is None
     assert "timed out after 3 s" in r.stderr
+    # Off means off: not even the idle figure at the wall clock.
+    assert r.idle_s is None
+    assert r.stderr.endswith("whatever it had written is discarded")
 
 
 def test_an_unmeasurable_tree_is_active_not_stalled(tmp_path, fast_watch, monkeypatch):
     monkeypatch.setattr(base.proctree, "sample", lambda pid: None)
     r = run_subprocess([sys.executable, "-c", "import time; time.sleep(60)"], tmp_path, 4)
     assert r.state is ToolState.TIMEOUT and r.stalled_s is None
+    assert r.idle_s is None, "a tree it could not see is never reported as idle"
+
+
+# --- idle time at a WALL-CLOCK timeout (reporting only) ----------------------
+# At the defaults the watchdog (300 s) cannot decide before any gate runner's
+# budget (30-300 s), so a deadlocked pip-audit still dies at the wall clock.
+# The result then says how long the tree had been idle; the kill is unchanged.
+
+@pytest.fixture
+def long_window(monkeypatch):
+    monkeypatch.setattr(base, "_SAMPLE_S", 0.25)
+    old = base.stall_window()
+    base.set_stall_window(100)
+    yield
+    base.set_stall_window(old)
+
+
+def test_an_idle_child_at_the_wall_clock_reports_its_idle_time(tmp_path, long_window):
+    r = run_subprocess([sys.executable, "-c", "import time; time.sleep(60)"], tmp_path, 2)
+    assert r.state is ToolState.TIMEOUT
+    assert r.stalled_s is None, "the wall clock killed it, not the watchdog"
+    assert r.idle_s is not None and 0.25 <= r.idle_s <= 2.0, r.idle_s
+    assert re.fullmatch(
+        rf"aramid: {re.escape(r.tool)} timed out after 2 s and was killed; whatever it had"
+        r" written is discarded -- no CPU or output for the last \d+ s, which looks hung,"
+        r" not slow", r.stderr), r.stderr
+
+
+def test_a_busy_child_at_the_wall_clock_reports_no_idle_time(tmp_path, long_window):
+    r = run_subprocess([sys.executable, "-c", "x = 0\nwhile True: x += 1"], tmp_path, 2)
+    assert r.state is ToolState.TIMEOUT
+    assert r.stalled_s is None and r.idle_s is None
+    assert r.stderr.endswith("whatever it had written is discarded"), r.stderr
+
+
+class _Clock:
+    def __init__(self):
+        self.t = 0.0
+
+    def monotonic(self):
+        return self.t
+
+
+class _Proc:
+    """A child that never exits, on a fake clock: each `wait` sleeps the
+    slice it is given (or its timeout) and times out. Empty pipes, so the
+    readers finish at once."""
+    args = ["fake"]
+    pid = 4242
+
+    def __init__(self, clock, slices=()):
+        self.clock, self.slices = clock, list(slices)
+        self.stdout, self.stderr = io.BytesIO(), io.BytesIO()
+
+    def wait(self, timeout=None):
+        self.clock.t += self.slices.pop(0) if self.slices else timeout
+        raise subprocess.TimeoutExpired(self.args, timeout)
+
+
+@pytest.fixture
+def fake_clock(monkeypatch):
+    """`_watched_communicate` on a fake clock with an idle tree: one sample
+    per second, a 3 s window, nothing moving."""
+    clock = _Clock()
+    monkeypatch.setattr(base, "time", SimpleNamespace(monotonic=clock.monotonic))
+    monkeypatch.setattr(base, "_SAMPLE_S", 1.0)
+    monkeypatch.setattr(base.proctree, "sample", lambda pid: {pid: (1, 7)})
+    old = base.stall_window()
+    base.set_stall_window(3)
+    yield clock
+    base.set_stall_window(old)
+
+
+def test_the_idle_figure_runs_to_the_deadline_not_to_the_previous_wake(fake_clock):
+    base.set_stall_window(100)
+    with pytest.raises(subprocess.TimeoutExpired) as exc:
+        base._watched_communicate(_Proc(fake_clock), 5.5, None)
+    # Wakes at 1..5 s, then the last slice ends at the 5.5 s deadline. Quiet
+    # since the first sample (1 s): 4.5 s at the deadline, 4.0 at the wake before.
+    assert fake_clock.t == 5.5
+    assert exc.value.idle_s == 4.5
 
 
 def test_a_raising_sampler_is_active_not_a_crash(tmp_path, fast_watch, monkeypatch):

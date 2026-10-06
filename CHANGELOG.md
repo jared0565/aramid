@@ -69,6 +69,18 @@ to publish a tag that disagrees with it.
   the item stayed `degraded` and was retried on every drain. The count is
   per head, like the failing-baseline one: a stall can be a race rather than
   a property of the suite, and a new commit gets a fresh count.
+- **A wall-clock timeout says how long the tool had been idle.** At the
+  default 300 s stall window the watchdog cannot decide before any gate
+  runner's budget, so a hung tool in a default gate was still reported as a
+  plain `timeout after 180 s`. When the budget kills a child whose whole
+  process tree had shown no CPU and no output for at least one sample
+  interval, the runner's message now ends `-- no CPU or output for the last
+  <s> s, which looks hung, not slow`, and the degraded reason reads
+  `timeout after <s> s (no CPU or output for the last <s> s)`. This is
+  reporting only: the run is killed at its budget exactly as before, and it
+  is not counted as stalled anywhere (`stalled`, status, health, fleet, or
+  the mutation baseline notes), so a baseline that hit its budget still
+  counts toward the budget give-up.
 
 ## [0.20.3] — 2026-10-06
 

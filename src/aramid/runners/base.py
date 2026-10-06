@@ -115,6 +115,16 @@ class RunnerResult:
     # TIMEOUT (a killed mutation run must never read as a killed mutant), so
     # only the REPORT differs, never the control flow.
     stalled_s: float | None = None
+    # Trailing seconds of no CPU and no output when the WALL CLOCK, not the
+    # watchdog, killed the child: set only with the watch on, a measurable
+    # tree, and at least one sample interval (`_SAMPLE_S`) of quiet. At the
+    # default 300 s window the watchdog cannot decide before any gate
+    # runner's budget, so this is what tells a hung tool from a slow one
+    # there. REPORTING ONLY, and never set together with `stalled_s`: it is
+    # read by the timeout text and `pipeline._degraded_reasons` and by
+    # nothing that branches on a stall, so a run that hit its budget stays
+    # a budget timeout everywhere (the mutation budget give-up among them).
+    idle_s: float | None = None
 
 @dataclass
 class RunContext:
@@ -443,6 +453,15 @@ class _Stalled(Exception):
         self.procs = procs
 
 
+class _TimedOut(subprocess.TimeoutExpired):
+    """The wall clock ran out. `idle_s` is the trailing no-CPU/no-output
+    time measured AT the deadline, or None: watch off, tree unmeasurable,
+    or quiet for less than one sample interval."""
+    def __init__(self, cmd, timeout: float, idle_s: float | None):
+        super().__init__(cmd, timeout)
+        self.idle_s = idle_s
+
+
 _READ_CHUNK = 65536
 
 
@@ -459,11 +478,13 @@ def _watched_communicate(proc: subprocess.Popen, timeout_s: float, on_stdout_lin
     """Drain both pipes on daemon threads (a single-threaded read of one pipe
     lets the other fill its OS buffer and wedge the child -- exactly the bug
     that hung pip-audit), tap stdout lines to `on_stdout_line` when given, and
-    wait in SAMPLE_S slices. Raises `subprocess.TimeoutExpired` at the wall
-    clock and `_Stalled` when neither the tree's CPU/membership nor the
-    output moved for the stall window. An unmeasurable tree (sample() ->
-    None) counts as activity, so a watchdog that cannot see is today's
-    timeout, never a false stall.
+    wait in SAMPLE_S slices. Raises `_TimedOut` (a `subprocess.TimeoutExpired`)
+    at the wall clock and `_Stalled` when neither the tree's CPU/membership
+    nor the output moved for the stall window. An unmeasurable tree
+    (sample() -> None) counts as activity, so a watchdog that cannot see is
+    today's timeout, never a false stall. At the wall clock the watch takes
+    one last sample, so `_TimedOut.idle_s` runs to the deadline rather than
+    to the previous wake; the deadline still wins over a stall there.
 
     The pipes are BINARY and read in chunks as the bytes arrive, never by
     line: a line reader counted nothing until a newline, so a child printing
@@ -525,9 +546,11 @@ def _watched_communicate(proc: subprocess.Popen, timeout_s: float, on_stdout_lin
             proc.wait(timeout=max(0.0, min(_SAMPLE_S, deadline - time.monotonic())))
             break
         except subprocess.TimeoutExpired:
-            if time.monotonic() >= deadline:
-                raise subprocess.TimeoutExpired(proc.args, timeout_s) from None
+            pass
+        expired = time.monotonic() >= deadline
         if not window:
+            if expired:
+                raise _TimedOut(proc.args, timeout_s, None) from None
             continue
         now = time.monotonic()
         try:
@@ -538,8 +561,14 @@ def _watched_communicate(proc: subprocess.Popen, timeout_s: float, on_stdout_lin
         if tree is None or last_tree is None or tree != last_tree or read != last_seen:
             quiet_since = now
         last_tree, last_seen = tree, read
-        if now - quiet_since >= window:
-            raise _Stalled(now - quiet_since, len(tree))
+        idle = now - quiet_since
+        if expired:
+            # The budget killed it, whatever the sample says: the idle time
+            # is only REPORTED (`RunnerResult.idle_s`), never a stall.
+            measured = tree is not None and idle >= _SAMPLE_S
+            raise _TimedOut(proc.args, timeout_s, idle if measured else None) from None
+        if idle >= window:
+            raise _Stalled(idle, len(tree))
     # One shared bound for both readers: joined one after the other with a
     # full bound each, a holder of BOTH pipes cost twice the bound.
     drained_by = time.monotonic() + _POST_KILL_DRAIN_S
@@ -559,7 +588,8 @@ def run_subprocess(argv, cwd: Path, timeout_s: float, env=None, *,
     are ALWAYS drained on threads, tap or not, and the wait is watched: past
     the wall clock `timeout_s`, or once the child tree shows no CPU and no
     output for the stall window (`stall_window()`), it is killed and the
-    result is ToolState.TIMEOUT -- with `stalled_s` set in the second case."""
+    result is ToolState.TIMEOUT -- with `stalled_s` set in the second case,
+    and `idle_s` in the first when the tree sat idle up to the deadline."""
     tool = Path(argv[0]).name
     if closed():
         return RunnerResult(tool, ToolState.TIMEOUT,
@@ -612,10 +642,15 @@ def run_subprocess(argv, cwd: Path, timeout_s: float, env=None, *,
         # child leaves no report and no exit code, so a bare TIMEOUT wrote a
         # 0-byte log and the gate named the tool with no reason (2026-09-04,
         # gitleaks on a pre-push gate, two pushes refused with blocking 0).
-        return RunnerResult(tool, ToolState.TIMEOUT,
-                            stderr=(f"aramid: {tool} timed out after {timeout_s:g} s and was "
-                                    f"killed; whatever it had written is discarded"),
-                            duration_s=elapsed)
+        # A tree that had sat idle up to the deadline is said to: at the
+        # default window that is the only way a hang reads as one.
+        idle = stop.idle_s if isinstance(stop, _TimedOut) else None
+        why = (f"aramid: {tool} timed out after {timeout_s:g} s and was "
+               f"killed; whatever it had written is discarded")
+        if idle is not None:
+            why += f" -- no CPU or output for the last {idle:.0f} s, which looks hung, not slow"
+        return RunnerResult(tool, ToolState.TIMEOUT, stderr=why,
+                            duration_s=elapsed, idle_s=idle)
     if closed():
         # Killed by the drain's hard deadline, not finished: its exit code
         # is the kill's, and a killed test run must not read as a failing

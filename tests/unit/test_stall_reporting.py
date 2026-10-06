@@ -12,6 +12,28 @@ def test_degraded_reason_names_a_stall_not_a_timeout():
     }
 
 
+def test_degraded_reason_for_every_timeout_shape():
+    rs = [RunnerResult("pip-audit", ToolState.TIMEOUT, duration_s=312.4, stalled_s=301.0),
+          RunnerResult("semgrep", ToolState.TIMEOUT, duration_s=180.2, idle_s=171.6),
+          RunnerResult("gitleaks", ToolState.TIMEOUT, duration_s=120.0),
+          RunnerResult("tests", ToolState.TIMEOUT)]
+    assert pipeline._degraded_reasons(rs) == {
+        "pip-audit": "stalled: no CPU or output for 301 s (killed after 312 s)",
+        "semgrep": "timeout after 180 s (no CPU or output for the last 172 s)",
+        "gitleaks": "timeout after 120 s",
+        "tests": "timeout (gate budget expired)",
+    }
+
+
+def test_idle_at_the_wall_clock_is_not_a_stall():
+    # Reporting only: a budget-hit run stays a budget timeout on every surface
+    # that branches on stalled (GateResult.stalled, the run row, status,
+    # health and fleet all read _stalled_tools).
+    rs = [RunnerResult("semgrep", ToolState.TIMEOUT, duration_s=180.2, idle_s=171.6),
+          RunnerResult("pip-audit", ToolState.TIMEOUT, duration_s=312.4, stalled_s=301.0)]
+    assert pipeline._stalled_tools(rs) == ("pip-audit",)
+
+
 def test_stalled_tools_come_from_the_field_not_the_text():
     rs = [RunnerResult("pip-audit", ToolState.TIMEOUT, duration_s=312.4, stalled_s=301.0),
           RunnerResult("ruff", ToolState.TIMEOUT, stderr="stalled: (just a message)",

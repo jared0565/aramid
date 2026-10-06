@@ -777,13 +777,19 @@ def _degraded_reasons(flat_results: list[RunnerResult]) -> dict[str, str]:
 
     A TIMEOUT from `run_subprocess` carries the measured wall time; the bare
     one `_run_selected` builds for a runner abandoned at the gate's budget
-    carries none, and says so rather than claiming 0 s."""
+    carries none, and says so rather than claiming 0 s. A wall-clock timeout
+    whose tree had sat idle up to the deadline (`idle_s`) says that too: at
+    the default stall window it is the only sign of a hang. Text only --
+    `_stalled_tools` never reads `idle_s`."""
     reasons: dict[str, str] = {}
     for r in flat_results:
         if r.state is ToolState.TIMEOUT:
             if r.stalled_s is not None:
                 reasons[r.tool] = (f"stalled: no CPU or output for {r.stalled_s:.0f} s "
                                    f"(killed after {r.duration_s:.0f} s)")
+            elif r.idle_s is not None:
+                reasons[r.tool] = (f"timeout after {r.duration_s:.0f} s "
+                                   f"(no CPU or output for the last {r.idle_s:.0f} s)")
             else:
                 reasons[r.tool] = (f"timeout after {r.duration_s:.0f} s" if r.duration_s
                                    else "timeout (gate budget expired)")
