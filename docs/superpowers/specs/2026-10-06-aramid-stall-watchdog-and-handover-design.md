@@ -218,7 +218,47 @@ behind `@_onboarded`, like the existing seven tools.
   Consumers get it on their next `aramid init`. This repo's block is
   refreshed by running `init` as a tool, never by hand.
 
-### B.4 Out of scope
+### B.4 Threat model and provenance
+
+- **What a planted handover could do.** The hook delivers the body to a fresh
+  agent framed as "resume WITHOUT asking the operator". A file an attacker
+  placed in `.aramid/handover.json` is therefore a prompt injection with the
+  operator's own authority attached. Gitignoring `.aramid/` does not stop
+  that: `git add -f`, a zip or tarball download, a copied folder, and a
+  case-variant or submodule `.aramid` all deliver a file.
+- **Why a git check cannot cover it.** A git check (`ls-files`) sees only
+  what arrived through git. A zip, a copy, or a directory with no `.git` at
+  all carries a file with no index entry, and every git-based variant tried
+  leaked (case-variant paths, a gitlink `.aramid`, `GIT_LITERAL_PATHSPECS`,
+  a "dubious ownership" refusal read as "not tracked"). The only check that
+  covers every route authenticates the file's ORIGIN.
+- **Provenance.** `write` signs the file; `read` delivers it only when the
+  signature verifies, with no git subprocess and no network. The key is 32
+  bytes from `secrets.token_bytes`, created on the first `write` (0600,
+  `O_EXCL`) at `~/.aramid/handover.key`, or at `$ARAMID_HANDOVER_KEY_FILE`
+  when set (an env var, so spawned test processes see the same path). `read`
+  never creates it. The file gains `"v": 1`, `"root"` (the repo's
+  `os.path.normcase(os.path.realpath(root))`) and `"mac"`, an HMAC-SHA256 over
+  the canonical JSON (sorted keys, compact, ASCII) of `v`, `root`,
+  `written_at`, `head`, `author` and `body`. A handover copied into another
+  repo on the same machine fails on `root`; an edited field fails the MAC; a
+  missing or corrupt key (not exactly 32 bytes, never regenerated silently)
+  means nothing can be verified.
+- **An unverified file is visible, never an instruction.** `read` raises
+  `Unreadable(reason, pending)`. `pending` carries the parsed body when only
+  provenance failed, so `show` can print it under a NOT VERIFIED header for a
+  human; the hook prints one warning line with the reason and never the body.
+  A file over 1 MiB, or one that is not a regular file, is refused before it
+  is read, so a planted FIFO or huge file cannot stall session start.
+- **Trade-off.** The root is part of the signature, so renaming or moving
+  the repo turns its pending handover into "written for another repo" until
+  it is done or replaced. `done` and `--replace` archive an unverified file
+  like any other and never delete it.
+- **Out of reach.** Anyone who can already read `~/.aramid/handover.key` or
+  run code as the operator can sign a handover; this defends against a
+  repository's contents, not against the operator's own account.
+
+### B.5 Out of scope
 
 Expiry, multiple concurrent handovers, ledger events, and graphite. graphite
 holds code-graph state only. Whether it should mirror this is an improvement

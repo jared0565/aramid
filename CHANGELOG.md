@@ -88,9 +88,12 @@ to publish a tag that disagrees with it.
   archives the old one first; consuming it archives it under
   `.aramid/handovers/` and never deletes it. A corrupt file, a missing or
   non-string body, or a `head` or `author` that is neither a string nor null
-  reads as unreadable, not as a crash; a handover that git tracks, or that is a
-  symlink, is unreadable too, and a symlinked `.aramid` or archive directory is
-  refused rather than followed. The `aramid handover` command and the
+  reads as unreadable, not as a crash. A handover is signed (HMAC-SHA256,
+  with a machine key under `~/.aramid`, bound to the repo's real path) and
+  delivered only when the signature verifies, so a file planted by a clone,
+  a zip or a copy is never mistaken for one aramid wrote; a symlink, a
+  non-regular or oversized file, and a symlinked `.aramid` or archive
+  directory are refused rather than followed. The `aramid handover` command and the
   SessionStart and `aramid status` lines that print it follow.
 
 ### Fixed

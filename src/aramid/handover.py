@@ -11,8 +11,12 @@ Operator, 2026-10-06: "this must be true to all repo where Aramid is
 running" -- per-agent memory exists in one repo for one agent; aramid is
 already in every armed repo, so it carries the state.
 """
+import hashlib
+import hmac
 import json
 import os
+import secrets
+import stat
 import subprocess
 import tempfile
 from dataclasses import dataclass
@@ -22,6 +26,10 @@ from pathlib import Path
 PATH = Path(".aramid") / "handover.json"
 ARCHIVE = Path(".aramid") / "handovers"
 SCHEMA = 1
+MAC_VERSION = 1
+KEY_ENV = "ARAMID_HANDOVER_KEY_FILE"
+KEY_BYTES = 32
+MAX_BYTES = 1_048_576
 
 
 @dataclass(frozen=True)
@@ -41,10 +49,26 @@ class AlreadyPending(RuntimeError):
 
 
 class Unreadable(RuntimeError):
-    def __init__(self, path: Path, reason: str = "it is not valid handover JSON"):
+    """The file at `path` is not delivered. `pending` is set when it parsed
+    into a well-formed Pending and only provenance failed, so `show` can print
+    the body for a human under a NOT VERIFIED header; it is None for a corrupt
+    or oversized file."""
+
+    def __init__(self, path: Path, reason: str = "it is not valid handover JSON",
+                 pending: "Pending | None" = None):
         super().__init__(f"{path} is not a readable handover: {reason}")
         self.path = path
         self.reason = reason
+        self.pending = pending
+
+
+class KeyCorrupt(RuntimeError):
+    def __init__(self, path: Path):
+        super().__init__(
+            f"the handover key {path} is not {KEY_BYTES} bytes; it is never "
+            "regenerated silently. Remove it to start a new key; a pending "
+            "handover written under the old key then reads as unverified.")
+        self.path = path
 
 
 class UnsafePath(RuntimeError):
@@ -66,26 +90,52 @@ def _head(root: Path) -> str | None:
     return sha if run.returncode == 0 and sha else None
 
 
-def _tracked(root: Path) -> bool:
-    """True only when git positively lists the handover file as tracked. git
-    matches pathspecs case-sensitively but Windows and default macOS
-    filesystems do not, so list everything under `.aramid` with an icase
-    pathspec and compare casefolded. Any git failure (missing, not a repo,
-    timeout) is NOT tracked."""
+def key_path() -> Path:
+    env = os.environ.get(KEY_ENV)
+    if env:
+        return Path(env)
+    return Path.home() / ".aramid" / "handover.key"
+
+
+def _load_key(*, create: bool) -> bytes | None:
+    """The machine key, or None when absent and not creating. A key that is not
+    exactly KEY_BYTES is corrupt: KeyCorrupt, never regenerated."""
+    path = key_path()
     try:
-        run = subprocess.run(["git", "ls-files", "-z", "--cached", "--",  # noqa: S603,S607
-                              ":(icase)" + PATH.parent.as_posix()],
-                             cwd=root, capture_output=True, timeout=10)
-    except (OSError, subprocess.SubprocessError):
-        return False
-    if run.returncode != 0:
-        return False
-    want = PATH.as_posix().casefold()
-    for raw in run.stdout.split(b"\0"):
-        entry = raw.decode("utf-8", "replace").replace("\\", "/")
-        if entry.casefold() == want:
-            return True
-    return False
+        key = path.read_bytes()
+    except FileNotFoundError:
+        key = None
+    if key is None:
+        if not create:
+            return None
+        path.parent.mkdir(parents=True, exist_ok=True)
+        flags = os.O_CREAT | os.O_EXCL | os.O_WRONLY | getattr(os, "O_BINARY", 0)
+        try:
+            fd = os.open(path, flags, 0o600)
+        except FileExistsError:
+            key = path.read_bytes()  # another writer won the race
+        else:
+            key = secrets.token_bytes(KEY_BYTES)
+            with os.fdopen(fd, "wb") as fh:
+                fh.write(key)
+                fh.flush()
+                os.fsync(fh.fileno())
+            return key
+    if len(key) != KEY_BYTES:
+        raise KeyCorrupt(path)
+    return key
+
+
+def _bound_root(root: Path) -> str:
+    return os.path.normcase(os.path.realpath(root))
+
+
+def _mac(key: bytes, fields: dict) -> str:
+    canon = json.dumps(
+        {"v": MAC_VERSION, "root": fields["root"], "written_at": fields["written_at"],
+         "head": fields["head"], "author": fields["author"], "body": fields["body"]},
+        sort_keys=True, separators=(",", ":"), ensure_ascii=True).encode("ascii")
+    return hmac.new(key, canon, hashlib.sha256).hexdigest()
 
 
 def _check_dirs(root: Path, *, archive: bool = False) -> None:
@@ -107,6 +157,28 @@ def _check_dirs(root: Path, *, archive: bool = False) -> None:
                 raise UnsafePath(d, "it resolves outside the repository")
 
 
+def _verify(path: Path, root: Path, data: dict, pending: Pending) -> None:
+    """Raise Unreadable unless aramid on this machine signed `data` for this
+    repo. No git, no network."""
+    stored_root, mac = data.get("root"), data.get("mac")
+    if data.get("v") != MAC_VERSION or not isinstance(mac, str) or not isinstance(stored_root, str):
+        raise Unreadable(path, "not written by aramid on this machine (unsigned)", pending)
+    try:
+        key = _load_key(create=False)
+    except KeyCorrupt as exc:
+        raise Unreadable(path, "cannot verify: handover key corrupt", pending) from exc
+    if key is None:
+        raise Unreadable(path, "cannot verify: no handover key on this machine", pending)
+    if stored_root != _bound_root(root):
+        raise Unreadable(path, f"written for another repo: {stored_root}", pending)
+    fields = {"root": stored_root, "written_at": data.get("written_at"),
+              "head": data.get("head"), "author": data.get("author"),
+              "body": data.get("body")}
+    if not hmac.compare_digest(mac.encode("ascii", "replace"), _mac(key, fields).encode("ascii")):
+        raise Unreadable(path, "not written by aramid on this machine "
+                               "(signature does not match)", pending)
+
+
 def read(root: Path) -> Pending | None:
     path = Path(root) / PATH
     if not os.path.lexists(path) and not path.parent.is_symlink():
@@ -120,13 +192,20 @@ def read(root: Path) -> Pending | None:
         return None
     if path.is_symlink():
         raise Unreadable(path, "it is a symlink")
-    if not path.is_file():
-        raise Unreadable(path, "it is not a regular file")
-    if _tracked(Path(root)):
-        raise Unreadable(path, "it is tracked by git: a handover is machine-local, "
-                               "a tracked one came from someone else")
     try:
-        data = json.loads(path.read_text(encoding="utf-8"))
+        st = os.lstat(path)
+    except OSError as exc:
+        raise Unreadable(path) from exc
+    if not stat.S_ISREG(st.st_mode):
+        raise Unreadable(path, "it is not a regular file")
+    if st.st_size > MAX_BYTES:
+        raise Unreadable(path, f"it is too large (over {MAX_BYTES} bytes)")
+    try:
+        with open(path, "rb") as fh:
+            raw = fh.read(MAX_BYTES + 1)
+        if len(raw) > MAX_BYTES:
+            raise Unreadable(path, f"it is too large (over {MAX_BYTES} bytes)")
+        data = json.loads(raw.decode("utf-8"))
         body = data["body"]
         if not isinstance(body, str):
             raise TypeError("body")
@@ -134,9 +213,11 @@ def read(root: Path) -> Pending | None:
         for name, value in (("head", head), ("author", author)):
             if value is not None and not isinstance(value, str):
                 raise TypeError(name)
-        return Pending(str(data.get("written_at") or ""), head, author, body)
+        pending = Pending(str(data.get("written_at") or ""), head, author, body)
     except (OSError, ValueError, KeyError, TypeError, AttributeError) as exc:
         raise Unreadable(path) from exc
+    _verify(path, Path(root), data, pending)
+    return pending
 
 
 def _atomic_write(path: Path, data: dict) -> None:
@@ -184,6 +265,7 @@ def write(root: Path, body: str, *, author: str | None = None, replace: bool = F
     if not body.strip():
         raise EmptyBody("a handover needs a body")
     path = Path(root) / PATH
+    key = _load_key(create=True)
     _check_dirs(root)
     if path.is_symlink():
         raise UnsafePath(path, "it is a symlink")
@@ -192,8 +274,10 @@ def write(root: Path, body: str, *, author: str | None = None, replace: bool = F
             raise AlreadyPending(str(path))
         _archive(root)
     stamp = (now or datetime.now(timezone.utc)).isoformat()
-    _atomic_write(path, {"schema": SCHEMA, "written_at": stamp, "head": _head(Path(root)),
-                         "author": author, "body": body})
+    fields = {"root": _bound_root(Path(root)), "written_at": stamp,
+              "head": _head(Path(root)), "author": author, "body": body}
+    _atomic_write(path, {"schema": SCHEMA, "v": MAC_VERSION, **fields,
+                         "mac": _mac(key, fields)})
     return path
 
 
