@@ -132,6 +132,15 @@ def describe(exc: Unreadable) -> str:
     return _DESCRIBE.get(exc.kind, "the file could not be delivered")
 
 
+def remedy(kind: str) -> str:
+    """What clears a file that was not delivered, by kind: the ONE source of
+    that text for the hook, status, show and MCP. `done` refuses to archive
+    through a symlink, so for SYMLINK the remedy is by hand."""
+    if kind == SYMLINK:
+        return "remove the link by hand"
+    return "'aramid handover done' archives it"
+
+
 class KeyCorrupt(RuntimeError):
     def __init__(self, path: Path):
         super().__init__(
@@ -383,15 +392,17 @@ def _read_capped(path: Path) -> bytes:
 
 def read(root: Path) -> Pending | None:
     path = Path(root) / PATH
-    if not os.path.lexists(path) and not path.parent.is_symlink():
+    # Nothing at the handover path is nothing pending, a symlinked `.aramid`
+    # included: such a directory matters only when a handover would be read
+    # or written THROUGH it, and write and done refuse there. (Reporting it
+    # as unreadable was a nag no command could clear.)
+    if not os.path.lexists(path):
         return None
     try:
         _check_dirs(root)
     except UnsafePath as exc:
         raise Unreadable(path, "a symlinked or escaping handover directory",
                          kind=SYMLINK) from exc
-    if not os.path.lexists(path):
-        return None
     if path.is_symlink():
         raise Unreadable(path, "it is a symlink", kind=SYMLINK)
     raw = _read_capped(path)
@@ -439,13 +450,14 @@ def _archive(root: Path) -> Path:
     _check_dirs(root, archive=True)
     if src.is_symlink():
         raise UnsafePath(src, "it is a symlink")
+    # `written_at` names the archive only once the MAC verified it; anything
+    # else gets a fixed stamp, so no unverified field names a file
     try:
-        stamp = json.loads(_read_capped(src).decode("utf-8")).get("written_at") or "unknown"
-    except (Unreadable, ValueError, AttributeError, RecursionError):
-        stamp = "unreadable"
-    if not isinstance(stamp, str):
-        stamp = "unreadable"
-    safe = "".join(c if c.isalnum() or c in "+-" else "-" for c in str(stamp))[:40]
+        verified = read(root)
+    except Unreadable:
+        verified = None
+    stamp = verified.written_at if verified is not None else "unverified"
+    safe = "".join(c if c.isalnum() or c in "+-" else "-" for c in stamp)[:40]
     dest_dir = Path(root) / ARCHIVE
     dest_dir.mkdir(parents=True, exist_ok=True)
     dest = dest_dir / f"{safe}.json"

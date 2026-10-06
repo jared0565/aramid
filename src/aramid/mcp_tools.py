@@ -152,8 +152,9 @@ def _handover_show(repo, args):
     from aramid.commands.handover_cmd import cmd_handover
     # rc 3 = a file is present but cannot be delivered as verified: the command
     # worked and is TELLING you something about the repo, like check's 1 and 2,
-    # so it is a report (isError False) carrying the NOT VERIFIED text.
-    return _run(cmd_handover, "show", repo, report_codes=(3,))
+    # so it is a report (isError False) carrying the NOT VERIFIED text -- and,
+    # being an agent surface, never the unverified commit, author or body.
+    return _run(cmd_handover, "show", repo, for_agent=True, report_codes=(3,))
 
 
 @_onboarded

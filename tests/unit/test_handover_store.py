@@ -653,7 +653,7 @@ def test_replace_over_an_unverified_pending_file_archives_it(tmp_path):
 def test_an_oversized_file_is_archived_without_being_parsed(tmp_path):
     _raw(tmp_path, "x" * (handover.MAX_BYTES + 5))
     archived = handover.done(tmp_path)
-    assert archived.name.startswith("unreadable")
+    assert archived.name == "unverified.json"
     assert handover.read(tmp_path) is None
 
 
@@ -751,7 +751,7 @@ def test_a_recursion_error_in_the_mac_is_corrupt_defence_in_depth(tmp_path, monk
 def test_done_and_replace_archive_a_file_whose_written_at_is_a_list(tmp_path):
     _signed_shape(tmp_path, written_at=[[1]])
     archived = handover.done(tmp_path)
-    assert archived.name.startswith("unreadable")
+    assert archived.name == "unverified.json"
     _signed_shape(tmp_path, written_at=[[1]])
     handover.write(tmp_path, "fresh", replace=True, now=NOW)
     assert handover.read(tmp_path).body == "fresh"
@@ -945,3 +945,44 @@ def test_write_refuses_a_lone_surrogate_and_writes_nothing(tmp_path, field):
 def test_a_valid_astral_character_is_not_a_lone_surrogate(tmp_path):
     handover.write(tmp_path, "rocket " + chr(0x1F680), author="me " + chr(0x1F680), now=NOW)
     assert handover.read(tmp_path).body == "rocket " + chr(0x1F680)
+
+
+# ---- I2 / I3 (final review): nothing behind a symlinked .aramid; remedy; archive stamp ----
+
+def test_a_symlinked_aramid_dir_with_nothing_behind_it_reads_as_none(tmp_path, monkeypatch):
+    state = tmp_path / "state"
+    state.mkdir()
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _link(monkeypatch, repo / ".aramid", state)
+    assert handover.read(repo) is None
+    assert handover.done(repo) is None
+
+
+@pytest.mark.parametrize("kind", sorted(handover.KINDS))
+def test_remedy_is_per_kind_and_only_a_symlink_is_removed_by_hand(kind):
+    expected = ("remove the link by hand" if kind == handover.SYMLINK
+                else "'aramid handover done' archives it")
+    assert handover.remedy(kind) == expected
+
+
+def test_an_unverified_file_is_archived_under_a_fixed_stamp_never_its_own(tmp_path):
+    _raw(tmp_path, json.dumps({"written_at": "PLANTED-STAMP", "body": "planted"}))
+    first = handover.done(tmp_path)
+    assert first.name == "unverified.json"
+    _raw(tmp_path, json.dumps({"written_at": "PLANTED-STAMP", "body": "planted"}))
+    assert handover.done(tmp_path).name == "unverified-2.json"
+    assert not any("PLANTED" in p.name for p in (tmp_path / ".aramid" / "handovers").iterdir())
+
+
+def test_a_mismatched_file_is_archived_under_the_fixed_stamp(tmp_path):
+    p = handover.write(tmp_path, "x", now=NOW)
+    data = json.loads(p.read_text(encoding="utf-8"))
+    data["written_at"] = "PLANTED-STAMP"                    # the MAC now fails
+    p.write_text(json.dumps(data), encoding="utf-8")
+    assert handover.done(tmp_path).name == "unverified.json"
+
+
+def test_a_verified_file_keeps_its_written_at_stamp(tmp_path):
+    handover.write(tmp_path, "x", now=NOW)
+    assert handover.done(tmp_path).name == "2026-10-06T08-00-00+00-00.json"

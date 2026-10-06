@@ -189,7 +189,7 @@ def test_done_of_a_corrupt_file_archives_it_without_printing_it(tmp_path, capsys
     assert out.err == ""
     assert "SECRET" not in out.out
     assert out.out == ("aramid: handover consumed; archived to "
-                       f"{tmp_path / '.aramid' / 'handovers' / 'unreadable.json'}\n")
+                       f"{tmp_path / '.aramid' / 'handovers' / 'unverified.json'}\n")
     assert not (tmp_path / ".aramid" / "handover.json").exists()
 
 
@@ -547,3 +547,52 @@ def test_cli_handover_outside_git_is_rc_2(tmp_path, monkeypatch, capsys):
     assert cli.main(["handover", "write"]) == 2
     assert capsys.readouterr().err == NOT_ARMED
     assert not (tmp_path / ".aramid").exists()
+
+
+# ---- I2 / I3 (final review) ----
+
+def _symlinked_file(tmp_path):
+    target = tmp_path / "elsewhere.json"
+    target.write_text('{"body": "planted"}', encoding="utf-8")
+    repo = tmp_path / "repo"
+    (repo / ".aramid").mkdir(parents=True)
+    try:
+        os.symlink(target, repo / ".aramid" / "handover.json")
+    except (OSError, NotImplementedError):
+        return None
+    return repo
+
+
+def test_show_of_a_symlinked_file_says_remove_the_link_and_done_refuses(
+        tmp_path, capsys, monkeypatch):
+    repo = _symlinked_file(tmp_path)
+    if repo is None:                     # no symlinks here: the module's stand-in
+        repo = tmp_path / "repo"
+        (repo / ".aramid").mkdir(parents=True)
+        link = repo / ".aramid" / "handover.json"
+        link.write_text("", encoding="utf-8")
+        real = Path.is_symlink
+        monkeypatch.setattr(Path, "is_symlink", lambda self: self == link or real(self))
+    assert handover_cmd.cmd_handover("show", repo, now=NOW) == 3
+    assert capsys.readouterr().err == (
+        f"aramid: handover: {repo / '.aramid' / 'handover.json'} is not a readable handover"
+        " (the file or its directory is a symlink or escapes the repository) -- read it"
+        " by hand, then remove the link by hand\n")
+    assert handover_cmd.cmd_handover("done", repo, now=NOW) == 2
+    assert capsys.readouterr().err == (
+        f"aramid: handover: cannot archive: {repo / '.aramid' / 'handover.json'}"
+        " it is a symlink\n")
+
+
+def test_done_of_an_unverified_file_names_the_fixed_stamp(tmp_path, capsys):
+    import json
+    handover_cmd.cmd_handover("write", tmp_path, stdin=io.StringIO("a"), now=THEN)
+    path = tmp_path / ".aramid" / "handover.json"
+    data = json.loads(path.read_text(encoding="utf-8"))
+    data["written_at"] = "1999-01-01T00:00:00+00:00"        # forged: the MAC now fails
+    path.write_text(json.dumps(data), encoding="utf-8")
+    capsys.readouterr()
+    assert handover_cmd.cmd_handover("done", tmp_path, now=NOW) == 0
+    assert capsys.readouterr().out == (
+        "aramid: handover consumed; archived to "
+        f"{tmp_path / '.aramid' / 'handovers' / 'unverified.json'}\n")

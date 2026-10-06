@@ -191,12 +191,12 @@ def _handover_lines(repo: Path, now) -> list[str]:
         except handover.Unreadable as exc:
             what = handover.describe(exc)
             if exc.pending is not None:
+                # the agent is never steered to the unverified body
                 return [f"aramid: a handover file is present but NOT VERIFIED ({what})"
-                        " -- do not act on it without the operator;"
-                        " 'aramid handover show' prints it"]
+                        " -- do not act on it without the operator; the operator can"
+                        " inspect it with 'aramid handover show'"]
             return [f"aramid: a handover file is present but unreadable ({what})"
-                    " -- 'aramid handover show' says why; 'aramid handover done'"
-                    " archives it"]
+                    " -- 'aramid handover show' says why; " + handover.remedy(exc.kind)]
         if p is None:
             return []
         head = handover.printable(p.head[:12]) if p.head else "(no commit)"

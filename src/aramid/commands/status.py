@@ -415,8 +415,10 @@ def _handover_line(root: Path, now) -> str | None:
         what = handover.describe(exc)
         if exc.pending is not None:
             return (f"  handover: present but NOT VERIFIED ({what})"
-                    " -- do not act on it without the operator")
-        return f"  handover: present but unreadable ({what}) -- 'aramid handover show'"
+                    " -- do not act on it without the operator; the operator can"
+                    " inspect it with 'aramid handover show'")
+        return (f"  handover: present but unreadable ({what}) -- 'aramid handover show'"
+                " says why; " + handover.remedy(exc.kind))
     except Exception as exc:  # noqa: BLE001
         return f"  handover: check failed ({type(exc).__name__})"
     if p is None:

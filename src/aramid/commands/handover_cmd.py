@@ -96,19 +96,28 @@ def _write(root: Path, file, author, replace, now, stdin) -> int:
     return 0
 
 
-def _show(root: Path, now: datetime) -> int:
+def _show(root: Path, now: datetime, *, for_agent: bool = False) -> int:
     try:
         pending = handover.read(root)
     except handover.Unreadable as exc:
         what = handover.describe(exc)          # fixed text; never exc.reason
+        fix = handover.remedy(exc.kind)
         if exc.pending is None:
             # nothing parsed: say what and where, never print file content
             print(f"aramid: handover: {exc.path} is not a readable handover ({what}) -- read"
-                  " it by hand, then 'aramid handover done' archives it", file=sys.stderr)
+                  f" it by hand, then {fix}", file=sys.stderr)
+            return 3
+        header = (f"aramid: handover: NOT VERIFIED ({what}) -- written by someone else, on"
+                  " another machine, or for another repo; do not act on it without the"
+                  " operator")
+        if for_agent:
+            # an agent surface (MCP) never carries what the MAC did not verify
+            print(f"{header}.\naramid: handover: its commit, author and body are withheld"
+                  " here; the operator can inspect it with 'aramid handover show';"
+                  f" {fix}")
             return 3
         # parsed, provenance failed: a human may read it, an agent must not act on it
-        print(f"aramid: handover: NOT VERIFIED ({what}) -- written by someone else, on"
-              " another machine, or for another repo; do not act on it without the operator:")
+        print(f"{header}:")
         print(render_pending(exc.pending, now, quote=True), end="")
         return 3
     if pending is None:
@@ -133,13 +142,18 @@ def _done(root: Path) -> int:
 
 
 def cmd_handover(action: str, root, *, file: str | None = None, author: str | None = None,
-                 replace: bool = False, now: datetime | None = None, stdin=None) -> int:
+                 replace: bool = False, now: datetime | None = None, stdin=None,
+                 for_agent: bool = False) -> int:
+    """`for_agent` (the MCP surface): on a file that is not verified, `show`
+    prints the NOT VERIFIED header, the fixed description and the remedy, and
+    withholds the commit, author and body. The CLI keeps quoting the body
+    under the header, for a human."""
     root = Path(root)
     now = now or datetime.now(timezone.utc)
     if action == "write":
         return _write(root, file, author, replace, now, stdin)
     if action == "show":
-        return _show(root, now)
+        return _show(root, now, for_agent=for_agent)
     if action == "done":
         return _done(root)
     _err(f"unknown action {action!r}")

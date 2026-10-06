@@ -93,7 +93,13 @@ to publish a tag that disagrees with it.
     to exceed), and a symlinked or planted-over `.aramid` or archive directory
     are refused rather than followed. A corrupt or deeply nested file, or one
     whose fields are the wrong type, reads as unreadable with a fixed `kind`,
-    and `done` still archives it.
+    and `done` still archives it. `done` names an archive after the file's
+    `written_at` only when its signature verified; anything else is archived
+    as `unverified.json` (`unverified-2.json`, ...), so no unverified field
+    names a file. The one thing `done` refuses is a symlinked handover file
+    (or one behind a symlinked `.aramid`): its remedy is to remove the link
+    by hand, and every surface says so. A symlinked `.aramid` with nothing
+    behind it is simply no handover.
   - **Provenance.** A handover is signed (HMAC-SHA256) with a key that lives
     on this machine only (`~/.aramid/handover.key`), bound to the repo's real
     path, and is delivered as an instruction only when the signature verifies,
@@ -122,8 +128,15 @@ to publish a tag that disagrees with it.
     trailing newline not counted) with every line prefixed `aramid: | `.
     `aramid status` shows `handover: PENDING, written <age> ago` right after
     its header. An unverified or unreadable handover is reported in one fixed
-    line by both, never framed as an instruction, and its body is never
-    printed by the hook. The handover prints even if the rest of the posture
+    line by both, never framed as an instruction: an unverified one says the
+    operator can inspect it with `aramid handover show`, and an unreadable one
+    names its remedy. aramid never volunteers an unverified file's content to
+    an agent: the hook and `status` never print it, and `aramid_handover_show`
+    returns only the NOT VERIFIED header, the reason and the remedy,
+    withholding the commit, author and body. The CLI `show` still prints the
+    body, quoted under that header, for a human (an agent with a shell can run
+    it too; aramid only declines to hand it over unasked or as an
+    instruction). The handover prints even if the rest of the posture
     block fails. Every agent-hook output (`session-start` and `pre-tool-use`)
     is written as UTF-8, with anything unencodable backslash-escaped: the
     hook's fast path never reached the CLI's UTF-8 setup, so on Windows a
