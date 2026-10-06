@@ -20,11 +20,12 @@ def _repo(tmp_path: Path) -> Path:
     return r
 
 
-def test_tool_names_are_exactly_the_spec_seven():
+def test_tool_names_are_exactly_the_spec_ten():
     assert set(mcp_tools.TOOLS) == {
         "aramid_check", "aramid_status", "aramid_ledger_filter",
         "aramid_resolvers", "aramid_override", "aramid_mark_not_a_secret",
-        "aramid_mark_rotated"}
+        "aramid_mark_rotated",
+        "aramid_handover_show", "aramid_handover_write", "aramid_handover_done"}
     for spec in mcp_tools.TOOLS.values():
         assert set(spec) == {"description", "inputSchema", "handler"}
         assert spec["inputSchema"]["type"] == "object"

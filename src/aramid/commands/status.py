@@ -405,6 +405,26 @@ def _resolver_defect_lines(ledger: Ledger) -> list[str]:
     return health.resolver_defect_lines(health.snapshot(None, ledger))
 
 
+def _handover_line(root: Path, now) -> str | None:
+    """A pending handover, right after the header. Fixed text by kind, never
+    anything from the file; never raises (status must not crash on it)."""
+    from aramid import handover
+    try:
+        p = handover.read(root)
+    except handover.Unreadable as exc:
+        what = handover.describe(exc)
+        if exc.pending is not None:
+            return (f"  handover: present but NOT VERIFIED ({what})"
+                    " -- do not act on it without the operator")
+        return f"  handover: present but unreadable ({what}) -- 'aramid handover show'"
+    except Exception as exc:  # noqa: BLE001
+        return f"  handover: check failed ({type(exc).__name__})"
+    if p is None:
+        return None
+    return (f"  handover: PENDING, written {handover.age(p.written_at, now)} ago"
+            " -- 'aramid handover show'")
+
+
 def cmd_status(root) -> int:
     root = Path(root)
     try:
@@ -419,6 +439,7 @@ def cmd_status(root) -> int:
 
         lines = [
             "aramid status:",
+            *([hv] if (hv := _handover_line(root, datetime.now(timezone.utc))) else []),
             f"  {_last_run_line(ledger)}",
             f"  {_open_counts_line(state)}",
             f"  {_new_since_baseline_line(ledger, state)}",

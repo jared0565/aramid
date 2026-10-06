@@ -104,7 +104,13 @@ to publish a tag that disagrees with it.
   named with fixed text and never printed, and the body is shown with control
   characters escaped; `done` archives it. Exit `2` is a
   refusal, `3` is a pending file that cannot be delivered. The SessionStart
-  and `aramid status` lines that print it follow.
+  hook and `aramid status` show a pending handover first. Only a verified one
+  (signed by aramid on this machine, for this repo) is framed as "resume it
+  without asking the operator", with its body escaped; an unverified or
+  unreadable one is reported in one fixed line, never framed as an instruction,
+  and its body is never printed by the hook. The handover prints even if the
+  rest of the posture block fails. Three MCP tools carry it too:
+  `aramid_handover_show`, `aramid_handover_write` and `aramid_handover_done`.
 
 ### Fixed
 

@@ -208,3 +208,44 @@ def test_unreadable_stdin_and_non_command_payloads_are_silent(tmp_path, monkeypa
         _stdin(monkeypatch, payload)
         assert ah._pre_tool_use(r) == 0, payload
     assert capsys.readouterr() == ("", "")
+
+
+# ------------------------------------------------- pending handover (0.20.4) --
+
+def test_a_pending_handover_leads_the_session_block_and_the_posture_is_intact(tmp_path):
+    from aramid import handover
+    r = _repo(tmp_path)
+    handover.write(r, "resume step 3\n")
+    out = ah._session_context(r)
+    assert out.startswith("aramid: PENDING HANDOVER written ")
+    assert out.splitlines()[1] == "aramid: | resume step 3"
+    assert out.splitlines()[2].startswith("aramid: this repo is GATED")
+    assert out.endswith('aramid: commands: aramid check --staged | aramid ledger filter'
+                        ' --status open | aramid override <id> --reason "..."\n')
+
+
+def test_the_handover_prints_even_when_the_posture_block_raises(tmp_path, monkeypatch, capsys):
+    from aramid import handover
+    from aramid.ledger import Ledger
+    r = _repo(tmp_path)
+    handover.write(r, "resume step 3\n")
+
+    def boom(self, *a, **k):
+        raise RuntimeError("ledger locked")
+    monkeypatch.setattr(Ledger, "open_findings", boom)
+    assert ah.cmd_agent_hook("session-start", r) == 0
+    out = capsys.readouterr().out
+    assert out.startswith("aramid: PENDING HANDOVER written ")
+    assert "aramid: | resume step 3" in out
+    assert "this repo is GATED" not in out
+
+
+def test_a_raising_posture_block_with_no_handover_is_still_silent(tmp_path, monkeypatch, capsys):
+    from aramid.ledger import Ledger
+    r = _repo(tmp_path)
+
+    def boom(self, *a, **k):
+        raise RuntimeError("ledger locked")
+    monkeypatch.setattr(Ledger, "open_findings", boom)
+    assert ah.cmd_agent_hook("session-start", r) == 0
+    assert capsys.readouterr().out == ""
