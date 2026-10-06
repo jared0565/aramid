@@ -14,6 +14,7 @@ already in every armed repo, so it carries the state.
 import json
 import os
 import subprocess
+import tempfile
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -40,25 +41,80 @@ class AlreadyPending(RuntimeError):
 
 
 class Unreadable(RuntimeError):
-    def __init__(self, path: Path):
-        super().__init__(f"{path} is not a readable handover")
+    def __init__(self, path: Path, reason: str = "it is not valid handover JSON"):
+        super().__init__(f"{path} is not a readable handover: {reason}")
         self.path = path
+        self.reason = reason
+
+
+class UnsafePath(RuntimeError):
+    """A symlinked or escaping location: refused, never followed."""
+
+    def __init__(self, path: Path, reason: str):
+        super().__init__(f"refusing to use {path}: {reason}")
+        self.path = path
+        self.reason = reason
 
 
 def _head(root: Path) -> str | None:
     try:
-        done = subprocess.run(["git", "rev-parse", "--verify", "-q", "HEAD"],  # noqa: S603,S607
-                              cwd=root, capture_output=True, text=True, timeout=10)
+        run = subprocess.run(["git", "rev-parse", "--verify", "-q", "HEAD"],  # noqa: S603,S607
+                             cwd=root, capture_output=True, text=True, timeout=10)
     except (OSError, subprocess.SubprocessError):
         return None
-    sha = done.stdout.strip()
-    return sha if done.returncode == 0 and sha else None
+    sha = run.stdout.strip()
+    return sha if run.returncode == 0 and sha else None
+
+
+def _tracked(root: Path) -> bool:
+    """True only when git positively says the handover file is tracked. Any
+    git failure (missing, not a repo, timeout) is NOT tracked."""
+    try:
+        run = subprocess.run(  # noqa: S603,S607
+            ["git", "ls-files", "--error-unmatch", "--", PATH.as_posix()],
+            cwd=root, capture_output=True, text=True, timeout=10)
+    except (OSError, subprocess.SubprocessError):
+        return False
+    return run.returncode == 0
+
+
+def _check_dirs(root: Path, *, archive: bool = False) -> None:
+    """Refuse a symlinked `.aramid` (or `.aramid/handovers`), and any whose
+    resolved location is outside the repo root."""
+    real_root = Path(root).resolve()
+    dirs = [Path(root) / PATH.parent]
+    if archive:
+        dirs.append(Path(root) / ARCHIVE)
+    for d in dirs:
+        if d.is_symlink():
+            raise UnsafePath(d, "it is a symlink")
+        if os.path.lexists(d):
+            try:
+                inside = d.resolve().is_relative_to(real_root)
+            except (OSError, RuntimeError):
+                inside = False
+            if not inside:
+                raise UnsafePath(d, "it resolves outside the repository")
 
 
 def read(root: Path) -> Pending | None:
     path = Path(root) / PATH
-    if not path.exists():
+    if not os.path.lexists(path) and not path.parent.is_symlink():
         return None
+    try:
+        _check_dirs(root)
+    except UnsafePath as exc:
+        raise Unreadable(path, f"{exc.path.name} is a symlink or escapes the "
+                               "repository") from exc
+    if not os.path.lexists(path):
+        return None
+    if path.is_symlink():
+        raise Unreadable(path, "it is a symlink")
+    if not path.is_file():
+        raise Unreadable(path, "it is not a regular file")
+    if _tracked(Path(root)):
+        raise Unreadable(path, "it is tracked by git: a handover is machine-local, "
+                               "a tracked one came from someone else")
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
         body = data["body"]
@@ -74,24 +130,39 @@ def read(root: Path) -> Pending | None:
 
 
 def _atomic_write(path: Path, data: dict) -> None:
+    """Random exclusive temp name (never a fixed one a repo could pre-plant a
+    symlink at), fsynced, then os.replace."""
     path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_name(path.name + ".tmp")
-    tmp.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
-    os.replace(tmp, path)
+    fd, tmp = tempfile.mkstemp(dir=path.parent, prefix="handover.", suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as fh:
+            fh.write(json.dumps(data, indent=2) + "\n")
+            fh.flush()
+            os.fsync(fh.fileno())
+        os.replace(tmp, path)
+    except BaseException:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
 
 
 def _archive(root: Path) -> Path:
     src = Path(root) / PATH
+    _check_dirs(root, archive=True)
+    if src.is_symlink():
+        raise UnsafePath(src, "it is a symlink")
     try:
         stamp = json.loads(src.read_text(encoding="utf-8")).get("written_at") or "unknown"
     except (OSError, ValueError, AttributeError):
         stamp = "unreadable"
-    safe = "".join(c if c.isalnum() or c in "+-" else "-" for c in str(stamp))
+    safe = "".join(c if c.isalnum() or c in "+-" else "-" for c in str(stamp))[:40]
     dest_dir = Path(root) / ARCHIVE
     dest_dir.mkdir(parents=True, exist_ok=True)
     dest = dest_dir / f"{safe}.json"
     n = 1
-    while dest.exists():
+    while os.path.lexists(dest):
         n += 1
         dest = dest_dir / f"{safe}-{n}.json"
     os.replace(src, dest)
@@ -103,7 +174,10 @@ def write(root: Path, body: str, *, author: str | None = None, replace: bool = F
     if not body.strip():
         raise EmptyBody("a handover needs a body")
     path = Path(root) / PATH
-    if path.exists():
+    _check_dirs(root)
+    if path.is_symlink():
+        raise UnsafePath(path, "it is a symlink")
+    if os.path.lexists(path):
         if not replace:
             raise AlreadyPending(str(path))
         _archive(root)
@@ -114,7 +188,7 @@ def write(root: Path, body: str, *, author: str | None = None, replace: bool = F
 
 
 def done(root: Path) -> Path | None:
-    if not (Path(root) / PATH).exists():
+    if not os.path.lexists(Path(root) / PATH):
         return None
     return _archive(root)
 
@@ -126,6 +200,8 @@ def age(written_at: str, now: datetime) -> str:
         return "unknown"
     if then.tzinfo is None:
         then = then.replace(tzinfo=timezone.utc)
+    if now.tzinfo is None:
+        now = now.replace(tzinfo=timezone.utc)
     secs = (now - then).total_seconds()
     if secs < 0:
         return "unknown"
