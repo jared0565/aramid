@@ -84,6 +84,17 @@ def test_an_unmeasurable_tree_is_active_not_stalled(tmp_path, fast_watch, monkey
     assert r.state is ToolState.TIMEOUT and r.stalled_s is None
 
 
+def test_a_raising_sampler_is_active_not_a_crash(tmp_path, fast_watch, monkeypatch):
+    def boom(pid):
+        raise RuntimeError("sampler broke")
+
+    monkeypatch.setattr(base.proctree, "sample", boom)
+    r = run_subprocess([sys.executable, "-c", "import time; time.sleep(60)"], tmp_path, 4)
+    assert r.state is ToolState.TIMEOUT
+    assert r.stalled_s is None
+    assert "timed out after 4 s" in r.stderr
+
+
 def test_set_stall_window_clamps_negative_to_zero():
     old = base.stall_window()
     try:

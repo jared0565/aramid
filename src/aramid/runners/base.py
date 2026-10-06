@@ -483,7 +483,10 @@ def _watched_communicate(proc: subprocess.Popen, timeout_s: float, on_stdout_lin
         if not window:
             continue
         now = time.monotonic()
-        tree = proctree.sample(proc.pid)
+        try:
+            tree = proctree.sample(proc.pid)
+        except Exception:  # noqa: BLE001 -- a sampler that raises is unmeasurable, i.e. active
+            tree = None
         if tree is None or last_tree is None or tree != last_tree or seen[0] != last_seen:
             quiet_since = now
         last_tree, last_seen = tree, seen[0]
