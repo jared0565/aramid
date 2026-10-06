@@ -81,6 +81,10 @@ to publish a tag that disagrees with it.
   is not counted as stalled anywhere (`stalled`, status, health, fleet, or
   the mutation baseline notes), so a baseline that hit its budget still
   counts toward the budget give-up.
+- **A suspended or starved machine no longer reads as a stalled tool.** When
+  the stall watchdog wakes more than two sample intervals late, nothing was
+  observed in between, so it restarts the quiet clock from that wake instead
+  of counting the gap as idle time.
 
 ## [0.20.3] — 2026-10-06
 

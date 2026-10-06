@@ -482,7 +482,8 @@ def _watched_communicate(proc: subprocess.Popen, timeout_s: float, on_stdout_lin
     at the wall clock and `_Stalled` when neither the tree's CPU/membership
     nor the output moved for the stall window. An unmeasurable tree
     (sample() -> None) counts as activity, so a watchdog that cannot see is
-    today's timeout, never a false stall. At the wall clock the watch takes
+    today's timeout, never a false stall; so is a wake more than two sample
+    intervals late, which restarts the quiet clock. At the wall clock the watch takes
     one last sample, so `_TimedOut.idle_s` runs to the deadline rather than
     to the previous wake; the deadline still wins over a stall there.
 
@@ -540,7 +541,7 @@ def _watched_communicate(proc: subprocess.Popen, timeout_s: float, on_stdout_lin
     deadline = time.monotonic() + timeout_s
     window = _STALL_S
     last_tree, last_seen = None, -1
-    quiet_since = time.monotonic()
+    quiet_since = sampled_at = time.monotonic()
     while True:
         try:
             proc.wait(timeout=max(0.0, min(_SAMPLE_S, deadline - time.monotonic())))
@@ -553,12 +554,20 @@ def _watched_communicate(proc: subprocess.Popen, timeout_s: float, on_stdout_lin
                 raise _TimedOut(proc.args, timeout_s, None) from None
             continue
         now = time.monotonic()
+        # A wake much later than asked for (a suspended machine, a starved
+        # aramid) observed nothing in between, so the gap is not evidence
+        # of a stall: this sample starts the quiet clock afresh (it leans
+        # toward active). Measured from the END of the previous sample, so
+        # a slow sampler (`ps` on macOS) is not mistaken for a gap.
+        unobserved = now - sampled_at > 2 * _SAMPLE_S
         try:
             tree = proctree.sample(proc.pid)
         except Exception:  # noqa: BLE001 -- a sampler that raises is unmeasurable, i.e. active
             tree = None
+        sampled_at = time.monotonic()
         read = seen["out"] + seen["err"]
-        if tree is None or last_tree is None or tree != last_tree or read != last_seen:
+        if (unobserved or tree is None or last_tree is None or tree != last_tree
+                or read != last_seen):
             quiet_since = now
         last_tree, last_seen = tree, read
         idle = now - quiet_since

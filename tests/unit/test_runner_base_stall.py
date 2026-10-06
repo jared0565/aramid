@@ -218,6 +218,23 @@ def test_the_idle_figure_runs_to_the_deadline_not_to_the_previous_wake(fake_cloc
     assert exc.value.idle_s == 4.5
 
 
+def test_an_idle_tree_on_the_fake_clock_stalls_at_the_window(fake_clock):
+    # Control for the gap test below: same harness, no gap.
+    with pytest.raises(base._Stalled) as exc:
+        base._watched_communicate(_Proc(fake_clock), 1000, None)
+    # Quiet from the first sample (1 s); 3 s of it at the 4 s wake.
+    assert (fake_clock.t, exc.value.idle_s) == (4.0, 3.0)
+
+
+def test_a_gap_longer_than_two_samples_restarts_the_quiet_clock(fake_clock):
+    # A suspended machine or a starved aramid: the wake after 1 s, 1 s comes
+    # 50 s late. Nothing was observed in between, so those 50 s are not
+    # evidence of a stall; the window starts again from that wake (52 s).
+    with pytest.raises(base._Stalled) as exc:
+        base._watched_communicate(_Proc(fake_clock, [1, 1, 50]), 1000, None)
+    assert (fake_clock.t, exc.value.idle_s) == (55.0, 3.0)
+
+
 def test_a_raising_sampler_is_active_not_a_crash(tmp_path, fast_watch, monkeypatch):
     def boom(pid):
         raise RuntimeError("sampler broke")
