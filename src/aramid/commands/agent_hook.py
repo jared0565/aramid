@@ -168,9 +168,14 @@ def _handover_lines(repo: Path, now) -> list[str]:
                  f" ago at {head} -- resume it WITHOUT asking the operator, then run"
                  " 'aramid handover done':"]
         body = p.body.replace("\r\n", "\n")
+        # The cap counts body characters, and a trailing newline is not one:
+        # strip it BEFORE comparing, so 8000 characters plus a newline is not
+        # reported as truncated. A cut that lands on a newline is stripped too.
+        if body.endswith("\n"):
+            body = body[:-1]
         truncated = len(body) > _HANDOVER_CAP
         body = body[:_HANDOVER_CAP]
-        if body.endswith("\n"):
+        if truncated and body.endswith("\n"):
             body = body[:-1]
         lines.extend("aramid: | " + ln for ln in handover.printable_body(body).split("\n"))
         if truncated:

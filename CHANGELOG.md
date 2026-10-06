@@ -108,7 +108,7 @@ to publish a tag that disagrees with it.
   (signed by aramid on this machine, for this repo) is framed as "resume it
   without asking the operator", with its body escaped; an unverified or
   unreadable one is reported in one fixed line, never framed as an instruction,
-  and its body is never printed by the hook. The handover prints even if the
+  and its body is never printed by the hook. A verified body is capped at 8000 characters (a trailing newline is not counted). The handover prints even if the
   rest of the posture block fails. Three MCP tools carry it too:
   `aramid_handover_show`, `aramid_handover_write` and `aramid_handover_done`.
 

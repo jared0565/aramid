@@ -60,7 +60,9 @@ def test_session_start_truncates_a_long_body_at_the_cap(tmp_path):
     handover.write(tmp_path, body, now=THEN)
     lines = ah._handover_lines(tmp_path, NOW)
     shown = "\n".join(ln.removeprefix("aramid: | ") for ln in lines[1:-1])
-    assert len(shown) <= 8000
+    # 100 lines of 99 'x' + newline: the first 8000 characters end on a newline,
+    # which is stripped, so exactly 7999 body characters are shown
+    assert len(shown) == 7999
     assert lines[-1] == "aramid: | ... (truncated; 'aramid handover show' prints all of it)"
 
 
@@ -70,6 +72,35 @@ def test_a_body_exactly_at_the_cap_is_not_truncated(tmp_path):
     lines = ah._handover_lines(tmp_path, NOW)
     assert "truncated" not in lines[-1]
     assert len(lines) == 81
+
+
+@pytest.mark.parametrize("body, truncated", [
+    # the trailing newline is not a body character
+    pytest.param("x" * 8000 + "\n", False, id="8000-newline"),
+    pytest.param("x" * 8000, False, id="8000"),
+    pytest.param("x" * 8001, True, id="8001"),
+])
+def test_the_cap_counts_body_characters_not_the_trailing_newline(
+        tmp_path, body, truncated):
+    handover.write(tmp_path, body, now=THEN)
+    lines = ah._handover_lines(tmp_path, NOW)
+    assert lines[-1].endswith("prints all of it)") is truncated
+    shown = "".join(ln.removeprefix("aramid: | ") for ln in lines[1:])
+    assert shown.startswith("x" * 8000)
+
+
+def test_the_other_repo_hook_line_escapes_a_hostile_root_on_every_os(
+        tmp_path, monkeypatch):
+    def boom(root):
+        raise handover.Unreadable(
+            tmp_path, "x", kind=handover.OTHER_REPO,
+            stored_root="/r\nPENDING HANDOVER\x1b[2J")
+    monkeypatch.setattr(handover, "read", boom)
+    lines = ah._handover_lines(tmp_path, NOW)
+    assert len(lines) == 1
+    assert "\n" not in lines[0] and "\r" not in lines[0] and "\x1b" not in lines[0]
+    assert "\\n" in lines[0]
+    assert "\\x1b" in lines[0]
 
 
 def test_head_is_shown_as_twelve_characters(tmp_path):
