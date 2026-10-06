@@ -15,33 +15,57 @@ to publish a tag that disagrees with it.
 - **A child that has stopped working is killed after a stall window, not
   after its whole budget.** `run_subprocess` now drains both pipes on
   threads for every caller and, every 15 s, compares the child tree's CPU
-  time and the output read so far. A tree with neither moving for the window
-  is killed and reported as `aramid: <tool> stalled: no CPU in any of its <n>
-  processes and no output for <s> s; killed after <s> s. A child blocked on
-  a full pipe or on a read with no timeout looks like this; a slow one does
-  not.` It is still `ToolState.TIMEOUT`, so no caller's control flow
-  changes; `RunnerResult.stalled_s` carries the idle time. A tree that
-  cannot be measured counts as active, so the worst case is today's
-  wall-clock timeout.
+  time and the bytes of output read so far, so a child printing progress
+  with no newline still counts as active. A tree with neither moving for
+  the window is killed and reported as `aramid: <tool> stalled: no CPU in
+  any of its <n> processes and no output for <s> s; killed after <s> s. A
+  child blocked on a full pipe or on a read with no timeout looks like
+  this; a slow one does not.` It is still `ToolState.TIMEOUT`, so no
+  caller's control flow changes; `RunnerResult.stalled_s` carries the idle
+  time. Anything the watchdog cannot observe counts as activity: a tree
+  that cannot be measured, and a stretch in which it did not run (a wake
+  more than two sample intervals late, or a sample that itself took that
+  long -- a suspended or starved machine) restarts the quiet clock instead
+  of counting as idle. The worst case is today's wall-clock timeout.
 - **`[timeouts].stall_s` sets the stall window (default 300, `0` = off).**
   The tree is sampled every 15 s, so the kill comes after between `stall_s`
   and `stall_s` + 15 s of idleness -- never earlier than about 315 s from
-  launch at the default. A negative value turns the watchdog off, like `0`.
-  The window is read once per `aramid check` and, in the drain, applied per
-  repo just before that repo's consumers run.
+  launch at the default. A negative value turns the watchdog off, like `0`;
+  a non-numeric value, a bool, or a `timeouts` that is not a table falls
+  back to 300. The window is applied at the start of every gate run
+  (`check`, `init`, `rebaseline`) and, in the drain, per repo just before
+  that repo's consumers run.
 - **A stall is named wherever a timeout is reported.** The gate's degraded
   reason (`stalled: no CPU or output for <s> s (killed after <s> s)`),
   `GateResult.stalled`, the ledger run row (`stalled`), `aramid status`,
   health and fleet (`stalled_tools`, `tool (stalled)` in the red detail)
-  carry it, and the mutation and js_mutation baseline note says `baseline
-  stalled`, outside the `timeout_note_prefix` family, so a hung child never
-  feeds the budget give-up counter or advises raising the budget. At the
-  default window the watchdog cannot decide before any gate runner's budget
-  (ruff 30 s up to the tests runner and the pre-push gate at 300 s), so a
-  gate runner that hangs reads as a timeout with its trailing idle time
-  (see Fixed); a stall verdict proper comes from the long-budget callers
-  (the mutation and js_mutation baselines, the drain's consumers) or from a
-  lowered `stall_s`.
+  carry it. At the default window the watchdog cannot decide before any
+  gate runner's budget (ruff 30 s up to the tests runner and the pre-push
+  gate at 300 s), so a stall verdict proper comes from the long-budget
+  callers (the mutation and js_mutation baselines, the drain's consumers)
+  or from a lowered `stall_s`.
+- **A wall-clock timeout says how long the tool had been idle.** In 0.20.3
+  a hung tool in a gate read as a plain `timeout after 180 s`, the same as
+  a slow one. When the budget kills a child whose whole process tree had
+  shown no CPU and no output for at least one sample interval, the runner's
+  message now ends `-- no CPU or output for the last <s> s, which looks
+  hung, not slow`, and the degraded reason reads `timeout after <s> s (no
+  CPU or output for the last <s> s)`. This is reporting only: the run is
+  killed at its budget exactly as before, and it is not counted as stalled
+  anywhere (`stalled`, status, health, fleet, or the mutation baseline
+  notes), so a baseline that hit its budget still counts toward the budget
+  give-up.
+- **A stalled mutation baseline is its own note, with its own give-up.**
+  The mutation and js_mutation baseline note for a stall reads `baseline
+  stalled (last seen @ <sha>): no CPU or output for <s> s -- ...`, outside
+  the `timeout_note_prefix` family, so a hung child never feeds the budget
+  give-up counter or advises raising the budget. Three such notes for one
+  queue item at one head make the consumer stand down with `ok` and
+  `mutation giving up: baseline persistently stalls (last seen @ <sha>) --
+  fix the hang, or raise [timeouts].stall_s if the suite legitimately
+  idles that long` (`js mutation giving up: ...` for js_mutation). The
+  count is per head, like the failing-baseline one: a stall can be a race
+  rather than a property of the suite, and a new commit gets a fresh count.
 - **`aramid.proctree.sample(pid)` measures a child process tree.** It
   returns each live member's creation time and CPU time, using only the
   standard library (`/proc`, `ps`, or Win32 through ctypes), and returns
@@ -58,57 +82,18 @@ to publish a tag that disagrees with it.
 
 ### Fixed
 
-- **Output with no newline counts as activity, and a child's last line is
-  kept when a process it started still holds the pipe.** `run_subprocess`
-  reads its pipes as bytes in chunks as they arrive, instead of line by
-  line, and decodes them to exactly the text the old pipes produced (UTF-8,
-  invalid bytes replaced, universal newlines). Without this the stall
-  watchdog would read a child printing progress dots with no newline as
-  silent and kill it as stalled.
-- **A process the child started no longer holds the run open.** When a
-  grandchild keeps the child's output pipe after the child has exited, aramid
-  now waits at most 5 s in total for both pipes, uses the output read so
-  far, and prints one line on its own stderr: `aramid: <tool>: a process it
-  started still holds its output pipe after it exited; using the output read
-  so far`. That line does not change the result, and the holder is not
-  killed. In 0.20.3 a run without the test runner's progress tap (every
-  runner but `tests`) waited out its whole budget on such a holder and was
-  reported as a timeout; under the tap, the run came back `ok` but lost an
-  unterminated last line (a JSON report, say), and its output was empty if
+- **A process the child started no longer costs the run its output.** When
+  a grandchild keeps the child's output pipe after the child has exited,
+  aramid now waits at most 5 s in total for both pipes, uses the output
+  read so far -- including an unterminated last line, such as a JSON
+  report -- and prints one line on its own stderr: `aramid: <tool>: a
+  process it started still holds its output pipe after it exited; using
+  the output read so far`. That line does not change the result, and the
+  holder is not killed. In 0.20.3 a run without the test runner's progress
+  tap (every runner but `tests`) waited out its whole budget on such a
+  holder and was reported as a timeout; under the tap, the run came back
+  `ok` but lost an unterminated last line, and its output was empty if
   that was all the child wrote.
-- **A wall-clock timeout says how long the tool had been idle.** At the
-  default 300 s stall window the watchdog cannot decide before any gate
-  runner's budget, so a hung tool in a default gate was still reported as a
-  plain `timeout after 180 s`. When the budget kills a child whose whole
-  process tree had shown no CPU and no output for at least one sample
-  interval, the runner's message now ends `-- no CPU or output for the last
-  <s> s, which looks hung, not slow`, and the degraded reason reads
-  `timeout after <s> s (no CPU or output for the last <s> s)`. This is
-  reporting only: the run is killed at its budget exactly as before, and it
-  is not counted as stalled anywhere (`stalled`, status, health, fleet, or
-  the mutation baseline notes), so a baseline that hit its budget still
-  counts toward the budget give-up.
-- **A mutation baseline that keeps stalling gives up instead of pinning the
-  drain queue.** The mutation and js_mutation stalled-baseline note reads
-  `baseline stalled (last seen @ <sha>): no CPU or output for <s> s --
-  ...`, the stable part first, in the failing-baseline note's grammar.
-  Three such notes for one queue item at one head make the consumer stand
-  down with `ok` and `mutation giving up: baseline persistently stalls (last
-  seen @ <sha>) -- fix the hang, or raise [timeouts].stall_s if the suite
-  legitimately idles that long` (`js mutation giving up: ...` for
-  js_mutation). Before this, the stalled note matched no give-up counter, so
-  the item stayed `degraded` and was retried on every drain. The count is
-  per head, like the failing-baseline one: a stall can be a race rather than
-  a property of the suite, and a new commit gets a fresh count.
-- **A suspended or starved machine no longer reads as a stalled tool.** When
-  the stall watchdog wakes more than two sample intervals late, or a single
-  sample itself takes that long, nothing was observed in between, so it
-  restarts the quiet clock from the end of that stretch instead of counting
-  it as idle time.
-- **A `timeouts` value that is not a table no longer stops the drain.** With
-  `timeouts = 5` in a repo's `aramid.toml`, reading the stall window raised
-  outside the drain's per-repo error handling, so every repo still waiting
-  in that drain was skipped. That repo now gets the default 300 s window.
 
 ## [0.20.3] — 2026-10-06
 
