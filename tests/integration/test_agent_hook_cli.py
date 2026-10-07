@@ -38,7 +38,7 @@ def _repo(tmp_path, name="repo") -> Path:
 
 
 def _armed_repo(tmp_path) -> Path:
-    """Minimal armed repo, built by hand: `_repo_with_aramid` only needs
+    """Minimal armed repo, built by hand: `gitutil.armed_root` only needs
     `aramid.toml` to exist, and `load_config` merges an aramid.toml with
     nothing but the one key on top of the package defaults -- no `aramid
     init` (and its doctor gate / real runners) required."""
