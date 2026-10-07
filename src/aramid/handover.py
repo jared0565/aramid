@@ -165,8 +165,10 @@ def _head(root: Path) -> str | None:
                              cwd=root, capture_output=True, text=True, timeout=10)
     except (OSError, subprocess.SubprocessError):
         return None
-    sha = run.stdout.strip()
-    return sha if run.returncode == 0 and sha else None
+    # the same answer as `sha if rc == 0 and sha else None` for every input,
+    # written so no mutant of it is equivalent (git prints nothing to stdout
+    # when this fails, which made the old `and` -> `or` unkillable)
+    return (run.stdout.strip() or None) if run.returncode == 0 else None
 
 
 def key_path() -> Path:

@@ -234,6 +234,18 @@ def test_write_file_that_does_not_exist_is_rc_2(tmp_path, capsys):
     assert handover.read(tmp_path) is None
 
 
+def test_an_oserror_with_no_strerror_is_named_by_the_error_itself(tmp_path, capsys,
+                                                                 monkeypatch):
+    def boom(self, *a, **k):
+        raise OSError("the share went away")      # no errno, so no strerror
+
+    src = tmp_path / "h.md"
+    monkeypatch.setattr(Path, "read_text", boom)
+    assert handover_cmd.cmd_handover("write", tmp_path, file=str(src), now=THEN) == 2
+    assert capsys.readouterr().err == (
+        f"aramid: handover: cannot read {src}: the share went away\n")
+
+
 def test_write_file_that_is_not_utf8_is_rc_2(tmp_path, capsys):
     src = tmp_path / "bad.md"
     src.write_bytes(b"\xff\xfe\x00bad")

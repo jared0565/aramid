@@ -2,7 +2,9 @@
 deleted) when consumed."""
 import json
 import os
+import stat
 import subprocess
+import sys
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -82,6 +84,9 @@ def test_two_archives_with_the_same_stamp_do_not_overwrite(tmp_path):
     assert first != second
     assert {json.loads(p.read_text(encoding="utf-8"))["body"]
             for p in (first, second)} == {"a", "b"}
+    # the collision counter, exactly: the second same-second archive is -2
+    assert first.name == "2026-10-06T08-00-00+00-00.json"
+    assert second.name == "2026-10-06T08-00-00+00-00-2.json"
 
 
 def test_a_corrupt_file_reads_as_unreadable_not_a_crash(tmp_path):
@@ -274,11 +279,13 @@ def test_age_accepts_a_naive_now():
 
 
 def test_a_huge_written_at_is_capped_in_the_archive_name(tmp_path):
+    # re-signed, so the stamp is VERIFIED and is the one that names the archive
     p = handover.write(tmp_path, "x", now=NOW)
     data = json.loads(p.read_text(encoding="utf-8"))
     data["written_at"] = "A" * 500
-    p.write_text(json.dumps(data), encoding="utf-8")
-    assert len(handover.done(tmp_path).name) <= 40 + len("-99.json")
+    p.write_text(json.dumps(_sign_over(tmp_path, data)), encoding="utf-8")
+    assert handover.read(tmp_path).written_at == "A" * 500
+    assert handover.done(tmp_path).name == "A" * 40 + ".json"
 
 
 # ---- fix round 3: provenance (a signed handover; nothing else is delivered) --
@@ -694,6 +701,11 @@ def test_key_creation_falls_back_when_hard_links_are_unavailable(tmp_path, monke
     assert len(handover._load_key(create=True)) == 32
     assert sorted(p.name for p in handover.key_path().parent.glob("handover.key*")) == [
         "handover.key"]
+    # the O_EXCL fallback creates the key 0o600. Only this assertion is POSIX:
+    # on Windows os.open's mode sets nothing but the read-only bit, so the
+    # line above still runs there and only the mode check is skipped.
+    if sys.platform != "win32":
+        assert stat.S_IMODE(handover.key_path().stat().st_mode) == 0o600
 
 
 # ---- fix round 5: type-check every MAC-covered field before the MAC runs ----
@@ -1027,3 +1039,36 @@ def test_an_aramid_dir_resolving_outside_the_repo_is_refused(tmp_path, monkeypat
 
 def test_age_reads_a_naive_written_at_as_utc():
     assert handover.age("2026-10-06T07:59:00", NOW) == "1m"
+
+
+# ---- M4 (final review): the predicted drain survivors that a test can kill ----
+
+def test_printable_body_keeps_nbsp_and_escapes_the_last_c1_control():
+    # the C1 range ends at U+009F exactly: U+00A0 (NBSP) is ordinary text
+    assert handover.printable_body("a" + chr(0xA0) + "b") == "a" + chr(0xA0) + "b"
+    assert handover.printable_body("a" + chr(0x9F) + "b") == "a" + chr(92) + "x9fb"
+
+
+def test_the_escape_width_follows_the_code_point():
+    bs = chr(92)
+    assert handover.printable_body(chr(0x1B) + chr(0x85) + chr(0x2028) + chr(0xD800)) == (
+        bs + "x1b" + bs + "x85" + bs + "u2028" + bs + "ud800")
+
+
+def test_the_written_file_is_pinned_byte_for_byte(tmp_path):
+    body = "line one" + chr(10) + "line two" + chr(10)
+    p = handover.write(tmp_path, body, author="me", now=NOW)
+    mac = json.loads(p.read_text(encoding="utf-8"))["mac"]
+    root = os.path.normcase(os.path.realpath(tmp_path))
+    expected = (
+        "{\n"
+        '  "schema": 1,\n'
+        '  "v": 1,\n'
+        f'  "root": {json.dumps(root)},\n'
+        '  "written_at": "2026-10-06T08:00:00+00:00",\n'
+        '  "head": null,\n'
+        '  "author": "me",\n'
+        f'  "body": {json.dumps(body)},\n'
+        f'  "mac": "{mac}"\n'
+        "}\n")
+    assert p.read_bytes() == expected.encode("utf-8")
