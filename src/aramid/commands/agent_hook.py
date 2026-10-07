@@ -103,20 +103,9 @@ def _emit(text: str) -> None:
         out.buffer.flush()
 
 
-def _repo_with_aramid(root: Path | None) -> Path | None:
-    base = Path(root) if root is not None else Path.cwd()
-    from aramid import gitutil
-    try:
-        repo = gitutil.repo_root(base)
-    except Exception:
-        return None
-    if not (repo / "aramid.toml").is_file():
-        return None
-    return repo
-
-
 def _session_start(root: Path | None) -> int:
-    repo = _repo_with_aramid(root)
+    from aramid import gitutil
+    repo = gitutil.armed_root(root)
     if repo is None:
         return 0
     _emit(_session_context(repo))
@@ -138,7 +127,8 @@ def _pre_tool_use(root: Path | None) -> int:
     bypass = find_bypass(command)
     if bypass is None:
         return 0
-    repo = _repo_with_aramid(root)
+    from aramid import gitutil
+    repo = gitutil.armed_root(root)
     if repo is None:
         return 0
     from aramid import config as config_mod

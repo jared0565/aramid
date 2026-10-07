@@ -538,6 +538,38 @@ def test_cli_show_and_done_from_a_subdirectory_act_on_the_root_file(
     assert not (sub / ".aramid").exists()
 
 
+def test_the_hook_mcp_and_the_cli_resolve_one_root_from_a_subdirectory(
+        tmp_path, monkeypatch, capsys):
+    """FN-30: all three surfaces resolve the repo through `gitutil.armed_root`.
+    A handover written from a subdirectory is PENDING at the hook's session
+    start, shown by MCP and shown by `aramid handover show`, each run from
+    that same subdirectory with the cwd as its only hint (the hook gets
+    `root=None`, as `__main__`'s fast path passes it)."""
+    from aramid import cli, mcp_tools
+    from aramid.commands import agent_hook
+    repo = _git_repo(tmp_path / "repo")
+    sub = repo / "src" / "pkg"
+    sub.mkdir(parents=True)
+    monkeypatch.chdir(sub)
+    monkeypatch.setattr("sys.stdin", io.StringIO("one root for all three\n"))
+    assert cli.main(["handover", "write"]) == 0
+    assert (repo / ".aramid" / "handover.json").is_file()
+    assert not (sub / ".aramid").exists()
+    capsys.readouterr()
+
+    assert agent_hook.cmd_agent_hook("session-start", None) == 0
+    hook = capsys.readouterr().out.splitlines()
+    assert hook[0].startswith("aramid: PENDING HANDOVER written ")
+    assert hook[1] == "aramid: | one root for all three"
+
+    shown = mcp_tools.TOOLS["aramid_handover_show"]["handler"](None, {})
+    assert shown["isError"] is False
+    assert "one root for all three" in shown["content"][0]["text"]
+
+    assert cli.main(["handover", "show"]) == 0
+    assert capsys.readouterr().out.endswith("\none root for all three\n")
+
+
 @pytest.mark.parametrize("argv", [["handover", "write"], ["handover", "show"],
                                   ["handover", "done"], ["handover"]])
 def test_cli_handover_in_a_repo_without_aramid_toml_is_rc_2_and_writes_nothing(

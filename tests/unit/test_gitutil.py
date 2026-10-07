@@ -32,6 +32,30 @@ def test_not_a_repo_raises(tmp_path):
     with pytest.raises(gitutil.NotARepo):
         gitutil.repo_root(tmp_path)
 
+def test_armed_root_is_the_git_root_only_where_aramid_init_ran(tmp_path, monkeypatch):
+    """FN-30: the one rule the SessionStart hook, the MCP tools and `aramid
+    handover` resolve a repo by. Since 0.20.4 it decides where a handover
+    file lands, so it lives once, here."""
+    r = _repo(tmp_path)
+    (r / "aramid.toml").write_text("schema_version = 1\n", encoding="utf-8")
+    sub = r / "src" / "pkg"
+    sub.mkdir(parents=True)
+    assert gitutil.armed_root(r) == r.resolve()
+    assert gitutil.armed_root(sub) == r.resolve(), "a subdirectory resolves to the root"
+    monkeypatch.chdir(sub)
+    assert gitutil.armed_root(None) == r.resolve(), "no start means the cwd"
+
+    plain = tmp_path / "plain"
+    plain.mkdir()
+    _git(plain, "init", "-b", "main")
+    assert gitutil.armed_root(plain) is None, "a repo aramid never armed"
+    (plain / "aramid.toml").mkdir()
+    assert gitutil.armed_root(plain) is None, "a directory named aramid.toml is not the file"
+    bare = tmp_path / "bare"
+    bare.mkdir()
+    assert gitutil.armed_root(bare) is None, "a directory outside git"
+    assert gitutil.armed_root(tmp_path / "nowhere") is None, "a path that does not exist"
+
 def test_resolve_range_new_branch_no_remote_returns_none(tmp_path):
     # spec §3 invariant: a brand-new branch with no upstream/origin must NOT hard-error;
     # resolve_range returns None meaning "scan all commits reachable from HEAD".

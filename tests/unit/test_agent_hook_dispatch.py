@@ -3,7 +3,8 @@ guard, the session-start emitter and the PreToolUse screen -- every
 return value and every byte of output, one exact assertion each.
 
 The drain confirms a mutant against the unit suite alone, and until this
-file nothing in it executed `cmd_agent_hook`, `_repo_with_aramid`,
+file nothing in it executed `cmd_agent_hook`, `_repo_with_aramid` (since
+FN-30 the shared `gitutil.armed_root`, pinned in tests/unit/test_gitutil.py),
 `_session_start`, `_pre_tool_use` or `_describe`: the 14 mutants the
 generator emits for them were held by tests/integration/test_agent_hook*.py
 (which onboard a repo through `cmd_init`), which the drain never runs.
@@ -11,7 +12,7 @@ generator emits for them were held by tests/integration/test_agent_hook*.py
 `--no-verify` into a deny while the agent surface is armed -- so a mutant
 there is a bypass, not a test gap.
 
-Seams: a real tmp git repo with a two-line aramid.toml (`_repo_with_aramid`
+Seams: a real tmp git repo with a two-line aramid.toml (`gitutil.armed_root`
 resolves it through git, `load_config` reads `agent_block_armed` from it),
 `sys.stdin` replaced with the payload, stdout captured. Fail-open is the
 contract: every non-happy path returns 0 with NOTHING printed."""
@@ -19,6 +20,7 @@ import io
 import json
 import subprocess
 
+from aramid import gitutil
 from aramid.commands import agent_hook as ah
 
 FLAG = {"session_id": "t", "cwd": ".", "hook_event_name": "PreToolUse",
@@ -123,14 +125,18 @@ def test_an_internal_error_fails_open_with_nothing_printed(tmp_path, monkeypatch
 
 # ---------------------------------------------------------- repo guard --
 
-def test_the_guard_wants_a_git_repo_with_aramid_toml_at_its_root(tmp_path):
+def test_session_start_from_a_subdirectory_speaks_for_the_armed_root(tmp_path, capsys):
+    """The hook's guard is `gitutil.armed_root` (FN-30; its cases are pinned in
+    tests/unit/test_gitutil.py): from a subdirectory the hook prints exactly
+    what it prints at the root."""
     r = _repo(tmp_path)
     (r / "sub").mkdir()
 
-    assert ah._repo_with_aramid(r / "sub") == r
-    (tmp_path / "bare").mkdir()
-    assert ah._repo_with_aramid(_repo(tmp_path / "bare", onboarded=False)) is None
-    assert ah._repo_with_aramid(tmp_path / "nowhere") is None
+    assert ah.cmd_agent_hook("session-start", r) == 0
+    at_root = capsys.readouterr()
+    assert ah.cmd_agent_hook("session-start", r / "sub") == 0
+
+    assert at_root.out != "" and capsys.readouterr() == at_root
 
 
 def test_session_start_outside_a_repo_and_in_an_un_onboarded_repo_is_silent(
@@ -186,7 +192,7 @@ def test_a_clean_command_is_silent_before_the_repo_is_looked_at(tmp_path, monkey
 
     def never(root):
         raise AssertionError("the repo must not be resolved for a clean command")
-    monkeypatch.setattr(ah, "_repo_with_aramid", never)
+    monkeypatch.setattr(gitutil, "armed_root", never)
 
     assert ah._pre_tool_use(tmp_path) == 0
     assert capsys.readouterr() == ("", "")

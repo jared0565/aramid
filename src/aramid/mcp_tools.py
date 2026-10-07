@@ -26,17 +26,6 @@ from pathlib import Path
 from aramid.mcp_errors import InvalidParams as _InvalidParams
 
 
-def _repo() -> Path | None:
-    from aramid import gitutil
-    try:
-        repo = gitutil.repo_root(Path.cwd())
-    except Exception:
-        return None
-    if not (repo / "aramid.toml").is_file():
-        return None
-    return repo
-
-
 _NOT_ONBOARDED = (
     "aramid: this directory is not an onboarded repo (no aramid.toml"
     " at the git root) -- run `aramid init` there first.")
@@ -77,7 +66,10 @@ def _require_id_and_reason(args: dict) -> tuple[str, str]:
 
 def _onboarded(handler):
     def wrapped(root, args):
-        repo = _repo()
+        # The repo the server's cwd is in, by the rule the hook and the CLI
+        # share (FN-30). `root` is always None from the server.
+        from aramid import gitutil
+        repo = gitutil.armed_root(Path.cwd())
         if repo is None:
             return _text_result(_NOT_ONBOARDED, is_error=True)
         return handler(repo, args)

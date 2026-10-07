@@ -349,13 +349,14 @@ def main(argv: list[str] | None = None) -> int:
         return cmd_notices(args.notices_command or "list", getattr(args, "id", None), root)
 
     if args.command == "handover":
-        from aramid.commands.agent_hook import _repo_with_aramid
+        from aramid import gitutil
         from aramid.commands.handover_cmd import cmd_handover
-        # The root the SessionStart hook and MCP read: the git root, and only
+        # The root the SessionStart hook and MCP read, by the one rule all
+        # three share (`gitutil.armed_root`, FN-30): the git root, and only
         # where `aramid init` ran. From a subdirectory a cwd root would write
         # a file nothing delivers, and in a repo aramid never gitignored it
         # would leave a committable `.aramid/handover.json`.
-        repo = _repo_with_aramid(root)
+        repo = gitutil.armed_root(root)
         if repo is None:
             print("aramid: handover: not in an aramid-armed repo (run it inside a repo"
                   " where aramid init has run)", file=sys.stderr)

@@ -63,6 +63,27 @@ def repo_root(path: Path) -> Path:
         raise NotARepo(str(path))
     return Path(cp.stdout.strip()).resolve()
 
+
+def armed_root(start: Path | None = None) -> Path | None:
+    """The git root of `start` (the cwd when None), and only when it holds
+    an `aramid.toml` FILE -- a repo where `aramid init` ran. None outside
+    git, in a repo aramid never armed, or when git cannot answer.
+
+    THE ONE COPY (FN-30). The SessionStart hook, the MCP tools and `aramid
+    handover` all resolve their repo here. Since 0.20.4 this rule decides
+    where a handover file lands, so if two copies drift the CLI writes a
+    handover where MCP never reads it. The hook calls it on its fail-open
+    path, so every failure is None: a start that does not exist makes the
+    git subprocess itself raise, not `NotARepo`."""
+    base = Path(start) if start is not None else Path.cwd()
+    try:
+        repo = repo_root(base)
+    except Exception:
+        return None
+    if not (repo / "aramid.toml").is_file():
+        return None
+    return repo
+
 def read_blob(root: Path, ref: str, rel_path: str) -> str:
     spec = f"{ref}:{rel_path}" if ref != ":" else f":{rel_path}"
     cp = _run(root, "show", spec)
