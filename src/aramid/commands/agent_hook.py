@@ -15,6 +15,11 @@ does not know (forward compatibility with newer harness configs), and on
 ANY internal error, exit 0 with no output. The block is built fully before
 a single print so a mid-build exception can never emit a half-rendered
 context. The git-hook gate beneath still enforces; this layer only informs.
+One exception to "nothing on error": a pending handover's lines are built
+before the posture block and still print when it raises (Ruling R2). Every
+output goes through one encoding choke point (`_utf8_stdout` / `_emit`), so
+no text this module prints can make the print itself raise -- that once
+turned the fail-open catch into a silent hook on Windows (final review C1).
 
 pre-tool-use screens each Bash/PowerShell tool call's command string for
 git hook-bypass invocations (aramid.agent_bypass, token-level). While
@@ -40,7 +45,9 @@ sitting in another command's arguments can match (`echo git commit
 quoted never does (`echo "git commit --no-verify"` is one token, not a
 `git` invocation at all).
 
-Budget: < 2 s. Reads only the local ledger and config -- no scans, no
+Budget: < 2 s. Reads only the local ledger, the config and, for
+session-start, the handover file (`.aramid/handover.json`, verified with
+the machine key `~/.aramid/handover.key`; capped at 1 MiB) -- no scans, no
 network, no subprocesses beyond a single `git rev-parse` for repo
 detection. Heavy imports stay inside functions so the non-matching paths
 stay cheap.

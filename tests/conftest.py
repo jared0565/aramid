@@ -177,9 +177,11 @@ def _isolated_handover_key(tmp_path, monkeypatch):
     """Keep the session-handover signing key (`handover.key_path()`) off the
     real `~/.aramid`. A test that created or rotated the real key would make
     a pending handover on the operator's machine silently unverifiable.
-    Set via ENV VAR, like the fleet store above, because tests drive
-    `aramid handover` and the SessionStart hook in spawned processes that a
-    monkeypatch cannot reach. A later `monkeypatch.setenv` still wins."""
+    Set via ENV VAR, like the fleet store above, so a spawned child sees it
+    too: tests/integration/test_agent_hook_cli.py runs the SessionStart hook
+    in a real `python -m aramid` child, which must verify a handover the test
+    wrote in-process with the same key. (No test spawns `aramid handover`
+    itself.) A later `monkeypatch.setenv` still wins."""
     monkeypatch.setenv("ARAMID_HANDOVER_KEY_FILE", str(tmp_path / "handover.key"))
 
 
