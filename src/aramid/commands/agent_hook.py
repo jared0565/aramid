@@ -77,8 +77,9 @@ def _utf8_stdout() -> None:
     the handover and not the GATED / never --no-verify posture lines. A lone
     surrogate did the same on every OS. Reconfiguring the text layer (rather
     than writing raw bytes) keeps the platform's newline translation, so
-    every byte the hook emitted before is unchanged. A stream that has no
-    `reconfigure`, or refuses it, is left alone; `_emit` covers it."""
+    ASCII output is byte-for-byte what it was before; only non-ASCII text
+    now goes out as UTF-8 instead of the locale code page. A stream that has
+    no `reconfigure`, or refuses it, is left alone; `_emit` covers it."""
     import sys
     try:
         sys.stdout.reconfigure(encoding="utf-8", errors="backslashreplace")

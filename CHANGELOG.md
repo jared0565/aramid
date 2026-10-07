@@ -96,10 +96,12 @@ to publish a tag that disagrees with it.
     and `done` still archives it. `done` names an archive after the file's
     `written_at` only when its signature verified; anything else is archived
     as `unverified.json` (`unverified-2.json`, ...), so no unverified field
-    names a file. The one thing `done` refuses is a symlinked handover file
-    (or one behind a symlinked `.aramid`): its remedy is to remove the link
-    by hand, and every surface says so. A symlinked `.aramid` with nothing
-    behind it is simply no handover.
+    names a file. `done` refuses (exit `2`) rather than archive through a
+    link or into something that is not a directory: a symlinked handover
+    file (or one behind a symlinked `.aramid`), whose remedy every surface
+    names as removing the link by hand, and an archive directory that is a
+    symlink or a planted-over file, which `done` names in its refusal. A
+    symlinked `.aramid` with nothing behind it is simply no handover.
   - **Provenance.** A handover is signed (HMAC-SHA256) with a key that lives
     on this machine only (`~/.aramid/handover.key`), bound to the repo's real
     path, and is delivered as an instruction only when the signature verifies,
@@ -110,17 +112,23 @@ to publish a tag that disagrees with it.
   - **CLI.** `aramid handover write` takes the body from stdin or `--file`
     (`--author`, `--replace`); `show` prints the pending one; `done` archives
     it. Every subcommand acts on the root of the git repository it runs in,
-    from any subdirectory, and refuses (exit `2`) outside a repository where
-    `aramid init` has run: the file is always where the hook and the MCP
-    tools read it, and never in an `.aramid/` that nothing gitignores.
+    from any subdirectory, and refuses (exit `2`) unless that root holds
+    `aramid.toml`, so the file is always where the hook and the MCP tools
+    read it. `aramid init` adds `.aramid/` to `.gitignore`; the guard checks
+    for `aramid.toml`, not for that line, so a repo that has the config but
+    lost the ignore line can still show the file as untracked.
     Exit `2` is a refusal (including a body or author holding a lone
-    surrogate, which only MCP or a direct call can produce: it is not valid
-    Unicode text, so it is never signed), `3` is a pending file that cannot be
-    delivered as verified. `show` prints a file that parsed but could not be
-    verified only under a `NOT VERIFIED` header, each body line prefixed `| `;
-    anything unparseable is named in fixed text and never printed. Bodies,
-    authors and commits are printed with control characters and lone
-    surrogates escaped, so no file on disk can make `show` raise. A body is
+    surrogate: it is not valid Unicode text, so it is never signed; a body
+    from stdin or `--file` cannot carry one, because both are decoded as
+    strict UTF-8, but `--author`, MCP and a direct call can), `3` is a
+    pending file that cannot be delivered as verified. `show` prints a file
+    that parsed but could not be verified only under a `NOT VERIFIED`
+    header, each body line prefixed `| `; anything unparseable is named in
+    fixed text and never printed. Bodies, authors and commits are printed
+    with control characters and lone surrogates escaped, so no file on disk
+    can forge a line, or make the hook or redirected output raise. `show`
+    to a terminal whose encoding cannot represent a character in the body
+    still raises; redirect it, or set `PYTHONIOENCODING=utf-8`. A body is
     stored with CRLF line endings turned into LF, whether it came through the
     CLI or the `aramid_handover_write` MCP tool.
   - **Delivery.** The SessionStart hook prints a verified handover first, in

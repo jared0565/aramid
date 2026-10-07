@@ -314,10 +314,14 @@ reason and the remedy, and withholds the commit, author and body.
   it is done or replaced. `done` and `--replace` archive an unverified file
   like any other (under the fixed stamp `unverified`) and never delete it.
 - **Output encoding.** A lone surrogate (U+D800-U+DFFF) is not valid Unicode
-  text: `write` refuses one in the body or author (only MCP or a direct call
-  can produce one; the CLI decodes strict UTF-8), and `printable` /
+  text: `write` refuses one in the body or author (a body from stdin or
+  `--file` cannot carry one, since both are decoded as strict UTF-8; the
+  `--author` argument, MCP and a direct call can), and `printable` /
   `printable_body` escape one as a backslash-u sequence, so a file already on
-  disk cannot make `show`, the hook or `status` raise.
+  disk cannot make the hook or redirected output raise. `show` to a terminal
+  whose encoding cannot represent a character in the body still raises
+  (`cli._force_utf8_on_redirect` deliberately leaves a tty alone); redirect
+  it, or set `PYTHONIOENCODING=utf-8`.
 - **Out of reach.** The MAC proves "aramid on this machine wrote it", not
   "the operator meant it": a prompt-injected agent with shell access can run
   `aramid handover write`, and an archived handover moved back into place

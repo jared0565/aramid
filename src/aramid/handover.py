@@ -78,9 +78,10 @@ class BodyTooLarge(ValueError):
 
 class InvalidText(ValueError):
     """The body or author holds a lone surrogate (U+D800-U+DFFF), which is not
-    valid Unicode text. The CLI cannot produce one (stdin and `--file` are
-    decoded as strict UTF-8); MCP and a direct call can. Refused, so what is
-    signed is always text every UTF-8 consumer can print."""
+    valid Unicode text. A CLI body cannot carry one (stdin and `--file` are
+    decoded as strict UTF-8); the `--author` argument, MCP and a direct call
+    can. Refused, so what is signed is always text every UTF-8 consumer can
+    print."""
 
 
 class Unreadable(RuntimeError):
