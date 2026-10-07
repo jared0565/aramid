@@ -10,6 +10,8 @@ to publish a tag that disagrees with it.
 
 ## [Unreleased]
 
+## [0.20.4] — 2026-10-07
+
 ### Added
 
 - **A child that has stopped working is killed after a stall window, not
@@ -5561,7 +5563,8 @@ Stated plainly because each one changes how you should deploy this:
 - **PyPI publishing is not set up.** Install from a GitHub Release artifact or
   from git; `pip install aramid` does not work.
 
-[Unreleased]: https://github.com/jared0565/aramid/compare/v0.20.3...HEAD
+[Unreleased]: https://github.com/jared0565/aramid/compare/v0.20.4...HEAD
+[0.20.4]: https://github.com/jared0565/aramid/releases/tag/v0.20.4
 [0.20.3]: https://github.com/jared0565/aramid/releases/tag/v0.20.3
 [0.20.2]: https://github.com/jared0565/aramid/releases/tag/v0.20.2
 [0.20.1]: https://github.com/jared0565/aramid/releases/tag/v0.20.1
