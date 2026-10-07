@@ -12,6 +12,7 @@ import ast
 import fnmatch
 import json
 import shutil
+import site
 import sys
 import tempfile
 import time
@@ -22,8 +23,11 @@ from aramid import gitutil
 from aramid.consumers import base
 from aramid.consumers.base import ConsumerResult, DrainContext
 from aramid.fingerprint import compute_fingerprint
+from aramid.fleet import FLEET_DIR_ENV
+from aramid.handover import KEY_ENV
 from aramid.normalizer import RawFinding
 from aramid.runners.base import ToolState, run_subprocess, worktree_import_env
+from aramid.toolpath import TOOLS_DIR_ENV
 
 NAME = "fuzz"
 TOOL = "fuzz"
@@ -141,6 +145,46 @@ def _read_progress(path: Path) -> dict | None:
     return data
 
 
+def _sandbox_env(shell: Path) -> dict[str, str]:
+    """The driver child's home, temp dir and aramid machine-state paths, all
+    inside `shell` (the consumer's `aramid-fuzz-*` temp shell, which the
+    finally below and the leftovers sweep both remove).
+
+    WHY: the driver calls every changed top-level function it can feed, with
+    no fixtures, and every aramid machine-state location resolves from
+    `Path.home()` or the temp dir. On 2026-10-07 the 02Z drain fuzzed
+    `handover._load_key(create=True)` and created the machine's real
+    `~/.aramid/handover.key` (FN-31). Moving the home moves all of them at
+    once; the three env seams are set as well, explicitly, because a
+    machine-wide setting of one would otherwise reach the child and win over
+    its home.
+
+    Every key is set on every OS: `Path.home()` reads USERPROFILE on Windows
+    and HOME elsewhere, and `tempfile` reads TMPDIR, TEMP and TMP in that
+    order. PYTHONUSERBASE keeps the parent's user site, which on POSIX would
+    otherwise move with HOME and drop a `pip install --user` aramid.
+
+    ONLY THE FUZZ CHILD IS SANDBOXED. Mutation and red_proof run the consumed
+    repo's own test suite, which isolates itself; moving HOME under another
+    repo's tests could break them, so `worktree_import_env` stays as it is.
+
+    NOT MOVED: APPDATA, LOCALAPPDATA and the XDG_* directories. aramid keeps
+    no state there, but a fuzzed function in a consumed repo, or a library
+    it calls, can still write to them.
+    """
+    home = shell / "home"
+    tmp = shell / "tmp"
+    home.mkdir()
+    tmp.mkdir()
+    state = home / ".aramid"
+    return {"HOME": str(home), "USERPROFILE": str(home),
+            "TMP": str(tmp), "TEMP": str(tmp), "TMPDIR": str(tmp),
+            "PYTHONUSERBASE": site.getuserbase(),
+            KEY_ENV: str(state / "handover.key"),
+            FLEET_DIR_ENV: str(state),
+            TOOLS_DIR_ENV: str(state / "tools")}
+
+
 def consume(item, ctx: DrainContext) -> ConsumerResult:
     fcfg = getattr(ctx.cfg, "fuzz", None) or {}
     if not fcfg.get("enabled", True):
@@ -228,9 +272,17 @@ def consume(item, ctx: DrainContext) -> ConsumerResult:
         # dependencies) or, for a module the commit added, from nowhere
         # (interop round 187: `import_failures 1` on graphite's cache commit).
         # Same inversion red-proof and mutation each had once; see the helper.
+        # _sandbox_env: the driver calls changed functions with no fixtures,
+        # so it runs with its home, temp dir and aramid seams inside this
+        # shell, never the machine's -- on 2026-10-07 a fuzzed
+        # `handover._load_key(create=True)` created the real handover key
+        # (FN-31). It comes last, after the worktree env, and shares no key
+        # with it: the consumer marker and PYTHONPATH reach the driver as
+        # before.
         result = run_subprocess(
             [sys.executable, "-m", "aramid.fuzzdriver", str(spec_path)],
-            wt, remaining, env={"PYTHONHASHSEED": "0", **worktree_import_env(wt)})
+            wt, remaining,
+            env={"PYTHONHASHSEED": "0", **worktree_import_env(wt), **_sandbox_env(tmp)})
         if result.state is ToolState.TIMEOUT:
             stats["timeouts"] += 1
             # What the driver waits on is the call into a target function

@@ -1,13 +1,16 @@
 """Integration: the fuzz consumer against real git worktrees + the real
 driver subprocess on tiny fixture repos."""
+import json
 import os
 import subprocess
+import tempfile
 from pathlib import Path
 
 import pytest
 
 import aramid
 from aramid import config as config_mod
+from aramid import fleet, handover, toolpath
 from aramid.consumers import fuzz as fuzz_consumer
 from aramid.consumers.base import DrainContext
 from aramid.ledger import Ledger
@@ -774,3 +777,134 @@ def test_an_import_failure_names_its_file_and_reason(tmp_path, monkeypatch):
     failed = res.extra["import_failed"]
     assert list(failed) == ["bad.py"]
     assert failed["bad.py"].startswith("ModuleNotFoundError")
+
+
+# --- FN-31: a fuzz target runs in a sandboxed home, never the machine's -----
+#
+# On 2026-10-07 the 02Z drain fuzzed `handover._load_key(create=True)` and
+# created the machine's real `~/.aramid/handover.key`. The driver child
+# inherited the drain's home, temp dir and environment, so any fuzzed
+# function that writes machine state wrote the real one.
+#
+# These arms stand the parent's home and temp dir in for the operator's real
+# ones BEFORE `consume` runs: on the unfixed code the child writes wherever
+# the parent's home points, and that must be a tmp directory, never the real
+# home. The autouse conftest fixtures already point the aramid seams at
+# tmp_path, and the child inherits them, which would hide the bug -- so one
+# arm writes through `Path.home()` with no seam at all, and the other sets a
+# seam to a stand-in directory of its own.
+#
+# The shell, sandbox included, is gone by the time `consume` returns. So the
+# target also appends what it saw to an evidence file named through the
+# test's env: that proves it ran, and ran inside the shell.
+
+_EVIDENCE_ENV = "FN31_EVIDENCE"
+
+
+def _stand_in_machine(tmp_path, monkeypatch):
+    """Point the parent's home and temp at stand-ins. The parent's own
+    `mkdtemp` reads `tempfile.tempdir`, cached long before any env change,
+    so the fuzz shell is pointed at a directory of its own explicitly."""
+    home, tmp, shells = tmp_path / "real-home", tmp_path / "real-tmp", tmp_path / "shells"
+    for d in (home, tmp, shells):
+        d.mkdir()
+    for key in ("HOME", "USERPROFILE"):
+        monkeypatch.setenv(key, str(home))
+    for key in ("TMP", "TEMP", "TMPDIR"):
+        monkeypatch.setenv(key, str(tmp))
+    monkeypatch.setattr(tempfile, "tempdir", str(shells))
+    evidence = tmp_path / "evidence.jsonl"
+    monkeypatch.setenv(_EVIDENCE_ENV, str(evidence))
+    return home, tmp, shells, evidence
+
+
+def _ran_once_in_a_shell(res, evidence, shells):
+    """The target was fuzzed and called, and every call saw one value; that
+    value, as a path relative to the `aramid-fuzz-*` shell it lived in."""
+    assert res.state == "ok", res.note
+    assert res.extra["functions_fuzzed"] == 1, res.extra
+    assert res.extra["cases_run"] > 0, res.extra
+    assert (res.findings, res.extra["contract_exceptions"]) == ([], 0), res.findings
+    seen = {line for line in evidence.read_text(encoding="utf-8").splitlines() if line}
+    assert len(seen) == 1, seen
+    return [Path(p) for p in json.loads(seen.pop())]
+
+
+def _in_shell(path, shells):
+    shell = shells / path.relative_to(shells).parts[0]
+    assert shell.name.startswith("aramid-fuzz-"), path
+    return path.relative_to(shell)
+
+
+_HOME_PROBE = f"""import json
+import os
+import tempfile
+from pathlib import Path
+
+
+def probe(flag: bool) -> bool:
+    (Path.home() / "marker").write_text("fuzzed", encoding="utf-8")
+    (Path(tempfile.gettempdir()) / "marker").write_text("fuzzed", encoding="utf-8")
+    with open(os.environ["{_EVIDENCE_ENV}"], "a", encoding="utf-8") as fh:
+        fh.write(json.dumps([str(Path.home()), tempfile.gettempdir()]) + "\\n")
+    return flag
+"""
+
+
+def test_a_fuzz_target_writing_its_home_never_reaches_the_parents_home(
+        tmp_path, monkeypatch):
+    real_home, real_tmp, shells, evidence = _stand_in_machine(tmp_path, monkeypatch)
+    r, base, head = _repo(tmp_path, _HOME_PROBE, filename="probe.py")
+
+    res = _consume(r, base, head, monkeypatch, tmp_path)
+
+    home_seen, tmp_seen = _ran_once_in_a_shell(res, evidence, shells)
+    assert list(real_home.iterdir()) == [], "the fuzz target wrote the parent's home"
+    assert list(real_tmp.iterdir()) == [], "the fuzz target wrote the parent's temp dir"
+    assert _in_shell(home_seen, shells) == Path("home")
+    assert _in_shell(tmp_seen, shells) == Path("tmp")
+    assert list(shells.iterdir()) == [], "the sandbox is removed with its shell"
+
+
+_SEAM_PROBE = f"""import json
+import os
+from pathlib import Path
+
+import aramid.fleet
+import aramid.handover
+import aramid.toolpath
+
+
+def probe(flag: bool) -> bool:
+    path = {{expr}}
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("fuzzed", encoding="utf-8")
+    with open(os.environ["{_EVIDENCE_ENV}"], "a", encoding="utf-8") as fh:
+        fh.write(json.dumps([str(path)]) + "\\n")
+    return flag
+"""
+
+
+@pytest.mark.parametrize("env_key, stand_in, expr, sandboxed", [
+    (handover.KEY_ENV, "handover.key", "aramid.handover.key_path()",
+     Path("home", ".aramid", "handover.key")),
+    (fleet.FLEET_DIR_ENV, "", "aramid.fleet.store_dir() / 'marker'",
+     Path("home", ".aramid", "marker")),
+    (toolpath.TOOLS_DIR_ENV, "", "aramid.toolpath.tools_dir() / 'marker'",
+     Path("home", ".aramid", "tools", "marker")),
+], ids=["handover-key", "fleet-store", "tools-dir"])
+def test_an_aramid_seam_set_in_the_parent_never_reaches_a_fuzz_target(
+        tmp_path, monkeypatch, env_key, stand_in, expr, sandboxed):
+    """A machine-wide setting of a seam -- or the suite's own autouse one --
+    is the parent's, not the child's: the sandbox sets every seam itself."""
+    _, _, shells, evidence = _stand_in_machine(tmp_path, monkeypatch)
+    real = tmp_path / "real-seam"
+    real.mkdir()
+    monkeypatch.setenv(env_key, str(real / stand_in) if stand_in else str(real))
+    r, base, head = _repo(tmp_path, _SEAM_PROBE.format(expr=expr), filename="probe.py")
+
+    res = _consume(r, base, head, monkeypatch, tmp_path)
+
+    (written,) = _ran_once_in_a_shell(res, evidence, shells)
+    assert list(real.iterdir()) == [], f"the fuzz target wrote the parent's {env_key}"
+    assert _in_shell(written, shells) == sandboxed

@@ -10,6 +10,22 @@ to publish a tag that disagrees with it.
 
 ## [Unreleased]
 
+### Fixed
+
+- **The fuzz consumer no longer runs its targets against the machine's real
+  home.** The fuzz driver calls each changed top-level function it can feed,
+  and it ran with the drain's own home and temp dir, so a fuzzed function
+  that writes machine state wrote the real one: on 2026-10-07 the 02Z drain
+  fuzzed `handover._load_key(create=True)` and created
+  `~/.aramid/handover.key`. The driver now runs with `HOME`, `USERPROFILE`,
+  `TMP`, `TEMP` and `TMPDIR` pointed at a sandbox inside its own
+  `aramid-fuzz-*` temp shell, which is removed with the shell, and with
+  `ARAMID_HANDOVER_KEY_FILE`, `ARAMID_FLEET_DIR` and `ARAMID_TOOLS_DIR` set
+  inside that sandbox. `PYTHONUSERBASE` keeps the parent's user site.
+  `APPDATA`, `LOCALAPPDATA` and the `XDG_*` directories are not moved;
+  aramid keeps no state there. Mutation and red-proof runs are unchanged:
+  they run the consumed repo's own test suite, which isolates itself.
+
 ## [0.20.4] — 2026-10-07
 
 ### Added

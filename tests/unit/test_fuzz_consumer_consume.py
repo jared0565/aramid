@@ -10,17 +10,20 @@ reads it), a real ledger, and the driver subprocess replaced by a fake that
 reads the spec it was handed, records what it was asked, and answers a
 script. `time` is a fixed clock so the budget arithmetic is exact."""
 import json
+import os
+import site
 import subprocess
 from pathlib import Path
 from types import SimpleNamespace
 
+from aramid import fleet, handover, toolpath
 from aramid.consumers import fuzz as fc
 from aramid.consumers.base import DrainContext
 from aramid.fingerprint import compute_fingerprint
 from aramid.ledger import Ledger
 from aramid.models import Event, EventType, Finding, Gate, Severity, Verdict
 from aramid.queue import QueueItem
-from aramid.runners.base import RunnerResult, ToolState
+from aramid.runners.base import CONSUMER_WORKTREE_ENV, RunnerResult, ToolState
 
 
 def _git(root, *a):
@@ -247,6 +250,81 @@ def test_every_file_with_candidates_reaches_the_driver_whatever_the_budget(
     assert driver.spec["targets"] == [{"file": "a.py", "functions": ["a1", "a2"], "cases": 50},
                                       {"file": "b.py", "functions": ["b1"], "cases": 50}]
     assert res.extra["functions_seen"] == 3
+
+
+# ------------------------------------------------- FN-31: the sandbox --
+#
+# The driver calls whatever changed top-level function it can feed, with no
+# fixtures. On 2026-10-07 one of them was `handover._load_key(create=True)`,
+# and the 02Z drain created the machine's real `~/.aramid/handover.key`.
+# The child now runs with its home, its temp dir and every aramid path seam
+# inside the `aramid-fuzz-*` shell, which the consumer removes.
+
+_SANDBOX_KEYS = ("HOME", "USERPROFILE", "TMP", "TEMP", "TMPDIR", "PYTHONUSERBASE",
+                 handover.KEY_ENV, fleet.FLEET_DIR_ENV, toolpath.TOOLS_DIR_ENV)
+
+
+def _sandbox_expected(shell: Path) -> dict:
+    """The sandbox env for `shell`, spelled out key by key. Every OS gets
+    every key: no line of the helper may be Windows-only, or the ubuntu
+    ratchet counts it latent."""
+    home, tmp = shell / "home", shell / "tmp"
+    return {"HOME": str(home), "USERPROFILE": str(home),
+            "TMP": str(tmp), "TEMP": str(tmp), "TMPDIR": str(tmp),
+            "PYTHONUSERBASE": site.getuserbase(),
+            handover.KEY_ENV: str(home / ".aramid" / "handover.key"),
+            fleet.FLEET_DIR_ENV: str(home / ".aramid"),
+            toolpath.TOOLS_DIR_ENV: str(home / ".aramid" / "tools")}
+
+
+def test_sandbox_env_puts_home_temp_and_every_aramid_seam_inside_the_shell(
+        tmp_path, monkeypatch):
+    shell = tmp_path / "aramid-fuzz-x"
+    shell.mkdir()
+
+    env = fc._sandbox_env(shell)
+
+    assert env == _sandbox_expected(shell), "every key, and nothing else"
+    assert (shell / "home").is_dir() and (shell / "tmp").is_dir()
+    assert env["PYTHONUSERBASE"] == site.getuserbase(), \
+        "a --user install keeps importing once HOME moves"
+    # The values are the ones the resolvers read: with the env applied, the
+    # home and every machine-state seam land under the sandbox home.
+    for key, value in env.items():
+        monkeypatch.setenv(key, value)
+    home = shell / "home"
+    assert Path.home() == home
+    assert handover.key_path() == home / ".aramid" / "handover.key"
+    assert fleet.store_dir() == home / ".aramid"
+    assert toolpath.tools_dir() == home / ".aramid" / "tools"
+
+
+def test_the_driver_runs_in_the_sandbox_and_keeps_the_worktree_import_env(
+        tmp_path, monkeypatch):
+    """The call site, at unit scope: the env the driver is handed carries the
+    sandbox for its own shell (the worktree's parent), the directories exist
+    when it starts, and the consumer marker and worktree PYTHONPATH from
+    `worktree_import_env` survive the merge."""
+    r, base, head = _repo(tmp_path, {"lib.py": _fns(["f"])})
+    existed = {}
+
+    class Looking(Driver):
+        def __call__(self, argv, cwd, timeout_s, env=None):
+            existed.update({k: bool(env.get(k)) and Path(env[k]).is_dir()
+                            for k in ("HOME", "TMP")})
+            return super().__call__(argv, cwd, timeout_s, env)
+
+    _, driver = _run(r, base, head, monkeypatch, {}, Looking())
+
+    (_, cwd, _, env), = driver.calls
+    shell = cwd.parent
+    assert cwd == shell / "wt" and shell.name.startswith("aramid-fuzz-")
+    assert {k: env.get(k) for k in _SANDBOX_KEYS} == _sandbox_expected(shell)
+    assert existed == {"HOME": True, "TMP": True}
+    assert env[CONSUMER_WORKTREE_ENV] == str(cwd)
+    assert env["PYTHONPATH"].split(os.pathsep)[:2] == [str(cwd / "src"), str(cwd)]
+    assert env["PYTHONHASHSEED"] == "0" and env["PYTHONDONTWRITEBYTECODE"] == "1"
+    assert not shell.exists(), "the sandbox goes with the shell"
 
 
 # ------------------------------------------------------------ verdicts --
