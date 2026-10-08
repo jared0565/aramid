@@ -274,3 +274,22 @@ def test_kill_tree_off_windows_kills_the_process_group_with_sigkill(monkeypatch)
     calls.clear()
     base._kill_tree(proc)
     assert calls == [("kill",)], "no group: the process itself is killed"
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="cmd.exe's limit applies to .cmd/.bat programs on Windows")
+def test_a_batch_file_over_cmd_exe_s_limit_is_refused_not_launched(tmp_path):
+    """FN-34: cmd.exe refuses a command line over 8,191 characters and exits
+    1, which several tools accept as a verdict. The launcher must not start
+    such a program at all, and must say why."""
+    marker = tmp_path / "ran.txt"
+    shim = tmp_path / "tool.cmd"
+    shim.write_text(f'@echo off\r\necho ran> "{marker}"\r\nexit /b 0\r\n', encoding="utf-8")
+
+    short = run_subprocess([str(shim), "x"], tmp_path, 30)
+    assert short.state is ToolState.OK and marker.exists()      # control: the shim does run
+    marker.unlink()
+
+    long = run_subprocess([str(shim), "y" * 9000], tmp_path, 30)
+    assert long.state is ToolState.CRASHED
+    assert not marker.exists()
+    assert "8,191" in long.stderr

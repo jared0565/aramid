@@ -14,6 +14,19 @@ to publish a tag that disagrees with it.
 
 ### Fixed
 
+- **On Windows, eslint no longer reads as a clean lint when cmd.exe
+  refuses its command line.** eslint is launched through npm's
+  `eslint.cmd` shim, so its command line goes through cmd.exe, which
+  refuses anything over 8,191 characters: it prints "The command line is
+  too long." and exits 1. Exit 1 is also eslint's own "problems reported"
+  code, so a whole-tree run (`--all`) over a large JS/TS repo was recorded
+  as an OK eslint run with zero findings, not degraded, and passed even
+  under `--strict`. Reported by a consumer on 0.20.3 and reproduced here.
+  eslint now lints a long file list in batches that fit the limit and
+  merges the reports; an exit 1 whose report has no error is treated as a
+  crash, so it degrades the run instead of passing it; and aramid's
+  launcher refuses to start any `.cmd` / `.bat` program whose command line
+  is over the limit, saying why.
 - **The test suite no longer reaches real LLM providers.** On a machine
   with `codex` or `claude` on PATH, or `OPENROUTER_API_KEY` /
   `OLLAMA_API_KEY` set, a test that drained through the llm-review consumer

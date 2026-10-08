@@ -1,6 +1,9 @@
 import json
+import subprocess
 import sys
 from pathlib import Path
+
+import pytest
 
 from aramid.runners import eslint
 from aramid.runners.base import RunContext, RunnerResult, ToolState
@@ -308,3 +311,135 @@ def test_timeout_still_carries_the_runner_name(tmp_path, monkeypatch):
     result = eslint.run(RunContext(root=tmp_path, files=["src/app.js"]))
     assert result.state is ToolState.TIMEOUT
     assert result.tool == eslint.NAME
+
+
+# --- FN-34: a command line cmd.exe refuses must never read as a clean lint --
+#
+# Channel round 314 (aramid 0.20.3, Windows): a whole-tree file list went
+# through node_modules/.bin/eslint.cmd, cmd.exe refused the line ("The command
+# line is too long.") and exited 1 -- one of eslint's accepted codes -- with
+# nothing on stdout, so the run read as OK with zero findings.
+
+def _with_bin(tmp_path):
+    bin_dir = tmp_path / "node_modules" / ".bin"
+    bin_dir.mkdir(parents=True)
+    binp = eslint._eslint_bin(tmp_path)
+    binp.write_text("")
+    return binp
+
+
+def _prefix_len(tmp_path) -> int:
+    return len(subprocess.list2cmdline([str(eslint._eslint_bin(tmp_path)), "-f", "json"]))
+
+
+def test_exit_1_with_no_report_is_crashed_not_a_clean_lint(tmp_path, monkeypatch):
+    _with_bin(tmp_path)
+    monkeypatch.setattr(
+        eslint, "run_subprocess",
+        lambda argv, cwd, t, env=None: RunnerResult(
+            "eslint", ToolState.OK, raw="", stderr="The command line is too long.", returncode=1))
+
+    result = eslint.run(RunContext(root=tmp_path, files=["a.js"]))
+
+    assert result.state is ToolState.CRASHED
+    assert "too long" in result.stderr
+    assert result.examined == frozenset()
+
+
+def test_exit_1_with_only_warnings_is_crashed(tmp_path, monkeypatch):
+    """eslint exits 1 only when it reports an error (aramid never passes
+    --max-warnings), so a warnings-only report under exit 1 is not one of
+    its verdicts."""
+    _with_bin(tmp_path)
+    raw = _payload(tmp_path, ("a.js", [{"ruleId": "no-console", "severity": 1,
+                                       "message": "console", "line": 1, "column": 1}]))
+    monkeypatch.setattr(
+        eslint, "run_subprocess",
+        lambda argv, cwd, t, env=None: RunnerResult("eslint", ToolState.OK, raw=raw, returncode=1))
+
+    assert eslint.run(RunContext(root=tmp_path, files=["a.js"])).state is ToolState.CRASHED
+
+
+def _reports_each_file(calls):
+    """A stand-in eslint: one entry per file it was handed, an error in every
+    file whose name starts with `dirty`, and exit 1 exactly when it reported
+    an error -- eslint's own contract."""
+    def fake(argv, cwd, t, env=None):
+        calls.append(list(argv))
+        entries = [{"filePath": str(Path(cwd) / f),
+                    "messages": ([{"ruleId": "no-eval", "severity": 2, "message": "eval",
+                                   "line": 1, "column": 1}]
+                                 if Path(f).name.startswith("dirty") else [])}
+                   for f in argv[3:]]
+        rc = 1 if any(e["messages"] for e in entries) else 0
+        return RunnerResult("eslint", ToolState.OK, raw=json.dumps(entries), returncode=rc)
+    return fake
+
+
+def test_a_long_file_list_is_linted_in_batches_that_fit_the_budget(tmp_path, monkeypatch):
+    _with_bin(tmp_path)
+    files = [f"src/clean_{i:02d}.js" for i in range(12)] + ["src/dirty_a.js", "src/dirty_b.js"]
+    budget = _prefix_len(tmp_path) + 60
+    calls = []
+    monkeypatch.setattr(eslint, "run_subprocess", _reports_each_file(calls))
+    monkeypatch.setattr(eslint, "_line_budget", lambda binp: budget)
+
+    result = eslint.run(RunContext(root=tmp_path, files=files))
+
+    assert len(calls) >= 2
+    assert all(len(subprocess.list2cmdline(argv)) <= budget for argv in calls)
+    assert all(argv[:3] == calls[0][:3] for argv in calls)      # same binary and flags
+    assert [f for argv in calls for f in argv[3:]] == files     # every file once, in order
+    assert result.state is ToolState.OK
+    assert result.examined == frozenset(files)
+    findings = eslint.parse(result, RunContext(root=tmp_path))
+    assert sorted(f.file for f in findings) == ["src/dirty_a.js", "src/dirty_b.js"]
+
+
+def test_one_failing_batch_degrades_the_whole_run(tmp_path, monkeypatch):
+    """A partial OK would vouch for the files of the batches that ran and
+    say nothing of the rest -- the run is degraded, vouching for nothing."""
+    _with_bin(tmp_path)
+    files = [f"src/f_{i:02d}.js" for i in range(10)]
+    calls = []
+    good = _reports_each_file(calls)
+
+    def later_batches_fail(argv, cwd, t, env=None):
+        if calls:
+            calls.append(list(argv))
+            return RunnerResult("eslint", ToolState.OK, raw="", stderr="boom", returncode=2)
+        return good(argv, cwd, t, env)
+
+    monkeypatch.setattr(eslint, "run_subprocess", later_batches_fail)
+    monkeypatch.setattr(eslint, "_line_budget", lambda binp: _prefix_len(tmp_path) + 40)
+
+    result = eslint.run(RunContext(root=tmp_path, files=files))
+
+    assert len(calls) >= 2
+    assert result.state is ToolState.CRASHED
+    assert result.examined == frozenset()
+
+
+def test_only_a_batch_file_binary_is_held_to_cmd_exe_s_limit():
+    assert eslint._line_budget(Path("node_modules/.bin/eslint")) is None
+    budget = eslint._line_budget(Path("node_modules/.bin/eslint.cmd"))
+    assert budget is not None and budget < 8191
+    assert eslint._line_budget(Path("node_modules/.bin/ESLINT.CMD")) == budget
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="cmd.exe's command-line limit is a Windows property")
+def test_a_whole_tree_list_through_a_real_cmd_shim_is_linted_not_refused(tmp_path):
+    """Round 314 end to end through the real launcher: a stand-in eslint.cmd
+    that reports nothing, handed about 25,000 characters of paths. Before the
+    fix cmd.exe refused the line, exited 1, and the run read as OK."""
+    bin_dir = tmp_path / "node_modules" / ".bin"
+    bin_dir.mkdir(parents=True)
+    (bin_dir / "eslint.cmd").write_text("@echo off\r\necho []\r\nexit /b 0\r\n", encoding="utf-8")
+    files = [f"src/components/some-fairly-long-directory-name/module_{i:04d}.ts" for i in range(400)]
+    assert len(" ".join(files)) > 8191
+
+    result = eslint.run(RunContext(root=tmp_path, files=files))
+
+    assert result.state is ToolState.OK
+    assert result.returncode == 0
+    assert "too long" not in result.stderr

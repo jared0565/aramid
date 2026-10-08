@@ -6,20 +6,28 @@ globally-installed eslint -- a global eslint may not match the repo's
 configured rules/plugins and would produce misleading results.
 """
 import json
+import subprocess
 import sys
 from dataclasses import replace
 from pathlib import Path
 
 from aramid.normalizer import RawFinding
-from aramid.runners.base import RunnerResult, ToolState, run_subprocess
+from aramid.runners.base import CMD_EXE_LINE_LIMIT, RunnerResult, ToolState, run_subprocess
 from aramid.runners._util import json_or_crashed, relativize
 
 NAME = "eslint"
+# Per launch. A long file list is linted in several launches (see
+# `_line_budget`), each with this timeout; the gate's own runner budget still
+# bounds the whole, and a run it abandons reads as TIMEOUT, never as clean.
 TIMEOUT_S = 60.0
 
 # eslint's documented exit codes: 0 = clean, 1 = lint problems reported.
 # 2 = fatal error (bad config, internal crash, ...) -- not a verdict.
 _OK_RETURNCODES = frozenset({0, 1})
+
+# Headroom under cmd.exe's limit for what the npm shim adds when it re-expands
+# `%*`: the node path and eslint's own script path, absolute.
+_CMD_SHIM_HEADROOM = 1191
 
 # ctx.files is the gate's whole file set (every staged/changed/tracked file);
 # eslint must only be handed JS/TS-family paths (same class of bug as
@@ -34,6 +42,64 @@ def _js_files(ctx) -> list[str]:
 def _eslint_bin(root: Path) -> Path:
     name = "eslint.cmd" if sys.platform == "win32" else "eslint"
     return root / "node_modules" / ".bin" / name
+
+
+def _line_budget(binp: Path) -> int | None:
+    """The longest command line one launch may have, or None for no limit
+    worth batching for.
+
+    On Windows the binary is npm's `eslint.cmd` shim, so the line goes through
+    cmd.exe, which refuses anything over 8,191 characters: it prints "The
+    command line is too long." and exits 1 -- an exit code eslint itself uses
+    for "problems reported" (FN-34, channel round 314: a whole-tree run read
+    as a clean lint). A POSIX binary is exec'd directly, where the limit is
+    far beyond any file list a gate builds."""
+    if binp.suffix.lower() in (".cmd", ".bat"):
+        return CMD_EXE_LINE_LIMIT - _CMD_SHIM_HEADROOM
+    return None
+
+
+def _batches(prefix: list[str], files: list[str], budget: int | None) -> list[list[str]]:
+    """`files` split, in order, so that every `prefix + batch` stays within
+    `budget` as `subprocess.list2cmdline` renders it -- the exact line
+    CreateProcess receives, quoting included. A file that alone does not fit
+    gets a batch of its own; the launcher refuses that one, visibly."""
+    if budget is None:
+        return [files]
+    out: list[list[str]] = []
+    batch: list[str] = []
+    length = len(subprocess.list2cmdline(prefix))
+    for f in files:
+        cost = 1 + len(subprocess.list2cmdline([f]))     # a space, then the quoted path
+        if batch and length + cost > budget:
+            out.append(batch)
+            batch, length = [], len(subprocess.list2cmdline(prefix))
+        batch.append(f)
+        length += cost
+    if batch:
+        out.append(batch)
+    return out
+
+
+def _reported_an_error(data: list) -> bool:
+    return any(m.get("severity") == 2
+               for entry in data for m in (entry.get("messages") or []))
+
+
+def _judge(result: RunnerResult) -> RunnerResult:
+    """`json_or_crashed`, plus the one exit/output pair eslint never produces.
+
+    eslint exits 1 only when its report carries at least one error (aramid
+    never passes --max-warnings). An exit 1 with no error in the report did
+    not come from eslint's verdict: it is what cmd.exe returns when it
+    refuses the command line, with nothing on stdout -- which the generic
+    check accepts as "[]" and so reads as a clean lint."""
+    out = json_or_crashed(NAME, result, _OK_RETURNCODES)
+    if out.state is ToolState.OK and out.returncode == 1 and not _reported_an_error(
+            json.loads(out.raw or "[]")):
+        return RunnerResult(NAME, ToolState.CRASHED, result.raw, result.stderr,
+                            result.duration_s, result.returncode)
+    return out
 
 
 def _is_file_notice(msg: dict) -> bool:
@@ -95,19 +161,30 @@ def run(ctx) -> RunnerResult:
     binp = _eslint_bin(ctx.root)
     if not binp.exists():
         return RunnerResult(NAME, ToolState.MISSING, examined=frozenset())
-    argv = [str(binp), "-f", "json", *files]
-    result = run_subprocess(argv, ctx.root, TIMEOUT_S)
-    out = json_or_crashed(NAME, result, _OK_RETURNCODES)
-    # Every degraded result vouches for nothing, matching the ruff adapter.
-    # aramid.pipeline only reads `examined` off OK results today, so this is
-    # defense in depth rather than a live path -- but "eslint timed out" must
-    # never be one refactor away from "eslint approved the whole gate scope".
-    if out.state is not ToolState.OK:
-        return replace(out, examined=frozenset())
-    try:
+    prefix = [str(binp), "-f", "json"]
+    outs = []
+    for batch in _batches(prefix, files, _line_budget(binp)):
+        out = _judge(run_subprocess([*prefix, *batch], ctx.root, TIMEOUT_S))
+        # Every degraded result vouches for nothing, matching the ruff adapter.
+        # aramid.pipeline only reads `examined` off OK results today, so this is
+        # defense in depth rather than a live path -- but "eslint timed out" must
+        # never be one refactor away from "eslint approved the whole gate scope".
+        # One degraded batch degrades the run: a partial OK would vouch for the
+        # batches that ran and say nothing of the rest.
+        if out.state is not ToolState.OK:
+            return replace(out, examined=frozenset())
+        outs.append(out)
+    if len(outs) == 1:
+        out = outs[0]
         data = json.loads(out.raw or "[]")
-    except json.JSONDecodeError:  # pragma: no cover - json_or_crashed pre-screens
-        return replace(out, examined=frozenset())
+    else:
+        # eslint's report is one entry per file, so the batches' reports
+        # concatenate into the report one launch would have written.
+        data = [entry for o in outs for entry in json.loads(o.raw or "[]")]
+        out = RunnerResult(NAME, ToolState.OK, json.dumps(data),
+                           "\n".join(o.stderr for o in outs if o.stderr),
+                           sum(o.duration_s for o in outs),
+                           max(o.returncode for o in outs))
     return replace(out, examined=_examined(data, ctx))
 
 

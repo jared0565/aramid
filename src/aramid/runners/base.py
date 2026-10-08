@@ -39,6 +39,11 @@ class ToolState(StrEnum):
 # rather than churning.
 CONTENT_UNREADABLE = "\x00aramid:line-unreadable"
 
+# cmd.exe's maximum command-line length. A `.cmd` / `.bat` program runs
+# through cmd.exe, which refuses a longer line with "The command line is too
+# long." and exits 1 -- an exit code several tools accept as a verdict (FN-34).
+CMD_EXE_LINE_LIMIT = 8191
+
 
 def scanned_line_reader(root):
     """A cached `(path, row) -> line` reader over the bytes a runner scanned.
@@ -633,6 +638,17 @@ def run_subprocess(argv, cwd: Path, timeout_s: float, env=None, *,
     # Launch by absolute path so the child does not re-resolve against a PATH
     # that may not contain the tool at all.
     argv = [str(resolved), *argv[1:]]
+    # Not started rather than refused: cmd.exe's refusal is an exit 1 with an
+    # empty stdout, which a tool that accepts 1 as a verdict reads as a clean
+    # report (FN-34). A runner with a long file list batches under this limit
+    # itself; this is the backstop for one that does not.
+    if Path(argv[0]).suffix.lower() in (".cmd", ".bat"):
+        line = len(subprocess.list2cmdline(argv))
+        if line > CMD_EXE_LINE_LIMIT:
+            return RunnerResult(tool, ToolState.CRASHED,
+                                stderr=(f"aramid: {tool} not started: its command line is "
+                                        f"{line:,} characters, over cmd.exe's "
+                                        f"{CMD_EXE_LINE_LIMIT:,} limit for a .cmd/.bat program"))
     kwargs = own_group()
     start = time.monotonic()
     # S603 justification: this is aramid's single generic subprocess
