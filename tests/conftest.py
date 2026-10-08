@@ -10,6 +10,7 @@ that seed state simply call autolearn.save_state(...) and hit the same
 patched location.
 """
 import os
+import shutil
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -17,6 +18,7 @@ import pytest
 
 import aramid
 from aramid import autolearn, config, fleet, leftovers, registry, toolpath
+from aramid.providers import spend
 
 
 @pytest.fixture
@@ -183,6 +185,42 @@ def _isolated_handover_key(tmp_path, monkeypatch):
     wrote in-process with the same key. (No test spawns `aramid handover`
     itself.) A later `monkeypatch.setenv` still wins."""
     monkeypatch.setenv("ARAMID_HANDOVER_KEY_FILE", str(tmp_path / "handover.key"))
+
+
+_PROVIDER_CLIS = frozenset({"codex", "claude"})
+
+
+@pytest.fixture(autouse=True)
+def _no_reachable_providers(tmp_path, monkeypatch):
+    """Make every test machine look like CI to the LLM providers (FN-33).
+
+    A provider counts as installed when `codex` / `claude` is on PATH
+    (`shutil.which`) or `OPENROUTER_API_KEY` / `OLLAMA_API_KEY` is set. CI has
+    none of the four, so a test that drains through the llm-review consumer
+    degrades quietly there; on a developer machine that has them, the same
+    test made real provider calls (measured 2026-10-08: two drain tests in
+    test_mutation_consumer.py each called codex and claude) and every call
+    appended to the real `~/.aramid/llm_spend.jsonl`.
+
+    Hides the two CLI names from `shutil.which` and delegates every other
+    name, because the runners, toolpath and doctor find git and the analyzers
+    through it. Deletes the two keys from os.environ, which a spawned child
+    inherits; the `which` filter and the spend redirect are in-process only
+    (no test spawns a consumer-running drain: the one `drain` child is
+    `--help`). A later monkeypatch in a test body still wins, which is how the
+    provider unit tests stub a binary or a key of their own."""
+    monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
+    monkeypatch.delenv("OLLAMA_API_KEY", raising=False)
+    real_which = shutil.which
+
+    def which(cmd, *args, **kwargs):
+        stem = os.path.splitext(os.path.basename(os.fspath(cmd)))[0].lower()
+        if stem in _PROVIDER_CLIS:
+            return None
+        return real_which(cmd, *args, **kwargs)
+
+    monkeypatch.setattr(shutil, "which", which)
+    monkeypatch.setattr(spend, "spend_path", lambda: tmp_path / "llm_spend.jsonl")
 
 
 @pytest.fixture(autouse=True)

@@ -14,6 +14,19 @@ to publish a tag that disagrees with it.
 
 ### Fixed
 
+- **The test suite no longer reaches real LLM providers.** On a machine
+  with `codex` or `claude` on PATH, or `OPENROUTER_API_KEY` /
+  `OLLAMA_API_KEY` set, a test that drained through the llm-review consumer
+  made real provider calls, and each call appended to the real
+  `~/.aramid/llm_spend.jsonl`. CI has none of the four, so it never showed
+  there. Measured with logging stand-ins for the two CLIs: two drain tests
+  in `test_mutation_consumer.py` each called codex and claude. A suite-wide
+  autouse fixture in `tests/conftest.py` now hides the two CLI names from
+  `shutil.which`, removes the two keys from the environment and points the
+  spend log into the test's own temp directory.
+  `tests/unit/test_suite_provider_isolation.py` plants its own `codex` and
+  `claude` on PATH and checks they stay hidden. Tests only; no behaviour
+  changed.
 - **The user guide now says in one place what aramid does not do.** What
   aramid knowingly leaves undone was spread across code comments, the
   release plan and a few user-guide paragraphs, and some of it was nowhere
