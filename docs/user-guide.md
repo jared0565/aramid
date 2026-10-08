@@ -237,7 +237,7 @@ Three checks are aramid's own rather than an external tool's. Each ships disarme
 
 **WARN or BLOCK.** WARN while baking, and exempt from the ratchet, so it cannot block a push until you arm it. With the top-level `tdd_block_armed = true` (`aramid arm --tdd`) it is BLOCK, and a git that does not answer while the check reads the push then counts as a degraded tool, which refuses the push unless accepted with `--accept-degraded`. `[tdd].enabled = false` turns the check off ([knowledge base, `[tdd]`](knowledge-base.md#tdd)).
 
-**Resolving it.** Write the test. A later pre-push resolves an open finding when it does not raise it again and either changes that file or changes a test file named for its module (`test_<module>`, `<module>_test`, `test_<parent>_<module>` or `test_<module>_<aspect>`); this needs a push with a range to diff. The finding on a file you deleted resolves at the next pre-push.
+**Resolving it.** Write the test. A later pre-push resolves an open finding when it does not raise it again and either changes that file or changes a test file named for its module (`test_<module>`, `<module>_test`, `test_<parent>_<module>` or `test_<module>_<aspect>`); this needs an upstream to diff against, so a new repo's first push resolves nothing, while under `--all` the push's own changes are recomputed from the upstream. The finding on a file you deleted resolves at the next pre-push.
 
 #### `red-proof` — a test that was never red
 
@@ -354,10 +354,13 @@ list, and a `ledger consumers` row was the consumer's payload as written.
 
 #### `check --json` keys
 
-Every key below is present in every report `check --json` prints; a `null`
-is a value the key carries, not a missing key. These are the keys
-[section 13](#13-compatibility-promise) declares, and a unit test fails if
-this list and the report disagree. Top level:
+Every top-level key below is present in every report `check --json` prints,
+and every `findings[]`, `refs_moved[]` and `stale_overrides[]` key in every
+entry of that array; a `null` is a value the key carries, not a missing key.
+These are the keys [section 13](#13-compatibility-promise) declares. A unit
+test fails if a key is added to or removed from the report and not to this
+list, or the other way round; it checks the key names, not the types or
+meanings. Top level:
 
 | Key | Type | Meaning |
 |---|---|---|

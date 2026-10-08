@@ -76,11 +76,12 @@ Verdict is computed by `policy.classify(tool, rule, severity_raw, gate, cfg)` �
 - `tests-failed` rule → always `BLOCK`.
 - Dependency tools (`pip-audit`, `npm`, `pnpm`, `yarn`) → `BLOCK` iff severity ≥ `[deps].block_severity` (default `"critical"`); else `WARN`.
 - `llm-review` tool → `classify()` always returns `WARN` structurally; the real BLOCK verdict is computed later, at pre-push, from ledger state + `[llm].llm_block_armed` (never inside `classify`).
+- aramid's own producers → `tdd`, `mutation`, `red-proof` and `shadow` are `BLOCK` once their own flag is set (`tdd_block_armed`, `[mutation].mutation_block_armed`, `[red_proof].red_proof_block_armed`, `[shadow].shadow_block_armed`), else `WARN`; `mutation-score` is `BLOCK` only for rule `transition` once `[mutation].score_block_armed` is set, else `WARN`.
 - Everything else → `WARN`.
 
-Net effect: **only OWASP-semgrep and LLM findings are gated by an arming flag** — gitleaks, the curated ruff rules, failing tests, and ≥critical CVEs BLOCK unconditionally regardless of bake state.
+Net effect: **apart from aramid's own producers, only the semgrep rules (the pack's and the OWASP block-list's) and LLM findings are gated by an arming flag** — gitleaks, the curated ruff rules, failing tests, and ≥critical CVEs BLOCK unconditionally regardless of bake state.
 
-**Pre-push no-new-warnings ratchet**: at `Gate.PRE_PUSH`, any `WARN` finding whose id is "new" (`f.id in new_ids`, never seen before in the ledger) is escalated to `BLOCK` — except findings with rule `deps.DEPS_SHAPE_DRIFT_RULE`, which are exempt.
+**Pre-push no-new-warnings ratchet**: at `Gate.PRE_PUSH`, any `WARN` finding whose id is "new" (`f.id in new_ids`, never seen before in the ledger) is escalated to `BLOCK` — except four kinds, which are exempt (`pipeline.py`, `_escalates`): rule `deps.DEPS_SHAPE_DRIFT_RULE`, and tools `cargo-audit-warnings`, `tdd` and `red-proof`. The LLM and mutation ledger gates' findings (`llm-review`, `mutation`, `mutation-score`) are added after the ratchet has run, so it never sees them.
 
 ### Arming / bake-then-arm
 Aramid ships with several checks in a WARN-only "bake" period so an operator can observe noise before committing to enforcement. There are exactly **ten** arming-style flags, independent of one another:
@@ -95,7 +96,7 @@ Aramid ships with several checks in a WARN-only "bake" period so an operator can
 | `[mutation].mutation_block_armed` | `aramid.toml` | `false` | `arm --mutation` | surviving-mutant findings BLOCK at pre-push |
 | `[mutation].score_block_armed` | `aramid.toml` | `false` | `arm --mutation-score` | mutation-score *transition* regressions BLOCK at pre-push (rate deltas stay WARN) |
 | `[red_proof].red_proof_block_armed` | `aramid.toml` | `false` | `arm --red-proof` | never-red test findings BLOCK at pre-push |
-| `[shadow].shadow_block_armed` | `aramid.toml` | `false` | `arm --shadow` | a repo-root file that hijacks `python -m aramid` BLOCKs at every gate, pre-commit included |
+| `[shadow].shadow_block_armed` | `aramid.toml` | `false` | `arm --shadow` | a repo-root file that hijacks `python -m aramid` or `python -m graphite` BLOCKs at every gate, pre-commit included |
 | `agent_block_armed` | root of `aramid.toml` | `false` | `arm --agent` | not a finding tier — the agent `pre-tool-use` hook REJECTS a git hook-bypass (`--no-verify`, `core.hooksPath`) instead of only warning |
 
 The verdict of every armable finding tool is computed from the arming flag at gate time, so arming applies to findings recorded before it. Drain-time mutation survivors are recorded `WARN`; `mutation_block_armed` is what escalates them at the next pre-push. `[dast]`, `[fuzz]` and `[js_mutation]` have **no** arming flag of any kind (until 0.19.0 `defaults.toml` carried a never-read `[dast].block_armed`; setting it now warns).
