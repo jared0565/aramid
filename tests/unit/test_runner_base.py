@@ -278,18 +278,95 @@ def test_kill_tree_off_windows_kills_the_process_group_with_sigkill(monkeypatch)
 
 @pytest.mark.skipif(sys.platform != "win32", reason="cmd.exe's limit applies to .cmd/.bat programs on Windows")
 def test_a_batch_file_over_cmd_exe_s_limit_is_refused_not_launched(tmp_path):
-    """FN-34: cmd.exe refuses a command line over 8,191 characters and exits
-    1, which several tools accept as a verdict. The launcher must not start
-    such a program at all, and must say why."""
+    """FN-34: cmd.exe refuses a command line over its limit and exits 1,
+    which several tools accept as a verdict. The launcher must not start such
+    a program at all, and must say why. The boundary is real cmd.exe's, read
+    on both sides: a line of exactly the budget runs, and one character more
+    -- which cmd.exe refuses when launched directly -- is never started.
+    Against the raw 8,191 the launcher started lines up to 8,191 and cmd.exe
+    refused every one from 8,161 (the CI-review finding on the first fix)."""
     marker = tmp_path / "ran.txt"
     shim = tmp_path / "tool.cmd"
     shim.write_text(f'@echo off\r\necho ran> "{marker}"\r\nexit /b 0\r\n', encoding="utf-8")
+    exe = str(base.toolpath.resolve(str(shim)))
+    budget = base.cmd_exe_line_budget()
 
-    short = run_subprocess([str(shim), "x"], tmp_path, 30)
-    assert short.state is ToolState.OK and marker.exists()      # control: the shim does run
+    def argv_of(length):
+        arg = "y" * (length - len(subprocess.list2cmdline([exe])) - 1)
+        assert len(subprocess.list2cmdline([exe, arg])) == length
+        return [exe, arg]
+
+    at = run_subprocess(argv_of(budget), tmp_path, 30)
+    assert at.state is ToolState.OK and at.returncode == 0 and marker.exists(), \
+        "a line of exactly the budget is within cmd.exe's limit"
     marker.unlink()
 
-    long = run_subprocess([str(shim), "y" * 9000], tmp_path, 30)
-    assert long.state is ToolState.CRASHED
+    # The control: launched directly, cmd.exe itself refuses one more.
+    direct = subprocess.run(argv_of(budget + 1), capture_output=True, text=True)
+    assert direct.returncode == 1 and not marker.exists()
+
+    over = run_subprocess(argv_of(budget + 1), tmp_path, 30)
+    assert over.state is ToolState.CRASHED
     assert not marker.exists()
-    assert "8,191" in long.stderr
+    assert f"{budget + 1:,} characters, over the {budget:,} cmd.exe allows" in over.stderr
+
+
+def test_the_cmd_exe_budget_is_held_at_its_boundary_and_only_against_a_batch_file(tmp_path, monkeypatch):
+    """FN-34, on every leg. The test above is the only one that launches a
+    real shim, so off Windows the comparison never ran at all (the CI
+    latent-mutant ratchet, 2026-10-08). The launch is stubbed here, because
+    the question is only which command lines the launcher STARTS. The budget
+    is cmd.exe's 8,191 less `%COMSPEC% /c `, from this process's COMSPEC
+    (measured, see `cmd_exe_line_budget`): a line at the budget starts, one
+    more does not, the suffix is matched in any case, and a program that is
+    not a .cmd/.bat is never held to it."""
+    class Launched(Exception):
+        pass
+
+    launched = []
+
+    def popen(argv, *args, **kwargs):
+        launched.append(len(subprocess.list2cmdline(argv)))
+        raise Launched
+
+    monkeypatch.setattr(base.subprocess, "Popen", popen)
+
+    def argv_of(name, length):
+        program = tmp_path / name
+        program.write_text("", encoding="utf-8")
+        exe = str(base.toolpath.resolve(str(program)))    # what the launcher measures
+        arg = "y" * (length - len(subprocess.list2cmdline([exe])) - 1)
+        assert len(subprocess.list2cmdline([exe, arg])) == length
+        return [str(program), arg]
+
+    monkeypatch.setenv("COMSPEC", r"C:\WINDOWS\system32\cmd.exe")         # 27 characters
+    assert base.cmd_exe_line_budget() == 8160
+
+    with pytest.raises(Launched):
+        run_subprocess(argv_of("tool.cmd", 8160), tmp_path, 30)
+    assert launched == [8160], "a line AT the budget is within it"
+
+    over = run_subprocess(argv_of("tool.cmd", 8161), tmp_path, 30)
+    assert over.state is ToolState.CRASHED
+    assert over.stderr == ("aramid: tool.cmd not started: its command line is 8,161 characters, "
+                           "over the 8,160 cmd.exe allows a .cmd/.bat program "
+                           "(8,191 less its own `%COMSPEC% /c `)")
+    assert launched == [8160], "a line over the budget is never started"
+
+    assert run_subprocess(argv_of("upper.BAT", 8161), tmp_path, 30).state is ToolState.CRASHED
+    assert launched == [8160]
+
+    with pytest.raises(Launched):
+        run_subprocess(argv_of("prog.exe", 8161), tmp_path, 30)
+    assert launched == [8160, 8161], "only a batch file goes through cmd.exe"
+
+    monkeypatch.setenv("COMSPEC", r"C:\WINDOWS\system32\..\system32\..\system32\cmd.exe")  # 51
+    assert base.cmd_exe_line_budget() == 8136
+    assert run_subprocess(argv_of("tool.cmd", 8137), tmp_path, 30).state is ToolState.CRASHED
+    with pytest.raises(Launched):
+        run_subprocess(argv_of("tool.cmd", 8136), tmp_path, 30)
+    assert launched == [8160, 8161, 8136], "the budget follows COMSPEC"
+
+    monkeypatch.delenv("COMSPEC", raising=False)
+    monkeypatch.setenv("SystemRoot", r"C:\WINDOWS")
+    assert base.cmd_exe_line_budget() == 8160, "unset: the system directory's cmd.exe"

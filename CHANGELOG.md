@@ -46,7 +46,9 @@ to publish a tag that disagrees with it.
   merges the reports; an exit 1 whose report has no error is treated as a
   crash, so it degrades the run instead of passing it; and aramid's
   launcher refuses to start any `.cmd` / `.bat` program whose command line
-  is over the limit, saying why.
+  is longer than cmd.exe accepts, saying why. cmd.exe counts its own
+  `%COMSPEC% /c ` against the 8,191, so on a standard install the most a
+  batch file's command line can carry is 8,160 characters, measured.
 - **The test suite no longer reaches real LLM providers.** On a machine
   with `codex` or `claude` on PATH, or `OPENROUTER_API_KEY` /
   `OLLAMA_API_KEY` set, a test that drained through the llm-review consumer

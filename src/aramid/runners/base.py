@@ -45,6 +45,24 @@ CONTENT_UNREADABLE = "\x00aramid:line-unreadable"
 CMD_EXE_LINE_LIMIT = 8191
 
 
+def cmd_exe_line_budget() -> int:
+    """The longest line a `.cmd` / `.bat` launch may have, counted as
+    `subprocess.list2cmdline` renders it.
+
+    CreateProcess runs a batch file as `%COMSPEC% /c <line>`, and cmd.exe
+    holds that WHOLE line to the limit, so the interpreter's own path and
+    ` /c ` come off the top. COMSPEC is this process's, not the child's:
+    CreateProcess reads the caller's. Measured 2026-10-08, Windows 11: with
+    COMSPEC=C:\\WINDOWS\\system32\\cmd.exe a line of 8,160 runs and 8,161 is
+    refused (27 + 4 under 8,191); a COMSPEC 24 characters longer moved the
+    boundary down by exactly 24; one set only in the child's environment
+    moved it not at all; with COMSPEC unset the boundary was 8,160 again,
+    the system directory's cmd.exe."""
+    comspec = os.environ.get("COMSPEC") or os.path.join(
+        os.environ.get("SystemRoot", r"C:\Windows"), "system32", "cmd.exe")
+    return CMD_EXE_LINE_LIMIT - len(comspec) - len(" /c ")
+
+
 def scanned_line_reader(root):
     """A cached `(path, row) -> line` reader over the bytes a runner scanned.
 
@@ -640,15 +658,20 @@ def run_subprocess(argv, cwd: Path, timeout_s: float, env=None, *,
     argv = [str(resolved), *argv[1:]]
     # Not started rather than refused: cmd.exe's refusal is an exit 1 with an
     # empty stdout, which a tool that accepts 1 as a verdict reads as a clean
-    # report (FN-34). A runner with a long file list batches under this limit
-    # itself; this is the backstop for one that does not.
+    # report (FN-34). This measures the line handed to cmd.exe, and only that:
+    # a program that re-expands its arguments into a longer line -- an npm
+    # shim puts node's path and its script's in front of `%*` -- can still be
+    # refused inside it. Such a runner batches under its own headroom and
+    # judges an exit 1 that reported nothing, as the eslint adapter does.
     if Path(argv[0]).suffix.lower() in (".cmd", ".bat"):
         line = len(subprocess.list2cmdline(argv))
-        if line > CMD_EXE_LINE_LIMIT:
+        budget = cmd_exe_line_budget()
+        if line > budget:
             return RunnerResult(tool, ToolState.CRASHED,
                                 stderr=(f"aramid: {tool} not started: its command line is "
-                                        f"{line:,} characters, over cmd.exe's "
-                                        f"{CMD_EXE_LINE_LIMIT:,} limit for a .cmd/.bat program"))
+                                        f"{line:,} characters, over the {budget:,} cmd.exe "
+                                        f"allows a .cmd/.bat program ({CMD_EXE_LINE_LIMIT:,} "
+                                        f"less its own `%COMSPEC% /c `)"))
     kwargs = own_group()
     start = time.monotonic()
     # S603 justification: this is aramid's single generic subprocess
