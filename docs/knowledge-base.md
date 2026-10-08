@@ -20,7 +20,7 @@ The rule-based (non-LLM) check pipeline invoked by `aramid check`, and by the in
 
 | Gate | Runners |
 |---|---|
-| `pre-commit` | gitleaks, ruff |
+| `pre-commit` | gitleaks, ruff, shadow |
 | `pre-push` | gitleaks, semgrep, eslint, clippy, typecheck, deps, tests, shadow |
 | `all` (`aramid check --gate all`) | both tiers: every runner of `pre-commit` and `pre-push`, ruff included (`--all` alone is a scan mode, not this gate) |
 

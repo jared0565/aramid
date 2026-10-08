@@ -122,7 +122,7 @@ Once hooks are installed, every commit and push runs a fixed set of runners per 
 
 | Gate | Runners |
 |---|---|
-| `pre-commit` | gitleaks, ruff |
+| `pre-commit` | gitleaks, ruff, shadow |
 | `pre-push` | gitleaks, semgrep, eslint, clippy, typecheck, deps, tests, shadow |
 | `all` (`aramid check --gate all`) | both tiers: every runner either hook gate runs, ruff included |
 
@@ -853,9 +853,9 @@ aramid check --all --strict --json
 aramid check --gate pre-push --all --strict --json
 ```
 
-These are the two steps aramid's own CI runs. `--all` widens the file set; it does not change which runners run, which is `--gate`'s job ([section 4](#scan-mode)). So the first step is the pre-commit tier (gitleaks and ruff), and the second is the pre-push tier (gitleaks, semgrep, the dependency audit, the tests, and the other pre-push runners that apply). Neither step alone is a backstop: the first never runs semgrep or the tests, and the second never runs ruff. A bare `aramid check --strict --json` is not one either: it scans the staged files, and a CI checkout has nothing staged.
+These are the two steps aramid's own CI runs. `--all` widens the file set; it does not change which runners run, which is `--gate`'s job ([section 4](#scan-mode)). So the first step is the pre-commit tier (gitleaks, ruff and shadow), and the second is the pre-push tier (gitleaks, semgrep, the dependency audit, the tests, and the other pre-push runners that apply). Neither step alone is a backstop: the first never runs semgrep or the tests, and the second never runs ruff. A bare `aramid check --strict --json` is not one either: it scans the staged files, and a CI checkout has nothing staged.
 
-`aramid check --gate all --all --strict --json` runs the runners of both tiers in one step, but it is not a substitute for the two: it skips everything the pre-push gate adds on top of its runners. That covers the TDD test-gap check, the ratchet, and the LLM and mutation ledger gates (which act on what the drain recorded in `.aramid/`). In a repo that has armed the TDD gate (`tdd_block_armed`), a test-gap BLOCK fails the pre-push step and passes the one-step form (measured). (The red-first proof needs a commit range, so over `--all` it runs in neither form.) Use the one step only on a fresh checkout of a repo that has not armed the TDD gate; otherwise, and whenever you keep `.aramid/` between CI runs, use the two steps.
+`aramid check --gate all --all --strict --json` runs the runners of both tiers in one step, but it is not a substitute for the two: it skips everything the pre-push gate adds on top of its runners. That covers the TDD test-gap check, the ratchet, and the LLM and mutation ledger gates (which act on what the drain recorded in `.aramid/`). In a repo that has armed the TDD gate (`tdd_block_armed`) and tracks no test file at all, a test-gap BLOCK fails the pre-push step and passes the one-step form (measured); over the whole tree the TDD check fires only when no tracked file is a test file. (The red-first proof needs a commit range, so over `--all` it runs in neither form.) Use the one step only on a fresh checkout of a repo that has not armed the TDD gate; otherwise, and whenever you keep `.aramid/` between CI runs, use the two steps.
 
 `--strict` remaps exit code `2` (degraded) to `1`, so CI never soft-passes on a tool that merely failed to run — a missing tool is treated the same as a real finding. An engine error stays `3`: it is already a hard failure, and keeping the code lets CI tell a crash from a finding. `--json` renders the report as JSON instead of the console format for your CI system to parse.
 

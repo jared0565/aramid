@@ -48,6 +48,10 @@ def test_a_provider_cli_on_path_is_not_found(tmp_path, monkeypatch):
     assert shutil.which("notcodex") is not None
     assert shutil.which("codex") is None
     assert shutil.which("claude") is None
+    # Every spelling a caller might use: an extension, a Path, a full path.
+    assert shutil.which("codex.cmd") is None
+    assert shutil.which(Path("claude")) is None
+    assert shutil.which(str(tmp_path / "planted-bin" / "codex")) is None
     assert not codex_cli.installed()
     assert not claude_cli.installed()
 

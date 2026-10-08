@@ -60,11 +60,15 @@ to publish a tag that disagrees with it.
   why `aramid check --gate all --all --strict --json` is not a substitute:
   it runs both tiers' runners but skips what the pre-push gate adds on top
   of them (the TDD test-gap check, the ratchet, the LLM and mutation ledger
-  gates), so an armed TDD gate's BLOCK passes it. The template's test-detection paragraph, which said aramid
-  recognizes pytest files and an npm `test` script "and nothing more", now
-  also names the cargo and go suites it has detected since 0.2.0. A
-  consumer's `ARAMID.md` picks up both corrections on its next `aramid init`
-  after a release. Docs and template text only; no behaviour changed.
+  gates). In a repo that has armed the TDD gate and tracks no test file, a
+  test-gap BLOCK fails the pre-push step and passes the one step. The
+  template's test-detection paragraph, which said aramid recognizes pytest
+  files and an npm `test` script "and nothing more", now also names the
+  cargo and go suites it has detected since 0.2.0, and it now says the
+  no-suite notice comes from any gate that runs the tests, not only
+  pre-push, matching the code (`pipeline.py`, `_tests_config_notices`). A
+  consumer's `ARAMID.md` picks up these corrections on its next `aramid
+  init` after a release. Docs and template text only; no behaviour changed.
 - **The limitations and compatibility sections, corrected after review.**
   The compatibility promise now lets a 1.x release add only optional flags,
   options, positionals and MCP parameters (a new required one waits for
