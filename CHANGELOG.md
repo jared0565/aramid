@@ -34,7 +34,7 @@ to publish a tag that disagrees with it.
   `tests/unit/test_user_guide_check_json_keys.py` fails when the table and
   the report disagree in either direction. Section 9's `[shadow]` row now
   names `graphite` as well as `aramid`. Docs and one test; no behaviour
-  changed. Three older statements were wrong and are fixed:
+  changed. Four older statements were wrong and are fixed:
   - Section 3 said the ratchet exempts only the dependency audit's
     shape-drift rule. It also exempts `cargo-audit-warnings`, `tdd` and
     `red-proof`, and the LLM and mutation gates' findings arrive after it
@@ -42,6 +42,9 @@ to publish a tag that disagrees with it.
   - Section 3 said only OWASP-semgrep and LLM findings have an arming flag.
   - Section 12 said a fresh clone has no hooks until `aramid init`, which
     is not so where `aramid hooks install` has run.
+  - Section 12 treated a `mutation-score` finding as one you can override.
+    It is never written to the ledger, so `aramid override` refuses its id;
+    a `.aramid-suppressions.toml` entry sets one aside.
 - **A secret you have already judged no longer tells you to rotate it.**
   When a gitleaks finding blocks, the gate printed "rotate the credential
   -- deleting the line does not fix the leak" under it, whatever its
