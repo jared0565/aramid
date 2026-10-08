@@ -17,6 +17,7 @@ This guide walks the journey of adopting aramid on a repo you own: install, onbo
 9. [The Bake-Then-Arm Model](#9-the-bake-then-arm-model)
 10. [CI Integration](#10-ci-integration)
 11. [Troubleshooting](#11-troubleshooting)
+12. [Known Limitations](#12-known-limitations)
 
 ---
 
@@ -870,3 +871,62 @@ aramid check --gate pre-push --all --strict --json
 **A bad flag or unknown subcommand** — any argparse failure (bad flags, unknown subcommand, no subcommand at all) is remapped to exit `3`, matching a genuine engine error, so scripts checking for `3` catch both cases.
 
 **Historical secrets flagged by the one-time `init` scan** — if it's a real leak, rotate the credential, then `aramid ledger mark-rotated <id> --reason "..."`. If it's a false positive instead (gitleaks' `generic-api-key` rule in particular flags plenty of secret-shaped, non-secret values), retire it with `aramid ledger mark-not-a-secret <id> --reason "..."` instead. `mark-not-a-secret` only works while the finding's status is exactly `historical`; `mark-rotated` also accepts a finding already marked not-a-secret, since discovering a supposed false positive was real after all and rotating it only adds caution. Neither mark can be undone.
+
+---
+
+## 12. Known Limitations
+
+What aramid does not do, or does imperfectly, in one place. Each entry says what happens, what it costs you, and what to do about it where there is something to do. Where another section covers a topic in depth, the entry links to it.
+
+### The gate
+
+**Local hooks can be skipped.** `git commit --no-verify` and `git push --no-verify` skip aramid's hooks, as they skip any git hook, and git hooks are not cloned, so a fresh clone has none until `aramid init` runs in it. A commit or push made that way was never gated. The backstop is CI: run `aramid check --gate pre-push --all --strict --json` there ([section 10](#10-ci-integration)). For AI agents, `aramid arm --agent` makes the agent hook refuse those flags in the agent's own tool calls, within the limits listed under *Agent surfaces* below.
+
+**The gate is not a full security review.** The bundled semgrep rules look for injection (SQL built from strings, shell commands, `eval`), unsafe deserialization, weak hashes and hard-coded crypto keys, plus four Rust memory-safety lints; gitleaks finds secrets, ruff and the other linters add their own rules, and the dependency audit finds known-vulnerable packages. Access control, security misconfiguration and authentication logic are largely beyond checks of this kind. A clean `aramid check` means none of these checks fired, not that the code is secure. The drain's LLM reviewer is the part of aramid meant for judgement-based review, and it only warns until `aramid arm --llm`.
+
+**The bundled semgrep rules miss four ways of building a SQL query in Python.** They do not report a query that is assembled in one function and executed in another; built into an attribute (`self.q`) in one method and executed in another; built as a list of queries in a loop and then iterated; or accumulated with `q +=` in a loop. ruff's `S608`, a BLOCK-tier rule at pre-commit, can still flag the line that builds SQL text by string formatting, but it does not catch every one of these forms. There is no setting that closes the gap; pass values as bound parameters (`cur.execute("SELECT ... WHERE x = ?", (value,))`) instead of building the SQL text.
+
+**A missing test tool is explained by a finding only when aramid runs two or more suites.** If aramid runs one test suite and that suite's tool (pytest, npm, cargo or go) cannot be found, no finding names it: the run lists the tool as degraded (`not found`), the pre-push gate exits `1`, so the push is blocked, and `aramid check --gate all` exits `2`. In a repo where aramid runs two or more suites, the same gap is a `tests-tool-missing` BLOCK finding that names the suite. Either way the push is blocked; only the second says why in a finding. `aramid doctor` exits `2` and names the missing tool before you push. See [Dual-stack repos](#dual-stack-repos-pytest-and-npm) in section 3.
+
+**A Rust crate whose tests are all inline is not detected.** aramid finds a test suite by file name: a pytest file (`test_*.py`, `*_test.py`, `conftest.py`), an npm `test` script, a `.rs` file in a `tests/` directory of a Cargo project, or a `*_test.go` file in a Go module. A crate whose tests all live in `#[cfg(test)]` modules has none of these, so the test gate runs nothing, and every pre-push gate prints a notice saying so. Set `[tests].command = ["cargo", "test"]`.
+
+**Two test suites share one budget, and the second can run out without a notice.** When aramid runs two suites (pytest and npm, say), they run one after the other inside the single `[timeouts].pre_push` budget. With the defaults (`[tests].timeout_s` and `[timeouts].pre_push` both 300 s) the second suite gets whatever time the first left, and if that runs out it is reported as `<tool> timeout: test suite failed`, a BLOCK, with no notice that the shared budget, not the suite, ran out. The notice about the shared budget prints only when `[tests].timeout_s` on its own is larger than the gate budget. Raise `[timeouts].pre_push` and `[tests].timeout_s` together, or point `[tests].command` at a faster subset.
+
+**In a gate, a hung tool reads as a timeout.** The stall watchdog (`[timeouts].stall_s`, default 300 s) samples a tool's process tree every 15 s, and its first sample only starts the clock, so at the default it cannot call a stall earlier than about 315 s after launch. Every gate budget at its default is shorter (pre-push is 300 s), so a tool that hangs inside a gate is killed at the budget and reported as a timeout, not as stalled. The stall verdict comes from longer-running work, such as the drain's consumers and the mutation baselines, or from a `stall_s` lowered below the gate budget; set it above the longest quiet stretch your tools legitimately have.
+
+### Findings and the ledger
+
+**An LLM finding can stay open after a real fix.** An LLM finding closes when the line it quotes is gone from the file at `HEAD`. A fix made elsewhere, such as an early return or a new check before the quoted line, leaves that line as it was, so the finding stays open. Close it by hand: `aramid override <id> --reason "fixed in <sha>; ..."` for a WARN finding. `override` refuses a confirmed-critical finding and prints the `.aramid-suppressions.toml` entry to add instead. [An LLM finding you fixed that stays open anyway](#an-llm-finding-you-fixed-that-stays-open-anyway) in section 5 explains why the match is not loosened.
+
+**An LLM finding closes when its quoted code moves to another file.** If the quoted line leaves its file while the file itself stays, the finding is resolved as fixed, even when the same code now sits in another file. (When the file itself is renamed or moved, aramid looks for the quote in the other tracked files and keeps the finding open if it is there.) A confirmed-critical finding closed this way stops blocking, and comes back only if a later drain review raises it again. If you move flagged code rather than fix it, check it yourself.
+
+**A dead override on an `llm-review`, `mutation` or `mutation-score` finding is never reported.** For other tools, when a finding you overrode moves (same tool, rule and file, new id), the gate prints `stale override <id> -- re-affirm it ...` and lists the entry under `stale_overrides` in `check --json`. For these three it never does, because the gate cannot tell a working override from a dead one there. If such a finding comes back under a new id, it is an ordinary open finding, with nothing linking it to your override. A `.aramid-suppressions.toml` entry for these three is checked for staleness like any other.
+
+**`ledger mark-rotated` and `ledger mark-not-a-secret` cannot be undone.** No command reverses either mark. A finding marked not-a-secret can still be marked rotated; a rotated one has no way back. Check before you mark.
+
+**pnpm and yarn audit output is read from documented shapes.** aramid's readers for `pnpm audit --json` and `yarn npm audit --json` were written from documentation and an upstream issue report, not from captured runs of either tool, and only Yarn Berry 4.0.1 and later is handled. When the output does not match the expected shape, aramid reports a WARN finding, `deps-audit-shape-unrecognized` ("findings may be incomplete -- verify the audit manually"), rather than reading it as clean. If you see it, run the audit yourself.
+
+### The drain
+
+**A mutation survivor means the mutant survived the suite aramid ran.** The mutation consumer confirms a survivor with `[mutation].test_command`, or else the gate's `[tests].command` (or the legacy top-level `test_command`), or else `pytest -q`. If that command runs only part of your tests, for example the unit tests you pointed the push gate at, a mutant that only your other tests kill is reported as a survivor. The finding's message names the suite that ran (`unkilled by: <command>`). Point `[mutation].test_command` at a suite that includes those tests, and raise `[mutation].mutant_timeout_s` and `[mutation].baseline_timeout_s` so it fits.
+
+**A push can stop a mutation survivor blocking before anything proves it dead.** At pre-push, a push that changes the survivor's source file, or a test file whose name maps to that module, moves the survivor to `pending_retest`, where it no longer blocks, even with `[mutation].mutation_block_armed` set. It stays there until something settles it, normally a drain re-test, which closes it (`fixed`) or re-opens it. The name match is loose: a test named `test_<module>_<anything>.py` counts for every source file named `<module>.py`, so `test_report_writer.py` counts for `report.py` as well as `report_writer.py`.
+
+**The fuzzer moves your home and temp directories, not every directory a function can write to.** The fuzz consumer calls changed functions with `HOME`, `USERPROFILE`, `TMP`, `TEMP` and `TMPDIR` pointed inside its own temporary directory. It does not move `APPDATA`, `LOCALAPPDATA` or the `XDG_*` directories, so a fuzzed function that writes there writes your real ones. And because its home has moved, a fuzzed function that runs git does not see the git config in your home directory (your user name and email, for example), so it can behave differently there than it does for you. Keep such functions out of the fuzzer with `[fuzz].skip_name_patterns`; a list in `aramid.toml` replaces the packaged one, so copy the defaults you want to keep (see [fuzz](#fuzz) in section 8).
+
+**DAST probes only a site you are running, and never blocks.** The DAST consumer probes the URL in `[dast].base_url`; aramid does not start your app, and with no URL set the consumer skips. While the URL cannot be reached the consumer reports `degraded`, and after three tries at one commit it gives up on that commit. Its findings are WARN only, with no arming flag, throughout 1.x.
+
+**On Linux and macOS, a missed drain is skipped, not run late.** The scheduled drain is a crontab line there (macOS uses cron, not launchd), and cron has no run-when-available: a drain whose time passes while the machine is off or asleep does not run. Queued items wait for the next drain; an item expires after `[drain].item_expiry_days` (30 by default). On Windows the task runs as soon as it can after a missed start.
+
+### Agent surfaces
+
+**The agent bypass screen works per session, on the words of the command.** Once `aramid arm --agent` is set, the agent hook refuses a `git commit`/`git push` carrying `--no-verify` (or `commit -n`, or a `-c core.hooksPath=...` wrapper). It has these limits:
+
+- It decides by the repo the agent session is working in, not by the repo the command targets. `git -C <other repo> commit -n` is refused in an armed session even if the other repo is not armed, and a session in a repo that is not armed is not stopped from bypassing an armed one.
+- It reads the command as words, so unquoted flag text inside another command can match: `echo git commit --no-verify` is refused, while `echo "git commit --no-verify"` is not.
+- It does not catch a bypass in bundled short flags (`git commit -an`), behind a git alias, in a command built from shell variables or `eval`, or in PowerShell syntax it cannot parse.
+- On any internal error it lets the call through.
+
+The git hooks and CI remain the enforcement; this screen only stops an agent from switching them off in the obvious ways.
+
+**`aramid handover show` can stop on a terminal that cannot print the body.** The body is printed as written, with control characters escaped. On a terminal whose encoding cannot represent a character in the body, the command stops with a Python `UnicodeEncodeError` instead of printing it. Redirected output is always written as UTF-8, so `aramid handover show > handover.txt` works, and so does a UTF-8 terminal.

@@ -10,6 +10,16 @@ to publish a tag that disagrees with it.
 
 ## [Unreleased]
 
+### Fixed
+
+- **The user guide now says in one place what aramid does not do.** What
+  aramid knowingly leaves undone was spread across code comments, the
+  release plan and a few user-guide paragraphs, and some of it was nowhere
+  a user would read. The new section 12, *Known Limitations*, lists each
+  one with its consequence and what to do about it, and the README links
+  to it. Each entry was checked against the code before it was written.
+  Docs only; no behaviour changed.
+
 ## [0.20.5] — 2026-10-07
 
 ### Fixed
