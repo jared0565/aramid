@@ -360,6 +360,16 @@ def test_exit_1_with_only_warnings_is_crashed(tmp_path, monkeypatch):
     assert eslint.run(RunContext(root=tmp_path, files=["a.js"])).state is ToolState.CRASHED
 
 
+def test_exit_1_with_json_that_is_not_a_report_is_crashed(tmp_path, monkeypatch):
+    _with_bin(tmp_path)
+    monkeypatch.setattr(
+        eslint, "run_subprocess",
+        lambda argv, cwd, t, env=None: RunnerResult("eslint", ToolState.OK, raw='{"x": 1}',
+                                                    returncode=1))
+
+    assert eslint.run(RunContext(root=tmp_path, files=["a.js"])).state is ToolState.CRASHED
+
+
 def _reports_each_file(calls):
     """A stand-in eslint: one entry per file it was handed, an error in every
     file whose name starts with `dirty`, and exit 1 exactly when it reported

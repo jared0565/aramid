@@ -343,7 +343,10 @@ def _still_in_tree(root: Path, rec: dict) -> bool:
     there -- the value itself is never stored -- so the note is worded
     conditionally."""
     file = rec.get("file")
-    return bool(file) and (root / file).is_file()
+    try:
+        return bool(file) and (root / file).is_file()
+    except (OSError, ValueError):
+        return False        # a note is advice; never fail a recorded mark over it
 
 
 def cmd_ledger_mark_rotated(root, finding_id: str, reason: str) -> int:

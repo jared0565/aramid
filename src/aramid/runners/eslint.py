@@ -81,9 +81,13 @@ def _batches(prefix: list[str], files: list[str], budget: int | None) -> list[li
     return out
 
 
-def _reported_an_error(data: list) -> bool:
-    return any(m.get("severity") == 2
-               for entry in data for m in (entry.get("messages") or []))
+def _reported_an_error(data) -> bool:
+    """Valid JSON that is not eslint's report shape reported nothing."""
+    if not isinstance(data, list):
+        return False
+    return any(isinstance(m, dict) and m.get("severity") == 2
+               for entry in data if isinstance(entry, dict)
+               for m in (entry.get("messages") or []))
 
 
 def _judge(result: RunnerResult) -> RunnerResult:
