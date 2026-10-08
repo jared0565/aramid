@@ -18,6 +18,7 @@ This guide walks the journey of adopting aramid on a repo you own: install, onbo
 10. [CI Integration](#10-ci-integration)
 11. [Troubleshooting](#11-troubleshooting)
 12. [Known Limitations](#12-known-limitations)
+13. [Compatibility Promise](#13-compatibility-promise)
 
 ---
 
@@ -930,3 +931,68 @@ What aramid does not do, or does imperfectly, in one place. Each entry says what
 The git hooks and CI remain the enforcement; this screen only stops an agent from switching them off in the obvious ways.
 
 **`aramid handover show` can stop on a terminal that cannot print the body.** The body is printed as written, with control characters escaped. On a terminal whose encoding cannot represent a character in the body, the command stops with a Python `UnicodeEncodeError` instead of printing it. Redirected output is always written as UTF-8, so `aramid handover show > handover.txt` works, and so does a UTF-8 terminal.
+
+---
+
+## 13. Compatibility Promise
+
+Scripts, CI jobs and agents read parts of aramid by name: a flag, an exit code, a JSON key, a status. This section lists those parts, says what aramid promises about them, and says which of those promises a test enforces today.
+
+### Before 1.0 and from 1.0
+
+aramid is not at 1.0 yet (`aramid --version` says which release you have). Until 1.0.0, any release may change a part listed below; such a change belongs under `Changed` or `Removed` in `CHANGELOG.md`. The project's release rules (`RELEASING.md`, "The 1.0 gate") allow a 1.0.0 tag only when, among other things, the two most recent releases carry no such entry.
+
+From 1.0.0 on, "stable within 1.x" means:
+
+- No 1.x release removes or renames a listed part, or changes what it means. A change of that kind waits for 2.0.
+- A 1.x release may add to the surface: a command or flag, a JSON key or finding field, a config key, a ledger status, an MCP tool or parameter. Additions belong under `Added`.
+- The finding fingerprint stays the same within 1.x. If a 1.x release has to change it, `CHANGELOG.md` says so, and the remedy is [`aramid rebaseline`](#aramid-rebaseline--recovering-from-a-fingerprint-change) (section 5). This covers aramid's own computation only: a rule an analyzer itself renames, or a different analyzer version on your machine (see [`DRIFT` in `aramid doctor`](#drift-in-aramid-doctor--you-are-running-a-different-analyzer-than-aramid-shipped)), changes ids whatever aramid does.
+
+### Reading output from another release
+
+The rule for JSON output is stated where `check --json` is written (`reporter.py`): `schema_version` is "bumped only by a change an existing reader could trip on -- a key removed, renamed or retyped; adding a key is not one." `check --json` writes every one of its keys whenever it prints a report, so a key that is absent means the report came from an older aramid; the comment on `tools` puts it as "an ABSENT key means an aramid old enough not to record provenance, an EMPTY one means it looked and found nothing." Read the keys you need, and ignore keys you do not know.
+
+### What is declared
+
+"Pinned" below means a test fails when a member is added, renamed or removed, so the change cannot land unnoticed. "Promised" means the promise stands but no such test guards it yet.
+
+| Part | What it covers | Guarded by |
+|---|---|---|
+| CLI commands and flags | every subcommand, option, choice and positional of `aramid` ([knowledge base, section 4](knowledge-base.md#4-cli-command-reference)) | pinned: `tests/unit/test_cli_surface.py` |
+| Exit codes | `0` pass, `1` BLOCK, `2` degraded, `3` engine or config error ([section 3](#the-exit-code-contract)), and each command's own codes ([knowledge base, section 5](knowledge-base.md#5-exit-code-reference)) | tested command by command where each code is decided, for example `tests/unit/test_cli_main.py` (a malformed invocation exits `3`) and `tests/unit/test_check_hook_stdin.py` (`--strict` turns `2` into `1`); `test_cli_surface.py` checks that every command has a row in the knowledge base's exit-code table. No single test freezes the whole table. |
+| `check --json` | the top-level keys, every finding's keys (the `Finding` fields plus `escalated_by_ratchet` and `verdict_before_ratchet`), the keys of a `refs_moved` and a `stale_overrides` entry, and `schema_version` 1 ([section 4](#machine-readable-output---json)) | pinned: `tests/unit/test_reporter_json_surface.py` |
+| Ledger statuses | `open`, `fixed`, `overridden`, `historical`, `rotated`, `not_a_secret`, `unreachable`, `superseded`, `out_of_scope`, `pending_retest` | pinned: `tests/unit/test_ledger_status_enum.py` |
+| `aramid.toml` keys | every key aramid reads, with its type, and the keys of an `[[llm.ladder]]` entry ([knowledge base, section 2](knowledge-base.md#2-configuration-reference)) | pinned: `tests/unit/test_config_keys_surface.py` |
+| MCP tools | the ten tool names and their parameters, listed below | names pinned: `tests/unit/test_mcp_tools.py`; the parameters of the first seven tools pinned by the same file; the parameters of the three handover tools promised |
+| Environment variables | `ARAMID_ACCEPT_DEGRADED`, `ARAMID_HOOK` and `ARAMID_FLEET_DIR`, listed below | promised; no test freezes the set. `tests/integration/test_check.py` sets `ARAMID_ACCEPT_DEGRADED` by name and `tests/unit/test_hooks.py` checks `ARAMID_HOOK` in the hook shims; `tests/unit/test_fleet_docs.py` checks that this guide names `ARAMID_FLEET_DIR`, but no test checks that aramid reads that name |
+| `.aramid-suppressions.toml` | `[[suppress]]` entries with `id`, `tool`, `rule`, `path` and `reason` ([section 5](#suppressing-a-finding-for-the-whole-team--aramid-suppressionstoml)) | promised; `tests/unit/test_config.py` reads entries in this format, but no test freezes the keys |
+| Finding fingerprint | a finding's `id`: SHA-256 over the tool, the rule id, the normalized path, a hash of the whitespace-normalized line, and the occurrence index | promised; `tests/unit/test_fingerprint.py` checks how paths and lines are normalized, but no test freezes the value it produces |
+| No Python API | aramid is used through its CLI (`aramid ...` or `python -m aramid ...`) and its MCP server (`python -m aramid.mcp`). Importing its modules is not supported: anything under `aramid.` other than those two entry points may change in any release | nothing to pin |
+
+**The MCP tools**, served by the entry `aramid init` registers in `.mcp.json`:
+
+| Tool | Parameters |
+|---|---|
+| `aramid_check` | `gate` (`pre-commit`, `pre-push` or `all`), `staged` (boolean), `strict` (boolean) |
+| `aramid_status` | none |
+| `aramid_ledger_filter` | `status`, `tool`, `rule`, `severity` (strings) |
+| `aramid_resolvers` | none |
+| `aramid_override` | `id`, `reason` (both required) |
+| `aramid_mark_not_a_secret` | `id`, `reason` (both required) |
+| `aramid_mark_rotated` | `id`, `reason` (both required) |
+| `aramid_handover_show` | none |
+| `aramid_handover_write` | `body` (required), `author`, `replace` (boolean) |
+| `aramid_handover_done` | none |
+
+**The environment variables:**
+
+- `ARAMID_ACCEPT_DEGRADED`: its value is used as `check --accept-degraded --reason <value>` when the flag is not given; hooks inherit it from git ([section 4](#ci--automation-flags)).
+- `ARAMID_HOOK`: set by the hook shims aramid writes (`ARAMID_HOOK=<gate>`); it tells the gate that git is on the other end of stdin ([section 2](#the-hooks-it-installs)).
+- `ARAMID_FLEET_DIR`: moves the fleet store (the health rows, the verdict, `fleet.toml` and the notices) away from `~/.aramid` ([section 7](#fleet-health-10-readiness-and-notices)).
+
+### What is not declared
+
+Anything not listed above is outside the promise. Two cases worth naming:
+
+- `ARAMID_HANDOVER_KEY_FILE`, `ARAMID_TOOLS_DIR` and `ARAMID_CONSUMER_WORKTREE`. aramid uses them to isolate its own test suite, the fuzz sandbox and its consumer subprocesses, and they may change in any release.
+- The other `--json` documents (`ledger filter`, `ledger consumers`, `resolvers`, `mutation-score`, `fleet`). [Section 4](#machine-readable-output---json) describes them and how each is versioned, but their keys are not part of this declaration.

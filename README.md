@@ -80,6 +80,7 @@ list`). In a log or CI step the same line is written afresh at most every
 
 - **[User Guide](https://github.com/jared0565/aramid/blob/main/docs/user-guide.md)** — task-oriented walkthrough: install, onboarding, the gate, running checks, the red-team drain, and each consumer.
 - **[Known limitations](https://github.com/jared0565/aramid/blob/main/docs/user-guide.md#12-known-limitations)** — what aramid does not do, or does imperfectly, and what to do about each.
+- **[Compatibility promise](https://github.com/jared0565/aramid/blob/main/docs/user-guide.md#13-compatibility-promise)** — what scripts, CI jobs and agents can rely on across releases, before 1.0 and from 1.0, and which of those promises a test enforces.
 - **[Knowledge Base](https://github.com/jared0565/aramid/blob/main/docs/knowledge-base.md)** — reference: concepts glossary, full configuration reference, consumer reference, CLI commands, and exit codes.
 - **Design specs & implementation plans** — `docs/superpowers/specs/` and `docs/superpowers/plans/`.
 - **[Security policy](https://github.com/jared0565/aramid/blob/main/SECURITY.md)** — how to report a vulnerability privately, what is in and out of scope, supported versions, and how to verify a release.

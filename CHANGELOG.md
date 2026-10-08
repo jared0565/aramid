@@ -19,6 +19,18 @@ to publish a tag that disagrees with it.
   one with its consequence and what to do about it, and the README links
   to it. Each entry was checked against the code before it was written.
   Docs only; no behaviour changed.
+- **The compatibility promise is declared where users read it.** Which parts
+  of aramid scripts and CI jobs may rely on was listed only in `RELEASING.md`
+  (five parts) and the release plan (the rest, written before the three MCP
+  handover tools existed). The
+  user guide's new section 13, *Compatibility Promise*, declares each part
+  (the CLI, exit codes, `check --json`, ledger statuses, `aramid.toml` keys,
+  the MCP tools and their parameters, three environment variables, the
+  `.aramid-suppressions.toml` format and the finding fingerprint, and that
+  there is no Python API), says what holds before 1.0 and what holds from
+  1.0.0, and names the test that pins each part or says that none does yet.
+  `RELEASING.md`'s 1.0 gate now points at it, and the README links to it.
+  Docs only; no behaviour changed.
 
 ## [0.20.5] — 2026-10-07
 
