@@ -45,22 +45,32 @@ CONTENT_UNREADABLE = "\x00aramid:line-unreadable"
 CMD_EXE_LINE_LIMIT = 8191
 
 
+def cmd_line_length(argv) -> int:
+    """`argv`'s command line as cmd.exe counts it: the line CreateProcess
+    receives (`subprocess.list2cmdline`), in UTF-16 units, so a character
+    outside the BMP is two."""
+    return len(subprocess.list2cmdline(argv).encode("utf-16-le")) // 2
+
+
 def cmd_exe_line_budget() -> int:
-    """The longest line a `.cmd` / `.bat` launch may have, counted as
-    `subprocess.list2cmdline` renders it.
+    """The longest line a `.cmd` / `.bat` launch may have, in
+    `cmd_line_length`'s units.
 
     CreateProcess runs a batch file as `%COMSPEC% /c <line>`, and cmd.exe
-    holds that WHOLE line to the limit, so the interpreter's own path and
-    ` /c ` come off the top. COMSPEC is this process's, not the child's:
-    CreateProcess reads the caller's. Measured 2026-10-08, Windows 11: with
+    holds that WHOLE line to the limit, so the interpreter's own path --
+    quoted when it holds a space -- and ` /c ` come off the top. COMSPEC is
+    this process's, not the child's: CreateProcess reads the caller's.
+    Measured 2026-10-08, Windows 11, with a .cmd writing a marker: with
     COMSPEC=C:\\WINDOWS\\system32\\cmd.exe a line of 8,160 runs and 8,161 is
     refused (27 + 4 under 8,191); a COMSPEC 24 characters longer moved the
     boundary down by exactly 24; one set only in the child's environment
-    moved it not at all; with COMSPEC unset the boundary was 8,160 again,
-    the system directory's cmd.exe."""
+    moved it not at all; with COMSPEC unset it was 8,160 again, the system
+    directory's cmd.exe; a 130-character COMSPEC with a space put it at
+    8,055, two under the unquoted 8,057; and a line of 8,160 code points with
+    one character outside the BMP was refused."""
     comspec = os.environ.get("COMSPEC") or os.path.join(
         os.environ.get("SystemRoot", r"C:\Windows"), "system32", "cmd.exe")
-    return CMD_EXE_LINE_LIMIT - len(comspec) - len(" /c ")
+    return CMD_EXE_LINE_LIMIT - cmd_line_length([comspec]) - len(" /c ")
 
 
 def scanned_line_reader(root):
@@ -664,7 +674,7 @@ def run_subprocess(argv, cwd: Path, timeout_s: float, env=None, *,
     # refused inside it. Such a runner batches under its own headroom and
     # judges an exit 1 that reported nothing, as the eslint adapter does.
     if Path(argv[0]).suffix.lower() in (".cmd", ".bat"):
-        line = len(subprocess.list2cmdline(argv))
+        line = cmd_line_length(argv)
         budget = cmd_exe_line_budget()
         if line > budget:
             return RunnerResult(tool, ToolState.CRASHED,

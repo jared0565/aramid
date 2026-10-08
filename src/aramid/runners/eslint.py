@@ -6,13 +6,13 @@ globally-installed eslint -- a global eslint may not match the repo's
 configured rules/plugins and would produce misleading results.
 """
 import json
-import subprocess
 import sys
 from dataclasses import replace
 from pathlib import Path
 
 from aramid.normalizer import RawFinding
-from aramid.runners.base import CMD_EXE_LINE_LIMIT, RunnerResult, ToolState, run_subprocess
+from aramid.runners.base import (CMD_EXE_LINE_LIMIT, RunnerResult, ToolState, cmd_line_length,
+                                 run_subprocess)
 from aramid.runners._util import json_or_crashed, relativize
 
 NAME = "eslint"
@@ -49,11 +49,14 @@ def _line_budget(binp: Path) -> int | None:
     worth batching for.
 
     On Windows the binary is npm's `eslint.cmd` shim, so the line goes through
-    cmd.exe, which refuses anything over 8,191 characters: it prints "The
-    command line is too long." and exits 1 -- an exit code eslint itself uses
-    for "problems reported" (FN-34, channel round 314: a whole-tree run read
-    as a clean lint). A POSIX binary is exec'd directly, where the limit is
-    far beyond any file list a gate builds."""
+    cmd.exe, which refuses one over its limit: it prints "The command line is
+    too long." and exits 1 -- an exit code eslint itself uses for "problems
+    reported" (FN-34, channel round 314: a whole-tree run read as a clean
+    lint). The launcher refuses a line over `base.cmd_exe_line_budget()`
+    (8,160 on a standard install) without starting it; this budget sits well
+    under that, because the shim then re-expands the line with node's path and
+    eslint's script in front. A POSIX binary is exec'd directly, where the
+    limit is far beyond any file list a gate builds."""
     if binp.suffix.lower() in (".cmd", ".bat"):
         return CMD_EXE_LINE_LIMIT - _CMD_SHIM_HEADROOM
     return None
@@ -61,19 +64,20 @@ def _line_budget(binp: Path) -> int | None:
 
 def _batches(prefix: list[str], files: list[str], budget: int | None) -> list[list[str]]:
     """`files` split, in order, so that every `prefix + batch` stays within
-    `budget` as `subprocess.list2cmdline` renders it -- the exact line
-    CreateProcess receives, quoting included. A file that alone does not fit
-    gets a batch of its own; the launcher refuses that one, visibly."""
+    `budget` as `base.cmd_line_length` counts it -- the exact line
+    CreateProcess receives, quoting included, in the UTF-16 units cmd.exe
+    counts, as the launcher measures it. A file that alone does not fit gets
+    a batch of its own; the launcher refuses that one, visibly."""
     if budget is None:
         return [files]
     out: list[list[str]] = []
     batch: list[str] = []
-    length = len(subprocess.list2cmdline(prefix))
+    length = cmd_line_length(prefix)
     for f in files:
-        cost = 1 + len(subprocess.list2cmdline([f]))     # a space, then the quoted path
+        cost = 1 + cmd_line_length([f])     # a space, then the quoted path
         if batch and length + cost > budget:
             out.append(batch)
-            batch, length = [], len(subprocess.list2cmdline(prefix))
+            batch, length = [], cmd_line_length(prefix)
         batch.append(f)
         length += cost
     if batch:

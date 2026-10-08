@@ -310,6 +310,16 @@ def test_a_batch_file_over_cmd_exe_s_limit_is_refused_not_launched(tmp_path):
     assert not marker.exists()
     assert f"{budget + 1:,} characters, over the {budget:,} cmd.exe allows" in over.stderr
 
+    # cmd.exe counts UTF-16 units: the budget in code points, one of them
+    # outside the BMP, is one unit over -- refused directly, never started.
+    wide = argv_of(budget)
+    wide[1] = "\U0001F600" + wide[1][1:]
+    assert len(subprocess.list2cmdline(wide)) == budget
+    direct = subprocess.run(wide, capture_output=True)
+    assert direct.returncode == 1 and not marker.exists()
+    assert run_subprocess(wide, tmp_path, 30).state is ToolState.CRASHED
+    assert not marker.exists()
+
 
 def test_the_cmd_exe_budget_is_held_at_its_boundary_and_only_against_a_batch_file(tmp_path, monkeypatch):
     """FN-34, on every leg. The test above is the only one that launches a
@@ -370,3 +380,39 @@ def test_the_cmd_exe_budget_is_held_at_its_boundary_and_only_against_a_batch_fil
     monkeypatch.delenv("COMSPEC", raising=False)
     monkeypatch.setenv("SystemRoot", r"C:\WINDOWS")
     assert base.cmd_exe_line_budget() == 8160, "unset: the system directory's cmd.exe"
+
+
+def test_the_budget_counts_what_cmd_exe_counts(tmp_path, monkeypatch):
+    """cmd.exe counts UTF-16 units, and a COMSPEC holding a space reaches it
+    quoted. Measured 2026-10-08: a line of 8,160 code points carrying one
+    character outside the BMP (8,161 units) was refused while the same line
+    one code point shorter ran; a 130-character COMSPEC with a space put the
+    boundary at 8,055, two under the unquoted 8,057. Counting code points,
+    or the bare COMSPEC, started both lines cmd.exe then refused."""
+    class Launched(Exception):
+        pass
+
+    launched = []
+
+    def popen(argv, *args, **kwargs):
+        launched.append(list(argv))
+        raise Launched
+
+    monkeypatch.setattr(base.subprocess, "Popen", popen)
+    monkeypatch.setenv("COMSPEC", r"C:\WINDOWS\system32\cmd.exe")
+    program = tmp_path / "tool.cmd"
+    program.write_text("", encoding="utf-8")
+    exe = str(base.toolpath.resolve(str(program)))
+    wide = "\U0001F600" + "y" * (8160 - len(subprocess.list2cmdline([exe])) - 2)
+    assert len(subprocess.list2cmdline([exe, wide])) == 8160          # code points
+
+    over = run_subprocess([str(program), wide], tmp_path, 30)
+    assert over.state is ToolState.CRASHED
+    assert "its command line is 8,161 characters, over the 8,160" in over.stderr
+    assert launched == []
+    with pytest.raises(Launched):
+        run_subprocess([str(program), wide[:-1]], tmp_path, 30)      # 8,160 units
+    assert len(launched) == 1
+
+    monkeypatch.setenv("COMSPEC", r"C:\Program Files\x\cmd.exe")      # 26, quoted 28
+    assert base.cmd_exe_line_budget() == 8191 - 28 - 4

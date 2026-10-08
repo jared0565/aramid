@@ -430,6 +430,24 @@ def test_one_failing_batch_degrades_the_whole_run(tmp_path, monkeypatch):
     assert result.examined == frozenset()
 
 
+def test_batches_are_sized_in_the_units_cmd_exe_counts():
+    """cmd.exe counts UTF-16 units, so a file name with a character outside
+    the BMP costs one more than its code points. Sized in code points, a
+    batch one unit over the budget went out whole -- and the launcher, which
+    counts units, refused it."""
+    prefix = ["eslint.cmd", "-f", "json"]
+    files = ["src/\U0001F600.js", "src/b.js"]
+
+    def units(argv):
+        return len(subprocess.list2cmdline(argv).encode("utf-16-le")) // 2
+
+    budget = units([*prefix, *files]) - 1
+    assert len(subprocess.list2cmdline([*prefix, *files])) == budget  # fits in code points
+    batches = eslint._batches(prefix, files, budget)
+    assert batches == [["src/\U0001F600.js"], ["src/b.js"]]
+    assert all(units([*prefix, *b]) <= budget for b in batches)
+
+
 def test_only_a_batch_file_binary_is_held_to_cmd_exe_s_limit():
     assert eslint._line_budget(Path("node_modules/.bin/eslint")) is None
     budget = eslint._line_budget(Path("node_modules/.bin/eslint.cmd"))
