@@ -14,6 +14,26 @@ to publish a tag that disagrees with it.
 
 ### Fixed
 
+- **A secret you have already judged no longer tells you to rotate it.**
+  When a gitleaks finding blocks, the gate printed "rotate the credential
+  -- deleting the line does not fix the leak" under it, whatever its
+  ledger said. A history-scan secret whose value is still in a tracked
+  file blocks every whole-tree scan (`--all`, and CI) even after
+  `ledger mark-not-a-secret` or `ledger mark-rotated`. That is by design:
+  a ledger mark is local and never unblocks a gate, and CI has no ledger.
+  Reported by a consumer on 0.20.3, whose not-a-secret client id blocked
+  their first whole-tree scan; reproduced here. The gate now names the
+  mark and the remedy that works: a committed `.aramid-suppressions.toml`
+  entry for a value that is not a secret (measured: the whole-tree scan
+  then passes, on a fresh clone too), or deleting a rotated value. A
+  finding that a suppression or override has already set aside prints no
+  remedy at all. `mark-not-a-secret` and `mark-rotated` add a note when
+  the finding's file is still in the tree. The user guide's example for
+  `mark-not-a-secret` (a client id in `wrangler.toml`) and the `ARAMID.md`
+  template now say the mark alone is not enough while the value is in a
+  tracked file; a consumer's `ARAMID.md` picks that up on its next
+  `aramid init` after a release. An unmarked historical secret keeps
+  "rotate the credential".
 - **On Windows, eslint no longer reads as a clean lint when cmd.exe
   refuses its command line.** eslint is launched through npm's
   `eslint.cmd` shim, so its command line goes through cmd.exe, which

@@ -275,4 +275,10 @@ rotate it**, then retire the finding with `aramid ledger mark-rotated <id>
 all (common with gitleaks' `generic-api-key` rule), `mark-not-a-secret`
 instead of `mark-rotated`.
 
+Either mark is local and never unblocks a gate. A hit whose value is still
+in a tracked file blocks every whole-tree scan (`aramid check --all`, and
+CI) whatever it is marked: delete a rotated value, and for one that is not a
+secret commit an `.aramid-suppressions.toml` entry for its id with the same
+reason.
+
 <!-- /aramid:managed -->

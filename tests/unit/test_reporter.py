@@ -2,7 +2,7 @@ import json
 
 from aramid import reporter
 from aramid.ledger import Ledger
-from aramid.models import Finding, Gate, Severity, Verdict
+from aramid.models import Event, EventType, Finding, Gate, Severity, Verdict
 from aramid.pipeline import GateResult
 from aramid.policy import OverrideRecord
 
@@ -146,6 +146,86 @@ def test_non_secret_finding_has_no_rotate_warning(tmp_path):
 
     assert "rotate the credential" not in out
     ledger.close()
+
+
+# FN-35 (channel round 315): a history-scan secret still in the tree blocks a
+# whole-tree scan whatever the user has marked it -- a ledger mark is local and
+# never unblocks a gate, and CI has no ledger. The remedy printed under it must
+# follow the mark: "rotate the credential" told a user who had judged it a public
+# id, or had already rotated it, to do the one thing that does not help.
+
+def _adjudicated(tmp_path, status, reason):
+    ledger = Ledger(tmp_path / "l.db")
+    ledger.record_run("r0", "t0", "historical-scan", {"gitleaks"}, set(), [
+        Finding("sec1", "gitleaks", "generic-api-key", "high", Severity.HIGH, Verdict.BLOCK,
+                "wrangler.toml", 17, "m", "e", Gate.ALL, historical=True)])
+    kind = {"not_a_secret": EventType.FINDING_NOT_A_SECRET,
+            "rotated": EventType.FINDING_ROTATED}.get(status)
+    if kind is not None:
+        ledger.append(Event(kind, "r1", "t1", finding_id="sec1", payload={"reason": reason}))
+    return ledger
+
+
+def _remedy_lines(tmp_path, status, reason="public client id"):
+    ledger = _adjudicated(tmp_path, status, reason)
+    result = GateResult(exit_code=1, findings=[_f("sec1", tool="gitleaks", rule="generic-api-key",
+                                                  verdict=Verdict.BLOCK, file="wrangler.toml",
+                                                  line=39)],
+                        degraded=[], new_ids=[], stale_overrides=[], run_id="r2")
+    lines = reporter.render_console(result, ledger).splitlines()
+    ledger.close()
+    i = next(n for n, line in enumerate(lines) if "sec1" in line)
+    return lines[i + 1:i + 3]
+
+
+def test_a_not_a_secret_finding_names_the_remedy_that_unblocks_it(tmp_path):
+    assert _remedy_lines(tmp_path, "not_a_secret") == [
+        "      marked not-a-secret in this ledger (public client id): a local, reporting-only "
+        "mark that never unblocks a gate.",
+        "      This gate found the value again; to stop it blocking here and in CI, add this "
+        "id to .aramid-suppressions.toml with that reason.",
+    ]
+
+
+def test_a_not_a_secret_finding_with_no_recorded_reason_asks_for_one(tmp_path):
+    assert _remedy_lines(tmp_path, "not_a_secret", reason="") == [
+        "      marked not-a-secret in this ledger: a local, reporting-only mark that never "
+        "unblocks a gate.",
+        "      This gate found the value again; to stop it blocking here and in CI, add this "
+        "id to .aramid-suppressions.toml with a reason.",
+    ]
+
+
+def test_a_rotated_finding_says_the_dead_value_can_go(tmp_path):
+    assert _remedy_lines(tmp_path, "rotated") == [
+        "      marked rotated in this ledger: the old value is dead, but this gate found it "
+        "again, so it keeps blocking here and in CI.",
+        "      Delete it from the file, or, if it must stay, add this id to "
+        ".aramid-suppressions.toml with a reason.",
+    ]
+
+
+def test_a_suppressed_secret_gets_no_rotate_line(tmp_path):
+    """INFO is what a committed .aramid-suppressions.toml entry (or a WARN
+    override) makes of a finding: the team has judged it, and the gate is not
+    failing on it. Measured on a fresh clone with the entry committed: rc 0,
+    the finding printed as [INFO] -- under "rotate the credential"."""
+    ledger = Ledger(tmp_path / "l.db")
+    result = GateResult(exit_code=0, findings=[_f("sec1", tool="gitleaks", verdict=Verdict.INFO)],
+                        degraded=[], new_ids=["sec1"], stale_overrides=[], run_id="r1")
+
+    out = reporter.render_console(result, ledger)
+
+    assert "sec1" in out
+    assert "rotate the credential" not in out
+    ledger.close()
+
+
+def test_an_unmarked_history_finding_still_says_rotate(tmp_path):
+    # Nobody has reviewed it: suggesting suppression here would invite
+    # suppressing a real secret.
+    assert _remedy_lines(tmp_path, "historical")[0] == (
+        "      rotate the credential — deleting the line does not fix the leak")
 
 
 # --------------------------------------------------------- stale overrides ---

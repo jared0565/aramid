@@ -334,6 +334,18 @@ def cmd_ledger_consumers(root, consumer: str | None = None, last: int | None = N
 
 # ----------------------------------------------------------- mark-rotated ---
 
+def _still_in_tree(root: Path, rec: dict) -> bool:
+    """Whether a marked secret's file is still in the working tree (FN-35).
+
+    The two marks below write the gitignored ledger, and a ledger mark never
+    unblocks a gate, so a value still in its file blocks every whole-tree
+    scan, and CI, whatever it is marked. aramid knows only that the FILE is
+    there -- the value itself is never stored -- so the note is worded
+    conditionally."""
+    file = rec.get("file")
+    return bool(file) and (root / file).is_file()
+
+
 def cmd_ledger_mark_rotated(root, finding_id: str, reason: str) -> int:
     root = Path(root)
     reason = (reason or "").strip()
@@ -360,6 +372,10 @@ def cmd_ledger_mark_rotated(root, finding_id: str, reason: str) -> int:
         ledger.append(Event(EventType.FINDING_ROTATED, uuid.uuid4().hex, _now(),
                              finding_id=finding_id, payload={"reason": reason}))
         print(f"aramid: ledger: {finding_id} marked rotated ({reason})")
+        if _still_in_tree(root, rec):
+            print(f"aramid: note: {rec['file']} is still in the tree. If the old value is "
+                  "still in it, every whole-tree scan (and CI) keeps flagging it: delete it "
+                  "(it is dead now), or add the id to .aramid-suppressions.toml with a reason.")
         return 0
     finally:
         ledger.close()
@@ -404,6 +420,11 @@ def cmd_ledger_mark_not_a_secret(root, finding_id: str, reason: str) -> int:
         ledger.append(Event(EventType.FINDING_NOT_A_SECRET, uuid.uuid4().hex, _now(),
                              finding_id=finding_id, payload={"reason": reason}))
         print(f"aramid: ledger: {finding_id} marked not-a-secret ({reason})")
+        if _still_in_tree(root, rec):
+            print(f"aramid: note: {rec['file']} is still in the tree. If the value is still "
+                  "in it, every whole-tree scan (and CI) keeps blocking on it: this mark is "
+                  "reporting-only. To stop that, add the id to .aramid-suppressions.toml "
+                  "with this reason.")
         return 0
     finally:
         ledger.close()

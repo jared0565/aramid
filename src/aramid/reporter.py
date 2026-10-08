@@ -16,7 +16,32 @@ from aramid.pipeline import GateResult
 ROTATE_WARNING = "rotate the credential — deleting the line does not fix the leak"
 
 
-def _render_finding(f: Finding, log_paths: dict | None = None) -> str:
+def _secret_remedy(status: str | None, reason: str) -> list[str]:
+    """What to do about a gitleaks finding, by what its ledger already says.
+
+    A history-scan secret still in the tree blocks every whole-tree scan
+    whatever the user has marked it: the mark lives in the gitignored ledger,
+    never unblocks a gate, and CI has no ledger at all. "rotate the credential"
+    under a finding the user judged a public id, or had already rotated, named
+    the one step that does not help (FN-35, channel round 315). An unmarked
+    finding keeps it: nobody has reviewed that one, and suggesting suppression
+    there invites suppressing a real secret."""
+    if status == "not_a_secret":
+        why = f" ({reason})" if reason else ""
+        which = "that reason" if reason else "a reason"
+        return [f"marked not-a-secret in this ledger{why}: a local, reporting-only mark "
+                "that never unblocks a gate.",
+                "This gate found the value again; to stop it blocking here and in CI, add "
+                f"this id to .aramid-suppressions.toml with {which}."]
+    if status == "rotated":
+        return ["marked rotated in this ledger: the old value is dead, but this gate found "
+                "it again, so it keeps blocking here and in CI.",
+                "Delete it from the file, or, if it must stay, add this id to "
+                ".aramid-suppressions.toml with a reason."]
+    return [ROTATE_WARNING]
+
+
+def _render_finding(f: Finding, log_paths: dict | None = None, state: dict | None = None) -> str:
     # ASCII `--`, for the reason `ledger_cmd._render_row` is: a literal U+2014
     # goes out as the single byte 0x97 under a redirected stdout on Windows,
     # which is not valid UTF-8. `cli.main` now reconfigures the stream so this
@@ -24,8 +49,12 @@ def _render_finding(f: Finding, log_paths: dict | None = None) -> str:
     # separator to be non-ASCII and every other rendered line here already
     # uses `--`.
     line = f"  [{f.verdict.value.upper()}] {f.id} {f.tool}:{f.rule} {f.file}:{f.line} -- {f.message}"
-    if f.tool == "gitleaks":
-        line += f"\n      {ROTATE_WARNING}"
+    # INFO is what a committed suppression (or a WARN override) makes of a
+    # finding: the team has judged it, and nothing is failing on it.
+    if f.tool == "gitleaks" and f.verdict is not Verdict.INFO:
+        rec = (state or {}).get(f.id) or {}
+        for text in _secret_remedy(rec.get("status"), rec.get("reason") or ""):
+            line += f"\n      {text}"
     # A `<...>` marker is not a location -- it is a label standing in for a
     # finding that has no file (`ledger._is_synthetic_path`, reused rather than
     # re-matched because its own docstring asks new consumers to inherit the
@@ -84,15 +113,19 @@ def render_console(result: GateResult, ledger: Ledger) -> str:
     still_blocking = [f for f in baseline_findings if f.verdict is Verdict.BLOCK]
     quiet_baseline = [f for f in baseline_findings if f.verdict is not Verdict.BLOCK]
 
+    # Read only when a secret is shown: what the user has marked it decides
+    # the remedy printed under it (`_secret_remedy`).
+    state = (ledger.open_findings()
+             if any(f.tool == "gitleaks" for f in new_findings + still_blocking) else {})
     if new_findings:
         lines.append(f"NEW findings ({len(new_findings)}):")
         for f in new_findings:
-            lines.append(_render_finding(f, result.log_paths))
+            lines.append(_render_finding(f, result.log_paths, state))
     if still_blocking:
         lines.append(f"STILL BLOCKING ({len(still_blocking)}) -- seen before, "
                      "and still failing this gate:")
         for f in still_blocking:
-            lines.append(_render_finding(f, result.log_paths))
+            lines.append(_render_finding(f, result.log_paths, state))
     if quiet_baseline:
         lines.append(f"(+{len(quiet_baseline)} baseline findings)")
     if not result.findings:

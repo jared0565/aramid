@@ -117,6 +117,22 @@ def test_mark_rotated_appends_exactly_one_event_from_historical(tmp_path, capsys
               payload={"reason": "rotated in vault 2026-09-14"})]
 
 
+def test_mark_rotated_notes_a_file_still_in_the_tree(tmp_path, capsys, clock):
+    """FN-35: the mark is in the gitignored ledger, so a dead value left in
+    the file keeps blocking every whole-tree scan, and CI. Said once, here,
+    conditionally: aramid knows the file is there, not that the value is."""
+    (tmp_path / "a.py").write_text("x\n", encoding="utf-8")
+    _seed(tmp_path, _f("h1", tool="gitleaks", historical=True))
+
+    assert cmd_ledger_mark_rotated(tmp_path, "h1", "rotated in vault") == 0
+
+    assert capsys.readouterr() == (
+        "aramid: ledger: h1 marked rotated (rotated in vault)\n"
+        "aramid: note: a.py is still in the tree. If the old value is still in it, every "
+        "whole-tree scan (and CI) keeps flagging it: delete it (it is dead now), or add the "
+        "id to .aramid-suppressions.toml with a reason.\n", "")
+
+
 def test_mark_rotated_also_accepts_a_not_a_secret_finding(tmp_path, capsys, clock):
     _seed(tmp_path, _f("h1", tool="gitleaks", historical=True), status="not_a_secret")
 
@@ -168,6 +184,22 @@ def test_mark_not_a_secret_appends_exactly_one_event_from_historical(tmp_path, c
     assert _appended(tmp_path, EventType.FINDING_NOT_A_SECRET) == [
         Event(EventType.FINDING_NOT_A_SECRET, RUN, AT, finding_id="h1",
               payload={"reason": "example key in a fixture"})]
+
+
+def test_mark_not_a_secret_notes_a_file_still_in_the_tree(tmp_path, capsys, clock):
+    """FN-35 (channel round 315): marked not-a-secret, the value still in the
+    file blocked the consumer's first whole-tree scan. The mark is reporting-
+    only by design; the success line must not read as if it settled that."""
+    (tmp_path / "a.py").write_text("x\n", encoding="utf-8")
+    _seed(tmp_path, _f("h1", tool="gitleaks", historical=True))
+
+    assert cmd_ledger_mark_not_a_secret(tmp_path, "h1", "public client id") == 0
+
+    assert capsys.readouterr() == (
+        "aramid: ledger: h1 marked not-a-secret (public client id)\n"
+        "aramid: note: a.py is still in the tree. If the value is still in it, every "
+        "whole-tree scan (and CI) keeps blocking on it: this mark is reporting-only. To stop "
+        "that, add the id to .aramid-suppressions.toml with this reason.\n", "")
 
 
 @pytest.mark.parametrize("reason", ["", "   ", None])
