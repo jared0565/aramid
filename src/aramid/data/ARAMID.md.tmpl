@@ -16,9 +16,6 @@ aramid check --all --strict --json                    # pre-commit tier
 aramid check --gate pre-push --all --strict --json    # pre-push tier
 ```
 
-On a fresh checkout (no `.aramid/` kept between runs), `aramid check --gate all
---all --strict --json` runs both tiers in one step.
-
 - **Detected stack:** __STACK__
 - **Package manager:** __PKG_MGR__
 - **Onboarded:** __DATE__
@@ -173,7 +170,7 @@ suite, or a Rust crate whose tests are all inline `#[cfg(test)]` modules
 are all invisible to it. If that's this repo's suite, the tests runner is
 never *selected* at all (not degraded, just absent), so the gate can exit
 clean without ever running it. aramid prints a stderr notice whenever a
-pre-push gate recognizes no suite -- if you see it, set `[tests].command`
+gate that runs the tests recognizes no suite -- if you see it, set `[tests].command`
 to point aramid at your suite explicitly.
 
 **Dual-stack repo?** If this repo has both a real Python test file

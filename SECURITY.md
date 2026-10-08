@@ -83,9 +83,8 @@ documentation is unclear.
   not run `aramid arm --agent`. Local hooks are a convenience; the enforcement
   boundary is CI running both tiers over the whole tree, as the README states:
   `aramid check --all --strict --json` and
-  `aramid check --gate pre-push --all --strict --json`, or on a fresh checkout
-  the one step `aramid check --gate all --all --strict --json`. Either tier
-  alone is not the boundary: the first misses semgrep and the tests, the
+  `aramid check --gate pre-push --all --strict --json`. Either tier alone is
+  not the boundary: the first misses semgrep and the tests, the
   second misses ruff. The agent-side rejector exists for AI agents, not as a
   substitute for CI.
 - Findings that an upstream analyzer (gitleaks, semgrep, ruff, pip-audit,

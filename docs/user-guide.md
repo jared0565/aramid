@@ -123,7 +123,7 @@ Once hooks are installed, every commit and push runs a fixed set of runners per 
 | Gate | Runners |
 |---|---|
 | `pre-commit` | gitleaks, ruff |
-| `pre-push` | gitleaks, semgrep, eslint, typecheck, deps, tests |
+| `pre-push` | gitleaks, semgrep, eslint, clippy, typecheck, deps, tests, shadow |
 | `all` (`aramid check --gate all`) | both tiers: every runner either hook gate runs, ruff included |
 
 Each runner also has to be *applicable* to actually run: ruff only if the repo has a Python stack, eslint only if it has a JS stack, typecheck only if a `tsconfig`/mypy config is present (and mypy is handed only the in-range Python files inside the repo's own `[tool.mypy] files`/`exclude`, when set -- what the gate types is what the repo types), deps only if a package manager, a `requirements*.txt`, or a `pyproject.toml` with a `[project]` table exists (pip-audit audits the requirements files when there are any, else the pyproject's declared dependencies in project-path mode -- about 40 s at pre-push; a tool-only pyproject is not a dependency source, and `doctor` says so when a Python repo has nothing to audit), tests only if a test suite is detected (or `[tests].command` is set). gitleaks and semgrep are always applicable. A runner that isn't applicable is simply never selected — it never counts as "degraded."
@@ -855,7 +855,7 @@ aramid check --gate pre-push --all --strict --json
 
 These are the two steps aramid's own CI runs. `--all` widens the file set; it does not change which runners run, which is `--gate`'s job ([section 4](#scan-mode)). So the first step is the pre-commit tier (gitleaks and ruff), and the second is the pre-push tier (gitleaks, semgrep, the dependency audit, the tests, and the other pre-push runners that apply). Neither step alone is a backstop: the first never runs semgrep or the tests, and the second never runs ruff. A bare `aramid check --strict --json` is not one either: it scans the staged files, and a CI checkout has nothing staged.
 
-On a fresh checkout, one step does the same job: `aramid check --gate all --all --strict --json` runs every runner of both tiers. It never ratchets, and it skips the pre-push gate's ledger gates (the LLM and mutation gates, which act on what the drain recorded in `.aramid/`). On a fresh checkout neither has anything to act on. If you keep `.aramid/` between CI runs, use the two steps.
+`aramid check --gate all --all --strict --json` runs the runners of both tiers in one step, but it is not a substitute for the two: it skips everything the pre-push gate adds on top of its runners. That covers the TDD test-gap check, the ratchet, and the LLM and mutation ledger gates (which act on what the drain recorded in `.aramid/`). In a repo that has armed the TDD gate (`tdd_block_armed`), a test-gap BLOCK fails the pre-push step and passes the one-step form (measured). (The red-first proof needs a commit range, so over `--all` it runs in neither form.) Use the one step only on a fresh checkout of a repo that has not armed the TDD gate; otherwise, and whenever you keep `.aramid/` between CI runs, use the two steps.
 
 `--strict` remaps exit code `2` (degraded) to `1`, so CI never soft-passes on a tool that merely failed to run — a missing tool is treated the same as a real finding. An engine error stays `3`: it is already a hard failure, and keeping the code lets CI tell a crash from a finding. `--json` renders the report as JSON instead of the console format for your CI system to parse.
 
@@ -864,7 +864,7 @@ On a fresh checkout, one step does the same job: `aramid check --gate all --all 
 - A genuine BLOCK-tier finding ([section 3](#security-blocks-quality-warns--but-not-uniformly) lists which findings those are).
 - A degraded run (a tool missing, crashed or timed out), under `--strict`.
 - An engine or config error (exit `3`).
-- A finding from semgrep's BLOCK-tier rules, but only once semgrep is armed (`aramid arm`, [section 9](#9-the-bake-then-arm-model)). While semgrep is baking, those findings are WARN, and on a fresh checkout a WARN alone exits `0`, even under `--strict`.
+- A finding from a gate you have armed ([section 9](#9-the-bake-then-arm-model)), but only once it is armed: semgrep's BLOCK-tier rules (`aramid arm`) and the TDD test-gap check (`tdd_block_armed`, pre-push step only). The LLM and mutation ledger gates act only on a kept `.aramid/`. While a gate is baking, its findings are WARN, and on a fresh checkout a WARN alone exits `0`, even under `--strict`.
 
 On a fresh checkout the ratchet cannot fail a step by its exit code alone. A checkout without a kept `.aramid/` is a fresh ledger, so the fresh-ledger rule waves through the pre-push gate's escalation of new warnings ([section 3](#the-pre-push-no-new-warnings-ratchet); knowledge base section 5, remap layer 4). The `--json` report says so: `fresh_ledger_baseline` is `true`, and `grandfathered` lists the findings it waved through. If you want the ratchet to bite in CI, read those keys or keep `.aramid/` between runs. With a kept `.aramid/`, a new semgrep WARN during the bake is escalated at the pre-push step and fails it like any other new warning.
 

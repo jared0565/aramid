@@ -21,7 +21,7 @@ The rule-based (non-LLM) check pipeline invoked by `aramid check`, and by the in
 | Gate | Runners |
 |---|---|
 | `pre-commit` | gitleaks, ruff |
-| `pre-push` | gitleaks, semgrep, eslint, typecheck, deps, tests |
+| `pre-push` | gitleaks, semgrep, eslint, clippy, typecheck, deps, tests, shadow |
 | `all` (`aramid check --gate all`) | both tiers: every runner of `pre-commit` and `pre-push`, ruff included (`--all` alone is a scan mode, not this gate) |
 
 Each runner is additionally filtered by `_is_applicable()`: ruff only if the repo has a Python stack, eslint only if a JS stack, typecheck only if a `tsconfig`/mypy config is present (`run_mypy` then filters the in-range Python files by `typecheck.mypy_scope(root)` -- `[tool.mypy] files`/`exclude` -- and `toolset.examines_path("mypy", path, root=)` consults the same helper), deps only if a package manager or `requirements*.txt` exists, tests only if `detectors.detect_tests()` finds a suite. gitleaks and semgrep are always applicable. A non-applicable runner is never selected and never counts as "degraded." `aramid.pipeline.run_gate` recomputes `detect_stacks()`/`detect_tests()` fresh on every gate run (not just at `init` time) via a pruned walk (`node_modules/`, `venv/`, `build/`, and dot-directories excluded) — so a JS/TS repo whose only `.py` files are vendored under one of those no longer spuriously enables ruff (`ctx.stacks`) or the tests gate.
@@ -182,7 +182,7 @@ Code's own ultimate fallback if the section were entirely absent: `60.0`.
 
 ### `[tests]`
 
-The BLOCK-tier `tests` gate (pre-push and `--all`). Read by `pipeline.run_gate`, which resolves the section onto `RunContext.test_command` / `.test_timeout_s` / `.tests_enabled` — the Runner protocol is `run(ctx)`, so ctx is the only channel a runner has to config.
+The BLOCK-tier `tests` gate (`--gate pre-push` and `--gate all`). Read by `pipeline.run_gate`, which resolves the section onto `RunContext.test_command` / `.test_timeout_s` / `.tests_enabled` — the Runner protocol is `run(ctx)`, so ctx is the only channel a runner has to config.
 
 | Key | Type | Default | Meaning |
 |---|---|---|---|
@@ -446,8 +446,8 @@ Onboard a repo: write config, install hooks, seed baseline.
 
 ### `aramid check [--gate pre-commit|pre-push|all] [--staged|--range|--all] [--strict] [--json] [--accept-degraded] [--reason REASON] [--no-record]`
 Run the gate pipeline.
-- `--gate {pre-commit,pre-push,all}` (default `pre-commit`). `all` runs every tool of both hooks -- ruff runs only at pre-commit and semgrep only at pre-push, so neither hook gate sees both -- in mode `all` unless a mode flag is given. No shim invokes it, it never ratchets (the ratchet runs at `pre-push` only), and it skips the pre-push-only ledger gates (LLM, mutation); `--gate all --all --strict --json` is the one-step CI form for a fresh checkout (user guide, section 10).
-- Mode group (mutually exclusive): `--staged`, `--range`, `--all`; default is `staged` for pre-commit, `range` for pre-push.
+- `--gate {pre-commit,pre-push,all}` (default `pre-commit`). `all` runs every tool of both hooks -- ruff runs only at pre-commit and semgrep only at pre-push, so neither hook gate sees both -- in mode `all` unless a mode flag is given. No shim invokes it, it never ratchets (the ratchet runs at `pre-push` only), and it skips everything the pre-push gate adds on top of its runners: the TDD test-gap check, the red-first proof, and the LLM and mutation ledger gates (`pipeline.py`, `gate is Gate.PRE_PUSH`). `--gate all --all --strict --json` is a one-step CI form only for a fresh checkout of a repo that has not armed the TDD gate; otherwise use the two steps (user guide, section 10).
+- Mode group (mutually exclusive): `--staged`, `--range`, `--all`; default is `staged` for pre-commit, `range` for pre-push, `all` for `--gate all`.
 - `--strict` — remaps exit code 2 to 1; 3 passes through unchanged.
 - `--json` — render JSON instead of console report.
 - `--accept-degraded` — accept a degraded run; `--reason` (default `None`, falls back to `"no reason given"`) records why. Also settable via `ARAMID_ACCEPT_DEGRADED` env var.

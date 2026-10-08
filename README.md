@@ -61,8 +61,7 @@ installed hooks. Local hooks are convenience, not enforcement — `--no-verify` 
 The authoritative backstop is CI running both tiers over the whole tree, as two steps:
 `aramid check --all --strict --json` (pre-commit tier: gitleaks, ruff) and
 `aramid check --gate pre-push --all --strict --json` (pre-push tier: semgrep, the
-tests and the rest). On a fresh checkout `aramid check --gate all --all --strict --json`
-does both in one step. Either tier alone misses the other's tools; see the user
+tests and the rest). Either tier alone misses the other's tools; see the user
 guide's [CI Integration](https://github.com/jared0565/aramid/blob/main/docs/user-guide.md#10-ci-integration).
 
 The pre-push gate runs the repo's own test suite, which on a large tree can take

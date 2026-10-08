@@ -43,9 +43,11 @@ to publish a tag that disagrees with it.
   known limitations) runs only the pre-push tier, so it never runs ruff. The
   docs now give the two steps aramid's own CI runs, `aramid check --all
   --strict --json` and `aramid check --gate pre-push --all --strict --json`,
-  name `aramid check --gate all --all --strict --json` as the one-step form
-  for a fresh checkout, and say what fails a CI step while semgrep is still
-  baking. The template's test-detection paragraph, which said aramid
+  and say what fails a CI step while a gate is still baking. They also say
+  why `aramid check --gate all --all --strict --json` is not a substitute:
+  it runs both tiers' runners but skips what the pre-push gate adds on top
+  of them (the TDD test-gap check, the ratchet, the LLM and mutation ledger
+  gates), so an armed TDD gate's BLOCK passes it. The template's test-detection paragraph, which said aramid
   recognizes pytest files and an npm `test` script "and nothing more", now
   also names the cargo and go suites it has detected since 0.2.0. A
   consumer's `ARAMID.md` picks up both corrections on its next `aramid init`
