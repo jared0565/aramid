@@ -114,6 +114,30 @@ These three are git hooks -- they run outside of, and are invisible to, an agent
 
 To reverse onboarding later, `aramid uninstall [path]` removes the installed hook shims, deletes `ARAMID.md`, removes the `.gitignore` entries `init` added, removes the managed agent blocks from `CLAUDE.md`/`AGENTS.md` (deleting a file that held nothing but the block), removes aramid's hook entries from `.claude/settings.json` (deleting the file if nothing else remains in it), and deregisters the repo — but **deliberately keeps the ledger** (`.aramid/`) so security/audit history survives; delete that by hand if you genuinely don't want it.
 
+### Hooks for repos created later — `aramid hooks`
+
+`init` writes its shims into one repo's `.git/hooks`, and git neither commits nor clones that directory. A fresh clone of an onboarded repo therefore arrives with the committed `aramid.toml` and no hooks, and nothing says so. `aramid hooks` closes that gap for repos created on this machine from now on, through git's template directory:
+
+```powershell
+aramid hooks install
+aramid hooks status
+aramid hooks remove
+```
+
+- `install` writes two shims, `pre-commit` and `pre-push`, into `~/.aramid/git-template/hooks/` and sets git's global `init.templateDir` to `~/.aramid/git-template`. git copies that directory's hooks into every repo a later `git init` or `git clone` creates. git takes only one template directory, so if `init.templateDir` already names another one, `install` refuses (exit `3`) and changes nothing: copy the two shims into that directory yourself, or unset it first. Running `install` again rewrites the shims from the current aramid and interpreter.
+- `remove` unsets `init.templateDir` only when it names aramid's directory, and leaves anyone else's alone. The shim files stay on disk, unused.
+- `status` prints `installed` when `init.templateDir` names aramid's directory and both shims are there, and otherwise `not installed` with the reason. `remove` and `status` always exit `0` (unlike `aramid schedule status`), so a script has to read the line, not the exit code.
+
+A template shim does nothing in a repo without an `aramid.toml`. It asks git for the top-level directory of the working tree (`git rev-parse --show-toplevel`) and exits `0` at once, running nothing, if git cannot say or if no regular file named `aramid.toml` is there; an `aramid.toml` in a subdirectory does not count. So the shims land in every new repo on the machine but gate only the repos that have one, a file an onboarded repo commits; a clone of such a repo is gated from its first commit. There they run the same gate as the shims `init` writes: `check --gate pre-commit` or `check --gate pre-push`, with `-P` and `ARAMID_HOOK`, and the same exit-code mapping as the table above. The interpreter baked into them is the one that ran `aramid hooks install`, with the same `py -3` fallback.
+
+What the template does not do:
+
+- **It reaches new repos only.** git reads the template when it creates a repo, so repos already on disk never get these shims; run `aramid init` in them. A repo keeps the copy it was created with, so rewriting the template later does not change it.
+- **It runs no triage, and ignores `[hooks].pre_push_match_ci`.** There is no `post-commit` shim, and the `pre-push` shim always runs plain `check --gate pre-push`.
+- **It does not onboard the repo.** The registry entry that makes the repo a candidate for `aramid drain --all`, the one-time history scan and the agent hooks come only from `aramid init`.
+
+When you run `aramid init` in a repo the template seeded, it recognises the template shims as its own (they carry aramid's `# >>> aramid managed >>>` marker) and rewrites them in place as the shims in the table above, adding `post-commit`; it does not chain them as foreign hooks.
+
 ---
 
 ## 3. The Deterministic Gate on Commit/Push
@@ -174,17 +198,58 @@ The classifier (`policy.classify`) is the single source of truth, and the split 
 - **tests-tool-missing** → always `BLOCK`. Fires only when two or more suites run (any of pytest, npm, cargo and go), when one suite's own tool binary can't be resolved at all. A repo where only one suite runs, and whose one tool is missing, does **not** get this finding — it still just degrades the BLOCK tier with no finding to explain it: exit `2` normally, or exit `1` at pre-push specifically via `policy.escalate_degraded` (a pure tool-state check — unrelated to the new-findings ratchet), the same unchanged behavior as before this rule existed.
 - **dependency tools** (`pip-audit`, `npm`, `pnpm`, `yarn`) → `BLOCK` only if severity is at or above `[deps].block_severity` (default `"critical"`); otherwise `WARN`.
 - **llm-review** → the classifier itself always returns `WARN` structurally; a confirmed-critical LLM finding can only become `BLOCK` later, at the pre-push gate, once `[llm].llm_block_armed` is set (see [section 9](#9-the-bake-then-arm-model)).
+- **shadow**, **tdd**, **red-proof** and **mutation** → `WARN` until the tool's own arming flag is set, then `BLOCK`; **mutation-score** → `BLOCK` only for its `transition` rule, once armed. The first three are aramid's own checks, [described below](#aramids-own-checks-shadow-tdd-and-red-first-proof).
 - Everything else → `WARN`.
 
-So only OWASP-semgrep and LLM findings are gated by an arming flag — gitleaks, the curated ruff rules, failing tests, and ≥critical CVEs block unconditionally, bake state or not.
+So apart from aramid's own checks and the mutation gates, only the semgrep rules (the pack's and the OWASP block-list's) and LLM findings are gated by an arming flag — gitleaks, the curated ruff rules, failing tests, and ≥critical CVEs block unconditionally, bake state or not.
 
 ### The pre-push no-new-warnings ratchet
 
-At `pre-push` only, any `WARN` finding that is **new** (never seen before in the ledger) is escalated to `BLOCK`. The one exemption is the `deps.DEPS_SHAPE_DRIFT_RULE` rule, which is never ratcheted. `pre-commit` has no ratchet at all.
+At `pre-push` only, any `WARN` finding that is **new** (never seen before in the ledger) is escalated to `BLOCK`. Four kinds are exempt: the dependency audit's `deps-audit-shape-unrecognized` rule and `cargo-audit-warnings` findings, which the push's author cannot fix by changing the push, and the `tdd` and `red-proof` findings, which block only once armed ([section 9](#9-the-bake-then-arm-model)). The LLM and mutation ledger gates' findings (`llm-review`, `mutation`, `mutation-score`) are added after the ratchet has run, so it never escalates them either. `pre-commit` has no ratchet at all.
 
 On the very first `pre-push` run against a fresh ledger (no baseline yet), aramid writes a baseline from the current findings, and if the *only* reason the exit code came back `1` was the ratchet's own WARN→BLOCK escalation — no genuine BLOCK finding, no degraded BLOCK-tier tool — the exit code is downgraded to `0` (or `2` if something degraded). A real BLOCK is never downgraded.
 
 **In CI this happens on every run.** `.aramid/` is normally gitignored, so every CI checkout is a fresh ledger and every CI pre-push run is "the first" — the ratchet's new-warning escalation can never fail a CI step by exit code alone. The `--json` report says so: `fresh_ledger_baseline` is `true` and `grandfathered` lists the escalated ids the downgrade waved through (both keys are always present; `false`/`[]` on an ordinary run). A CI step that wants the ratchet to bite must read those keys — or persist `.aramid/` between runs so the baseline survives. Intrinsic BLOCKs (secrets, semgrep BLOCK rules, a failed test suite) still exit `1` regardless.
+
+### aramid's own checks: shadow, TDD and red-first proof
+
+Three checks are aramid's own rather than an external tool's. Each ships disarmed (WARN) and has one arming flag ([section 9](#9-the-bake-then-arm-model)); their config keys are in the [knowledge base, section 2](knowledge-base.md#2-configuration-reference).
+
+#### `shadow` — a file that hijacks `python -m aramid`
+
+**What it checks.** `python -m <name>` puts the current directory first on `sys.path`, so a file at the repo root named for an installed tool is imported instead of that tool by every `python -m aramid` (or `python -m graphite`) started there without `-P`: an old hook shim, a CI step, an editor task. It runs in place of the real package, and a hook that discards its output hides that it did. The `shadow` runner reports `aramid.py`, `aramid/__init__.py`, `graphite.py` and `graphite/__init__.py` at the repo root. A directory named `aramid` or `graphite` with no `__init__.py` is not reported: it cannot take the place of an installed package. The two names are fixed; no config key changes them.
+
+**When.** At every gate (pre-commit, pre-push and `--gate all`), in every repo, whatever the scan mode: it looks at the repo root, not at the changed files. It only checks whether those files exist, so it never times out or degrades.
+
+**Finding.** Tool `shadow`, rule `module-shadow`, severity `critical`, line `1` of the file. The id depends on the path alone, so editing the file's content does not change it.
+
+**WARN or BLOCK.** Disarmed, a finding is WARN. It is not exempt from the pre-push ratchet, so a pre-push gate that is the first recorded run to see it escalates it to BLOCK, like any new WARN (on a fresh ledger the fresh-ledger rule lets that push through). With `[shadow].shadow_block_armed = true` (`aramid arm --shadow`) it is BLOCK at every gate, pre-commit included. That key is the check's only setting ([knowledge base, `[shadow]`](knowledge-base.md#shadow)).
+
+**Resolving it.** Delete or rename the file, or move it out of the repo root; the next gate run, at any gate, records the finding fixed because its file is gone. A repo that has to keep such a file can set the finding aside: `aramid override` while it is WARN, a `.aramid-suppressions.toml` entry once armed ([section 5](#5-understanding--handling-findings)).
+
+#### `tdd` — code changed with no new test
+
+**What it checks.** Whether a push that changes Python code also adds a test. If the push's commits add or change no line in any test file, it reports every production `.py` file they changed. A test file is a `test_*.py` or `*_test.py` file, or any file under a `tests/` directory. One added or changed test line anywhere is enough to silence it for the whole push, whichever code that test exercises.
+
+**When.** At pre-push only; pre-commit and `--gate all` never run it. On a push with no range to diff (no upstream and no remote-tracking ref, as on a new repo's first push), and under `--gate pre-push --all`, the whole tracked tree is the change, and it reports every tracked production `.py` file only when no tracked file is a test file.
+
+**Finding.** Tool `tdd`, rule `code-without-test`, severity `medium`, line `0`: one per file.
+
+**WARN or BLOCK.** WARN while baking, and exempt from the ratchet, so it cannot block a push until you arm it. With the top-level `tdd_block_armed = true` (`aramid arm --tdd`) it is BLOCK, and a git that does not answer while the check reads the push then counts as a degraded tool, which refuses the push unless accepted with `--accept-degraded`. `[tdd].enabled = false` turns the check off ([knowledge base, `[tdd]`](knowledge-base.md#tdd)).
+
+**Resolving it.** Write the test. A later pre-push resolves an open finding when it does not raise it again and either changes that file or changes a test file named for its module (`test_<module>`, `<module>_test`, `test_<parent>_<module>` or `test_<module>_<aspect>`); this needs a push with a range to diff. The finding on a file you deleted resolves at the next pre-push.
+
+#### `red-proof` — a test that was never red
+
+**What it checks.** Whether a test the push changed could have failed before the push. For each changed test file in which at least one changed line is a test definition (a `def test...` or `async def test...` line, found by parsing the file), it writes the file's new version into a temporary worktree of the push's base commit and runs `pytest -q <file>` there, with aramid's own interpreter. Exit `0` means every test in the file passes against the code as it was before the push: the tests were never red, so they prove nothing about the change. Exit `1` or `2` (a collection error counts) proves the file red. Anything else proves nothing either way. A changed test file whose changed lines include no test definition, such as a fixture fix, a stronger assertion or a new `parametrize` case, is not checked.
+
+**When.** At pre-push only, and only when the push has a range to diff: never on a new repo's first push, never under `--all`, never with `--gate all`. `[red_proof].wall_budget_s` (default 120 s) bounds the whole check and `[red_proof].test_timeout_s` (default 60 s) each file; a file the budget did not reach was not checked, which is not the same as clean.
+
+**Finding.** Tool `red-proof`, rule `test-not-red`, severity `medium`, line `0`: one per test file. The verdict is for the whole file, so an older test in the same file that fails on the base hides a new test that never failed.
+
+**WARN or BLOCK.** WARN while baking, and exempt from the ratchet. With `[red_proof].red_proof_block_armed = true` (`aramid arm --red-proof`) it is BLOCK, and a git that does not answer counts as a degraded tool, as for `tdd`. `[red_proof].enabled = false` turns the check off ([knowledge base, `[red_proof]`](knowledge-base.md#red_proof)).
+
+**Resolving it.** Make the test fail without the change it tests. An open finding resolves when a later pre-push checks the file again (a push that changes one of its test definitions) and the base run proves it red. The finding on a file you deleted resolves at the next pre-push. One trap: the base run uses the repo's own pytest configuration, and an `addopts` setting such as a coverage threshold or warnings as errors can make it exit non-zero whatever the tests do. That reads as red, so such a file is never reported, and an open finding on it resolves without any proof.
 
 ### What the pre-push gate certifies -- and a branch that moves while it runs
 
@@ -263,7 +328,7 @@ aramid check --gate pre-push --all --strict --json
 These are the two steps a CI job needs, one per tier; [section 10](#10-ci-integration) says why one tier alone is not enough, and gives the one-step form for a fresh checkout. A bare `aramid check --strict --json` is no CI check: it scans the staged files, and a CI checkout has nothing staged.
 
 - `--strict` — remaps exit code `2` to `1` (treat degraded as failure; no soft-pass in CI). `3` (engine error) is already a failure and keeps its code.
-- `--json` — renders the machine-readable report instead of the console report. It leads with `schema_version` (see *Machine-readable output* below). Beyond `findings`, it carries `exit_code` (the final one, after `--strict` and the fresh-ledger rule), `degraded` and `degraded_reasons` (the `{tool: reason}` map behind it), `new_ids`, `stale_overrides`, `tools` (which binary backed each probed key), `tools_ran` (what actually ran), `scope_widened`, and — since 0.7.1 — `fresh_ledger_baseline` / `grandfathered` (see the fresh-ledger rule above), and `run_id` / `recorded` (`recorded: false` means the run was `--no-record`: a real report against a snapshot, with no ledger row to match it against). Every finding carries `escalated_by_ratchet` and `verdict_before_ratchet`.
+- `--json` — renders the machine-readable report instead of the console report. It leads with `schema_version`; every key it carries, with its type and meaning, is in [`check --json` keys](#check---json-keys) below.
 - `--accept-degraded --reason "why"` — accept a degraded run instead of blocking on it: the gate exits `0`, writes an `infrastructure_bypass` ledger row carrying the reason, prints `degraded, ACCEPTED: <reason>` and carries `accepted_reason` in `--json`, so the pass is never mistaken for a clean one. `--strict` does not remap an accepted run, and the CI-parity shim needs no exit-code arm for it (until 0.12.0 the accepted run exited `2`, which `--strict` turned into `1` -- under `[hooks].pre_push_match_ci` the hatch refused the push with its acceptance on record). A genuine BLOCK finding still exits `1`; `--reason` defaults to `"no reason given"` if `--accept-degraded` is passed without one. The same signal can be supplied via the `ARAMID_ACCEPT_DEGRADED` environment variable, which hooks inherit from the parent git process automatically.
 
 ### Machine-readable output (`--json`)
@@ -276,7 +341,7 @@ versioned on its own.
 
 | Command | Document |
 |---|---|
-| `check --json` | the report: `schema_version`, then the keys listed under *CI / automation flags* above |
+| `check --json` | the report; every key is in [`check --json` keys](#check---json-keys) below |
 | `ledger filter --json` | `{"schema_version": 1, "findings": [...]}` -- one row per finding: `id`, the `ledger show` fields, `verdict_now`, `suppressed`, `suppressed_reason` |
 | `ledger consumers --json` | `{"schema_version": 1, "runs": [...]}` -- one row per consumer run: `at`, `run_id`, `consumer`, `item_id`, `state`, `duration_s`, `cost`, `finding_count`, `note` (null when an old row lacks one), and `extra`, everything else that consumer recorded |
 | `resolvers --json` | `{"schema_version": 1, "resolvers": [...]}` -- one row per resolver and tool |
@@ -286,6 +351,63 @@ versioned on its own.
 An empty result is an empty list inside the object, never prose. Before
 0.19.0, `ledger filter`, `ledger consumers` and `resolvers` printed a bare
 list, and a `ledger consumers` row was the consumer's payload as written.
+
+#### `check --json` keys
+
+Every key below is present in every report `check --json` prints; a `null`
+is a value the key carries, not a missing key. These are the keys
+[section 13](#13-compatibility-promise) declares, and a unit test fails if
+this list and the report disagree. Top level:
+
+| Key | Type | Meaning |
+|---|---|---|
+| `schema_version` | integer | The version of this document's shape, `1` today. It changes only when a key is removed, renamed or retyped. |
+| `exit_code` | integer | The code the command exits with: the final one, after the fresh-ledger rule, a certified ref that moved (which makes it `1`) and `--strict`. The codes are those of [the exit-code contract](#the-exit-code-contract). |
+| `findings` | array of objects | One object per finding the run reported; its keys are in the second table. A finding that an override or a `.aramid-suppressions.toml` entry set aside stays in the list, with `verdict` `info`. |
+| `degraded` | array of strings | The tools that could not vouch for anything this run: missing, crashed, timed out or stalled, or an armed `tdd` or `red-proof` whose git did not answer. Sorted; empty when every selected tool ran. |
+| `degraded_reasons` | object (string to string) | Why each tool in `degraded` degraded, keyed like it: `{"semgrep": "not found"}`. Empty when nothing degraded. |
+| `accepted_reason` | string or null | The `--accept-degraded` reason when this run's degradation was accepted (exit `0`, with an `infrastructure_bypass` ledger row); `null` on every other run. A `0` with this set is not a clean pass. |
+| `refs_moved` | array of objects | The certified refs that moved while a pre-push gate ran (see "What the pre-push gate certifies" in [section 3](#3-the-deterministic-gate-on-commitpush)); any entry fails the gate. Empty when nothing moved, and on every other gate. |
+| `new_ids` | array of strings | The ids of the findings the ledger had never seen before this run. At pre-push the ratchet escalates a WARN among them to BLOCK, except the kinds [section 3](#the-pre-push-no-new-warnings-ratchet) names as exempt. |
+| `stale_overrides` | array of objects | Overrides and `.aramid-suppressions.toml` entries that bind nothing this run but nearly match a finding (same tool, rule and path, a different id): the finding moved, so re-affirm the entry under its new id. |
+| `tools` | object (runner key to object) | Which binary backed each runner that has one, as `{"ruff": {"path": "..."}}`. Only `gitleaks`, `ruff` and `semgrep` appear. An entry also has `dependency_copy` when the copy aramid installed as a dependency lost to another copy earlier on `PATH`. This is not the list of what ran; that is `tools_ran`. |
+| `tools_ran` | array of strings | The tools that ran and returned a result this run, sorted: the same set the ledger's `run_started` row records. |
+| `scope_widened` | string or null | `null` on an ordinary scan. A sentence when the run scanned more than the delta it was asked about: a range scan (the pre-push default) with no upstream to diff against scans every tracked file. `--all` asks for the whole tree, so it never sets this. |
+| `fresh_ledger_baseline` | boolean | `true` when this was a pre-push run on a ledger with no baseline, which writes one (the fresh-ledger rule, [section 3](#the-pre-push-no-new-warnings-ratchet)). |
+| `grandfathered` | array of strings | The ratchet-escalated ids the fresh-ledger rule waved through when it downgraded the exit code, sorted. Empty when it did not. |
+| `run_id` | string | The run's id; the ledger's `run_started` row carries the same id when `recorded` is `true`. |
+| `recorded` | boolean | `false` means the run was `--no-record`: a real report against a snapshot of the ledger, with no ledger row to match it against. |
+| `fleet_notices_pending` | integer or null | How many fleet notices are pending ([section 7](#fleet-health-10-readiness-and-notices)); `0` means none. `null` means the notices store could not be read. |
+
+Keys of one entry in each array of objects:
+
+| Key | Type | Meaning |
+|---|---|---|
+| `findings[].id` | string | The finding's fingerprint: what `aramid override`, `ledger show` and `.aramid-suppressions.toml` take. |
+| `findings[].tool` | string | The tool that reported it, such as `gitleaks`, `ruff`, `shadow`, `tdd` or `mutation-score`. |
+| `findings[].rule` | string | The tool's rule id. |
+| `findings[].severity_raw` | string | The severity as the tool reported it. |
+| `findings[].severity` | string | The normalized severity: `info`, `low`, `medium`, `high` or `critical`. |
+| `findings[].verdict` | string | The verdict in force: `block`, `warn`, or `info` for a finding an override or suppression set aside. At pre-push it is the verdict after the ratchet. |
+| `findings[].file` | string | The path, relative to the repo root. |
+| `findings[].line` | integer | The line. `0` for a finding about a whole file (`tdd`, `red-proof`, `mutation-score`). |
+| `findings[].message` | string | What the tool found. |
+| `findings[].evidence` | string | The supporting text, already redacted: a secret appears only as a short preview and a salted hash. |
+| `findings[].gate` | string | `pre-commit`, `pre-push` or `all`. Usually the run's gate; a WARN about a `.aramid-suppressions.toml` entry with no reason carries `all`. |
+| `findings[].source` | string | `deterministic`, or `llm` for an `llm-review` finding. |
+| `findings[].historical` | boolean | `true` only for a finding from `aramid init`'s one-time history scan; a gate run's findings carry `false`. |
+| `findings[].confirmed` | boolean | `true` only for an `llm-review` finding whose CRITICAL severity survived the cross-provider refute call: the only kind the armed LLM gate blocks on. |
+| `findings[].refuted` | boolean | `true` when the refute call demoted the finding from critical to high. |
+| `findings[].escalated_by_ratchet` | boolean | `true` when the finding is BLOCK only because the pre-push ratchet escalated a new WARN. |
+| `findings[].verdict_before_ratchet` | string | The verdict before the ratchet: `warn` for an escalated finding, otherwise the same as `verdict`. |
+| `refs_moved[].ref` | string | The ref that moved, such as `refs/heads/main`, or `HEAD` when the gate had no ref lines (run by hand, or in CI). |
+| `refs_moved[].before` | string | The object id the gate certified when it started. |
+| `refs_moved[].after` | string or null | The object id the ref names when the gate finished; `null` when the ref no longer resolves. |
+| `stale_overrides[].id` | string | The finding id the entry names, which no finding has any more. |
+| `stale_overrides[].tool` | string | The entry's tool. |
+| `stale_overrides[].rule` | string | The entry's rule. |
+| `stale_overrides[].path` | string | The entry's path, normalized: forward slashes, case-folded. |
+| `stale_overrides[].reason` | string | The reason recorded with the override or written in the entry. |
 
 ---
 
@@ -725,6 +847,42 @@ A survivor is regenerated from its id — (op, path, line content) — so it is 
 
 Requirement: a pytest test stack must be detected — a real `test_*.py`, `*_test.py`, or `conftest.py` file; a bare `tests/` directory by itself no longer counts — otherwise it OK-skips permanently and harmlessly (`"no python test stack (mutation skipped)"`) rather than pinning the queue item forever.
 
+### `aramid mutation-score` — per-function scores and regressions
+
+Each run of the mutation consumer records, for every function it mutated, how that function's mutants fared: killed by the targeted tests (stage 1), killed by the full suite (stage 2), or survived both. `aramid mutation-score` reads that record from the ledger and prints each function's latest kill rate and any regression against an earlier run. It is read-only: it writes nothing and runs nothing, it exits `0` (with or without any history) or `3` on an engine error, and a regression never changes its exit code.
+
+```powershell
+aramid mutation-score
+aramid mutation-score --json
+```
+
+```
+aramid mutation-score:
+  transition regressions: WARN (baking)
+  src/pkg/report.py::main: not measured (0 mutants tested)
+  src/pkg/report.py::parse: kill-rate 0.90 (9/10) (partial)
+  src/pkg/report.py::render: kill-rate 0.75 (3/4)
+  regressions: none
+```
+
+- **The kill rate** is the mutants killed at either stage over the mutants that reached a verdict, killed or survived the full suite. A mutant whose run timed out or errored, or that survived stage 1 but was never confirmed because the run's `confirm_cap` was spent, is in neither count.
+- **`(partial)`** marks a function where not every generated mutant reached a verdict: `max_mutants` or `wall_budget_s` stopped the run before all of them were tested, or some timed out, errored or went unconfirmed.
+- **`not measured (0 mutants tested)`** means no mutant of that function reached a verdict, so there is no rate at all. That is an absent measurement, not a low one; a genuine `kill-rate 0.00` means mutants were tested and none was killed. When no function has a rate, the report says so and points at `aramid status`, where a degraded or stood-down mutation consumer explains why.
+- **The second line** says whether a transition regression blocks a push (`BLOCK (armed)`) or only warns (`WARN (baking)`).
+
+A function's **baseline** is its most recent earlier run that was not partial, and its latest run is compared with it in two ways:
+
+- **`transition`**: a mutant the baseline killed survives in the latest run. One mutant id names every identical line in a function, and an id the baseline both killed and saw survive never counts as a transition.
+- **`rate`**: the kill rate fell. Compared only when neither the latest run nor the baseline is partial.
+
+At pre-push the gate recomputes these regressions on every run and reports each as a finding of tool `mutation-score`, rule `transition` (severity `high`) or `rate` (severity `low`), on line `0` of the function's file. A `rate` finding is always WARN. A `transition` finding is WARN while baking and BLOCK once `[mutation].score_block_armed` is set (`aramid arm --mutation-score`, [section 9](#9-the-bake-then-arm-model)); the ratchet escalates neither. Nothing is written to the ledger, so `aramid status` does not list these findings and `aramid override` refuses their ids as unknown. A regression clears only when a later mutation drain run measures that function again without it; until then every pre-push reports it, except that:
+
+- a push that changes a test file mapped to the function's module (`test_<module>`, `<module>_test`, `test_<parent>_<module>` or `test_<module>_<aspect>`) drops that module's `transition` findings for that push only. This needs a range push with an upstream; under `--all`, or with no upstream, nothing is dropped;
+- a `.aramid-suppressions.toml` entry sets one aside ([section 5](#suppressing-a-finding-for-the-whole-team--aramid-suppressionstoml));
+- `[mutation].enabled = false` turns these findings off along with the consumer.
+
+`--json` prints `{"schema_version": 1, "targets": [...], "regressions": [...]}`: one target per function (`target`, `run_index`, `killed_s1`, `killed_s2`, `survived_s1`, `rate`, which is `null` when not measured, and `fully_mutated`, which is `false` for a partial run), and one entry per regression (`target`, `kind`, `detail`, `baseline_index`, `current_index`). An index is the run's position in the ledger's event history. The `--json` form leaves out the line about arming.
+
 ### js_mutation (JS/TS)
 
 The JS/TS analog of `mutation` — single-stage (a full-suite pass on a mutant *is* the confirmed survivor).
@@ -781,11 +939,11 @@ New rule classes and the LLM reviewer start in a WARN-only "bake" period so you 
 | `[pack].pack_block_armed` | `aramid.toml` | `true` | regression-pack compiled block rules |
 | `[llm].llm_block_armed` | `aramid.toml` | `false` | confirmed-and-CRITICAL `llm-review` findings, at pre-push |
 | `[llm.autolearn].armed` | `aramid.toml` | `false` | not a BLOCK gate — controls whether learned uplift/cascade actually change reviewer *selection* (vs. shadow-only telemetry) |
-| `tdd_block_armed` | root of `aramid.toml` | `false` | code-without-test (`tdd`) findings, at pre-push |
+| `tdd_block_armed` | root of `aramid.toml` | `false` | code-without-test (`tdd`) findings, at pre-push ([section 3](#aramids-own-checks-shadow-tdd-and-red-first-proof)) |
 | `[mutation].mutation_block_armed` | `aramid.toml` | `false` | surviving-mutant findings, at pre-push |
-| `[mutation].score_block_armed` | `aramid.toml` | `false` | mutation-score *transition* regressions, at pre-push (rate deltas stay WARN) |
-| `[red_proof].red_proof_block_armed` | `aramid.toml` | `false` | never-red test findings, at pre-push |
-| `[shadow].shadow_block_armed` | `aramid.toml` | `false` | a repo-root file that hijacks `python -m aramid`, at **every** gate, pre-commit included |
+| `[mutation].score_block_armed` | `aramid.toml` | `false` | mutation-score *transition* regressions, at pre-push (rate deltas stay WARN; [section 8](#aramid-mutation-score--per-function-scores-and-regressions)) |
+| `[red_proof].red_proof_block_armed` | `aramid.toml` | `false` | never-red test findings, at pre-push ([section 3](#aramids-own-checks-shadow-tdd-and-red-first-proof)) |
+| `[shadow].shadow_block_armed` | `aramid.toml` | `false` | a repo-root file that hijacks `python -m aramid` or `python -m graphite`, at **every** gate, pre-commit included ([section 3](#aramids-own-checks-shadow-tdd-and-red-first-proof)) |
 | `agent_block_armed` | root of `aramid.toml` | `false` | not a BLOCK gate — controls whether the `pre-tool-use` hook REJECTS a bypass-carrying agent tool call outright rather than only warning about it |
 
 Each verdict is computed from its flag at gate time, so arming also covers findings recorded before it. `[dast]`, `[fuzz]` and `[js_mutation]` have no arming flag.
@@ -902,7 +1060,7 @@ What aramid does not do, or does imperfectly, in one place. Each entry says what
 
 ### The gate
 
-**Local hooks can be skipped.** `git commit --no-verify` and `git push --no-verify` skip aramid's hooks, as they skip any git hook, and git hooks are not cloned, so a fresh clone has none until `aramid init` runs in it. A commit or push made that way was never gated. A `git commit --no-verify` skips ruff, and the pre-push gate does not run ruff, so locally nothing catches a ruff-tier finding committed that way; only CI's pre-commit-tier step does. The backstop is CI running both tiers, `aramid check --all --strict --json` and `aramid check --gate pre-push --all --strict --json` ([section 10](#10-ci-integration)). For AI agents, `aramid arm --agent` makes the agent hook refuse those flags in the agent's own tool calls, within the limits listed under *Agent surfaces* below.
+**Local hooks can be skipped.** `git commit --no-verify` and `git push --no-verify` skip aramid's hooks, as they skip any git hook, and git hooks are not cloned, so a fresh clone has none until `aramid init` runs in it, unless `aramid hooks install` has set up git's template directory on that machine ([section 2](#hooks-for-repos-created-later--aramid-hooks)). A commit or push made that way was never gated. A `git commit --no-verify` skips ruff, and the pre-push gate does not run ruff, so locally nothing catches a ruff-tier finding committed that way; only CI's pre-commit-tier step does. The backstop is CI running both tiers, `aramid check --all --strict --json` and `aramid check --gate pre-push --all --strict --json` ([section 10](#10-ci-integration)). For AI agents, `aramid arm --agent` makes the agent hook refuse those flags in the agent's own tool calls, within the limits listed under *Agent surfaces* below.
 
 **The gate is not a full security review.** The bundled semgrep rules look for injection (SQL built from strings, shell commands, `eval`), unsafe deserialization, weak hashes and hard-coded crypto keys, plus four Rust memory-safety lints; gitleaks finds secrets, ruff and the other linters add their own rules, and the dependency audit finds known-vulnerable packages. Access control, security misconfiguration and authentication logic are largely beyond checks of this kind. A clean `aramid check` means none of these checks fired, not that the code is secure. The drain's LLM reviewer is the part of aramid meant for judgement-based review, and it only warns until `aramid arm --llm`.
 
@@ -982,7 +1140,7 @@ The rule for JSON output is stated where `check --json` is written (`reporter.py
 |---|---|---|
 | CLI commands and flags | every subcommand, option, choice and positional of `aramid` ([knowledge base, section 4](knowledge-base.md#4-cli-command-reference)) | pinned: `tests/unit/test_cli_surface.py` |
 | Exit codes | `0` pass, `1` BLOCK, `2` degraded, `3` engine or config error ([section 3](#the-exit-code-contract)), and each command's own codes ([knowledge base, section 5](knowledge-base.md#5-exit-code-reference)) | promised. Some codes are covered by per-command tests, for example `tests/unit/test_cli_main.py` (a malformed invocation exits `3`) and `tests/unit/test_check_hook_stdin.py` (`--strict` turns `2` into `1`). `test_cli_surface.py` checks only that every top-level command has a row in the knowledge base's exit-code table. No test checks that table against the code, and no single test freezes it, so the table is not guaranteed to be complete. |
-| `check --json` | the top-level keys, every finding's keys (the `Finding` fields plus `escalated_by_ratchet` and `verdict_before_ratchet`), the keys of a `refs_moved` and a `stale_overrides` entry, and `schema_version` 1 ([section 4](#machine-readable-output---json)) | pinned: `tests/unit/test_reporter_json_surface.py` |
+| `check --json` | the top-level keys, every finding's keys (the `Finding` fields plus `escalated_by_ratchet` and `verdict_before_ratchet`), the keys of a `refs_moved` and a `stale_overrides` entry, and `schema_version` 1 ([section 4, `check --json` keys](#check---json-keys)) | pinned: `tests/unit/test_reporter_json_surface.py`; `tests/unit/test_user_guide_check_json_keys.py` checks section 4's table against the report, both ways |
 | Ledger statuses | `open`, `fixed`, `overridden`, `historical`, `rotated`, `not_a_secret`, `unreachable`, `superseded`, `out_of_scope`, `pending_retest` | pinned: `tests/unit/test_ledger_status_enum.py` |
 | `aramid.toml` keys | every key aramid reads, with its type, and the keys of an `[[llm.ladder]]` entry ([knowledge base, section 2](knowledge-base.md#2-configuration-reference)) | pinned: `tests/unit/test_config_keys_surface.py` |
 | MCP tools | the ten tool names and their parameters, listed below | names pinned: `tests/unit/test_mcp_tools.py`; the parameters of the first seven tools pinned by the same file; the parameters of the three handover tools promised |

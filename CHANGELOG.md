@@ -14,6 +14,34 @@ to publish a tag that disagrees with it.
 
 ### Fixed
 
+- **The user guide now covers the commands and checks it left out.** Four
+  parts of aramid had no user-guide coverage, and each section was written
+  from the code. Section 2 has a subsection on `aramid hooks
+  install|remove|status`, which seeds the gate hooks into repos created
+  later through git's template directory. It says what the template shim's
+  guard checks: a regular `aramid.toml` file at the top of the working
+  tree, and without one the shim exits 0 and runs nothing (measured in a
+  scratch repo). It also says that `aramid init` rewrites a template shim
+  as its own rather than chaining it. Section 8 has a subsection on `aramid
+  mutation-score`: what a kill rate counts, what `(partial)` and `not
+  measured` mean, what a baseline is, the two kinds of regression, and how
+  the pre-push gate reports them. Section 3 now says what the `shadow`,
+  `tdd` and `red-proof` checks look for, when each runs, the findings it
+  raises, how arming and the ratchet treat them, and how a finding
+  resolves. Section 4 has one table of every `check --json` key with its
+  type and meaning, written from a rendered report. It replaces a prose
+  list that named 14 of the 17 top-level keys, and
+  `tests/unit/test_user_guide_check_json_keys.py` fails when the table and
+  the report disagree in either direction. Section 9's `[shadow]` row now
+  names `graphite` as well as `aramid`. Docs and one test; no behaviour
+  changed. Three older statements were wrong and are fixed:
+  - Section 3 said the ratchet exempts only the dependency audit's
+    shape-drift rule. It also exempts `cargo-audit-warnings`, `tdd` and
+    `red-proof`, and the LLM and mutation gates' findings arrive after it
+    has run.
+  - Section 3 said only OWASP-semgrep and LLM findings have an arming flag.
+  - Section 12 said a fresh clone has no hooks until `aramid init`, which
+    is not so where `aramid hooks install` has run.
 - **A secret you have already judged no longer tells you to rotate it.**
   When a gitleaks finding blocks, the gate printed "rotate the credential
   -- deleting the line does not fix the leak" under it, whatever its
