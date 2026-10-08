@@ -1,8 +1,10 @@
 # Changelog
 
 All notable changes to aramid are recorded here. Format follows
-[Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning is
-[semantic](https://semver.org/spec/v2.0.0.html).
+[Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Version numbers are
+[PEP 440](https://peps.python.org/pep-0440/), not semver, as `RELEASING.md`
+says; what a release may change is in the user guide's Compatibility Promise
+(section 13).
 
 `src/aramid/__init__.py`'s `__version__` is the single source of truth —
 `pyproject.toml` derives its version from it, and the release workflow refuses
@@ -48,6 +50,24 @@ to publish a tag that disagrees with it.
   also names the cargo and go suites it has detected since 0.2.0. A
   consumer's `ARAMID.md` picks up both corrections on its next `aramid init`
   after a release. Docs and template text only; no behaviour changed.
+- **The limitations and compatibility sections, corrected after review.**
+  The compatibility promise now lets a 1.x release add only optional flags,
+  options, positionals and MCP parameters (a new required one waits for
+  2.0), tells a reader to ignore a key, status or choice it does not know,
+  says `check --json`'s `schema_version` does not change within 1.x, and no
+  longer says the exit codes are tested command by command. The known
+  limitations now say which mutation survivors a push leaves open, that
+  cargo and go suites are detected only with a `Cargo.toml` or `go.mod` at
+  the repository root, and that DAST is WARN-only today rather than
+  promised for all of 1.x. Five older user-guide passages that contradicted
+  them are fixed: test detection named only pytest and npm; `js-mutation`
+  and `fuzz` were said to have no resolver; the fuzz consumer was said never
+  to degrade and to have no give-up valve (the knowledge base said the same);
+  and the LLM override advice left out that `override` refuses a
+  confirmed-critical finding. The knowledge base's `aramid doctor` exit-code
+  row now lists every code `doctor` returns, in the order it checks them.
+  This file's header now says versions are PEP 440, as `RELEASING.md` does.
+  Docs only; no behaviour changed.
 
 ## [0.20.5] — 2026-10-07
 
