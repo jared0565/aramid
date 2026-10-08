@@ -6,7 +6,7 @@ from pathlib import Path
 import pytest
 
 from aramid.runners import eslint
-from aramid.runners.base import RunContext, RunnerResult, ToolState
+from aramid.runners.base import RunContext, RunnerResult, ToolState, cmd_line_length
 
 FIXTURE = Path(__file__).parent.parent / "fixtures" / "eslint.json"
 
@@ -446,6 +446,18 @@ def test_batches_are_sized_in_the_units_cmd_exe_counts():
     batches = eslint._batches(prefix, files, budget)
     assert batches == [["src/\U0001F600.js"], ["src/b.js"]]
     assert all(units([*prefix, *b]) <= budget for b in batches)
+
+
+def test_a_list_that_fills_the_budget_exactly_is_one_batch():
+    """Each file costs its quoted length plus the one space before it. A
+    list whose line is exactly the budget fits; one unit less does not.
+    Charging two for the space split the exact fit into two launches."""
+    prefix = ["eslint.cmd", "-f", "json"]
+    files = ["src/a.js", "src/b.js", "src/c.js"]
+    exact = cmd_line_length([*prefix, *files])
+
+    assert eslint._batches(prefix, files, exact) == [files]
+    assert eslint._batches(prefix, files, exact - 1) == [files[:2], files[2:]]
 
 
 def test_only_a_batch_file_binary_is_held_to_cmd_exe_s_limit():
