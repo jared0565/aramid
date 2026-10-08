@@ -52,13 +52,18 @@ design — not a runtime fetch).
 ```bash
 aramid init <repo>       # onboard a repo: writes aramid.toml, installs git hooks, baselines
 aramid doctor             # probe the toolchain (gitleaks/semgrep/ruff/pip-audit + the repo's test runner) and offer repair
-aramid check --all        # run the full gate on demand (also: --staged, --range, --gate pre-push)
+aramid check --gate all   # run both tiers on demand over the whole tree (also: --gate pre-commit|pre-push, --staged, --range, --all)
 aramid status              # report ledger and config state
 ```
 
 Once installed, `git commit` and `git push` trigger the gate automatically via the
 installed hooks. Local hooks are convenience, not enforcement — `--no-verify` exists.
-The authoritative backstop is re-running `aramid check --all --strict --json` in CI.
+The authoritative backstop is CI running both tiers over the whole tree, as two steps:
+`aramid check --all --strict --json` (pre-commit tier: gitleaks, ruff) and
+`aramid check --gate pre-push --all --strict --json` (pre-push tier: semgrep, the
+tests and the rest). On a fresh checkout `aramid check --gate all --all --strict --json`
+does both in one step. Either tier alone misses the other's tools; see the user
+guide's [CI Integration](https://github.com/jared0565/aramid/blob/main/docs/user-guide.md#10-ci-integration).
 
 The pre-push gate runs the repo's own test suite, which on a large tree can take
 many minutes. While it runs, the hook keeps one line current on the terminal the

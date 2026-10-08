@@ -100,7 +100,7 @@ aramid init path\to\workspace --discover
 | Hook | Command it runs | Exit-code behavior |
 |---|---|---|
 | `pre-commit` | `ARAMID_HOOK=pre-commit "$INTERP" -P -m aramid check --gate pre-commit` (falls back to `ARAMID_HOOK=pre-commit py -3 -P -m aramid check --gate pre-commit`) | Remaps `{2,3} → 0` — **fail-open**, always |
-| `pre-push` | `ARAMID_HOOK=pre-push "$INTERP" -P -m aramid check --gate pre-push` (same `py -3 -P` fallback; with `[hooks].pre_push_match_ci = true` the argv is CI's own, `--gate pre-push --all --strict`) | Remaps `2 → 0`; `1` and `3` pass through and block — **fail-closed** (an engine that couldn't run didn't run gitleaks, so it must not silently let the push through). Under `pre_push_match_ci` nothing is remapped. |
+| `pre-push` | `ARAMID_HOOK=pre-push "$INTERP" -P -m aramid check --gate pre-push` (same `py -3 -P` fallback; with `[hooks].pre_push_match_ci = true` the argv is that of CI's pre-push-tier step, `--gate pre-push --all --strict`, which, like every pre-push gate, does not run ruff; see [section 10](#10-ci-integration)) | Remaps `2 → 0`; `1` and `3` pass through and block — **fail-closed** (an engine that couldn't run didn't run gitleaks, so it must not silently let the push through). Under `pre_push_match_ci` nothing is remapped. |
 | `post-commit` | `"$INTERP" -P -m aramid triage HEAD --budget 15 >/dev/null 2>&1 \|\| true` | Always exits `0` from the shim's perspective — fully fail-open, a commit is never blocked or made noisy by triage |
 
 Two parts of those commands are load-bearing, and a shim missing either one is not the shim `init` wrote:
@@ -124,7 +124,7 @@ Once hooks are installed, every commit and push runs a fixed set of runners per 
 |---|---|
 | `pre-commit` | gitleaks, ruff |
 | `pre-push` | gitleaks, semgrep, eslint, typecheck, deps, tests |
-| `all` (`aramid check --all`) | same set as pre-push |
+| `all` (`aramid check --gate all`) | both tiers: every runner either hook gate runs, ruff included |
 
 Each runner also has to be *applicable* to actually run: ruff only if the repo has a Python stack, eslint only if it has a JS stack, typecheck only if a `tsconfig`/mypy config is present (and mypy is handed only the in-range Python files inside the repo's own `[tool.mypy] files`/`exclude`, when set -- what the gate types is what the repo types), deps only if a package manager, a `requirements*.txt`, or a `pyproject.toml` with a `[project]` table exists (pip-audit audits the requirements files when there are any, else the pyproject's declared dependencies in project-path mode -- about 40 s at pre-push; a tool-only pyproject is not a dependency source, and `doctor` says so when a Python repo has nothing to audit), tests only if a test suite is detected (or `[tests].command` is set). gitleaks and semgrep are always applicable. A runner that isn't applicable is simply never selected — it never counts as "degraded."
 
@@ -256,8 +256,11 @@ aramid check --gate all --no-record --json
 ### CI / automation flags
 
 ```powershell
-aramid check --strict --json
+aramid check --all --strict --json
+aramid check --gate pre-push --all --strict --json
 ```
+
+These are the two steps a CI job needs, one per tier; [section 10](#10-ci-integration) says why one tier alone is not enough, and gives the one-step form for a fresh checkout. A bare `aramid check --strict --json` is no CI check: it scans the staged files, and a CI checkout has nothing staged.
 
 - `--strict` — remaps exit code `2` to `1` (treat degraded as failure; no soft-pass in CI). `3` (engine error) is already a failure and keeps its code.
 - `--json` — renders the machine-readable report instead of the console report. It leads with `schema_version` (see *Machine-readable output* below). Beyond `findings`, it carries `exit_code` (the final one, after `--strict` and the fresh-ledger rule), `degraded` and `degraded_reasons` (the `{tool: reason}` map behind it), `new_ids`, `stale_overrides`, `tools` (which binary backed each probed key), `tools_ran` (what actually ran), `scope_widened`, and — since 0.7.1 — `fresh_ledger_baseline` / `grandfathered` (see the fresh-ledger rule above), and `run_id` / `recorded` (`recorded: false` means the run was `--no-record`: a real report against a snapshot, with no ledger row to match it against). Every finding carries `escalated_by_ratchet` and `verdict_before_ratchet`.
@@ -841,13 +844,27 @@ aramid pack compile
 
 ## 10. CI Integration
 
-In CI there's no git hook context, so invoke the gate directly. Use `--all` for the full pre-push runner set, and `--strict --json` so the pipeline gets a hard pass/fail with a machine-readable report:
+In CI there's no git hook context, so invoke the gate directly: over the whole tracked tree (`--all`), with `--strict --json` so the pipeline gets a hard pass/fail with a machine-readable report, and for both tiers, as two steps:
 
 ```powershell
+aramid check --all --strict --json
 aramid check --gate pre-push --all --strict --json
 ```
 
+These are the two steps aramid's own CI runs. `--all` widens the file set; it does not change which runners run, which is `--gate`'s job ([section 4](#scan-mode)). So the first step is the pre-commit tier (gitleaks and ruff), and the second is the pre-push tier (gitleaks, semgrep, the dependency audit, the tests, and the other pre-push runners that apply). Neither step alone is a backstop: the first never runs semgrep or the tests, and the second never runs ruff. A bare `aramid check --strict --json` is not one either: it scans the staged files, and a CI checkout has nothing staged.
+
+On a fresh checkout, one step does the same job: `aramid check --gate all --all --strict --json` runs every runner of both tiers. It never ratchets, and it skips the pre-push gate's ledger gates (the LLM and mutation gates, which act on what the drain recorded in `.aramid/`). On a fresh checkout neither has anything to act on. If you keep `.aramid/` between CI runs, use the two steps.
+
 `--strict` remaps exit code `2` (degraded) to `1`, so CI never soft-passes on a tool that merely failed to run — a missing tool is treated the same as a real finding. An engine error stays `3`: it is already a hard failure, and keeping the code lets CI tell a crash from a finding. `--json` renders the report as JSON instead of the console format for your CI system to parse.
+
+### What fails a CI step
+
+- A genuine BLOCK-tier finding ([section 3](#security-blocks-quality-warns--but-not-uniformly) lists which findings those are).
+- A degraded run (a tool missing, crashed or timed out), under `--strict`.
+- An engine or config error (exit `3`).
+- A finding from semgrep's BLOCK-tier rules, but only once semgrep is armed (`aramid arm`, [section 9](#9-the-bake-then-arm-model)). While semgrep is baking, those findings are WARN, and on a fresh checkout a WARN alone exits `0`, even under `--strict`.
+
+On a fresh checkout the ratchet cannot fail a step by its exit code alone. A checkout without a kept `.aramid/` is a fresh ledger, so the fresh-ledger rule waves through the pre-push gate's escalation of new warnings ([section 3](#the-pre-push-no-new-warnings-ratchet); knowledge base section 5, remap layer 4). The `--json` report says so: `fresh_ledger_baseline` is `true`, and `grandfathered` lists the findings it waved through. If you want the ratchet to bite in CI, read those keys or keep `.aramid/` between runs. With a kept `.aramid/`, a new semgrep WARN during the bake is escalated at the pre-push step and fails it like any other new warning.
 
 ---
 
@@ -881,7 +898,7 @@ What aramid does not do, or does imperfectly, in one place. Each entry says what
 
 ### The gate
 
-**Local hooks can be skipped.** `git commit --no-verify` and `git push --no-verify` skip aramid's hooks, as they skip any git hook, and git hooks are not cloned, so a fresh clone has none until `aramid init` runs in it. A commit or push made that way was never gated. The backstop is CI: run `aramid check --gate pre-push --all --strict --json` there ([section 10](#10-ci-integration)). For AI agents, `aramid arm --agent` makes the agent hook refuse those flags in the agent's own tool calls, within the limits listed under *Agent surfaces* below.
+**Local hooks can be skipped.** `git commit --no-verify` and `git push --no-verify` skip aramid's hooks, as they skip any git hook, and git hooks are not cloned, so a fresh clone has none until `aramid init` runs in it. A commit or push made that way was never gated. A `git commit --no-verify` skips ruff, and the pre-push gate does not run ruff, so locally nothing catches a ruff-tier finding committed that way; only CI's pre-commit-tier step does. The backstop is CI running both tiers, `aramid check --all --strict --json` and `aramid check --gate pre-push --all --strict --json` ([section 10](#10-ci-integration)). For AI agents, `aramid arm --agent` makes the agent hook refuse those flags in the agent's own tool calls, within the limits listed under *Agent surfaces* below.
 
 **The gate is not a full security review.** The bundled semgrep rules look for injection (SQL built from strings, shell commands, `eval`), unsafe deserialization, weak hashes and hard-coded crypto keys, plus four Rust memory-safety lints; gitleaks finds secrets, ruff and the other linters add their own rules, and the dependency audit finds known-vulnerable packages. Access control, security misconfiguration and authentication logic are largely beyond checks of this kind. A clean `aramid check` means none of these checks fired, not that the code is secure. The drain's LLM reviewer is the part of aramid meant for judgement-based review, and it only warns until `aramid arm --llm`.
 

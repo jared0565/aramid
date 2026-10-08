@@ -81,8 +81,13 @@ documentation is unclear.
 
 - `git commit --no-verify` or `git push --no-verify` on a repository that has
   not run `aramid arm --agent`. Local hooks are a convenience; the enforcement
-  boundary is `aramid check --all --strict` in CI, as the README states. The
-  agent-side rejector exists for AI agents, not as a substitute for CI.
+  boundary is CI running both tiers over the whole tree, as the README states:
+  `aramid check --all --strict --json` and
+  `aramid check --gate pre-push --all --strict --json`, or on a fresh checkout
+  the one step `aramid check --gate all --all --strict --json`. Either tier
+  alone is not the boundary: the first misses semgrep and the tests, the
+  second misses ruff. The agent-side rejector exists for AI agents, not as a
+  substitute for CI.
 - Findings that an upstream analyzer (gitleaks, semgrep, ruff, pip-audit,
   eslint, mypy) misses or misreports. Report those upstream. The rules aramid
   vendors are in scope.

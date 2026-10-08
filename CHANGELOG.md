@@ -31,6 +31,23 @@ to publish a tag that disagrees with it.
   1.0.0, and names the test that pins each part or says that none does yet.
   `RELEASING.md`'s 1.0 gate now points at it, and the README links to it.
   Docs only; no behaviour changed.
+- **The documented CI backstop now runs both tiers.** The docs gave four
+  different CI commands, and each one missed a tier. `aramid check --strict
+  --json` (the `ARAMID.md` template, the user guide's CI flags) scans the
+  staged files, and a CI checkout has nothing staged. `aramid check --all
+  --strict --json` (the README, `SECURITY.md`) runs only the pre-commit tier,
+  gitleaks and ruff, so it never runs semgrep or the tests. `aramid check
+  --gate pre-push --all --strict --json` (the user guide's CI section and
+  known limitations) runs only the pre-push tier, so it never runs ruff. The
+  docs now give the two steps aramid's own CI runs, `aramid check --all
+  --strict --json` and `aramid check --gate pre-push --all --strict --json`,
+  name `aramid check --gate all --all --strict --json` as the one-step form
+  for a fresh checkout, and say what fails a CI step while semgrep is still
+  baking. The template's test-detection paragraph, which said aramid
+  recognizes pytest files and an npm `test` script "and nothing more", now
+  also names the cargo and go suites it has detected since 0.2.0. A
+  consumer's `ARAMID.md` picks up both corrections on its next `aramid init`
+  after a release. Docs and template text only; no behaviour changed.
 
 ## [0.20.5] — 2026-10-07
 

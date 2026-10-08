@@ -234,8 +234,10 @@ timeout_s = 10           # per-request timeout
 cargo_audit_warnings = false
 
 [hooks]
-# Make the generated pre-push shim run the argv CI uses -- `--all --strict`
-# -- instead of the default `range` scope, and stop mapping exit 2 to 0.
+# Make the generated pre-push shim run the argv of CI's pre-push-tier step --
+# `--gate pre-push --all --strict`, which does not run ruff (CI's
+# pre-commit-tier step does) -- instead of the default `range` scope, and stop
+# mapping exit 2 to 0.
 #
 # OFF by default, and that is load-bearing rather than timidity: switching a
 # repo from range to `--all` surfaces every previously-unscanned finding at

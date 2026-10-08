@@ -6,8 +6,18 @@
 # ARAMID.md
 
 This repo is armed with **aramid** -- a deterministic security and quality gate
-that runs in git hooks (`pre-commit`, `pre-push`) and is CI-ready via `aramid
-check --strict --json`.
+that runs in git hooks (`pre-commit`, `pre-push`). Each hook gate runs one tier
+(ruff only at pre-commit; semgrep and the tests only at pre-push), and a CI
+checkout has nothing staged, so in CI run both tiers over the whole tree, as
+two steps:
+
+```
+aramid check --all --strict --json                    # pre-commit tier
+aramid check --gate pre-push --all --strict --json    # pre-push tier
+```
+
+On a fresh checkout (no `.aramid/` kept between runs), `aramid check --gate all
+--all --strict --json` runs both tiers in one step.
 
 - **Detected stack:** __STACK__
 - **Package manager:** __PKG_MGR__
@@ -154,14 +164,17 @@ The first twelve are aramid's packaged defaults; a `[fuzz]` list in
 ones you still want.
 
 **Suite not recognized?** Detection is literal: a real `test_*.py`,
-`*_test.py`, or `conftest.py` file, or a `package.json` `scripts.test`
-entry -- nothing more. A custom pytest `python_files` pattern,
-unittest-style `testfoo.py` naming, or a doctest-only suite are all
-invisible to it. If that's this repo's suite, the tests runner is never
-*selected* at all (not degraded, just absent), so the gate can exit clean
-without ever running it. aramid prints a stderr notice when a plausible
-test setup exists but nothing was recognized in it -- if you see it, set
-`[tests].command` to point aramid at your suite explicitly.
+`*_test.py`, or `conftest.py` file; a `scripts.test` entry in a
+`package.json` at the repository root; a `.rs` file in a `tests/`
+directory, when a `Cargo.toml` sits at the root; or a `*_test.go` file,
+when a `go.mod` sits at the root -- nothing more. A custom pytest
+`python_files` pattern, unittest-style `testfoo.py` naming, a doctest-only
+suite, or a Rust crate whose tests are all inline `#[cfg(test)]` modules
+are all invisible to it. If that's this repo's suite, the tests runner is
+never *selected* at all (not degraded, just absent), so the gate can exit
+clean without ever running it. aramid prints a stderr notice whenever a
+pre-push gate recognizes no suite -- if you see it, set `[tests].command`
+to point aramid at your suite explicitly.
 
 **Dual-stack repo?** If this repo has both a real Python test file
 (`test_*.py`, `*_test.py`, or `conftest.py`) and a `package.json`

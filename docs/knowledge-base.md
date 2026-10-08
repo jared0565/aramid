@@ -22,7 +22,7 @@ The rule-based (non-LLM) check pipeline invoked by `aramid check`, and by the in
 |---|---|
 | `pre-commit` | gitleaks, ruff |
 | `pre-push` | gitleaks, semgrep, eslint, typecheck, deps, tests |
-| `all` (`--all` / `aramid check --all`) | same as pre-push |
+| `all` (`aramid check --gate all`) | both tiers: every runner of `pre-commit` and `pre-push`, ruff included (`--all` alone is a scan mode, not this gate) |
 
 Each runner is additionally filtered by `_is_applicable()`: ruff only if the repo has a Python stack, eslint only if a JS stack, typecheck only if a `tsconfig`/mypy config is present (`run_mypy` then filters the in-range Python files by `typecheck.mypy_scope(root)` -- `[tool.mypy] files`/`exclude` -- and `toolset.examines_path("mypy", path, root=)` consults the same helper), deps only if a package manager or `requirements*.txt` exists, tests only if `detectors.detect_tests()` finds a suite. gitleaks and semgrep are always applicable. A non-applicable runner is never selected and never counts as "degraded." `aramid.pipeline.run_gate` recomputes `detect_stacks()`/`detect_tests()` fresh on every gate run (not just at `init` time) via a pruned walk (`node_modules/`, `venv/`, `build/`, and dot-directories excluded) — so a JS/TS repo whose only `.py` files are vendored under one of those no longer spuriously enables ruff (`ctx.stacks`) or the tests gate.
 
@@ -348,7 +348,7 @@ The dependency BLOCK threshold is not here: it is `block_severity` in `block_rul
 
 | Key | Type | Default | Meaning |
 |---|---|---|---|
-| `pre_push_match_ci` | bool | `false` | The generated pre-push shim runs `check --gate pre-push --all --strict`, what CI runs, instead of the changed-files range, and passes every exit code through instead of mapping `2` to `0`. Takes effect when the shim is regenerated (`aramid init`); turn it on together with `aramid rebaseline`, or the first full scan's never-seen findings are new and the ratchet blocks the push on them. An unreadable config yields the default shim. |
+| `pre_push_match_ci` | bool | `false` | The generated pre-push shim runs `check --gate pre-push --all --strict`, what CI's pre-push-tier step runs (it does not run ruff; CI's pre-commit-tier step, `check --all --strict`, has no hook equivalent), instead of the changed-files range, and passes every exit code through instead of mapping `2` to `0`. Takes effect when the shim is regenerated (`aramid init`); turn it on together with `aramid rebaseline`, or the first full scan's never-seen findings are new and the ratchet blocks the push on them. An unreadable config yields the default shim. |
 
 ### Key naming collisions (same name, different meaning)
 
@@ -446,7 +446,7 @@ Onboard a repo: write config, install hooks, seed baseline.
 
 ### `aramid check [--gate pre-commit|pre-push|all] [--staged|--range|--all] [--strict] [--json] [--accept-degraded] [--reason REASON] [--no-record]`
 Run the gate pipeline.
-- `--gate {pre-commit,pre-push,all}` (default `pre-commit`). `all` runs every tool of both hooks -- ruff runs only at pre-commit and semgrep only at pre-push, so neither hook gate sees both -- in mode `all` unless a mode flag is given. Informational: no shim invokes it, and it never ratchets (the ratchet runs at `pre-push` only).
+- `--gate {pre-commit,pre-push,all}` (default `pre-commit`). `all` runs every tool of both hooks -- ruff runs only at pre-commit and semgrep only at pre-push, so neither hook gate sees both -- in mode `all` unless a mode flag is given. No shim invokes it, it never ratchets (the ratchet runs at `pre-push` only), and it skips the pre-push-only ledger gates (LLM, mutation); `--gate all --all --strict --json` is the one-step CI form for a fresh checkout (user guide, section 10).
 - Mode group (mutually exclusive): `--staged`, `--range`, `--all`; default is `staged` for pre-commit, `range` for pre-push.
 - `--strict` — remaps exit code 2 to 1; 3 passes through unchanged.
 - `--json` — render JSON instead of console report.
@@ -575,7 +575,7 @@ The agent-harness hook endpoint (Claude Code) that `aramid init` registers in `.
    - `pre-push` shim: `2 → 0`; `1` and `3` pass through and block (fail-closed).
    - `post-commit` shim: always exits `0` regardless of the underlying `triage` exit (fully fail-open).
 3. **CLI argv failures** (`cli.py main`): any argparse `SystemExit` other than `0` is remapped to `3`.
-4. **`check` fresh-ledger downgrade**: at `--gate pre-push` with no existing baseline, if the only reason `exit_code==1` was the ratchet's own WARN→BLOCK escalation (no genuine BLOCK finding, no degraded BLOCK-tier tool), downgrades to `0` (or `2` if something degraded). In CI every checkout is a fresh ledger (`.aramid/` is gitignored), so this applies to EVERY CI run and the ratchet cannot fail a step by rc alone; the `--json` report carries `fresh_ledger_baseline: true` and `grandfathered: [ids]` when it applied (both keys always present, `false`/`[]` otherwise) — read them, or persist `.aramid/` between runs (interop rounds 149 s3 / 150). The report also carries `run_id` and `recorded` (both always present); `recorded: false` is a `--no-record` run, whose id matches no ledger row (round 155 s3).
+4. **`check` fresh-ledger downgrade**: at `--gate pre-push` with no existing baseline, if the only reason `exit_code==1` was the ratchet's own WARN→BLOCK escalation (no genuine BLOCK finding, no degraded BLOCK-tier tool), downgrades to `0` (or `2` if something degraded). In CI every checkout is a fresh ledger (`.aramid/` is gitignored), so this applies to EVERY CI pre-push-tier step and the ratchet cannot fail a step by rc alone (the pre-commit tier and `--gate all` never ratchet); the `--json` report carries `fresh_ledger_baseline: true` and `grandfathered: [ids]` when it applied (both keys always present, `false`/`[]` otherwise) — read them, or persist `.aramid/` between runs (interop rounds 149 s3 / 150). The report also carries `run_id` and `recorded` (both always present); `recorded: false` is a `--no-record` run, whose id matches no ledger row (round 155 s3).
 
 ### Per-command exit codes
 
