@@ -25,13 +25,17 @@ to publish a tag that disagrees with it.
   `[hooks].pre_push_match_ci`). A test fails if a future pre-commit runner
   is left out of pre-push. **The cost:** a ruff finding first seen at the
   push is held to the push's standard. A curated BLOCK-tier rule (`S102`,
-  `S105`, `S106`, `S107`, `S608`, `S301`, `S302`) refuses the push, and the
-  no-new-warnings ratchet escalates any other new ruff WARN to BLOCK, as it
-  does clippy's. A WARN the pre-commit gate already recorded is not new and
-  stays a WARN, so the same finding is stricter at the push when its commit
-  skipped the hook. A repo onboarded before 0.7.0 that sets
-  `pre_push_match_ci` can meet ruff WARNs in files nothing has re-scanned
-  since; `aramid rebaseline` records them. A ruff that is missing, crashes or
+  `S105`, `S106`, `S107`, `S608`, `S301`, `S302`) refuses the push when ruff
+  runs, unless the repo silences the rule itself: a `# noqa` on the line or
+  a `per-file-ignores` entry for the file does, at every gate and in CI, as
+  `# gitleaks:allow` and `# nosemgrep` do for their own tools (user guide,
+  *Known Limitations*). The no-new-warnings ratchet escalates any other new
+  ruff WARN to BLOCK, as it does clippy's. A WARN the pre-commit gate
+  already recorded is not new and stays a WARN, so the same finding is
+  stricter at the push when its commit skipped the hook. A repo onboarded
+  before 0.7.0 that sets `pre_push_match_ci` can meet ruff WARNs in files
+  nothing has re-scanned since; `aramid rebaseline` records them. A ruff
+  that is missing, crashes or
   times out at the push is now a degraded run there: exit 2, which the default pre-push
   hook lets through and `--strict` (CI, `pre_push_match_ci`) refuses. The two
   CI steps the docs give are unchanged: the second now covers the first,
