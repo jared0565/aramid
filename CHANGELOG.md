@@ -94,9 +94,10 @@ to publish a tag that disagrees with it.
   unchanged. A gitleaks on PATH is the user's and is never replaced,
   whatever its version, and an unreadable version is never read as a
   mismatch. The new binary is written beside the old one and moved into
-  place, so a download or write that fails leaves the working copy. The pin
-  itself is unchanged: which version doctor and CI should share is still
-  open.
+  place, so a download or write that fails leaves the working copy, and
+  says why; a download that fails its sha256 check used to return with no
+  message at all. The pin itself is unchanged: which version doctor and CI
+  should share is still open.
 
 - **A commit that only adds a test now reaches the drain that re-tests a
   mutation survivor.** Triage queued a survivor re-test only when a changed

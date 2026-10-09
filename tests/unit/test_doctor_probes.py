@@ -219,13 +219,21 @@ def test_fix_gitleaks_refuses_a_tarball_whose_binary_is_not_a_file(wired, tmp_pa
     assert not (tmp_path / "tools" / exe).exists()
 
 
-def test_fix_gitleaks_refuses_a_checksum_mismatch_before_touching_the_archive(wired, tmp_path):
+def test_fix_gitleaks_refuses_a_checksum_mismatch_before_touching_the_archive(
+        wired, tmp_path, capsys):
     exe = doctor._exe_name("gitleaks")
     calls = wired("windows_x64", _archive("windows_x64", exe), sha="00" * 32)
 
     assert doctor._fix_gitleaks() is False
     assert not (tmp_path / "tools").exists()
     assert calls["chmod"] == []
+    # Said, not silent: since FN-5 doctor's gitleaks line can tell the user to
+    # run `--fix`, and a refusal that printed nothing left that advice standing
+    # with no hint why the fix did nothing.
+    assert capsys.readouterr() == ("", (
+        f"aramid: doctor --fix: the downloaded gitleaks {doctor.GITLEAKS_VERSION} "
+        f"(gitleaks_{doctor.GITLEAKS_VERSION}_windows_x64.zip) failed its sha256 check; "
+        f"nothing was installed\n"))
 
 
 def test_fix_gitleaks_reports_a_download_failure(wired, tmp_path, capsys):

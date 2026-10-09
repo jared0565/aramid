@@ -844,6 +844,8 @@ def _fix_gitleaks() -> bool:
         return False
 
     if hashlib.sha256(data).hexdigest() != GITLEAKS_SHA256[key]:
+        print(f"aramid: doctor --fix: the downloaded gitleaks {GITLEAKS_VERSION} ({asset}) "
+              f"failed its sha256 check; nothing was installed", file=sys.stderr)
         return False
 
     tools_dir = _tools_dir()
