@@ -6,6 +6,7 @@ import hashlib
 import io
 import tarfile
 import zipfile
+from pathlib import Path
 
 import pytest
 
@@ -66,3 +67,60 @@ def test_fix_gitleaks_rejects_on_bad_checksum(_wired, monkeypatch):
     monkeypatch.setitem(doctor.GITLEAKS_SHA256, key, "00" * 32)  # wrong sha
     assert doctor._fix_gitleaks() is False
     assert not (tmp_path / "tools" / exe).exists()
+
+
+# --fix now REPLACES aramid's own gitleaks when it is off the pin (FN-5), so a
+# write that fails partway (a full disk, the binary in use on Windows) must
+# leave the working copy it found, never half a new one.
+
+def _working_copy(tmp_path, exe):
+    dest = tmp_path / "tools" / exe
+    dest.parent.mkdir(parents=True)
+    dest.write_bytes(b"the working gitleaks")
+    return dest
+
+
+def test_a_write_that_fails_partway_leaves_the_gitleaks_it_was_replacing(
+        _wired, monkeypatch, capsys):
+    key, exe, data, tmp_path = _wired
+    monkeypatch.setitem(doctor.GITLEAKS_SHA256, key, hashlib.sha256(data).hexdigest())
+    dest = _working_copy(tmp_path, exe)
+    real = Path.write_bytes
+
+    def dies_partway(self, payload):
+        real(self, payload[: len(payload) // 2])
+        raise OSError(28, "No space left on device")
+
+    monkeypatch.setattr(Path, "write_bytes", dies_partway)
+
+    assert doctor._fix_gitleaks() is False
+    assert dest.read_bytes() == b"the working gitleaks"
+    assert sorted(p.name for p in dest.parent.iterdir()) == [exe]
+    assert "aramid: doctor --fix: could not install gitleaks:" in capsys.readouterr().err
+
+
+def test_a_replace_the_os_refuses_leaves_the_gitleaks_it_was_replacing(
+        _wired, monkeypatch, capsys):
+    key, exe, data, tmp_path = _wired
+    monkeypatch.setitem(doctor.GITLEAKS_SHA256, key, hashlib.sha256(data).hexdigest())
+    dest = _working_copy(tmp_path, exe)
+
+    def in_use(src, dst):
+        raise PermissionError(13, "The process cannot access the file", str(dst))
+
+    monkeypatch.setattr(doctor.os, "replace", in_use)
+
+    assert doctor._fix_gitleaks() is False
+    assert dest.read_bytes() == b"the working gitleaks"
+    assert sorted(p.name for p in dest.parent.iterdir()) == [exe]
+    assert "aramid: doctor --fix: could not install gitleaks:" in capsys.readouterr().err
+
+
+def test_a_good_download_replaces_the_copy_that_was_there(_wired, monkeypatch):
+    key, exe, data, tmp_path = _wired
+    monkeypatch.setitem(doctor.GITLEAKS_SHA256, key, hashlib.sha256(data).hexdigest())
+    dest = _working_copy(tmp_path, exe)
+
+    assert doctor._fix_gitleaks() is True
+    assert dest.read_bytes() == b"#!/fake gitleaks\n"
+    assert sorted(p.name for p in dest.parent.iterdir()) == [exe]

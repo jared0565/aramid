@@ -25,17 +25,19 @@ directory isn't on PATH, semgrep's `--version` fails even when the file
 exists two inches away; the probe subprocess call works around this by
 prepending the resolved executable's own directory to the child's PATH.
 """
+import contextlib
 import hashlib
 import io
 import json
 import os
 import platform
+import re
 import shutil
 import subprocess
 import sys
 import urllib.request
 import zipfile
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 
 from aramid import toolpath
@@ -104,6 +106,10 @@ class ToolStatus:
     # a failure the gate would never produce. Report, do not block -- same
     # rule as probe_deps' cargo-audit.
     warn: bool = False
+    # The binary a probe found and ran. Only `probe_tool` sets it, so a
+    # status built anywhere else -- every test's fake probe among them -- is
+    # never taken for aramid's own gitleaks (`_own_gitleaks_off_pin`).
+    path: Path | None = None
 
 
 def _tools_dir() -> Path:
@@ -163,7 +169,32 @@ def probe_tool(name: str) -> ToolStatus:
     version = output.splitlines()[0] if output else ""
     if cp.returncode != 0:
         return ToolStatus(name, False, version, detail=f"--version exited {cp.returncode}")
-    return ToolStatus(name, True, version)
+    return ToolStatus(name, True, version, path=exe)
+
+
+_SEMVER = re.compile(r"\d+\.\d+\.\d+")
+
+
+def _own_gitleaks_off_pin(status: ToolStatus) -> bool:
+    """FN-5: the gitleaks the gate runs is aramid's OWN copy, and its version
+    is not GITLEAKS_VERSION.
+
+    `--fix` installed gitleaks only when it was absent, so a machine that ran
+    it once kept that version through every later pin change. Own means the
+    probed binary sits in the tools dir `_fix_gitleaks` writes to. A gitleaks
+    the user put on PATH is theirs, whatever its version: doctor never
+    replaces it. An unreadable version proves no drift, and is not one:
+    replacing on it would replace the pinned copy itself on every `--fix`,
+    should a release word its version differently."""
+    if not status.present or status.path is None:
+        return False
+    try:
+        here = os.path.normcase(str(status.path.resolve().parent))
+        tools = os.path.normcase(str(_tools_dir().resolve()))
+    except OSError:
+        return False
+    found = _SEMVER.search(status.version or "")
+    return here == tools and found is not None and found.group(0) != GITLEAKS_VERSION
 
 
 def _version_of(exe: Path) -> str:
@@ -822,16 +853,29 @@ def _fix_gitleaks() -> bool:
 
     if ext == "zip":
         with zipfile.ZipFile(io.BytesIO(data)) as zf:
-            dest.write_bytes(zf.read(exe_name))
+            binary = zf.read(exe_name)
     else:
         import tarfile
         with tarfile.open(fileobj=io.BytesIO(data)) as tf:
             member = tf.extractfile(exe_name)
             if member is None:
                 return False
-            dest.write_bytes(member.read())
+            binary = member.read()
 
-    dest.chmod(0o755)
+    # Written beside `dest` and moved into place: this can now REPLACE a
+    # working copy (FN-5), and a write that fails partway -- a full disk, the
+    # old binary in use on Windows -- must leave that copy, never half a new
+    # one in the BLOCK-tier tool's place.
+    part = dest.with_name(dest.name + ".part")
+    try:
+        part.write_bytes(binary)
+        part.chmod(0o755)
+        os.replace(part, dest)
+    except OSError as exc:
+        with contextlib.suppress(OSError):
+            part.unlink(missing_ok=True)
+        print(f"aramid: doctor --fix: could not install gitleaks: {exc}", file=sys.stderr)
+        return False
     return True
 
 
@@ -1060,9 +1104,13 @@ def cmd_doctor(root: Path, fix: bool = False, during_init: bool = False) -> int:
     if fix:
         if any(not statuses[name].present for name in OWNED_PIP_TOOLCHAIN):
             _fix_pip_toolchain()
-        if not statuses["gitleaks"].present:
+        if not statuses["gitleaks"].present or _own_gitleaks_off_pin(statuses["gitleaks"]):
             _fix_gitleaks()
         statuses = probe_toolchain(root)
+    if _own_gitleaks_off_pin(statuses["gitleaks"]):
+        statuses["gitleaks"] = replace(statuses["gitleaks"], detail=(
+            f"aramid's own copy; aramid pins {GITLEAKS_VERSION} -- "
+            f"`aramid doctor --fix` replaces it"))
 
     from aramid import config as config_mod
     cfg = None

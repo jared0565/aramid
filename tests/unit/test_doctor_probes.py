@@ -193,7 +193,9 @@ def test_fix_gitleaks_extracts_a_verified_zip_and_marks_it_executable(wired, tmp
     assert calls["urlopen"] == [(
         "https://github.com/gitleaks/gitleaks/releases/download/v8.21.2/"
         "gitleaks_8.21.2_windows_x64.zip", 60)]
-    assert calls["chmod"] == [(dest, 0o755)]
+    # Made executable BEFORE it is moved into place (a rename keeps the
+    # mode), so the gate never finds an un-executable gitleaks at `dest`.
+    assert calls["chmod"] == [(dest.with_name(dest.name + ".part"), 0o755)]
 
 
 def test_fix_gitleaks_extracts_a_verified_tarball_for_a_posix_key(wired, tmp_path):
@@ -563,3 +565,110 @@ def test_doctor_fix_repairs_only_what_is_missing_and_reprobes_once(tmp_path, cap
     assert repairs == [], "nothing missing: neither repair runs"
     assert _run(tmp_path) == 0
     assert repairs == []
+
+
+# ------------------------------------- FN-5: aramid's own gitleaks, off the pin ---
+# `--fix` called `_fix_gitleaks` only when gitleaks was ABSENT, so a machine
+# that ran it once kept that version through every later pin change. It now
+# replaces aramid's OWN copy (the one in the tools dir) when that copy's
+# version is not the pin, and never a gitleaks the user put on PATH. Every
+# arm runs through the `_tools_dir` seam: no test touches ~/.aramid/tools.
+
+_OFF_PIN = "gitleaks version 8.0.1"
+
+
+def _gitleaks_in(where: Path, version: str) -> ToolStatus:
+    return ToolStatus("gitleaks", True, version, path=where / doctor._exe_name("gitleaks"))
+
+
+def _gitleaks_probes(quiet, first: ToolStatus, after: ToolStatus | None = None) -> list:
+    """probe_toolchain answering `first`, then `after` (when given) on the
+    re-probe `--fix` makes. Returns the gitleaks status of every probe."""
+    seen: list = []
+
+    def probe(root):
+        statuses = _all_present()
+        statuses["gitleaks"] = after if (seen and after is not None) else first
+        seen.append(statuses["gitleaks"])
+        return statuses
+
+    quiet.setattr(doctor, "probe_toolchain", probe)
+    return seen
+
+
+@pytest.fixture
+def fixes(tmp_path, quiet):
+    """The tools-dir seam, and both repair paths recorded instead of run."""
+    calls: list = []
+    quiet.setattr(doctor, "_tools_dir", lambda: tmp_path / "tools")
+    quiet.setattr(doctor, "_fix_gitleaks", lambda: calls.append("gitleaks") or True)
+    quiet.setattr(doctor, "_fix_pip_toolchain", lambda: calls.append("pip"))
+    return calls
+
+
+def test_a_managed_gitleaks_off_the_pin_is_reported_and_the_exit_is_unchanged(
+        tmp_path, capsys, quiet, fixes):
+    _gitleaks_probes(quiet, _gitleaks_in(tmp_path / "tools", _OFF_PIN))
+
+    assert _run(tmp_path) == 0
+    assert (f"  OK       gitleaks     {_OFF_PIN} (aramid's own copy; aramid pins "
+            f"{doctor.GITLEAKS_VERSION} -- `aramid doctor --fix` replaces it)\n"
+            ) in capsys.readouterr().out
+    assert fixes == []
+
+
+def test_fix_replaces_a_managed_gitleaks_off_the_pin(tmp_path, capsys, quiet, fixes):
+    tools = tmp_path / "tools"
+    seen = _gitleaks_probes(quiet, _gitleaks_in(tools, _OFF_PIN),
+                            _gitleaks_in(tools, f"gitleaks version {doctor.GITLEAKS_VERSION}"))
+
+    assert _run(tmp_path, fix=True) == 0
+    assert fixes == ["gitleaks"]
+    assert len(seen) == 2   # re-probed after the replace
+    assert "aramid pins" not in capsys.readouterr().out
+
+
+def test_fix_never_replaces_a_gitleaks_on_path_whatever_its_version(
+        tmp_path, capsys, quiet, fixes):
+    _gitleaks_probes(quiet, _gitleaks_in(tmp_path / "bin", _OFF_PIN))
+
+    assert _run(tmp_path, fix=True) == 0
+    assert fixes == []
+    assert "aramid pins" not in capsys.readouterr().out
+
+
+@pytest.mark.parametrize("version", [
+    f"gitleaks version {doctor.GITLEAKS_VERSION}",
+    doctor.GITLEAKS_VERSION,
+    # Unreadable proves no drift, and replacing on it would replace the
+    # pinned copy itself on every --fix, should a release word it oddly.
+    "",
+    "gitleaks version dev",
+])
+def test_a_managed_gitleaks_at_the_pin_or_of_unreadable_version_is_left_alone(
+        tmp_path, capsys, quiet, fixes, version):
+    _gitleaks_probes(quiet, _gitleaks_in(tmp_path / "tools", version))
+
+    assert _run(tmp_path, fix=True) == 0
+    assert fixes == []
+    assert "aramid pins" not in capsys.readouterr().out
+
+
+def test_a_status_with_no_path_is_never_a_managed_copy(tmp_path, capsys, quiet, fixes):
+    # What every pre-FN-5 fake probe builds: the drift check must not reach
+    # for the real machine's gitleaks to fill the gap.
+    _gitleaks_probes(quiet, ToolStatus("gitleaks", True, _OFF_PIN))
+
+    assert _run(tmp_path, fix=True) == 0
+    assert fixes == []
+
+
+def test_probe_tool_records_the_binary_it_probed(tmp_path, monkeypatch):
+    exe = tmp_path / "tools" / doctor._exe_name("gitleaks")
+    monkeypatch.setattr(doctor, "_locate_gitleaks", lambda: exe)
+    monkeypatch.setattr(doctor.subprocess, "run", lambda argv, **kw: subprocess.CompletedProcess(
+        argv, 0, "gitleaks version 8.21.2\n", ""))
+
+    status = doctor.probe_tool("gitleaks")
+
+    assert (status.present, status.version, status.path) == (True, "gitleaks version 8.21.2", exe)

@@ -80,6 +80,20 @@ to publish a tag that disagrees with it.
 
 ### Fixed
 
+- **`aramid doctor --fix` now updates aramid's own gitleaks (FN-5, the
+  version-neutral half).** `--fix` installed gitleaks only when none was
+  found, so a machine that ran it once kept that release through every
+  later pin change. It now also replaces the copy in `~/.aramid/tools/`
+  when that copy's version is not the pinned one, and plain `aramid doctor`
+  names such a copy on its gitleaks line (`aramid's own copy; aramid pins
+  <version> -- aramid doctor --fix replaces it`). The exit code is
+  unchanged. A gitleaks on PATH is the user's and is never replaced,
+  whatever its version, and an unreadable version is never read as a
+  mismatch. The new binary is written beside the old one and moved into
+  place, so a download or write that fails leaves the working copy. The pin
+  itself is unchanged: which version doctor and CI should share is still
+  open.
+
 - **A commit that only adds a test now reaches the drain that re-tests a
   mutation survivor.** Triage queued a survivor re-test only when a changed
   test's file name mapped to the survivor's module (`test_<module>.py` and

@@ -13,7 +13,7 @@ git clone https://github.com/jared0565/aramid
 cd aramid
 python -m venv .venv && . .venv/bin/activate      # Windows: .venv\Scripts\activate
 pip install -e ".[dev]"
-aramid doctor                                      # --fix installs gitleaks if it is missing
+aramid doctor                                      # --fix installs gitleaks, or updates aramid's own copy
 ```
 
 `aramid doctor` probes the four analyzers (gitleaks, semgrep, ruff,

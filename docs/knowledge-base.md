@@ -461,7 +461,7 @@ Run the gate pipeline.
 ### `aramid doctor [--fix]`
 Probe (and optionally repair) the toolchain and the hook shim's baked interpreter.
 - No flag: probes `gitleaks`, `semgrep`, `ruff`, `pip-audit` via `<exe> --version`, plus the shim's baked interpreter; prints LLM-provider probe lines, autolearn state health, and a `config:` section (one `WARN` row per config-key problem, or one `OK` row; never an exit code).
-- `--fix` — `pip install --upgrade`s `ruff`/`semgrep`/`pip-audit` into the current interpreter if missing; downloads a pinned gitleaks v8.21.2 binary into `~/.aramid/tools/` (sha256-verified) if missing; re-probes.
+- `--fix` — `pip install --upgrade`s `ruff`/`semgrep`/`pip-audit` into the current interpreter if missing; downloads a pinned gitleaks v8.21.2 binary into `~/.aramid/tools/` (sha256-verified) if missing, or over aramid's own copy there when it is off the pin (never a PATH gitleaks; written beside it and moved into place); re-probes.
 
 ### `aramid status`
 Read-only report of ledger/config state; never mutates anything. No flags.
