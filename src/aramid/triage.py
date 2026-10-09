@@ -155,14 +155,29 @@ def blast_radius_signal(root: Path, paths: list[str]) -> tuple[int, list[str]]:
     return 0, []
 
 
-def survivor_signal(ledger, paths: list[str]) -> tuple[int, list[str]]:
+def survivor_signal(ledger, paths: list[str],
+                    root: Path | None = None) -> tuple[int, list[str]]:
     """Does this push carry evidence for a recorded mutation survivor? Fires
     when a changed TEST maps (by the mutation gate's own stem rule) to the
     module of an open or `pending_retest` survivor, or when a changed source
     file holds one. The verified re-test runs only inside a drain, and a drain
     runs only for a push that scores -- without this, the push that could
     close a survivor was the push that never reached the consumer (measured:
-    21 gate-time resolves, 20 never re-examined). Never raises."""
+    21 gate-time resolves, 20 never re-examined). Never raises.
+
+    ANY CHANGED TEST, while a survivor is open and not suppressed (FN-37).
+    The stem rule misses ordinary names: 1ff56f7 put the test that kills
+    `runners/eslint.py:77` in `test_runner_eslint.py`, which maps to no
+    module, so triage scored the commit 0 and the survivor waited for an
+    unrelated source push. The consumer's re-test already holds that "the
+    suite is the mapping" (`consumers.mutation._retest_candidates`): any
+    changed test re-tests every open survivor. The trigger now agrees.
+    Suppressed rows are left out (equivalent mutants; the re-test skips them
+    too), read from `root`'s suppressions file -- None, or an unreadable
+    file, reads no suppressions, the same permissive answer the re-test
+    gives. `pending_retest` rows are left out of this rule: the drain
+    already synthesizes an item for them when the queue is empty. Cost: one
+    drain item per test-only push while a real survivor is open."""
     try:
         from aramid import mutation_gate
         state = ledger.open_findings()
@@ -176,12 +191,32 @@ def survivor_signal(ledger, paths: list[str]) -> tuple[int, list[str]]:
         hit = sorted(f for f in survivors
                      if normalize_path(f) in changed_norm
                      or any(mutation_gate._maps_to_module(s, f) for s in test_stems))
-        if not hit:
+        if hit:
+            return SURVIVOR_WEIGHT, [f"survivor-retest: {len(hit)} module(s) with a recorded "
+                                     f"survivor incl. {hit[0]}"]
+        if not test_stems:
             return 0, []
-        return SURVIVOR_WEIGHT, [f"survivor-retest: {len(hit)} module(s) with a recorded "
-                                 f"survivor incl. {hit[0]}"]
+        suppressed = _suppressed_ids(root)
+        reachable = sorted(rec.get("file") for fid, rec in state.items()
+                           if rec.get("tool") == "mutation" and rec.get("status") == "open"
+                           and rec.get("file") and fid not in suppressed)
+        if not reachable:
+            return 0, []
+        return SURVIVOR_WEIGHT, [f"survivor-retest: a changed test may kill "
+                                 f"{len(reachable)} open survivor(s) incl. {reachable[0]}"]
     except Exception:
         return 0, []
+
+
+def _suppressed_ids(root: Path | None) -> set[str]:
+    """Finding ids the tracked suppressions file binds; empty when there is
+    no root or the file cannot be read (see `survivor_signal`)."""
+    if root is None:
+        return set()
+    try:
+        return {r.id for r in config_mod.load_suppressions(root)[0]}
+    except Exception:
+        return set()
 
 
 def score(root: Path, base: str | None, head: str, cfg, ledger, *,
@@ -209,7 +244,7 @@ def score(root: Path, base: str | None, head: str, cfg, ledger, *,
         lambda: content_signal(diff, paths),
         lambda: novelty_signal(queue.triaged_paths(ledger), paths),
         lambda: blast_radius_signal(root, paths),
-        lambda: survivor_signal(ledger, paths),
+        lambda: survivor_signal(ledger, paths, root),
     )
     for sig in signals:
         if monotonic() - start > budget_s:

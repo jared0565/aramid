@@ -368,11 +368,11 @@ def test_survivor_signal_fires_for_a_pending_retest_survivor_too(tmp_path):
     assert pts == triage.SURVIVOR_WEIGHT
 
 
-def test_survivor_signal_is_zero_for_an_unrelated_test_or_no_survivors(tmp_path):
+def test_survivor_signal_is_zero_for_a_non_test_path_or_no_survivors(tmp_path):
     led = _survivor_ledger(tmp_path)
     try:
-        assert triage.survivor_signal(led, ["tests/test_other.py"]) == (0, [])
         assert triage.survivor_signal(led, ["README.md"]) == (0, [])
+        assert triage.survivor_signal(led, ["src/pkg/other.py"]) == (0, [])
     finally:
         led.close()
     empty = Ledger(tmp_path / "empty.db")
@@ -403,7 +403,7 @@ def test_survivor_signal_is_silent_when_no_changed_path_reaches_a_survivor(tmp_p
     reached only through tests/integration."""
     led = _survivor_ledger(tmp_path)
     try:
-        assert triage.survivor_signal(led, ["src/pkg/other.py", "tests/test_other.py"]) == (0, [])
+        assert triage.survivor_signal(led, ["src/pkg/other.py", "docs/other.md"]) == (0, [])
         assert triage.survivor_signal(led, []) == (0, [])
         pts, why = triage.survivor_signal(led, ["src/pkg/x.py"])
         assert (pts, why) == (triage.SURVIVOR_WEIGHT,
@@ -430,5 +430,83 @@ def test_survivor_signal_needs_an_open_survivor_with_a_file_and_is_silent_on_a_t
             raise RuntimeError("torn")
         monkeypatch.setattr(led, "open_findings", torn)
         assert triage.survivor_signal(led, ["src/pkg/x.py"]) == (0, [])
+    finally:
+        led.close()
+
+
+# FN-37. A test-only commit that kills a survivor queued nothing when its file
+# name did not map to the module by the stem rule: 1ff56f7 added the test that
+# kills dee97bcb (`runners/eslint.py:77`) to tests/unit/test_runner_eslint.py,
+# triage scored it 0, and the survivor stayed open with nothing to re-test it.
+# The consumer's re-test already treats "the suite is the mapping"; the
+# trigger now does too, for open survivors that are not suppressed.
+
+_ESLINT = "src/aramid/runners/eslint.py"
+_ESLINT_TEST = "tests/unit/test_runner_eslint.py"
+
+
+def _suppress_survivor(root, reason="equivalent mutant"):
+    (root / ".aramid-suppressions.toml").write_text(
+        '[[suppress]]\n'
+        f'id = "{"s" * 64}"\n'
+        'tool = "mutation"\n'
+        'rule = "int-bound"\n'
+        f'path = "{_ESLINT}"\n'
+        f'reason = "{reason}"\n', encoding="utf-8")
+
+
+def test_an_unmapped_changed_test_fires_while_an_unsuppressed_survivor_is_open(tmp_path):
+    from aramid import mutation_gate
+    # The control: the stem rule really does not map this test name to the
+    # module, so only the new rule can make the signal fire.
+    assert not mutation_gate._maps_to_module(Path(_ESLINT_TEST).stem, _ESLINT)
+    led = _survivor_ledger(tmp_path, file=_ESLINT)
+    try:
+        pts, why = triage.survivor_signal(led, [_ESLINT_TEST], root=tmp_path)
+    finally:
+        led.close()
+    assert pts == triage.SURVIVOR_WEIGHT
+    assert why == ["survivor-retest: a changed test may kill 1 open survivor(s) "
+                   f"incl. {_ESLINT}"]
+
+
+def test_an_unmapped_changed_test_is_silent_when_every_open_survivor_is_suppressed(tmp_path):
+    """A suppressed survivor is an equivalent mutant: the consumer skips it,
+    so queueing a drain for it would buy nothing."""
+    led = _survivor_ledger(tmp_path, file=_ESLINT)
+    try:
+        assert triage.survivor_signal(led, [_ESLINT_TEST], root=tmp_path)[0] == \
+            triage.SURVIVOR_WEIGHT                  # control: fires unsuppressed
+        _suppress_survivor(tmp_path)
+        assert triage.survivor_signal(led, [_ESLINT_TEST], root=tmp_path) == (0, [])
+    finally:
+        led.close()
+
+
+def test_an_unmapped_changed_test_does_not_fire_for_a_pending_retest_survivor_alone(tmp_path):
+    """A `pending_retest` row already gets a drain item of its own when the
+    queue is empty (`pending-retest:`), so it needs no trigger here."""
+    led = _survivor_ledger(tmp_path, file=_ESLINT, status="pending_retest")
+    try:
+        assert triage.survivor_signal(led, [_ESLINT_TEST], root=tmp_path) == (0, [])
+    finally:
+        led.close()
+
+
+def test_a_test_only_push_whose_name_maps_to_no_module_reaches_min_score(
+        tmp_path, monkeypatch):
+    """The FN-37 case end to end through `score`, which must hand the
+    suppressions file's root down: suppressing the survivor silences it."""
+    cfg = type("C", (), {"triage": {"min_score": 40, "extra_security_paths": []},
+                         "ignore_paths": []})()
+    _fake_git(monkeypatch, [_ESLINT_TEST], "+def test_kills_it(): ...\n")
+    led = _survivor_ledger(tmp_path, file=_ESLINT)
+    try:
+        result = triage.score(tmp_path, "a", "b", cfg, led)
+        assert result.score >= 40, result
+        assert any(r.startswith("survivor-retest:") for r in result.reasons), result
+        _suppress_survivor(tmp_path)
+        result = triage.score(tmp_path, "a", "b", cfg, led)
+        assert not any(r.startswith("survivor-retest:") for r in result.reasons), result
     finally:
         led.close()

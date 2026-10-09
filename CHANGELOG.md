@@ -41,6 +41,20 @@ to publish a tag that disagrees with it.
   CI steps the docs give are unchanged: the second now covers the first,
   and both stay because a CI job may install an older aramid.
 
+### Fixed
+
+- **A commit that only adds a test now reaches the drain that re-tests a
+  mutation survivor.** Triage queued a survivor re-test only when a changed
+  test's file name mapped to the survivor's module (`test_<module>.py` and
+  its variants). An ordinary name such as `test_runner_eslint.py`, for
+  `runners/eslint.py`, maps to nothing. The commit adding the test that
+  kills a survivor therefore scored too low to be queued, and the survivor
+  stayed open until an unrelated source change queued a drain. Now any
+  changed test file scores the survivor signal (+40) while an open survivor
+  is not set aside in `.aramid-suppressions.toml`; the drain's re-test
+  already ran every open survivor for such an item. **The cost:** one drain
+  item per test-only push while a real survivor is open.
+
 ## [0.20.6] — 2026-10-08
 
 ### Fixed

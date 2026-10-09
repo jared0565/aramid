@@ -59,6 +59,7 @@ A pure, git-plumbing-only, self-budgeted score (default `budget_s=2.0`, checked 
 | `content_signal` | 25 | added-line regex hits for exec/eval/subprocess, SQL-string-building, or an HTTP handler decorator/call; or a touched dependency-manifest file (`pyproject.toml`, `package.json`, `requirements`, lockfiles) |
 | `novelty_signal` | 20 | any touched path never seen in a prior triage run (per `queue.triaged_paths`) |
 | `blast_radius_signal` | 0/10/18/25 | number of graphite-graph dependents of touched files: ≥10→25, ≥3→18, ≥1→10, else 0. Fails open (returns 0/`[]`) if `graph-out/graph.json` is absent, corrupt, or unexpectedly shaped |
+| `survivor_signal` | 40 | a changed file holds an open or `pending_retest` mutation survivor, or a changed test maps to its module by the `gap_addressed` stem rule; or any changed test while an `open` survivor is not bound by `.aramid-suppressions.toml` (FN-37: the drain's re-test already treats the suite as the mapping). An unreadable suppressions file counts nothing as bound |
 
 `run_triage()` always records a `TRIAGE_RECORDED` event (so the drain sweep can resume from its last-seen head), and enqueues (`QUEUE_ITEM_ADDED`) only at/above `[triage].min_score` (default 40).
 

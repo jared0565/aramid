@@ -688,6 +688,7 @@ Score signals (capped at 100 total):
 | content | 25 | added-line hits for exec/eval/subprocess, SQL-string-building, or an HTTP handler; or a touched dependency manifest |
 | novelty | 20 | a touched path never seen in a prior triage run |
 | blast radius | 0/10/18/25 | graph-dependent count of touched files |
+| survivor | 40 | a changed file holds a recorded mutation survivor, or a changed test is named for its module; or any changed test while an open survivor is not set aside in `.aramid-suppressions.toml` |
 
 An item is enqueued only if its score is at or above `[triage].min_score` (default **40**). A second risky commit while one item is already queued **coalesces** into it rather than creating a second item (base kept, head advances, score takes the max, reasons union).
 
@@ -842,7 +843,7 @@ retest_open_survivors = true   # when a TEST file changes, re-test recorded open
 retest_cap = 3                 # ...at most this many per item, after the range's own mutants
 ```
 
-A survivor the pre-push gate resolved on intent (the push touched its module, or a test named for it) is recorded as `pending_retest`, not `fixed`: it no longer blocks, but nothing has proved it dead. The re-test is what closes it (`mutant_killed` → `fixed`), a later run that regenerates the same mutant re-opens it, and triage scores a push that changes a test named for a recorded survivor's module high enough to be queued (`survivor-retest`), so the push carrying the evidence is the one that reaches the consumer. A survivor bound by `.aramid-suppressions.toml` (an equivalent mutant) is never resolved by the gate at all.
+A survivor the pre-push gate resolved on intent (the push touched its module, or a test named for it) is recorded as `pending_retest`, not `fixed`: it no longer blocks, but nothing has proved it dead. The re-test is what closes it (`mutant_killed` → `fixed`), a later run that regenerates the same mutant re-opens it, and triage scores a push high enough to be queued (`survivor-retest`) when it changes a test named for a recorded survivor's module or, while an open survivor is not set aside in `.aramid-suppressions.toml`, any test at all, so the push carrying the evidence is the one that reaches the consumer. A survivor bound by `.aramid-suppressions.toml` (an equivalent mutant) is never resolved by the gate at all.
 
 **A survivor no re-test can verify stays open.** One survivor id names every line with the same content, and a re-test must kill every occurrence within one drain item, which has room for min(`max_mutants`, `confirm_cap`) of them (3 by default). The gate does not move a survivor whose occurrences at HEAD exceed that room to `pending_retest`, since nothing could ever confirm the move, and it reopens any such survivor already parked there; the reopen is a `finding_detected` event carrying `reopened: "unretestable"`, the occurrence count and the room. `aramid status` lists each one (`mutation re-test impossible`) with its two exits: raise both knobs to the occurrence count and `wall_budget_s` to one full-suite run per occurrence plus the baseline, or, once every occurrence's kill is verified by hand, `aramid override <id> --reason "..."`. A push touching the module no longer clears such a survivor, and with `mutation_block_armed = true` it blocks like any other open survivor.
 
