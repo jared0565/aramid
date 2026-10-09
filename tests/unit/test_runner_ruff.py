@@ -265,6 +265,37 @@ def test_the_inline_pass_never_outlives_the_gate_deadline(tmp_path, monkeypatch)
     assert timeout_s < 10.0
 
 
+class _HungSecondPass(_FakeRuff):
+    """A second pass that ignores its timeout, standing in for the up-to-5 s
+    reap `run_subprocess` spends on a killed tree after the timeout."""
+
+    def __call__(self, argv, cwd, timeout_s, env=None):
+        if "--isolated" in argv:
+            self.calls.append((list(argv), timeout_s))
+            time.sleep(timeout_s + 6.0)
+            return RunnerResult("ruff", ToolState.TIMEOUT, duration_s=timeout_s + 6.0)
+        return super().__call__(argv, cwd, timeout_s, env)
+
+
+def test_a_second_pass_whose_kill_hangs_never_costs_ruff_its_own_result(tmp_path, monkeypatch):
+    # The gate drops a whole registry key that returns after its budget,
+    # finished results and all, so ruff's own result must come back before
+    # the deadline however long the second pass takes to die.
+    _marked_tree(tmp_path)
+    fake = _HungSecondPass(tmp_path, own=[_item(tmp_path / "t.py", 1)], examined=["a.py", "t.py"],
+                           second=[])
+    monkeypatch.setattr(ruff, "run_subprocess", fake)
+    deadline = time.monotonic() + 4.0
+    result = ruff.run(_inline_ctx(tmp_path, gate_deadline=deadline))
+    returned = time.monotonic()
+
+    assert returned < deadline, f"returned {returned - deadline:.1f} s after the deadline"
+    own, second = result.sub_results
+    assert own.state is ToolState.OK
+    assert (second.tool, second.state) == (inline.RUFF, ToolState.TIMEOUT)
+    assert [f.tool for f in ruff.parse(result, _inline_ctx(tmp_path))] == ["ruff"]
+
+
 def test_no_python_in_scope_still_reports_the_inline_label_ok_and_empty(tmp_path, monkeypatch):
     # The label is in each gate's expected set; ruff reports OK-with-nothing
     # here, so its inline label must too, or status counts a skip.

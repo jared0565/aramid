@@ -151,7 +151,8 @@ def run(ctx) -> RunnerResult:
     own = _run_own(ctx)
     if not ctx.inline_pass or own.state is not ToolState.OK:
         return own
-    return inline.bundle(own, _run_inline(own, ctx))
+    return inline.bundle(own, inline.within_deadline(
+        ctx, inline.RUFF, lambda: _run_inline(own, ctx)))
 
 
 # A `# noqa` on the flagged line. A file-level `# ruff: noqa` is config-shaped

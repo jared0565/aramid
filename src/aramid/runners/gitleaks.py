@@ -164,7 +164,8 @@ def run(ctx) -> RunnerResult:
                            duration_s=result.duration_s, returncode=result.returncode)
         if not ctx.inline_pass:
             return own
-        return inline.bundle(own, _run_inline(ctx, Path(td), items, scan_root))
+        return inline.bundle(own, inline.within_deadline(
+            ctx, inline.GITLEAKS, lambda: _run_inline(ctx, Path(td), items, scan_root)))
 
 
 def _key(item: dict) -> tuple:

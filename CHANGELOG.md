@@ -40,7 +40,12 @@ to publish a tag that disagrees with it.
   three labels. A second pass is a runner result of its own: if it fails, or
   the gate's budget is too short to start it, it is reported degraded under
   its label (exit 2, which `--strict` refuses), its open findings stay open,
-  and the tool's own result is untouched. Not covered: eslint and clippy
+  and the tool's own result is untouched. One still running a second before
+  the budget runs out is abandoned rather than waited for, so the tool's own
+  result is always returned in time to count. **Cost:** ruff and gitleaks
+  each scan twice, inside the same gate budget; semgrep does not. A gitleaks
+  too old to know `--ignore-gitleaks-allow` exits 126 on it, so
+  `gitleaks-inline` reports `crashed (exit 126)`. Not covered: eslint and clippy
   markers, and gitleaks' file-level `.gitleaksignore` and `.gitleaks.toml`
   allowlist.
 

@@ -297,3 +297,45 @@ def test_a_degraded_second_pass_refuses_a_strict_run_like_any_degraded_runner(
             rc = cmd_check(root, Gate.PRE_COMMIT, "all", strict=strict, as_json=True)
         assert rc == expected, (strict, rc)
         assert json.loads(buf.getvalue())["degraded"] == [inline.RUFF]
+
+
+# ---------------------------------------------------------- deadline guard ---
+
+def test_a_second_pass_without_a_deadline_runs_on_the_calling_thread():
+    import threading
+    ran_on = []
+    ctx = SimpleNamespace(gate_deadline=None)
+    done = RunnerResult(inline.GITLEAKS, ToolState.OK, raw="[]")
+    result = inline.within_deadline(ctx, inline.GITLEAKS,
+                                    lambda: ran_on.append(threading.current_thread()) or done)
+    assert result is done
+    assert ran_on == [threading.current_thread()]
+
+
+@pytest.mark.parametrize("deadline", [None, 60.0])
+def test_a_second_pass_that_raises_is_crashed_under_its_label_never_an_exception(deadline):
+    # Raised out of the runner, the gate would mark the WHOLE key crashed and
+    # lose the tool's own finished result with it.
+    import time
+
+    def boom():
+        raise ValueError("unparseable report")
+
+    ctx = SimpleNamespace(gate_deadline=None if deadline is None else time.monotonic() + deadline)
+    result = inline.within_deadline(ctx, inline.RUFF, boom)
+    assert (result.tool, result.state) == (inline.RUFF, ToolState.CRASHED)
+    assert "unparseable report" in result.stderr
+
+
+def test_a_second_pass_still_running_at_the_margin_is_abandoned_as_a_timeout():
+    import threading
+    import time
+    release = threading.Event()
+    ctx = SimpleNamespace(gate_deadline=time.monotonic() + inline.MARGIN_S + 0.5)
+    started = time.monotonic()
+    result = inline.within_deadline(ctx, inline.GITLEAKS, lambda: release.wait(30) and None)
+    waited = time.monotonic() - started
+    release.set()
+    assert (result.tool, result.state) == (inline.GITLEAKS, ToolState.TIMEOUT)
+    assert 0.3 < waited < 2.0, waited
+    assert "abandoned" in result.stderr

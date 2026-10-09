@@ -490,3 +490,33 @@ def test_an_inline_pass_that_exits_1_without_a_report_is_degraded_not_clean(
     own, second = result.sub_results
     assert own.state is ToolState.OK
     assert (second.tool, second.state) == (inline.GITLEAKS, ToolState.CRASHED)
+
+
+def test_a_second_pass_whose_kill_hangs_never_costs_gitleaks_its_own_result(
+        tmp_path, monkeypatch):
+    # The gate drops a whole registry key that returns after its budget,
+    # finished results and all. A second pass is capped to end before the
+    # deadline, but `run_subprocess` can spend up to 5 s reaping a killed
+    # tree after that. A pass that ignores its timeout here stands in for
+    # that reap: gitleaks' own scan must come back before the deadline anyway.
+    _allow_tree(tmp_path)
+
+    def fake(argv, cwd, timeout_s, env=None):
+        if "--ignore-gitleaks-allow" in argv:
+            time.sleep(timeout_s + 6.0)
+            return RunnerResult("gitleaks", ToolState.TIMEOUT, duration_s=timeout_s + 6.0)
+        Path(argv[argv.index("--report-path") + 1]).write_text(
+            json.dumps([_leak(tmp_path / "cfg.py", 2)]))
+        return RunnerResult("gitleaks", ToolState.OK, returncode=1)
+
+    monkeypatch.setattr(gitleaks, "run_subprocess", fake)
+    started = time.monotonic()
+    deadline = started + 4.0
+    result = gitleaks.run(RunContext(root=tmp_path, inline_pass=True, gate_deadline=deadline))
+    returned = time.monotonic()
+
+    assert returned < deadline, f"returned {returned - deadline:.1f} s after the deadline"
+    own, second = result.sub_results
+    assert own.state is ToolState.OK
+    assert (second.tool, second.state) == (inline.GITLEAKS, ToolState.TIMEOUT)
+    assert [f.tool for f in gitleaks.parse(result, RunContext(root=tmp_path))] == ["gitleaks"]

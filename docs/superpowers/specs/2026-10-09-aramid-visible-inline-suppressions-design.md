@@ -176,6 +176,14 @@ operator question.
    budget left, and its timeout is capped to end 1 s before the deadline. The gate
    abandons a whole registry key at its budget, so a second pass that overran
    would throw away the tool's own finished result, BLOCK-tier gitleaks included.
+   The cap bounds the child, not the call: past its timeout `run_subprocess` waits
+   up to 5 s (`_POST_KILL_DRAIN_S`) to reap the killed tree, and `taskkill` has no
+   bound, so the cap alone returned up to 5 s late (review finding; measured 5.0 s
+   with a hung fake). The pass therefore runs on a daemon thread and is abandoned
+   as TIMEOUT 1 s before the deadline (`inline.within_deadline`). Reserving the reap
+   in the timeout instead was rejected: at pre-commit's 5 s budget it would leave
+   no time to start one. A pass that raises is CRASHED under its label, since
+   raising out of the runner would cost the whole key.
 8. **A degraded second pass** is a degraded runner under its own label: exit 2,
    which `--strict` refuses, the same as any other WARN-tier runner. Its open
    findings stay open, and the tool's own result is untouched. A gitleaks
@@ -189,6 +197,15 @@ operator question.
     `toolset._expand_keys`, so `mark-unreachable` never offers a live one for
     retirement and a pass that stops running shows as a skip streak. Each label is
     OK-and-empty whenever its tool is OK over nothing, so the upgrade adds no skip.
+11. **An unknown ruff code is dropped, not fatal.** ruff exits 2 on a `--select`
+    code it does not know (0.16.10), and the selected list is the resolved one,
+    repo additions included. The pass drops each code ruff names and retries, and
+    its stderr says what it dropped: a code ruff does not know is one it can
+    never report, so no marker can hide anything under it.
+12. **Cost.** ruff and gitleaks each scan twice inside the same gate budget;
+    semgrep does not. Not changed after review: a not-started or abandoned pass
+    reads `timeout (gate budget expired)` in `degraded_reasons`, which is what cut
+    it; the exact wording is on the label's log.
 
 Measured on aramid's own tree from `src` (a scratch clone of HEAD plus this
 change, fresh ledger, `check --gate pre-push --all --strict --json`, test suite

@@ -21,6 +21,7 @@ marker was removed. A degraded second pass is a degraded runner under its own
 label: it resolves nothing, and it never degrades the tool's own result.
 """
 import dataclasses
+import threading
 import time
 
 from aramid.models import Verdict
@@ -59,6 +60,45 @@ def second_pass_timeout(ctx, cap: float) -> float | None:
         return cap
     left = deadline - time.monotonic() - MARGIN_S
     return min(cap, left) if left >= MIN_S else None
+
+
+def within_deadline(ctx, label: str, second_pass) -> RunnerResult:
+    """`second_pass()`, returned by the deadline less MARGIN_S whatever it is
+    still doing.
+
+    Its timeout bounds the CHILD, not the call. Once it fires, `run_subprocess`
+    kills the tree and waits up to `base._POST_KILL_DRAIN_S` (5 s) to reap it,
+    and `taskkill` has no bound of its own, so a second pass capped to end
+    before the deadline still returned up to 5 s after it, and the gate then
+    threw away the tool's own finished result. Reserving the reap in the
+    timeout instead would leave nothing to run on at pre-commit's 5 s budget.
+    So with a deadline the pass runs on a DAEMON thread (`_run_selected`'s
+    docstring has why not a pool), and one still going at the margin is
+    abandoned as a TIMEOUT under its label; its child dies by its own timeout
+    and what it returns is discarded.
+
+    A pass that raises is CRASHED under its label: raised out of the runner,
+    it would cost the whole key, the tool's own result with it."""
+    def guarded() -> RunnerResult:
+        try:
+            return second_pass()
+        except Exception as exc:  # noqa: BLE001 -- never the tool's own result
+            return RunnerResult(label, ToolState.CRASHED,
+                                stderr=f"aramid: {label} raised {exc!r}")
+
+    deadline = getattr(ctx, "gate_deadline", None)
+    if deadline is None:
+        return guarded()
+    box: list[RunnerResult] = []
+    worker = threading.Thread(target=lambda: box.append(guarded()), daemon=True,
+                              name=f"aramid-{label}")
+    worker.start()
+    worker.join(timeout=max(0.0, deadline - time.monotonic() - MARGIN_S))
+    if box:
+        return box[0]
+    return RunnerResult(label, ToolState.TIMEOUT, stderr=(
+        f"aramid: {label} still running {MARGIN_S:g} s before the gate's budget "
+        f"ran out; abandoned so the tool's own result is kept"))
 
 
 def skipped(label: str) -> RunnerResult:
