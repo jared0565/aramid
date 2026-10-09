@@ -197,3 +197,67 @@ def test_a_new_ruff_warning_first_seen_at_push_is_escalated_by_the_ratchet(
     assert rc == 1, payload
     assert f401 and all(f["verdict"] == "block" and f.get("escalated_by_ratchet")
                         and f.get("verdict_before_ratchet") == "warn" for f in f401), f401
+
+
+def _crashed_ruff(monkeypatch):
+    monkeypatch.setitem(pipeline.RUNNERS, "ruff", SimpleNamespace(
+        run=lambda ctx: RunnerResult("ruff", ToolState.CRASHED),
+        parse=lambda result, ctx: []))
+
+
+@pytest.mark.parametrize("strict, expected_rc", [(False, 2), (True, 1)])
+def test_a_ruff_that_cannot_run_at_the_push_degrades_the_run(
+        tmp_path, monkeypatch, live_ruff, only_ruff_is_real, strict, expected_rc):
+    """ruff is not BLOCK-tier, so a ruff that crashes (or is missing, or times
+    out) at the push is a degraded run, exit 2: the default pre-push hook maps
+    that to 0, and `--strict` -- CI, `pre_push_match_ci` -- refuses it. Before
+    FN-32 ruff never ran at the push, so neither could happen there."""
+    root = _pushed_repo(tmp_path)
+    _commit(root, "clean.py", "VALUE = 2\n")
+    _crashed_ruff(monkeypatch)
+
+    buf = io.StringIO()
+    with contextlib.redirect_stdout(buf):
+        rc = cmd_check(root, Gate.PRE_PUSH, "range", strict=strict, as_json=True)
+    payload = json.loads(buf.getvalue())
+
+    assert rc == expected_rc, payload
+    assert "ruff" in payload["degraded"], payload["degraded"]
+
+
+def test_the_first_push_after_upgrading_reports_no_ruff_skip_streak(
+        tmp_path, monkeypatch, capsys, live_ruff, only_ruff_is_real):
+    """`status` counts a tool skipped when the newest pre-push run EXPECTED it
+    and the runs before had none of it. Every pre-push row written before
+    FN-32 lacks ruff. The first row after the upgrade records ruff in both
+    `expected` and `tools`, so the streak is zero rather than "skipped last N".
+    The control: a push whose ruff crashed IS a skip, and says so."""
+    from aramid.commands.status import cmd_status
+    from aramid.ledger import Ledger
+    from aramid.models import Event, EventType
+
+    root = _pushed_repo(tmp_path)
+    _commit(root, "clean.py", "VALUE = 2\n")
+    lg = Ledger(root / ".aramid" / "ledger.db")
+    for day in ("01", "02"):                    # the old version's pre-push rows
+        lg.append(Event(EventType.RUN_STARTED, f"old{day}", f"2026-01-{day}T00:00:00+00:00",
+                        payload={"gate": "pre-push", "tools": ["gitleaks", "semgrep"],
+                                 "expected": ["gitleaks", "semgrep"]}))
+    lg.close()
+
+    rc, _ = _push_gate(root)
+    assert rc == 0
+    lg = Ledger(root / ".aramid" / "ledger.db")
+    newest = [e for e in lg.events() if e.type is EventType.RUN_STARTED][-1]
+    lg.close()
+    assert "ruff" in newest.payload["tools"] and "ruff" in newest.payload["expected"], newest.payload
+
+    capsys.readouterr()
+    assert cmd_status(root) == 0
+    assert "skipped last" not in capsys.readouterr().out
+
+    _crashed_ruff(monkeypatch)
+    _push_gate(root)
+    capsys.readouterr()
+    assert cmd_status(root) == 0
+    assert "ruff: skipped last 1 pre-push run(s)" in capsys.readouterr().out

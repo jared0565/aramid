@@ -31,8 +31,8 @@ to publish a tag that disagrees with it.
   stays a WARN, so the same finding is stricter at the push when its commit
   skipped the hook. A repo onboarded before 0.7.0 that sets
   `pre_push_match_ci` can meet ruff WARNs in files nothing has re-scanned
-  since; `aramid rebaseline` records them. A ruff that crashes or times out
-  at the push is now a degraded run there: exit 2, which the default pre-push
+  since; `aramid rebaseline` records them. A ruff that is missing, crashes or
+  times out at the push is now a degraded run there: exit 2, which the default pre-push
   hook lets through and `--strict` (CI, `pre_push_match_ci`) refuses. The two
   CI steps the docs give are unchanged: the second now covers the first,
   and both stay because a CI job may install an older aramid.
