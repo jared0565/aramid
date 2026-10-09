@@ -45,8 +45,19 @@ have.
 ## 2. The command
 
 ```
-aramid ledger resolve <id> --fixed <commit> --test <pytest node id> --reason "..."
+aramid ledger resolve <id> --fixed <commit> --test "<test command>" --reason "..."
 ```
+
+`--test` takes the command that runs the test, for example
+`npx vitest run src/orders.test.ts -t "routes CN"` or
+`python -m pytest tests/test_x.py::test_y`. aramid splits it with
+`shlex.split`, runs it with no shell from the repo root, and records the
+argv verbatim.
+
+The reason for this shape: the report that created FN-36 (round 316) came
+from pawscout-worker, a TypeScript repo whose nine fixes are vitest tests.
+A pytest node id could never have accepted any of them. Each runner names a
+single test differently, so the command, not aramid, says how.
 
 Refusals each exit 3 with a message naming what to do instead. The command
 refuses when:
@@ -57,20 +68,22 @@ refuses when:
    manual close;
 3. the finding is confirmed-critical (`review.is_confirmed_critical_llm`),
    armed or not. This mirrors `override`'s refusal; see section 5, question 1;
-4. `<commit>` is not an ancestor of HEAD, or does not touch the finding's
-   file. The fix must be in the history being certified, and must be about
-   this file;
-5. `--test` does not name a test that exists at HEAD;
-6. the test does not pass at HEAD. aramid runs it through the repo's
-   `[tests].command`, or `python -m pytest`, with the node id appended, under
-   `[tests].timeout_s`. A timeout or crash is a refusal, not a pass;
+4. `<commit>` is not an ancestor of HEAD. It is also refused when it is an
+   ancestor of the `head` the finding was raised at (recorded on its
+   detection), because a fix cannot predate the finding. The commit need NOT
+   touch the finding's file: one of round 316's nine fixes (82d77aaa) landed
+   only in a caller;
+5. the command's executable cannot be resolved (the same `toolpath.resolve`
+   the runners use);
+6. the command does not exit 0 at HEAD within `[tests].timeout_s`. A
+   timeout or crash is a refusal, not a pass;
 7. `--reason` is empty.
 
 On success it appends one `finding_resolved` event with this payload:
 
 ```
 {"auto_resolved": "evidenced_close", "commit": "<full sha>",
- "test": "<node id>", "test_rc": 0, "reason": "...", "head": "<HEAD sha>"}
+ "test_argv": ["..."], "test_rc": 0, "reason": "...", "head": "<HEAD sha>"}
 ```
 
 The status fold already maps a plain `finding_resolved` to `fixed`. No new
@@ -83,20 +96,24 @@ the evidence sits on the event.
   would cost a refute-or-confirm call. Tokens per touch, for every open
   finding, forever. It is also non-deterministic: the same fix can be
   refuted once and confirmed the next time.
-- **A new `fixed_by_evidence` status**: this would lose the re-open path in
-  section 1, unless `record_run`'s re-open list and the consumer's dedupe
-  both learned it. That is two more places to keep in step, for a
-  distinction `ledger show` already makes from the event payload.
+- **A new `fixed_by_evidence` status**: round 316 asked for one, "so it is
+  never mistaken for an automatic clear". This design departs from that
+  request on purpose, and the operator may overrule it (section 5, question
+  4). A new status would lose the re-open path in section 1, unless
+  `record_run`'s re-open list and the consumer's dedupe both learned it.
+  That is two more places to keep in step. The event's `auto_resolved:
+  evidenced_close` already tells this close from an automatic one in
+  `ledger show`, and `ledger filter --json` can expose it as a field.
 - **Loosening the quote match**: this is how a confirmed critical gets
   resolved away. The resolver's docstring rules it out, and that reasoning
   still holds.
 
 ## 4. What it does not do
 
-- It does not prove that the test exercises the finding. A passing test that
-  is unrelated satisfies rule 6. Rule 4 (the commit touches the file) and
-  the reason are the human evidence. Section 5, question 2 offers a stronger,
-  optional check.
+- It does not prove that the command tests the finding at all. A command
+  that runs no test (`true`) satisfies rule 6. The recorded argv and the
+  reason are the human evidence, and both sit on the event for review.
+  Section 5, question 2 offers the stronger, optional check.
 - It does not cover `historical` or `overridden` rows. An already-overridden
   fixed finding stays as it is; its owner can leave it.
 
@@ -115,7 +132,12 @@ the evidence sits on the event.
    is answered yes.
 3. **MCP.** Should the tool be exposed as `aramid_ledger_resolve`? An agent
    could then close its own findings, with the same rules. Proposed: yes;
-   the rules are the guard, and `override` is already exposed.
+   the rules are the guard, and `override` is already exposed. Given the
+   `true` case in section 4, an agent's close could require `--red-proof`.
+4. **Its own status, as round 316 asked?** Proposed: no; `fixed` plus the
+   payload (section 3) keeps the re-open path. Say yes if a filterable
+   status matters more than that path, and the re-open list and the dedupe
+   gain it too.
 
 ## 6. Tests (to write first)
 
@@ -127,8 +149,12 @@ the evidence sits on the event.
   consumer raises again (faked provider) is `open` again after `record_run`.
   The control: an OVERRIDDEN finding raised again stays `overridden`. That
   pins the asymmetry this design rests on.
-- A test that fails, times out, or does not exist at HEAD each refuses, and
-  each writes nothing.
+- A command that fails, times out, or cannot be resolved at HEAD each
+  refuses, and each writes nothing.
+- A commit that touches only another file (the caller case) is accepted; a
+  commit that predates the finding's detection head is refused.
+- The argv is recorded exactly as split, for a pytest command and for an
+  npx command alike.
 
 ## 7. Docs
 

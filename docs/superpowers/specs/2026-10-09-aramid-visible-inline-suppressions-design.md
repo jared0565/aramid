@@ -64,6 +64,13 @@ Only hits whose rule is BLOCK-tier in the RESOLVED `block_rules` (the
 machine floor plus additions) count. A WARN-tier rule silenced inline is the
 repo's own business.
 
+**Scope: these three producers only.** A repo can add BLOCK rules for any
+runner through `block_rules`, and eslint (`// eslint-disable...`) and clippy
+(`#[allow(...)]`) have inline markers of their own. They are out of scope
+for this design, which covers the producers with a curated BLOCK set by
+default. Each needs its own detection mechanism. They are filed as a
+follow-up on FN-38 in the plan, not silently covered.
+
 ## 4. Deployment: the first run after upgrading
 
 Every consumer that already carries markers sees them all at once on the
