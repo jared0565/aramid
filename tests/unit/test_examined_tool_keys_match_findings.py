@@ -120,3 +120,38 @@ def test_empty_set_is_preserved_not_collapsed_to_absent():
         [RunnerResult("eslint", ToolState.OK, examined=frozenset())])
 
     assert got == {"eslint": set()}
+
+
+# --- FN-38: a second pass is keyed by its own label -------------------------
+
+from aramid.runners import gitleaks, inline  # noqa: E402
+
+_RUFF_HIT = {"code": "S105", "filename": "a.py", "message": "m",
+             "location": {"row": 1, "column": 1}}
+_SEM_HIT = {"check_id": "owasp-top-ten.a01.x", "path": "a.py", "start": {"line": 1},
+            "extra": {"severity": "ERROR", "message": "m"}}
+_LEAK = {"RuleID": "github-pat", "File": "a.py", "StartLine": 1, "Secret": "s3cr3t",
+         "Description": "d"}
+
+_BUNDLES = [
+    pytest.param(ruff, json.dumps([_RUFF_HIT]), json.dumps([_RUFF_HIT]), id="ruff"),
+    pytest.param(semgrep, json.dumps({"results": [_SEM_HIT]}),
+                 json.dumps({"results": [_SEM_HIT]}), id="semgrep"),
+    pytest.param(gitleaks, json.dumps([_LEAK]), json.dumps([_LEAK]), id="gitleaks"),
+]
+
+
+@pytest.mark.parametrize("module, own_raw, second_raw", _BUNDLES)
+def test_every_flattened_pass_is_keyed_by_the_tool_its_findings_carry(
+        module, own_raw, second_raw, tmp_path):
+    (tmp_path / "a.py").write_text("x = 1\n", encoding="utf-8")
+    label = inline.LABELS[module.NAME]
+    own = RunnerResult(module.NAME, ToolState.OK, raw=own_raw, examined=frozenset({"a.py"}))
+    second = RunnerResult(label, ToolState.OK, raw=second_raw, examined=frozenset({"a.py"}))
+    bundle = inline.bundle(own, second)
+
+    findings = module.parse(bundle, RunContext(root=tmp_path, files=["a.py"]))
+    flat = pipeline._flatten({module.NAME: bundle})
+
+    assert {f.tool for f in findings} == {r.tool for r in flat} == {module.NAME, label}
+    assert set(pipeline._examined_by_tool(flat)) == {module.NAME, label}

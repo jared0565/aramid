@@ -127,6 +127,34 @@ def _aging_line(ledger: Ledger, state: dict, suppressed: set[str] = frozenset())
     return line
 
 
+def _inline_markers_line(state: dict, suppressed: set[str]) -> str | None:
+    """FN-38: how many BLOCK-tier hits the repo's own markers hide, by label,
+    with the ones a reasoned suppression entry accepts counted apart -- the
+    same set-aside rule as the aging line. None when there are none, so a
+    repo with no markers gets no line."""
+    from aramid.runners import inline
+    open_by_label: dict[str, int] = {}
+    accepted = 0
+    for fid, rec in state.items():
+        if (rec.get("status") != "open" or rec.get("rule") != inline.RULE
+                or rec.get("tool") not in inline.TOOLS):
+            continue
+        if fid in suppressed:
+            accepted += 1
+        else:
+            open_by_label[rec["tool"]] = open_by_label.get(rec["tool"], 0) + 1
+    if not open_by_label and not accepted:
+        return None
+    per_label = ", ".join(f"{label} {n}" for label, n in sorted(open_by_label.items()))
+    line = (f"inline markers: {sum(open_by_label.values())} open finding(s) where a "
+            f"tool's own marker hides a BLOCK rule")
+    if per_label:
+        line += f" ({per_label})"
+    if accepted:
+        line += f", {accepted} accepted in .aramid-suppressions.toml"
+    return line
+
+
 def _skip_streak_lines(ledger: Ledger) -> list[str]:
     """Rendered from `health.snapshot`; the streak rule and its history live
     in aramid.health.skip_streaks."""
@@ -449,6 +477,8 @@ def cmd_status(root) -> int:
 
     try:
         state = ledger.open_findings()
+        suppressed = _suppressed_ids(root)
+        inline_line = _inline_markers_line(state, suppressed)
 
         lines = [
             "aramid status:",
@@ -456,7 +486,8 @@ def cmd_status(root) -> int:
             f"  {_last_run_line(ledger)}",
             f"  {_open_counts_line(state)}",
             f"  {_new_since_baseline_line(ledger, state)}",
-            f"  {_aging_line(ledger, state, _suppressed_ids(root))}",
+            f"  {_aging_line(ledger, state, suppressed)}",
+            *([f"  {inline_line}"] if inline_line else []),
         ]
 
         h = health.snapshot(cfg, ledger)

@@ -335,3 +335,28 @@ def test_last_drain_line_reads_an_idle_visit_so_a_dead_scheduler_and_an_empty_qu
             "a visit without the key is idle"
     finally:
         led.close()
+
+
+# --- FN-38: the inline-marker count line ------------------------------------
+
+def _rec(tool, status="open", rule=None):
+    from aramid.runners import inline
+    return {"tool": tool, "rule": rule or inline.RULE, "status": status, "file": "a.py"}
+
+
+def test_inline_markers_line_counts_open_findings_per_label_and_the_accepted_ones():
+    from aramid.runners import inline
+    state = {
+        "a": _rec(inline.RUFF), "b": _rec(inline.RUFF), "c": _rec(inline.GITLEAKS),
+        "d": _rec(inline.RUFF),                       # accepted below
+        "e": _rec(inline.RUFF, status="fixed"),       # gone: not counted
+        "f": _rec("ruff", rule="S105"),               # not an inline finding
+    }
+    assert status._inline_markers_line(state, suppressed={"d"}) == (
+        "inline markers: 3 open finding(s) where a tool's own marker hides a "
+        "BLOCK rule (gitleaks-inline 1, ruff-inline 2), 1 accepted in "
+        ".aramid-suppressions.toml")
+
+
+def test_inline_markers_line_is_absent_when_there_is_nothing_to_count():
+    assert status._inline_markers_line({"f": _rec("ruff", rule="S105")}, set()) is None

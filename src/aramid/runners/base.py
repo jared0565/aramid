@@ -284,6 +284,16 @@ class RunContext:
       default None means no tap, no extra argv, no extra output -- the
       launcher is called exactly as before, which is what every RunContext
       built outside run_gate (consumers, tests) gets.
+    inline_pass / ruff_block_rules: FN-38 (runners/inline.py). `inline_pass`
+      True makes ruff, gitleaks and semgrep report the BLOCK-tier hits the
+      repo's own markers hid, as a second result under their inline label.
+      `ruff_block_rules` is the RESOLVED ruff BLOCK list (machine floor plus
+      repo additions), the `--select` of ruff's second pass -- parse() never
+      sees a Config, the same reason `cargo_audit_warnings` is a field. Only
+      run_gate sets them: init's full-history gitleaks scan, the regression
+      pack and update-rules build their own ctx and must neither pay for a
+      second pass nor report one. Additive: the defaults keep every existing
+      construction site exactly as before.
     """
     root: Path
     files: list[str] = field(default_factory=list)
@@ -300,6 +310,8 @@ class RunContext:
     detected_tests: set[str] | None = None
     cargo_audit_warnings: bool = False
     progress: Callable[[str], None] | None = None
+    inline_pass: bool = False
+    ruff_block_rules: tuple[str, ...] = ()
 
 _WIN = sys.platform == "win32"
 _POST_KILL_DRAIN_S = 5.0   # cap on the post-_kill_tree reap wait (test seam)

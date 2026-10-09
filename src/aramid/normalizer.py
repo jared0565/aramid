@@ -62,6 +62,10 @@ class RawFinding:
     source: Source = Source.DETERMINISTIC
     confirmed: bool = False
     refuted: bool = False
+    # FN-38: the (tool, rule) of ANOTHER tool's hit this finding is about --
+    # set only by the inline-marker passes (runners/inline.py), whose finding
+    # reports a hit the repo's own marker hid. Unset everywhere else.
+    subject: tuple[str, str] | None = None
 
 
 def normalize(raws: list[RawFinding], root: Path, ref_for: Callable[[str], str],
@@ -83,7 +87,15 @@ def normalize(raws: list[RawFinding], root: Path, ref_for: Callable[[str], str],
             idx = raw.line - 1
             line_content = lines[idx] if 0 <= idx < len(lines) else ""
 
-        occ_key = (raw.tool, raw.rule, raw.file, normalize_line(line_content))
+        # A finding ABOUT another tool's hit (FN-38) folds that hit's tool and
+        # rule into its id. Two hidden rules on one line otherwise share
+        # (tool, rule, file, line) and differ only by occurrence index, which
+        # follows the tool's output order -- and a reasoned suppression entry
+        # would silently move to the other rule when that order changed.
+        # Unset `subject` leaves `id_rule == raw.rule`: every other id is
+        # byte-identical to before.
+        id_rule = raw.rule if raw.subject is None else "\x1f".join((raw.rule, *raw.subject))
+        occ_key = (raw.tool, id_rule, raw.file, normalize_line(line_content))
         # pin_occurrence (M5): variable-set drain consumers (mutation, fuzz)
         # have budget-truncated batches, so positional occurrence indices
         # drift across drains -> ghost never-resolving findings. Pinning
@@ -99,7 +111,7 @@ def normalize(raws: list[RawFinding], root: Path, ref_for: Callable[[str], str],
         occurrence_index = 0 if pin_occurrence else occurrence_counts[occ_key]
         occurrence_counts[occ_key] += 1
 
-        finding_id = compute_fingerprint(raw.tool, raw.rule, raw.file, line_content,
+        finding_id = compute_fingerprint(raw.tool, id_rule, raw.file, line_content,
                                           occurrence_index)
 
         if raw.secret:

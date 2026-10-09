@@ -42,7 +42,8 @@ from aramid.models import Event, EventType, Finding, Gate, Verdict
 from aramid.normalizer import RawFinding, normalize
 from aramid.pack import RULES_REL_PATH
 from aramid.policy import OverrideRecord
-from aramid.runners import clippy, deps, eslint, gitleaks, ruff, semgrep, tests, typecheck
+from aramid.runners import (clippy, deps, eslint, gitleaks, inline, ruff, semgrep, tests,
+                            typecheck)
 from aramid.runners import shadow  # noqa: F401  (registry member)
 from aramid.runners.base import RunContext, RunnerResult, ToolState, apply_stall_window
 
@@ -769,7 +770,11 @@ _LOG_STDOUT_CAP = 64 * 1024
 # --report-path <file>`, so findings go to a file `_log_body` never reads and
 # stdout carries only a banner and a count; failures explain themselves on
 # stderr, which is still persisted.
-_NO_STDOUT_TOOLS = frozenset({"gitleaks"})
+#
+# The FN-38 second pass (`gitleaks-inline`) is the same tool with the same
+# report: its OK result's raw is the leaks a `gitleaks:allow` comment hid,
+# Secret fields included, and it exits 1 whenever there is one.
+_NO_STDOUT_TOOLS = frozenset({"gitleaks", inline.GITLEAKS})
 
 
 def _degraded_reasons(flat_results: list[RunnerResult]) -> dict[str, str]:
@@ -1041,7 +1046,14 @@ def run_gate(root: Path, gate: Gate, mode: str, cfg: config_mod.Config, ledger: 
                       # it to stderr, which git relays live to the terminal a
                       # push was typed in. Consumers build their own ctx and
                       # get the default None -- the drain stays silent.
-                      progress=progress_mod.StderrReporter())
+                      progress=progress_mod.StderrReporter(),
+                      # FN-38: the gate, and only the gate, asks ruff, gitleaks
+                      # and semgrep what the repo's own markers hid. The
+                      # RESOLVED list, so a repo's additions are asked about
+                      # too (runners/inline.py).
+                      inline_pass=True,
+                      ruff_block_rules=tuple(
+                          (cfg.block_rules or {}).get("ruff", {}).get("block", ())))
     selected = _select_runners(gate, ctx)
 
     # 3. run concurrently under the gate's wall-clock budget.
@@ -1061,6 +1073,10 @@ def run_gate(root: Path, gate: Gate, mode: str, cfg: config_mod.Config, ledger: 
     all_raws: list[RawFinding] = []
     for key, result in results.items():
         all_raws.extend(selected[key].parse(result, ctx))
+    # FN-38: a hit a repo's own marker hid counts only if it would have BLOCKED
+    # here. Before normalize, so a dropped one never gets an id or a row.
+    all_raws = inline.block_tier_only(
+        all_raws, lambda tool, rule, sev: policy.classify(tool, rule, sev, gate, cfg)[1])
 
     # TDD gate (1a): synchronous git-fact code-without-test producer. PRE_PUSH
     # only; joins the raw stream so classify/fingerprint/ratchet/overrides all
@@ -1223,6 +1239,17 @@ def run_gate(root: Path, gate: Gate, mode: str, cfg: config_mod.Config, ledger: 
         #                       structurally by being appended after this block.
         #                       Stated here so the third mechanism is explicit
         #                       rather than an accident of ordering.
+        #   inline markers (FN-38, runners/inline.py) -- also FAIL the principle:
+        #                       the author can remove the marker, or accept it
+        #                       with a reasoned suppressions entry. Exempt
+        #                       because the producer ships DISARMED (WARN-only
+        #                       until arming is decided), and for the reason
+        #                       that makes disarming necessary: on the first
+        #                       push after upgrading, every marker the repo
+        #                       already carries is a NEW id, so escalating
+        #                       would refuse that push for markers nobody added
+        #                       in it. Matched on label AND rule, never on rule
+        #                       alone.
         #
         # NOT exempt, decided under the principle (round 38):
         #   semgrep's WARN-only bake -- the bake exists to absorb the EXISTING
@@ -1239,7 +1266,8 @@ def run_gate(root: Path, gate: Gate, mode: str, cfg: config_mod.Config, ledger: 
             return (f.id in new_ids and f.verdict is Verdict.WARN
                     and f.rule != deps.DEPS_SHAPE_DRIFT_RULE
                     and f.tool not in ("tdd", "red-proof",
-                                       deps.NAME_CARGO_AUDIT_WARNINGS))
+                                       deps.NAME_CARGO_AUDIT_WARNINGS)
+                    and not (f.tool in inline.TOOLS and f.rule == inline.RULE))
 
         # Captured here, not re-derived downstream: this is the only place that
         # holds both the pre- and post-ratchet verdict. A reader given only the

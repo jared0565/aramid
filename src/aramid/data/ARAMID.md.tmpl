@@ -111,6 +111,13 @@ itself -- e.g. ruff's own `per-file-ignores`:
 
 aramid's own `--extend-select S` flag still respects this; it only adds
 rules to what ruff selects, it does not override the target repo's ignores.
+One exception is reported rather than silent: a `per-file-ignores` entry or a
+`# noqa` that hides one of the curated BLOCK rules (`S105` and the like), like
+a `gitleaks:allow` or `# nosemgrep` that hides a gitleaks or semgrep BLOCK, is
+reported as a WARN `inline-suppressed-block` finding. It never blocks; accept
+it with a reasoned `.aramid-suppressions.toml` entry for that finding's id. (A
+top-level ruff `lint.ignore` does not hide a curated rule at all:
+`--extend-select S` overrides it.)
 
 **Demoting a BLOCK-tier rule?** Setting `block_rules.<tool>.block` in
 `aramid.toml` can only ADD to what your own machine's config (packaged

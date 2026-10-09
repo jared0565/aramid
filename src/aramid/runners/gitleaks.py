@@ -31,9 +31,11 @@ push can ship and the only place a reported leak can be fixed.
 import json
 import shutil
 import tempfile
+from dataclasses import replace
 from pathlib import Path
 
 from aramid.normalizer import RawFinding
+from aramid.runners import inline
 from aramid.runners.base import RunnerResult, ToolState, run_subprocess
 from aramid.fingerprint import normalize_path
 from aramid.runners._util import relativize
@@ -158,14 +160,69 @@ def run(ctx) -> RunnerResult:
                                  duration_s=result.duration_s, returncode=result.returncode)
         if scan_root is not None:
             text = json.dumps(_unstage(items, scan_root, ctx.root))
-        return RunnerResult(NAME, ToolState.OK, raw=text or "[]", stderr=result.stderr,
-                             duration_s=result.duration_s, returncode=result.returncode)
+        own = RunnerResult(NAME, ToolState.OK, raw=text or "[]", stderr=result.stderr,
+                           duration_s=result.duration_s, returncode=result.returncode)
+        if not ctx.inline_pass:
+            return own
+        return inline.bundle(own, _run_inline(ctx, Path(td), items, scan_root))
+
+
+def _key(item: dict) -> tuple:
+    return (item.get("RuleID"), item.get("File"), item.get("StartLine"),
+            item.get("Commit") or "")
+
+
+def _run_inline(ctx, td: Path, own_items: list, scan_root: Path | None) -> RunnerResult:
+    """FN-38's second pass: the same scan path (staged / range / the staged
+    copy of the tracked tree) with `--ignore-gitleaks-allow`, keeping the leaks
+    the first run did not report, matched by (rule, file, line, commit).
+
+    The report it reads holds the secrets themselves. The OK result carries
+    them on purpose (parse puts each on `RawFinding.secret`, so the evidence
+    is redacted and the log scrubber knows it), and `pipeline._NO_STDOUT_TOOLS`
+    names this label so no log ever persists that raw. A failed run carries
+    none of it."""
+    timeout = inline.second_pass_timeout(ctx, TIMEOUT_S)
+    if timeout is None:
+        return inline.skipped(inline.GITLEAKS)
+    report_path = td / "gitleaks-inline-report.json"
+    argv = [*_build_argv(ctx, report_path, scan_root), "--ignore-gitleaks-allow"]
+    result = run_subprocess(argv, ctx.root, timeout)
+    if result.state in (ToolState.MISSING, ToolState.TIMEOUT):
+        return replace(result, tool=inline.GITLEAKS, raw="")
+    failed = RunnerResult(inline.GITLEAKS, ToolState.CRASHED, stderr=result.stderr,
+                          duration_s=result.duration_s, returncode=result.returncode)
+    # rc 1 is gitleaks' "leaks found OR an error", so with no report file it
+    # proves nothing: read as `[]`, it would say no marker hides anything.
+    if result.returncode not in _OK_RETURNCODES or (
+            result.returncode == 1 and not report_path.exists()):
+        return failed
+    try:
+        items = json.loads((report_path.read_text() if report_path.exists() else "") or "[]")
+    except json.JSONDecodeError:
+        return failed
+    if scan_root is not None:
+        _unstage(items, scan_root, ctx.root)
+    seen = {_key(item) for item in own_items}
+    hidden = [item for item in items if _key(item) not in seen]
+    return RunnerResult(inline.GITLEAKS, ToolState.OK, raw=json.dumps(hidden),
+                        stderr=result.stderr, duration_s=result.duration_s,
+                        returncode=result.returncode)
 
 
 def parse(result: RunnerResult, ctx) -> list[RawFinding]:
     if result.state is not ToolState.OK:
         return []
-    items = json.loads(result.raw or "[]")
+    found = _raw_findings(json.loads(result.raw or "[]"), ctx, hidden=False)
+    for sub in getattr(result, "sub_results", None) or ():
+        if sub.tool == inline.GITLEAKS and sub.state is ToolState.OK:
+            found.extend(_raw_findings(json.loads(sub.raw or "[]"), ctx, hidden=True))
+    return found
+
+
+def _raw_findings(items: list, ctx, *, hidden: bool) -> list[RawFinding]:
+    """One gitleaks report -> RawFindings. `hidden` marks the second pass's
+    report: each leak a `gitleaks:allow` comment hid, under the inline label."""
     # Only the `gitleaks git ...` history path (ctx.rng is not None, per
     # _build_argv above -- matches its is-not-None check, not truthiness, so
     # the FULL_HISTORY_RNG "" sentinel counts as a history scan too) can
@@ -194,14 +251,17 @@ def parse(result: RunnerResult, ctx) -> list[RawFinding]:
         rel = relativize(item["File"], ctx.root)
         if scope is not None and normalize_path(rel) not in scope:
             continue
+        description = item.get("Description") or item["RuleID"]
         out.append(RawFinding(
-            tool=NAME,
-            rule=item["RuleID"],
+            tool=inline.GITLEAKS if hidden else NAME,
+            rule=inline.RULE if hidden else item["RuleID"],
             severity_raw=_SEVERITY_RAW,
             file=rel,
             line=item["StartLine"],
-            message=item.get("Description") or item["RuleID"],
+            message=(inline.message(NAME, item["RuleID"], "a `gitleaks:allow` comment",
+                                    description) if hidden else description),
             secret=item["Secret"],
             commit=(item.get("Commit") or None) if is_history_scan else None,
+            subject=(NAME, item["RuleID"]) if hidden else None,
         ))
     return out

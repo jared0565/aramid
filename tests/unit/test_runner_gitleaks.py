@@ -317,3 +317,176 @@ def test_full_tree_with_nothing_tracked_scans_an_empty_directory(tmp_path, monke
     assert seen["files"] == []
     assert result.state is ToolState.OK
     assert gitleaks.parse(result, ctx) == []
+
+
+# --- FN-38: the `--ignore-gitleaks-allow` second pass -----------------------
+
+import time  # noqa: E402
+
+from aramid import pipeline  # noqa: E402
+from aramid.runners import inline  # noqa: E402
+
+_TOKEN = "ghp_" + "A1b2C3d4E5f6G7h8I9j0K1l2M3n4O5p6Q7r8"
+
+
+def _leak(path, line, commit=""):
+    return {"RuleID": "github-pat", "File": str(path), "StartLine": line,
+            "Secret": _TOKEN, "Description": "GitHub Personal Access Token",
+            "Commit": commit}
+
+
+class _FakeGitleaks:
+    def __init__(self, own, second, second_rc=1):
+        self.own, self.second, self.second_rc = own, second, second_rc
+        self.calls = []
+
+    def __call__(self, argv, cwd, timeout_s, env=None):
+        self.calls.append((list(argv), timeout_s))
+        report = Path(argv[argv.index("--report-path") + 1])
+        if "--ignore-gitleaks-allow" in argv:
+            if self.second_rc in (0, 1):
+                report.write_text(json.dumps(self.second))
+            return RunnerResult("gitleaks", ToolState.OK, returncode=self.second_rc)
+        report.write_text(json.dumps(self.own))
+        return RunnerResult("gitleaks", ToolState.OK, returncode=1 if self.own else 0)
+
+    def second_calls(self):
+        return [c for c in self.calls if "--ignore-gitleaks-allow" in c[0]]
+
+
+def _allow_tree(tmp_path):
+    (tmp_path / "cfg.py").write_text(
+        f'TOKEN = "{_TOKEN}"  # gitleaks:allow\nOTHER = "{_TOKEN}"\n', encoding="utf-8")
+
+
+def test_without_the_inline_pass_gitleaks_runs_once(tmp_path, monkeypatch):
+    _allow_tree(tmp_path)
+    fake = _FakeGitleaks(own=[_leak(tmp_path / "cfg.py", 2)], second=[])
+    monkeypatch.setattr(gitleaks, "run_subprocess", fake)
+    result = gitleaks.run(RunContext(root=tmp_path))
+    assert len(fake.calls) == 1
+    assert getattr(result, "sub_results", None) is None
+
+
+def test_the_inline_pass_reports_only_leaks_the_allow_comment_hid(tmp_path, monkeypatch):
+    _allow_tree(tmp_path)
+    fake = _FakeGitleaks(own=[_leak(tmp_path / "cfg.py", 2, "c2")],
+                         second=[_leak(tmp_path / "cfg.py", 1, "c1"),
+                                 _leak(tmp_path / "cfg.py", 2, "c2")])
+    monkeypatch.setattr(gitleaks, "run_subprocess", fake)
+    ctx = RunContext(root=tmp_path, rng="@{u}..HEAD", inline_pass=True)
+
+    result = gitleaks.run(ctx)
+
+    [(argv, _)] = fake.second_calls()
+    assert argv[:2] == ["gitleaks", "git"] and "--log-opts" in argv
+    own, second = result.sub_results
+    assert (own.tool, own.state) == ("gitleaks", ToolState.OK)
+    assert (second.tool, second.state) == (inline.GITLEAKS, ToolState.OK)
+    findings = gitleaks.parse(result, ctx)
+    assert [(f.tool, f.rule, f.line, f.subject, f.commit) for f in findings] == [
+        ("gitleaks", "github-pat", 2, None, "c2"),
+        (inline.GITLEAKS, inline.RULE, 1, ("gitleaks", "github-pat"), "c1"),
+    ]
+    hidden = findings[1]
+    # The secret rides along so normalize redacts the evidence and the log
+    # scrubber knows it; the message itself never quotes it.
+    assert hidden.secret == _TOKEN
+    assert _TOKEN not in hidden.message
+    assert "a `gitleaks:allow` comment" in hidden.message
+
+
+def test_the_full_tree_second_pass_scans_the_same_staged_copy(tmp_path, monkeypatch):
+    _allow_tree(tmp_path)
+    staged_dirs = []
+
+    def fake(argv, cwd, timeout_s, env=None):
+        staged = Path(argv[2])
+        staged_dirs.append(staged)
+        report = Path(argv[argv.index("--report-path") + 1])
+        items = [_leak(staged / "cfg.py", 2)]
+        if "--ignore-gitleaks-allow" in argv:
+            items.insert(0, _leak(staged / "cfg.py", 1))
+        report.write_text(json.dumps(items))
+        return RunnerResult("gitleaks", ToolState.OK, returncode=1)
+
+    monkeypatch.setattr(gitleaks, "run_subprocess", fake)
+    ctx = RunContext(root=tmp_path, files=["cfg.py"], full_tree=True, inline_pass=True)
+    findings = gitleaks.parse(gitleaks.run(ctx), ctx)
+    assert len(staged_dirs) == 2 and staged_dirs[0] == staged_dirs[1]
+    assert [(f.tool, f.file, f.line) for f in findings] == [
+        ("gitleaks", "cfg.py", 2), (inline.GITLEAKS, "cfg.py", 1)]
+
+
+def test_a_failed_inline_pass_degrades_only_its_own_label(tmp_path, monkeypatch):
+    _allow_tree(tmp_path)
+    fake = _FakeGitleaks(own=[_leak(tmp_path / "cfg.py", 2)], second=[], second_rc=126)
+    monkeypatch.setattr(gitleaks, "run_subprocess", fake)
+    ctx = RunContext(root=tmp_path, inline_pass=True)
+    result = gitleaks.run(ctx)
+    own, second = result.sub_results
+    assert result.state is own.state is ToolState.OK
+    assert (second.tool, second.state) == (inline.GITLEAKS, ToolState.CRASHED)
+    assert [f.tool for f in gitleaks.parse(result, ctx)] == ["gitleaks"]
+
+
+def test_no_time_left_skips_the_inline_pass_and_keeps_the_secret_scan(tmp_path, monkeypatch):
+    # gitleaks is BLOCK-tier: a second pass running past the gate's budget
+    # would get its OWN finished scan replaced by a bare TIMEOUT.
+    _allow_tree(tmp_path)
+    fake = _FakeGitleaks(own=[_leak(tmp_path / "cfg.py", 2)], second=[])
+    monkeypatch.setattr(gitleaks, "run_subprocess", fake)
+    result = gitleaks.run(RunContext(root=tmp_path, inline_pass=True,
+                                     gate_deadline=time.monotonic()))
+    assert fake.second_calls() == []
+    own, second = result.sub_results
+    assert own.state is ToolState.OK
+    assert (second.tool, second.state) == (inline.GITLEAKS, ToolState.TIMEOUT)
+
+
+def test_the_inline_pass_never_outlives_the_gate_deadline(tmp_path, monkeypatch):
+    _allow_tree(tmp_path)
+    fake = _FakeGitleaks(own=[], second=[])
+    monkeypatch.setattr(gitleaks, "run_subprocess", fake)
+    gitleaks.run(RunContext(root=tmp_path, inline_pass=True,
+                            gate_deadline=time.monotonic() + 10.0))
+    [(_, timeout_s)] = fake.second_calls()
+    assert timeout_s < 10.0
+
+
+def test_the_inline_results_report_never_reaches_a_log(tmp_path, monkeypatch):
+    # Its raw is gitleaks' own JSON, Secret fields included, and it exits 1
+    # whenever it has anything to say -- the case `_log_body` writes stdout for.
+    # Those logs are printed to a public CI job log on failure.
+    _allow_tree(tmp_path)
+    fake = _FakeGitleaks(own=[], second=[_leak(tmp_path / "cfg.py", 1)])
+    monkeypatch.setattr(gitleaks, "run_subprocess", fake)
+    result = gitleaks.run(RunContext(root=tmp_path, inline_pass=True))
+    second = result.sub_results[1]
+    assert _TOKEN in second.raw
+    assert _TOKEN not in pipeline._log_body(second)
+    assert _TOKEN not in pipeline._log_body(
+        RunnerResult(inline.GITLEAKS, ToolState.CRASHED, raw=second.raw, returncode=2))
+
+
+def test_an_inline_pass_that_exits_1_without_a_report_is_degraded_not_clean(
+        tmp_path, monkeypatch):
+    # gitleaks documents exit 1 as "leaks found OR an error". rc 1 with no
+    # report file read as `[]` would say no marker hides anything -- a clean
+    # read of a pass that never reported.
+    _allow_tree(tmp_path)
+    calls = []
+
+    def fake(argv, cwd, timeout_s, env=None):
+        calls.append(argv)
+        if "--ignore-gitleaks-allow" in argv:
+            return RunnerResult("gitleaks", ToolState.OK, returncode=1)   # no report
+        Path(argv[argv.index("--report-path") + 1]).write_text("[]")
+        return RunnerResult("gitleaks", ToolState.OK, returncode=0)
+
+    monkeypatch.setattr(gitleaks, "run_subprocess", fake)
+    result = gitleaks.run(RunContext(root=tmp_path, inline_pass=True))
+    assert len(calls) == 2
+    own, second = result.sub_results
+    assert own.state is ToolState.OK
+    assert (second.tool, second.state) == (inline.GITLEAKS, ToolState.CRASHED)

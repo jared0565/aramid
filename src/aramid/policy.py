@@ -22,6 +22,7 @@ from aramid.models import Finding, Gate, Severity, Verdict
 # toolpath and none of them import policy, so this is not the pipeline<->
 # toolset cycle that forces a local import in pipeline.run_gate.
 from aramid.runners import deps as deps_runner
+from aramid.runners import inline as inline_runner
 
 # Tool names that report dependency-CVE findings (see runners/deps.py).
 _DEPS_TOOLS = {"pip-audit", "npm", "pnpm", "yarn", "cargo-audit"}
@@ -86,6 +87,15 @@ def load_block_rules() -> dict:
 def classify(tool: str, rule: str, severity_raw: str, gate: Gate, cfg) -> tuple[Severity, Verdict]:
     severity = _map_severity(severity_raw)
     block_rules = cfg.block_rules
+
+    # FN-38: a hit the repo's own marker hid (runners/inline.py). WARN
+    # UNCONDITIONALLY, first, and keyed on the label alone: the feature's
+    # contract is "visible, never blocking" until arming is decided, so no
+    # promotion path -- repo `block_rules` additions included -- may reach it.
+    # The hidden hit itself still blocks through its own tool's branch the
+    # moment its marker goes.
+    if tool in inline_runner.TOOLS:
+        return severity, Verdict.WARN
 
     if tool == "gitleaks":
         return severity, Verdict.BLOCK

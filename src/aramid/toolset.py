@@ -16,7 +16,7 @@ from pathlib import Path
 from aramid import config as config_mod
 from aramid.detectors import detect_package_manager, detect_stacks, detect_tests
 from aramid.pipeline import GATE_RUNNER_KEYS, _is_applicable
-from aramid.runners import clippy, deps, eslint, ruff, typecheck
+from aramid.runners import clippy, deps, eslint, inline, ruff, typecheck
 from aramid.runners import tests as tests_runner
 from aramid.runners.base import RunContext
 
@@ -30,12 +30,17 @@ from aramid.runners.base import RunContext
 # the ONE name in this set that selected_tool_names() below does not
 # derive from a sub-tool's own applicability check alone; it tracks the
 # "tests" runner key's OWN applicability instead.
+#
+# The FN-38 inline labels (runners/inline.py) are runner results in their own
+# right -- each tool's second pass, carried in `.sub_results` -- and stamp their
+# own findings, so they belong here and expand alongside their tool below.
 RUNNER_TOOL_NAMES = frozenset({
     "gitleaks", "semgrep", "ruff", "eslint", clippy.NAME,
     typecheck.NAME_TSC, typecheck.NAME_MYPY,
     deps.NAME_PIP_AUDIT, deps.NAME_CARGO_AUDIT,
     deps.NAME_CARGO_AUDIT_WARNINGS, "npm", "pnpm", "yarn",
     "pytest", "tests",
+    *inline.TOOLS,
 })
 
 # The producer/consumer families from spec section 1.2/7: async consumers
@@ -152,6 +157,11 @@ def _expand_keys(keys, root: Path, ctx) -> set[str]:
     for key in applicable:
         if key in ("gitleaks", "semgrep", "ruff", "eslint", clippy.NAME):
             names.add(key)
+            # FN-38: the gate runs every one of these three with its second
+            # pass, so wherever the tool is selected or expected, so is its
+            # inline label -- OK-and-empty when the tool examined nothing.
+            if key in inline.LABELS:
+                names.add(inline.LABELS[key])
         elif key == "typecheck":
             # Both can be added independently of each other -- see the T-8
             # plan's Global Constraint 6 (mypy-starvation caveat) for the
@@ -217,6 +227,7 @@ def ghost_candidates(state: dict, selected: set[str]) -> dict[str, dict]:
 # and manifest), and for it the answer is "cannot say", never "no".
 _SUFFIX_SCOPE: dict[str, tuple[str, ...]] = {
     "ruff": ruff._PY_SUFFIXES,
+    inline.RUFF: ruff._PY_SUFFIXES,     # its second pass sees only what ruff examined
     typecheck.NAME_MYPY: typecheck._PY_SUFFIXES,
     "eslint": eslint._JS_SUFFIXES,
     clippy.NAME: (".rs",),

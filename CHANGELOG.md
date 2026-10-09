@@ -12,6 +12,38 @@ to publish a tag that disagrees with it.
 
 ## [Unreleased]
 
+### Added
+
+- **A tool's own marker that hides a BLOCK-tier hit is reported (FN-38).**
+  aramid runs ruff, gitleaks and semgrep with the repo's own markers in
+  force. A committed `# noqa: S105`, a ruff `per-file-ignores` entry, a
+  `gitleaks:allow` comment or a `# nosemgrep` therefore removed a BLOCK
+  finding with no `.aramid-suppressions.toml` entry, no reason and no ledger
+  row. Each of the three now also asks what its markers hid, and reports
+  every hidden hit that would have blocked as a WARN finding, rule
+  `inline-suppressed-block`, under the tool's inline label: `ruff-inline`,
+  `gitleaks-inline` or `semgrep-inline`. How each asks: ruff runs a second
+  pass with `--isolated --ignore-noqa`, selecting the resolved BLOCK rules,
+  over the files its first run examined; gitleaks runs a second pass with
+  `--ignore-gitleaks-allow` on the same scan path; semgrep adds
+  `--disable-nosem` to its one run. The marker still silences its own tool,
+  so nothing that passed before fails now. The finding never blocks and the
+  push ratchet never escalates it. Accept a marker with a reasoned
+  `.aramid-suppressions.toml` entry for the finding's id; like any entry, it
+  goes stale when the line changes. `aramid status` prints an `inline
+  markers:` count. A marker on a WARN-tier rule reports nothing, and neither
+  does a `# nosemgrep` while semgrep bakes, since neither hit would have
+  blocked. **Day one:** every marker a repo already carries is reported on
+  the first run after upgrading, as WARNs. aramid's own tree has 27, all
+  ruff: 25 behind its `tests/**` `per-file-ignores` and 2 `# noqa`.
+  **Output:** `tools_ran`, the run row's `tools` and `expected` gain the
+  three labels. A second pass is a runner result of its own: if it fails, or
+  the gate's budget is too short to start it, it is reported degraded under
+  its label (exit 2, which `--strict` refuses), its open findings stay open,
+  and the tool's own result is untouched. Not covered: eslint and clippy
+  markers, and gitleaks' file-level `.gitleaksignore` and `.gitleaks.toml`
+  allowlist.
+
 ### Changed
 
 - **The pre-push gate runs ruff.** ruff ran only at pre-commit, over the

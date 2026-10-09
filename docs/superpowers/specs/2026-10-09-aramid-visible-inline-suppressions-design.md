@@ -1,7 +1,9 @@
 # Inline markers that silence a BLOCK rule become visible (FN-38) — design
 
-Status: DRAFT, 2026-10-09. Shape chosen by the operator ("go with your
-recommendations"): make the markers VISIBLE, do not refuse them. Not built.
+Status: BUILT 2026-10-09, on the PROPOSED answers to section 5. Shape chosen by
+the operator ("go with your recommendations"): make the markers VISIBLE, do not
+refuse them. Section 8 records where the build departs from sections 2-4 (the
+tool is a per-tool label, not `aramid`) and why.
 
 ## 1. The problem (measured 2026-10-09, plan FN-38)
 
@@ -136,3 +138,62 @@ sees.
   sentence: true for `per-file-ignores` and `noqa` at the tool level, and now
   reported;
 - CHANGELOG `Added`.
+
+## 8. As built (2026-10-09)
+
+Built on the PROPOSED answers to section 5: (a) one entry per finding, file-level
+gitleaks channels out of scope, WARN-only. Where the build departs from sections
+2-4, the reason is a mechanism found while building it. None of these changes an
+operator question.
+
+1. **The tool is a per-tool label, not `aramid`.** Section 2 said tool `aramid`.
+   `ledger.record_run` resolves an open finding only when its `tool` is the label
+   of a runner result that ran OK this run, so an `aramid` finding could never
+   resolve once its marker was removed or its line changed. Each second pass is
+   therefore a `RunnerResult` of its own, carried beside the tool's own result in
+   `.sub_results` (the deps/tests precedent), and its findings carry its label:
+   `ruff-inline`, `gitleaks-inline`, `semgrep-inline`. Resolution, examined scope,
+   degraded reporting, logs and `tools_ran` all come from the existing machinery.
+   The rule is exactly `inline-suppressed-block`; the hidden tool and rule never go
+   into it, because classify's semgrep globs are substring patterns (`*sqli*`).
+2. **The id folds in the hidden rule.** `RawFinding.subject` (the hidden tool and
+   rule; unset everywhere else, so no other id moves) joins the fingerprint. Two
+   rules hidden on one line otherwise differ only by occurrence index, which
+   follows the tool's output order. The label already differs from the hidden
+   tool, so the id never equals the hidden finding's own.
+3. **Only what `policy.classify` would BLOCK counts.** Section 3 said "BLOCK-tier
+   in the resolved block_rules". The one authority is classify on the hidden hit at
+   the gate being run, so a semgrep hit while semgrep bakes counts for nothing, the
+   same as a WARN-tier rule.
+4. **classify returns WARN for the labels, first, whatever `block_rules` says.**
+5. **The ratchet exemption** is recorded under the pipeline's documented exception
+   (the producer ships disarmed), matched on label AND rule.
+6. **Opt-in per run.** `RunContext.inline_pass` and `ruff_block_rules` are set by
+   `run_gate` only. init's full-history gitleaks scan, the regression pack and
+   update-rules build their own context and neither pay for a second pass nor
+   report one.
+7. **Budget.** A second pass is not started with less than 2 s of the gate's
+   budget left, and its timeout is capped to end 1 s before the deadline. The gate
+   abandons a whole registry key at its budget, so a second pass that overran
+   would throw away the tool's own finished result, BLOCK-tier gitleaks included.
+8. **A degraded second pass** is a degraded runner under its own label: exit 2,
+   which `--strict` refuses, the same as any other WARN-tier runner. Its open
+   findings stay open, and the tool's own result is untouched. A gitleaks
+   second pass that exits 1 ("leaks or an error") without writing a report is
+   degraded, not read as "nothing hidden"; an unknown flag on an older gitleaks
+   exits 126, which is degraded too.
+9. **Secrets.** `gitleaks-inline` joins `pipeline._NO_STDOUT_TOOLS` (its raw is the
+   report, Secret fields included); its findings carry `secret=` so the evidence
+   is redacted and the log scrubber knows the value.
+10. **Selected and expected.** The labels expand with their tool in
+    `toolset._expand_keys`, so `mark-unreachable` never offers a live one for
+    retirement and a pass that stops running shows as a skip streak. Each label is
+    OK-and-empty whenever its tool is OK over nothing, so the upgrade adds no skip.
+
+Measured on aramid's own tree from `src` (a scratch clone of HEAD plus this
+change, fresh ledger, `check --gate pre-push --all --strict --json`, test suite
+off): exit 0 in 41 s, no degraded label, 27 `ruff-inline` WARNs (12 S105, 13 S106,
+2 S107: 25 under the `tests/**` `per-file-ignores`, plus `models.py`'s two
+`# noqa: S105`), no `gitleaks-inline` (the repo has no `gitleaks:allow`) and no
+`semgrep-inline` (its 7 `nosemgrep` strings are prose). A first probe also caught a
+real gitleaks BLOCK in this change's own new test fixture, fixed before commit.

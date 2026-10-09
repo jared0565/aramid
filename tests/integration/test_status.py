@@ -1216,8 +1216,10 @@ def test_two_real_runs_with_a_configured_tests_command_show_no_streak_at_all(
     expected = sorted(toolset.expected_tool_names(root, cfg, Gate.PRE_PUSH))
 
     lg = Ledger(root / ".aramid" / "ledger.db")
-    # What a pre-push run in a Python repo records. ruff is in it since FN-32.
-    ran = ["gitleaks", "python.exe", "ruff", "semgrep"]
+    # What a pre-push run in a Python repo records. ruff is in it since FN-32,
+    # and each of ruff, gitleaks and semgrep brings its inline label since FN-38.
+    ran = ["gitleaks", "gitleaks-inline", "python.exe", "ruff", "ruff-inline",
+           "semgrep", "semgrep-inline"]
     _run_started(lg, "pre-push", ran, expected=expected, at="2026-01-01T00:00:00+00:00")
     _run_started(lg, "pre-push", ran, expected=expected, at="2026-01-02T00:00:00+00:00")
     lg.close()

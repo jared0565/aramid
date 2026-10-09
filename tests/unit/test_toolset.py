@@ -390,3 +390,35 @@ def test_pip_audit_not_selected_for_a_tool_only_pyproject(tmp_path, monkeypatch)
     cfg = _cfg(tmp_path, monkeypatch, tmp_path)
     (tmp_path / "pyproject.toml").write_text("[tool.ruff]\nline-length = 100\n", encoding="utf-8")
     assert deps.NAME_PIP_AUDIT not in toolset.selected_tool_names(tmp_path, cfg)
+
+
+# ------------------------------------------------- FN-38 inline labels ---
+
+def test_every_inline_label_is_a_runner_tool_name():
+    from aramid.runners import inline
+    assert inline.TOOLS <= toolset.RUNNER_TOOL_NAMES
+    assert inline.TOOLS.isdisjoint(toolset.PRODUCER_TOOL_NAMES)
+
+
+def test_an_inline_label_is_selected_and_expected_exactly_with_its_tool(tmp_path, monkeypatch):
+    # Selected: or mark-unreachable would offer every open inline finding for
+    # retirement. Expected: or a pass that never runs would never show as
+    # skipped -- an absent control reading as a healthy one.
+    from aramid.models import Gate
+    from aramid.runners import inline
+    cfg = _cfg(tmp_path, monkeypatch, tmp_path)
+    (tmp_path / "pyproject.toml").write_text("[tool.x]\n", encoding="utf-8")
+    sets = [toolset.selected_tool_names(tmp_path, cfg),
+            toolset.expected_tool_names(tmp_path, cfg, Gate.PRE_COMMIT),
+            toolset.expected_tool_names(tmp_path, cfg, Gate.PRE_PUSH)]
+    for names in sets:
+        for tool, label in inline.LABELS.items():
+            assert (tool in names) == (label in names), (tool, sorted(names))
+    assert inline.RUFF in sets[1] and inline.SEMGREP in sets[2]
+
+
+def test_ruff_inline_scopes_by_ruffs_own_suffixes():
+    from aramid.runners import inline
+    assert toolset.examines_path(inline.RUFF, "app.js") is False
+    assert toolset.examines_path(inline.RUFF, "app.py") is True
+    assert toolset.examines_path(inline.GITLEAKS, "app.js") is None

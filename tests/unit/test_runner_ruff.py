@@ -119,3 +119,161 @@ def test_run_empty_output_with_error_returncode_is_crashed(tmp_path, monkeypatch
     )
     result = ruff.run(RunContext(root=tmp_path, files=["a.py"]))
     assert result.state is ToolState.CRASHED
+
+
+# --- FN-38: the inline-marker second pass ----------------------------------
+
+import json  # noqa: E402
+import time  # noqa: E402
+
+from aramid.runners import inline  # noqa: E402
+
+
+def _item(path, row, code="S105", message="Possible hardcoded password"):
+    return {"code": code, "name": code, "filename": str(path), "message": message,
+            "location": {"row": row, "column": 1}, "severity": "error"}
+
+
+class _FakeRuff:
+    """Answers the three ruff invocations by shape: the gate's own check, the
+    `--show-files` probe, and the `--isolated` second pass."""
+
+    def __init__(self, root, own, examined, second, second_rc=0):
+        self.root, self.own, self.examined = root, own, examined
+        self.second, self.second_rc = second, second_rc
+        self.calls = []
+
+    def __call__(self, argv, cwd, timeout_s, env=None):
+        self.calls.append((list(argv), timeout_s))
+        if "--show-files" in argv:
+            raw = "\n".join(str(self.root / f) for f in self.examined)
+            return RunnerResult("ruff", ToolState.OK, raw=raw, returncode=0)
+        if "--isolated" in argv:
+            return RunnerResult("ruff", ToolState.OK, raw=json.dumps(self.second),
+                                returncode=self.second_rc)
+        return RunnerResult("ruff", ToolState.OK, raw=json.dumps(self.own), returncode=1)
+
+    def second_calls(self):
+        return [c for c in self.calls if "--isolated" in c[0]]
+
+
+def _marked_tree(tmp_path):
+    (tmp_path / "a.py").write_text(
+        'password = "hunter2hunter2"  # noqa: S105\nVALUE = 2\n',
+        encoding="utf-8")
+    (tmp_path / "t.py").write_text('password = "hunter2hunter2"\n', encoding="utf-8")
+
+
+def _inline_ctx(tmp_path, **kw):
+    return RunContext(root=tmp_path, files=["a.py", "t.py"], inline_pass=True,
+                      ruff_block_rules=("S105", "S106"), **kw)
+
+
+def test_without_the_inline_pass_ruff_runs_exactly_as_before(tmp_path, monkeypatch):
+    _marked_tree(tmp_path)
+    fake = _FakeRuff(tmp_path, own=[], examined=["a.py"], second=[])
+    monkeypatch.setattr(ruff, "run_subprocess", fake)
+    result = ruff.run(RunContext(root=tmp_path, files=["a.py", "t.py"]))
+    assert fake.second_calls() == []
+    assert getattr(result, "sub_results", None) is None
+
+
+def test_the_inline_pass_reports_only_hits_the_markers_hid(tmp_path, monkeypatch):
+    _marked_tree(tmp_path)
+    own = [_item(tmp_path / "a.py", 2)]
+    second = [_item(tmp_path / "a.py", 1), _item(tmp_path / "a.py", 2),
+              _item(tmp_path / "t.py", 1)]
+    fake = _FakeRuff(tmp_path, own=own, examined=["a.py", "t.py"], second=second)
+    monkeypatch.setattr(ruff, "run_subprocess", fake)
+    ctx = _inline_ctx(tmp_path)
+
+    result = ruff.run(ctx)
+
+    [(argv, _)] = fake.second_calls()
+    assert argv[:3] == ["ruff", "check", "--isolated"]
+    assert "--ignore-noqa" in argv
+    assert argv[argv.index("--select") + 1] == "S105,S106"
+    assert argv[argv.index("--") + 1:] == ["a.py", "t.py"]
+    assert [r.tool for r in result.sub_results] == ["ruff", inline.RUFF]
+    assert result.state is ToolState.OK
+    findings = ruff.parse(result, ctx)
+    assert [(f.tool, f.rule, f.file, f.line, f.subject) for f in findings] == [
+        ("ruff", "S105", "a.py", 2, None),
+        (inline.RUFF, inline.RULE, "a.py", 1, ("ruff", "S105")),
+        (inline.RUFF, inline.RULE, "t.py", 1, ("ruff", "S105")),
+    ]
+
+
+def test_an_inline_finding_names_the_kind_of_marker(tmp_path, monkeypatch):
+    _marked_tree(tmp_path)
+    fake = _FakeRuff(tmp_path, own=[], examined=["a.py", "t.py"],
+                     second=[_item(tmp_path / "a.py", 1), _item(tmp_path / "t.py", 1)])
+    monkeypatch.setattr(ruff, "run_subprocess", fake)
+    ctx = _inline_ctx(tmp_path)
+    noqa, config = ruff.parse(ruff.run(ctx), ctx)
+    assert "`# noqa`" in noqa.message and "S105" in noqa.message
+    assert "per-file-ignores" in config.message and "S105" in config.message
+
+
+def test_the_inline_pass_examines_only_what_ruff_itself_examined(tmp_path, monkeypatch):
+    # `--isolated` drops the repo's `exclude` too; a file the repo excludes
+    # must never come back as "hidden".
+    _marked_tree(tmp_path)
+    fake = _FakeRuff(tmp_path, own=[], examined=["a.py"], second=[])
+    monkeypatch.setattr(ruff, "run_subprocess", fake)
+    result = ruff.run(_inline_ctx(tmp_path))
+    [(argv, _)] = fake.second_calls()
+    assert argv[argv.index("--") + 1:] == ["a.py"]
+    assert result.sub_results[1].examined == frozenset({"a.py"})
+
+
+def test_a_failed_inline_pass_degrades_only_its_own_label(tmp_path, monkeypatch):
+    _marked_tree(tmp_path)
+    fake = _FakeRuff(tmp_path, own=[_item(tmp_path / "a.py", 2)], examined=["a.py"],
+                     second=[], second_rc=2)
+    monkeypatch.setattr(ruff, "run_subprocess", fake)
+    ctx = _inline_ctx(tmp_path)
+    result = ruff.run(ctx)
+    own, second = result.sub_results
+    assert (own.tool, own.state) == ("ruff", ToolState.OK)
+    assert (second.tool, second.state) == (inline.RUFF, ToolState.CRASHED)
+    assert result.state is ToolState.OK
+    assert [(f.tool, f.line) for f in ruff.parse(result, ctx)] == [("ruff", 2)]
+
+
+def test_no_time_left_skips_the_inline_pass_and_leaves_ruffs_own_result(tmp_path, monkeypatch):
+    # The gate abandons a whole registry key at its budget. A second pass that
+    # ran past it would turn ruff's own finished result into a TIMEOUT.
+    _marked_tree(tmp_path)
+    fake = _FakeRuff(tmp_path, own=[_item(tmp_path / "a.py", 2)], examined=["a.py"],
+                     second=[_item(tmp_path / "a.py", 1)])
+    monkeypatch.setattr(ruff, "run_subprocess", fake)
+    ctx = _inline_ctx(tmp_path, gate_deadline=time.monotonic())
+    result = ruff.run(ctx)
+    assert fake.second_calls() == []
+    own, second = result.sub_results
+    assert own.state is ToolState.OK
+    assert (second.tool, second.state) == (inline.RUFF, ToolState.TIMEOUT)
+
+
+def test_the_inline_pass_never_outlives_the_gate_deadline(tmp_path, monkeypatch):
+    _marked_tree(tmp_path)
+    fake = _FakeRuff(tmp_path, own=[], examined=["a.py"], second=[])
+    monkeypatch.setattr(ruff, "run_subprocess", fake)
+    ruff.run(_inline_ctx(tmp_path, gate_deadline=time.monotonic() + 10.0))
+    [(_, timeout_s)] = fake.second_calls()
+    assert timeout_s < 10.0
+
+
+def test_no_python_in_scope_still_reports_the_inline_label_ok_and_empty(tmp_path, monkeypatch):
+    # The label is in each gate's expected set; ruff reports OK-with-nothing
+    # here, so its inline label must too, or status counts a skip.
+    fake = _FakeRuff(tmp_path, own=[], examined=[], second=[])
+    monkeypatch.setattr(ruff, "run_subprocess", fake)
+    result = ruff.run(RunContext(root=tmp_path, files=["README.md"], inline_pass=True,
+                                 ruff_block_rules=("S105",)))
+    assert fake.calls == []
+    own, second = result.sub_results
+    assert (own.state, own.examined) == (ToolState.OK, frozenset())
+    assert (second.tool, second.state, second.examined) == (
+        inline.RUFF, ToolState.OK, frozenset())

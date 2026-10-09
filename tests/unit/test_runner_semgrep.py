@@ -375,3 +375,99 @@ def test_degraded_run_vouches_for_nothing(tmp_path, monkeypatch):
 
     assert result.state is ToolState.TIMEOUT
     assert result.examined is not None and not result.examined
+
+
+# --- FN-38: `--disable-nosem` and the inline label --------------------------
+
+from aramid.runners import inline  # noqa: E402
+
+_SQLI = "F.x.rules.owasp-top-ten.a03-injection.python-sqli-string-concat"
+
+
+def _sem_item(line, ignored):
+    return {"check_id": _SQLI, "path": "q.py", "start": {"line": line},
+            "extra": {"severity": "ERROR", "message": "string-built SQL",
+                      "is_ignored": ignored}}
+
+
+def _sem_report(*items):
+    return json.dumps({"results": list(items), "errors": [],
+                       "paths": {"scanned": ["q.py"]}})
+
+
+def _sem_tree(tmp_path):
+    (tmp_path / "q.py").write_text(
+        "def f(cur, n):\n"
+        "    cur.execute('SELECT ' + n)  # nosemgrep\n"
+        "    cur.execute('SELECT ' + n)\n", encoding="utf-8")
+
+
+def _fake_semgrep(monkeypatch, raw, rc=1):
+    calls = []
+
+    def fake(argv, cwd, timeout_s, env=None):
+        calls.append(list(argv))
+        return RunnerResult("semgrep", ToolState.OK, raw=raw, returncode=rc)
+
+    monkeypatch.setattr(semgrep, "run_subprocess", fake)
+    return calls
+
+
+def test_without_the_inline_pass_semgrep_keeps_its_argv_and_shape(tmp_path, monkeypatch):
+    _sem_tree(tmp_path)
+    calls = _fake_semgrep(monkeypatch, _sem_report(_sem_item(3, False)))
+    result = semgrep.run(RunContext(root=tmp_path, files=["q.py"]))
+    assert "--disable-nosem" not in calls[0]
+    assert getattr(result, "sub_results", None) is None
+
+
+def test_the_inline_pass_asks_semgrep_for_what_nosem_hid(tmp_path, monkeypatch):
+    _sem_tree(tmp_path)
+    calls = _fake_semgrep(monkeypatch, _sem_report(_sem_item(2, True), _sem_item(3, False)))
+    ctx = RunContext(root=tmp_path, files=["q.py"], inline_pass=True)
+
+    result = semgrep.run(ctx)
+
+    [argv] = calls
+    assert "--disable-nosem" in argv
+    assert argv.index("--disable-nosem") < argv.index("--")
+    own, second = result.sub_results
+    assert (own.tool, second.tool) == ("semgrep", inline.SEMGREP)
+    assert second.state is ToolState.OK
+    assert second.examined == own.examined == frozenset({"q.py"})
+    canonical = "owasp-top-ten.a03-injection.python-sqli-string-concat"
+    assert [(f.tool, f.rule, f.line, f.subject) for f in semgrep.parse(result, ctx)] == [
+        ("semgrep", canonical, 3, None),
+        (inline.SEMGREP, inline.RULE, 2, ("semgrep", canonical)),
+    ]
+
+
+def test_an_ignored_result_never_becomes_one_of_semgreps_own_findings(tmp_path):
+    # `--disable-nosem` hands back what `# nosemgrep` hid. Read as an ordinary
+    # result, every marked line would start BLOCKING the day this shipped.
+    result = RunnerResult("semgrep", ToolState.OK,
+                          raw=_sem_report(_sem_item(2, True), _sem_item(3, False)))
+    findings = semgrep.parse(result, RunContext(root=tmp_path, files=["q.py"]))
+    assert [f.line for f in findings] == [3]
+
+
+def test_a_degraded_semgrep_carries_no_inline_label(tmp_path, monkeypatch):
+    # One process, so the inline label has nothing of its own to report:
+    # semgrep's own degradation already says the files were not analysed.
+    calls = _fake_semgrep(monkeypatch, "", rc=2)
+    result = semgrep.run(RunContext(root=tmp_path, files=["q.py"], inline_pass=True))
+    assert calls and result.state is ToolState.CRASHED
+    assert getattr(result, "sub_results", None) is None
+
+
+def test_an_empty_report_still_reports_the_inline_label_ok_and_examining_nothing(
+        tmp_path, monkeypatch):
+    # The label is in each gate's expected set. semgrep reports OK-vouching-
+    # for-nothing on an empty stdout, so its inline label must say the same,
+    # or status counts a skip for a run that skipped nothing.
+    _fake_semgrep(monkeypatch, "", rc=0)
+    result = semgrep.run(RunContext(root=tmp_path, files=["q.py"], inline_pass=True))
+    own, second = result.sub_results
+    assert (own.state, own.examined) == (ToolState.OK, frozenset())
+    assert (second.tool, second.state, second.examined) == (
+        inline.SEMGREP, ToolState.OK, frozenset())

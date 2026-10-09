@@ -31,6 +31,7 @@ from aramid import config as config_mod
 from aramid import pipeline
 from aramid.commands.check import cmd_check
 from aramid.models import Gate
+from aramid.runners import inline
 from aramid.runners.base import RunnerResult, ToolState
 
 
@@ -72,8 +73,19 @@ def only_ruff_is_real(monkeypatch):
     for key in pipeline.GATE_RUNNER_KEYS[Gate.PRE_PUSH]:
         if key != "ruff":
             monkeypatch.setitem(pipeline.RUNNERS, key, SimpleNamespace(
-                run=lambda ctx, _k=key: RunnerResult(_k, ToolState.OK),
+                run=lambda ctx, _k=key: _clean(_k),
                 parse=lambda result, ctx: []))
+
+
+def _clean(key: str) -> RunnerResult:
+    """A clean result shaped like the real runner's. gitleaks and semgrep carry
+    their FN-38 inline pass beside their own result whenever they run OK; a
+    double without it reads in `status` as a pass the gate skipped."""
+    own = RunnerResult(key, ToolState.OK)
+    if key not in inline.LABELS:
+        return own
+    return inline.bundle(own, RunnerResult(inline.LABELS[key], ToolState.OK,
+                                           examined=frozenset()))
 
 
 def _git(root: Path, *args: str) -> None:

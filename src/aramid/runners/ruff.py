@@ -6,9 +6,11 @@ regardless of the target repo's own pyproject.toml/ruff.toml config. This is
 how aramid enforces its own security baseline independent of repo config.
 """
 import json
+import re
 from dataclasses import replace
 
 from aramid.normalizer import RawFinding
+from aramid.runners import inline
 from aramid.runners.base import (RunnerResult, ToolState, run_subprocess,
                                   scanned_line_reader)
 from aramid.runners._util import json_or_crashed, relativize
@@ -64,7 +66,7 @@ def _examined(ctx) -> frozenset[str]:
     )
 
 
-def run(ctx) -> RunnerResult:
+def _run_own(ctx) -> RunnerResult:
     if not _py_files(ctx):
         # No Python in scope: a clean no-op, NOT a tool invocation -- ruff
         # given zero paths would fall back to scanning the whole cwd. It
@@ -77,6 +79,75 @@ def run(ctx) -> RunnerResult:
     return replace(out, examined=_examined(ctx))
 
 
+def _inline_argv(ctx, files: list[str]) -> list[str]:
+    """FN-38's second pass: the repo's markers OFF. `--isolated` drops every
+    config file (so `per-file-ignores` and a file-level `# ruff: noqa` with
+    it), `--ignore-noqa` drops line comments, and `--select` asks for the
+    resolved BLOCK rules only. `--isolated` drops the repo's `exclude` too,
+    which is why `files` is what the first run EXAMINED, never what it was
+    handed: an excluded file must never come back as "hidden"."""
+    return ["ruff", "check", "--isolated", "--ignore-noqa", "--output-format", "json",
+            "--select", ",".join(ctx.ruff_block_rules), "--", *files]
+
+
+def _key(item, root) -> tuple:
+    return (item["code"] or item["name"], relativize(item["filename"], root),
+            item["location"]["row"])
+
+
+def _run_inline(own: RunnerResult, ctx) -> RunnerResult:
+    """The hits the second pass has and the first does not, matched by (rule,
+    file, line). OK-and-empty when the first run examined nothing, like ruff's
+    own result then: the label is in each gate's expected set."""
+    examined = own.examined or frozenset()
+    if not examined or not ctx.ruff_block_rules:
+        return RunnerResult(inline.RUFF, ToolState.OK, raw="[]", examined=frozenset())
+    timeout = inline.second_pass_timeout(ctx, TIMEOUT_S)
+    if timeout is None:
+        return inline.skipped(inline.RUFF)
+    out = json_or_crashed(
+        inline.RUFF,
+        run_subprocess(_inline_argv(ctx, sorted(examined)), ctx.root, timeout),
+        _OK_RETURNCODES)
+    if out.state is not ToolState.OK:
+        return replace(out, examined=frozenset())
+    seen = {_key(item, ctx.root) for item in json.loads(own.raw or "[]")}
+    hidden = [item for item in json.loads(out.raw or "[]")
+              if _key(item, ctx.root) not in seen]
+    return replace(out, raw=json.dumps(hidden), examined=examined)
+
+
+def run(ctx) -> RunnerResult:
+    own = _run_own(ctx)
+    if not ctx.inline_pass or own.state is not ToolState.OK:
+        return own
+    return inline.bundle(own, _run_inline(own, ctx))
+
+
+# A `# noqa` on the flagged line. A file-level `# ruff: noqa` is config-shaped
+# (it is on line 1, not on the hit), and is named with the config below.
+_NOQA = re.compile(r"#\s*noqa\b", re.IGNORECASE)
+
+
+def _parse_inline(sub: RunnerResult, ctx) -> list[RawFinding]:
+    line_at = scanned_line_reader(ctx.root)
+    out = []
+    for item in json.loads(sub.raw or "[]"):
+        code = item["code"] or item["name"]
+        row = item["location"]["row"]
+        line = line_at(item["filename"], row)
+        marker = ("a `# noqa` comment" if _NOQA.search(line) else
+                  "the repo's ruff config (`per-file-ignores`, or a file-level "
+                  "`# ruff: noqa`)")
+        out.append(RawFinding(
+            tool=inline.RUFF, rule=inline.RULE,
+            severity_raw=item.get("severity", "error"),
+            file=relativize(item["filename"], ctx.root), line=row,
+            message=inline.message(NAME, code, marker, item["message"]),
+            line_content=line, subject=(NAME, code)))
+    return out
+
+
 def parse(result: RunnerResult, ctx) -> list[RawFinding]:
     if result.state is not ToolState.OK:
         return []
@@ -84,7 +155,7 @@ def parse(result: RunnerResult, ctx) -> list[RawFinding]:
     # ruff's JSON carries the row but not the source line, so read it back from
     # the file ruff just scanned. See runners/base.scanned_line_reader.
     line_at = scanned_line_reader(ctx.root)
-    return [
+    found = [
         RawFinding(
             tool=NAME,
             rule=item["code"] or item["name"],
@@ -96,3 +167,9 @@ def parse(result: RunnerResult, ctx) -> list[RawFinding]:
         )
         for item in items
     ]
+    # `result` is ruff's own result; its second pass, when one ran, rides in
+    # `.sub_results` beside a copy of it (inline.bundle).
+    for sub in getattr(result, "sub_results", None) or ():
+        if sub.tool == inline.RUFF and sub.state is ToolState.OK:
+            found.extend(_parse_inline(sub, ctx))
+    return found

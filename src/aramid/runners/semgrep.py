@@ -10,6 +10,7 @@ from dataclasses import replace
 from pathlib import Path
 
 from aramid.normalizer import RawFinding
+from aramid.runners import inline
 from aramid.runners.base import (RunnerResult, ToolState, run_subprocess,
                                   scanned_line_reader)
 from aramid.runners._util import json_or_crashed, relativize
@@ -104,7 +105,14 @@ def _build_argv(ctx) -> list[str]:
     argv = ["semgrep", "--config", str(VENDORED_RULES_PATH)]
     for extra in getattr(ctx, "extra_semgrep_configs", ()):
         argv += ["--config", extra]
-    argv += ["--json", "--metrics=off", "--quiet", "--", *ctx.files]
+    argv += ["--json", "--metrics=off", "--quiet"]
+    # FN-38: no second process. `--disable-nosem` reports what `# nosemgrep`
+    # would have hidden, marked `extra.is_ignored: true` (measured on semgrep
+    # 1.178.0); parse() keeps those out of semgrep's own findings and reports
+    # them under the inline label instead.
+    if getattr(ctx, "inline_pass", False):
+        argv.append("--disable-nosem")
+    argv += ["--", *ctx.files]
     return argv
 
 
@@ -179,12 +187,43 @@ def run(ctx) -> RunnerResult:
     # is distinguishable without a version probe: it still emits a real JSON
     # report, just without `paths`. `{}` is only ever aramid's own placeholder.
     if not (result.raw or "").strip():
-        return replace(out, examined=frozenset())
+        return _with_inline(replace(out, examined=frozenset()), [], ctx)
     try:
         data = json.loads(out.raw or "{}")
     except json.JSONDecodeError:  # pragma: no cover - json_or_crashed pre-screens
-        return replace(out, examined=frozenset())
-    return replace(out, examined=_examined(data, ctx))
+        return _with_inline(replace(out, examined=frozenset()), [], ctx)
+    hidden = [item for item in data.get("results", []) if _is_ignored(item)]
+    return _with_inline(replace(out, examined=_examined(data, ctx)), hidden, ctx)
+
+
+def _with_inline(own: RunnerResult, hidden: list, ctx) -> RunnerResult:
+    """One run answered both questions, so the inline label vouches for
+    exactly what semgrep's own OK result does: the same state, the same
+    files."""
+    if not ctx.inline_pass:
+        return own
+    return inline.bundle(own, replace(own, tool=inline.SEMGREP,
+                                      raw=json.dumps({"results": hidden})))
+
+
+def _is_ignored(item: dict) -> bool:
+    return bool((item.get("extra") or {}).get("is_ignored"))
+
+
+def _parse_inline(sub: RunnerResult, ctx) -> list[RawFinding]:
+    line_at = scanned_line_reader(ctx.root)
+    out = []
+    for item in json.loads(sub.raw or "{}").get("results", []):
+        rule = _canonical_rule_id(item["check_id"])
+        out.append(RawFinding(
+            tool=inline.SEMGREP, rule=inline.RULE,
+            severity_raw=item["extra"]["severity"],
+            file=relativize(item["path"], ctx.root), line=item["start"]["line"],
+            message=inline.message(NAME, rule, "a `# nosemgrep` comment",
+                                   item["extra"]["message"]),
+            line_content=line_at(item["path"], item["start"]["line"]),
+            subject=(NAME, rule)))
+    return out
 
 
 def parse(result: RunnerResult, ctx) -> list[RawFinding]:
@@ -200,7 +239,7 @@ def parse(result: RunnerResult, ctx) -> list[RawFinding]:
     # reports invocation-relative paths, so a bare Path(...) would resolve them
     # against wherever aramid was invoked from.
     line_at = scanned_line_reader(ctx.root)
-    return [
+    found = [
         RawFinding(
             tool=NAME,
             rule=_canonical_rule_id(item["check_id"]),
@@ -210,5 +249,12 @@ def parse(result: RunnerResult, ctx) -> list[RawFinding]:
             message=item["extra"]["message"],
             line_content=line_at(item["path"], item["start"]["line"]),
         )
-        for item in data.get("results", [])
+        # A result `# nosemgrep` hid is never one of semgrep's own findings,
+        # whoever asked for it: read as ordinary, every marked line would
+        # start blocking the day `--disable-nosem` shipped.
+        for item in data.get("results", []) if not _is_ignored(item)
     ]
+    for sub in getattr(result, "sub_results", None) or ():
+        if sub.tool == inline.SEMGREP and sub.state is ToolState.OK:
+            found.extend(_parse_inline(sub, ctx))
+    return found
