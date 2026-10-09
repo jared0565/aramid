@@ -15,6 +15,7 @@ raise out of its seam. `record_health`, `run_judgement` and `delivery_lines`
 catch everything and say so on stderr, once.
 """
 import json
+import math
 import os
 import sys
 import time
@@ -452,7 +453,7 @@ def judge(rows: list[dict], registered: dict[str, str], policy: Policy, now: str
         verdict = NOT_READY
     else:
         if days_held < policy.min_days:
-            blockers.append(f"streak {days_held:.1f}d < {policy.min_days}d")
+            blockers.append(f"streak {_days(days_held)} < {policy.min_days}d")
         if len(versions) < policy.min_versions:
             blockers.append(f"versions {len(versions)}/{policy.min_versions} in streak")
         if not armed_anywhere:
@@ -533,7 +534,7 @@ def _post_transitions(previous: dict | None, verdict: dict, now: str) -> None:
         versions = ", ".join(info["versions_in_streak"])
         notices.post("readiness-reached", f"streak:{start}",
                      title=(f"1.0 readiness reached -- streak since {start} "
-                            f"({info['days_held']:.0f}d, versions {versions}) across "
+                            f"({_days(info['days_held'])}, versions {versions}) across "
                             f"{len(names)} repos"),
                      body=("Every registered repo has been green on every criterion since "
                            f"{start}: {', '.join(names)}. `aramid fleet` prints the matrix. "
@@ -700,6 +701,17 @@ def _stale_suffix(computed_at, now: str | None) -> str:
     return ""
 
 
+def _days(value) -> str:
+    """A streak length for display: one decimal, TRUNCATED, never rounded up.
+    Every surface prints the streak with this (FN-28: the readiness line
+    used `:.0f` beside its own blocker's `:.1f`, "streak 1d, ... streak 0.7d
+    < 14d"), and rounding would print a 13.96-day streak as "14.0d < 14d",
+    at the bar it is failing. No float-error guard is needed: `days_held` is
+    rounded to 2 decimals, and floor(x * 10) is exact for every such value
+    from 0 to 2000 days (checked 2026-10-09)."""
+    return f"{math.floor(float(value or 0.0) * 10) / 10:.1f}d"
+
+
 def readiness_line(verdict: dict | None, *, now: str | None = None) -> str:
     """Spec section 8's one-line verdict; the same string on every surface."""
     if verdict is None:
@@ -709,7 +721,7 @@ def readiness_line(verdict: dict | None, *, now: str | None = None) -> str:
     green = sum(1 for v in repos.values() if v.get("green"))
     label = _LABELS.get(verdict.get("verdict"), str(verdict.get("verdict")).upper())
     line = (f"fleet: 1.0 readiness {label} -- {green}/{len(repos)} repos green, "
-            f"streak {float(info.get('days_held', 0.0)):.0f}d, "
+            f"streak {_days(info.get('days_held', 0.0))}, "
             f"versions {len(info.get('versions_in_streak', []))}/"
             f"{verdict.get('policy', {}).get('min_versions', 2)}")
     tail = []
@@ -790,7 +802,7 @@ def render_report(verdict: dict | None, policy: Policy, *, now: str | None = Non
     if info.get("streak_started_at"):
         versions = ", ".join(info.get("versions_in_streak", [])) or "none"
         out.append(f"  streak: since {info['streak_started_at']} "
-                   f"({float(info.get('days_held') or 0.0):.1f}d, versions: {versions})")
+                   f"({_days(info.get('days_held'))}, versions: {versions})")
     else:
         out.append("  streak: none (fleet not green)")
     out.append(f"  armed anywhere: {'yes' if info.get('armed_anywhere') else 'no'}")

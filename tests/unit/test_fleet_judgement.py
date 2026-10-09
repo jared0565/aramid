@@ -89,7 +89,7 @@ def test_reaching_readiness_posts_one_notice_and_only_once():
     assert n["notice_kind"] == "readiness-reached"
     assert n["key"] == "streak:" + _ready_rows()[0]["at"]
     assert n["title"] == ("1.0 readiness reached -- streak since " + _ready_rows()[0]["at"]
-                          + " (20d, versions 0.8.0, 0.9.0) across 2 repos")
+                          + " (20.0d, versions 0.8.0, 0.9.0) across 2 repos")
 
 
 def test_losing_readiness_posts_readiness_broken_keyed_on_the_breaking_run():

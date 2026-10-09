@@ -54,6 +54,12 @@ to publish a tag that disagrees with it.
   is not set aside in `.aramid-suppressions.toml`; the drain's re-test
   already ran every open survivor for such an item. **The cost:** one drain
   item per test-only push while a real survivor is open.
+- **`status` prints the fleet streak one way.** The readiness line printed
+  the streak in whole days next to its own blocker in tenths, so one line
+  read "streak 1d, ... streak 0.7d < 14d". Every surface now prints it to
+  one decimal (`streak 0.0d`), truncated rather than rounded: rounding
+  would print a 13.96-day streak as "14.0d < 14d", at the bar it has not
+  reached.
 
 ## [0.20.6] — 2026-10-08
 

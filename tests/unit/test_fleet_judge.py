@@ -175,6 +175,21 @@ def test_breaking_row_detail_names_every_red_criterion():
         "no_self_inflicted_block: gitleaks")
 
 
+def test_the_streak_renders_one_way_and_never_at_the_bar_it_fails():
+    """FN-28. The readiness line printed the streak with `:.0f` and its own
+    blocker with `:.1f`, so one line read "streak 1d, ... streak 0.7d < 14d".
+    Both now truncate to one decimal: rounding would print 13.96 as
+    "14.0d < 14d", a streak at the bar it is failing."""
+    rows = [_row(R_A, 13.96, "0.8.0", armed=ARMED), _row(R_B, 13.96, "0.8.0"),
+            _row(R_A, 1, "0.9.0", armed=ARMED)]
+    v = fleet.judge(rows, REG, POLICY, NOW)
+    assert v["fleet"]["days_held"] == 13.96
+    assert v["reasons"] == ["streak 13.9d < 14d"]
+    assert fleet.readiness_line(v) == (
+        "fleet: 1.0 readiness NOT READY -- 2/2 repos green, streak 13.9d, versions 2/2; "
+        "streak 13.9d < 14d")
+
+
 def test_a_fresh_verdicts_readiness_line_is_unchanged_by_now():
     v = fleet.judge(_ready_rows(), REG, POLICY, NOW, aramid_version="0.9.0")
     assert fleet.readiness_line(v) == fleet.readiness_line(v, now=NOW)
@@ -273,7 +288,7 @@ def test_no_rows_beats_stale_and_stale_beats_red():
 def test_the_readiness_line_names_stale_repos_and_the_window():
     v = fleet.judge(_ready_rows(), REG, DEFAULT, NOW, aramid_version="0.9.0")
     assert fleet.readiness_line(v) == (
-        "fleet: 1.0 readiness INSUFFICIENT DATA -- 2/2 repos green, streak 0d, versions 0/2; "
+        "fleet: 1.0 readiness INSUFFICIENT DATA -- 2/2 repos green, streak 0.0d, versions 0/2; "
         "stale: a (10.0d), b (10.0d) -- window 7d")
 
 
@@ -283,7 +298,7 @@ def test_a_verdict_written_before_a1_renders_unchanged():
         del repo["stale"], repo["age_days"]
     del v["fleet"]["stale_repos"], v["policy"]["max_row_age_days"]
     assert fleet.readiness_line(v) == (
-        "fleet: 1.0 readiness READY -- 2/2 repos green, streak 20d, versions 2/2")
+        "fleet: 1.0 readiness READY -- 2/2 repos green, streak 20.0d, versions 2/2")
 
 
 # --- a consumer shell in the registry is spurious, never a member ------------

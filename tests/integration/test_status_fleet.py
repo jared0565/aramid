@@ -83,7 +83,7 @@ def test_status_prints_the_verdict_and_a_due_notice_bare(tmp_path, capsys):
                        title="aramid: resolver gap_addressed/mutation on the last 3 gate runs",
                        body="b", evidence={}, now=NOW)
     lines = _out(root, capsys)
-    assert ("fleet: 1.0 readiness NOT READY -- 1/2 repos green, streak 0d, versions 0/2; "
+    assert ("fleet: 1.0 readiness NOT READY -- 1/2 repos green, streak 0.0d, versions 0/2; "
             "red: aramid (dep_audit_ran); no repo is armed") in lines
     assert (f"NOTICE {nid} fleet-defect: aramid: resolver gap_addressed/mutation on the "
             f"last 3 gate runs -- ack: aramid notices ack {nid}") in lines

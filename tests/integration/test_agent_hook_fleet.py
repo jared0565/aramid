@@ -79,7 +79,7 @@ def test_ready_line_full_shape():
               "versions_in_streak": ["0.8.0", "0.9.0"], "armed_anywhere": True,
               "disarm_in_streak": False, "blockers": [], "notes": [], "breaking_row": None})
     assert fleet.readiness_line(v) == (
-        "fleet: 1.0 readiness READY -- 5/5 repos green, streak 21d, versions 2/2")
+        "fleet: 1.0 readiness READY -- 5/5 repos green, streak 21.0d, versions 2/2")
 
 
 def test_insufficient_data_line_full_shape():
@@ -101,7 +101,7 @@ def test_insufficient_data_line_full_shape():
               "versions_in_streak": [], "armed_anywhere": False,
               "disarm_in_streak": False, "blockers": [], "notes": [], "breaking_row": None})
     assert fleet.readiness_line(v) == (
-        "fleet: 1.0 readiness INSUFFICIENT DATA -- 3/5 repos green, streak 0d, "
+        "fleet: 1.0 readiness INSUFFICIENT DATA -- 3/5 repos green, streak 0.0d, "
         "versions 0/2; no rows: atlas_data, graphite")
 
 
@@ -115,7 +115,7 @@ def test_no_verdict_yet_line_sits_before_the_commands_line(tmp_path, monkeypatch
 def test_not_ready_line_full_shape(tmp_path, monkeypatch, capsys):
     r = _onboarded(tmp_path, monkeypatch)
     fleet.write_verdict(_verdict())
-    assert ("aramid: fleet: 1.0 readiness NOT READY -- 1/2 repos green, streak 0d, "
+    assert ("aramid: fleet: 1.0 readiness NOT READY -- 1/2 repos green, streak 0.0d, "
             "versions 0/2; red: aramid (dep_audit_ran); no repo is armed"
             ) in _lines(r, capsys)
 

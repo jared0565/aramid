@@ -84,7 +84,9 @@ def test_render_report_name_column_is_never_narrower_than_its_heading():
 
 def test_render_report_streak_lines():
     v = _verdict()
-    v["fleet"].update(streak_started_at=NOW, days_held=3.25, versions_in_streak=[])
+    # 3.29 TRUNCATES to 3.2 and would ROUND to 3.3 (FN-28: one format, never
+    # rounded up past a bar it has not reached).
+    v["fleet"].update(streak_started_at=NOW, days_held=3.29, versions_in_streak=[])
     assert "  streak: since 2026-09-20T12:00:00+00:00 (3.2d, versions: none)" in \
         fleet.render_report(v, fleet.Policy()).splitlines()
     v["fleet"].update(versions_in_streak=["0.9.0", "0.10.0"], days_held=None,
