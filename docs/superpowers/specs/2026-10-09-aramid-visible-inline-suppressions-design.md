@@ -55,7 +55,7 @@ failing.
 |---|---|---|---|
 | ruff | A second run with `--isolated --ignore-noqa --select <curated BLOCK set>`, over the files the first run examined. A hit is hidden when the second run has it and the first does not, matched by (rule, file, line). | about 0.35 s whole-tree here | yes, on ruff 0.16.10: S105 comes back under both `# noqa` and `per-file-ignores`, and the bare control is unchanged |
 | gitleaks | A second run with `--ignore-gitleaks-allow`, on the same scan path (staged / range / dir). A hit is hidden when the second run has it and the first does not, matched by (rule, file, line, commit). `.gitleaksignore` and a repo `.gitleaks.toml` allowlist are further channels; see section 5, question 2. | 1-4 s here | yes: a `gitleaks:allow` line gives 0 findings by default and 1 with the flag, on 8.21.2 and on 8.28.0 |
-| semgrep | One run, not two. `--disable-nosem` makes semgrep report the results it would have hidden, marked `extra.is_ignored: true`. The runner keeps those out of the normal findings and turns them into this rule. | none | yes, on semgrep 1.178.0: 0 results by default, 1 with the flag, marked `is_ignored: true` |
+| semgrep | *(Superseded as built: two passes, see section 8 item 13.)* One run, not two. `--disable-nosem` makes semgrep report the results it would have hidden, marked `extra.is_ignored: true`. The runner keeps those out of the normal findings and turns them into this rule. | none | yes, on semgrep 1.178.0: 0 results by default, 1 with the flag, marked `is_ignored: true` |
 
 `--isolated` also ignores the repo's ruff `exclude`. The second run is
 therefore given only the files the first run reports as examined
@@ -203,9 +203,24 @@ operator question.
     its stderr says what it dropped: a code ruff does not know is one it can
     never report, so no marker can hide anything under it.
 12. **Cost.** ruff and gitleaks each scan twice inside the same gate budget;
-    semgrep does not. Not changed after review: a not-started or abandoned pass
+    semgrep scans again only the files that mention `nosem` (item 13). Not changed after review: a not-started or abandoned pass
     reads `timeout (gate budget expired)` in `degraded_reasons`, which is what cut
     it; the exact wording is on the label's log.
+13. **semgrep runs two passes, not one (CI, 2026-10-09).** Sections 2-4 had semgrep
+    add `--disable-nosem` to its one run and read the hidden hits off
+    `extra.is_ignored: true`, "measured on 1.178.0". That mark depends on semgrep's
+    own state, not its version: on 1.180.0 a logged-in semgrep (a settings file with
+    an `api_token`) marks it, a fresh one does not mark it at all. Every CI runner is
+    fresh, so on all 7 legs each `# nosemgrep` hit came back as one of semgrep's own
+    findings, and an armed one BLOCKED, while every local run, the push gate's
+    included, passed. semgrep's own run is now its pre-FN-38 argv exactly. A second
+    pass with `--disable-nosem` runs over the files the own run examined that mention
+    `nosem` (any case; an unreadable file counts), none when no file does, and keeps
+    the hits the own run lacks, matched by rule and start and end position. It goes
+    through the same deadline guard as the other two. The integration arms now run
+    semgrep with a fresh settings file (`SEMGREP_SETTINGS_FILE`), so a local run sees
+    what CI sees; both states were run green. Review finding F5 ("reliance on
+    `is_ignored`: fail-closed noise") was triaged wrong: it was this, and it blocked.
 
 Measured on aramid's own tree from `src` (a scratch clone of HEAD plus this
 change, fresh ledger, `check --gate pre-push --all --strict --json`, test suite

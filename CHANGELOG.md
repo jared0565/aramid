@@ -25,8 +25,10 @@ to publish a tag that disagrees with it.
   `gitleaks-inline` or `semgrep-inline`. How each asks: ruff runs a second
   pass with `--isolated --ignore-noqa`, selecting the resolved BLOCK rules,
   over the files its first run examined; gitleaks runs a second pass with
-  `--ignore-gitleaks-allow` on the same scan path; semgrep adds
-  `--disable-nosem` to its one run. The marker still silences its own tool,
+  `--ignore-gitleaks-allow` on the same scan path; semgrep runs a second
+  pass with `--disable-nosem` over the files its first run examined that
+  mention `nosem`. Each keeps the hits its first run did not report. The
+  marker still silences its own tool,
   so nothing that passed before fails now. The finding never blocks and the
   push ratchet never escalates it. Accept a marker with a reasoned
   `.aramid-suppressions.toml` entry for the finding's id; like any entry, it
@@ -43,7 +45,9 @@ to publish a tag that disagrees with it.
   and the tool's own result is untouched. One still running a second before
   the budget runs out is abandoned rather than waited for, so the tool's own
   result is always returned in time to count. **Cost:** ruff and gitleaks
-  each scan twice, inside the same gate budget; semgrep does not. A gitleaks
+  each scan twice, inside the same gate budget; semgrep scans again only
+  the files that mention `nosem`, and starts no second process when none
+  does. A gitleaks
   too old to know `--ignore-gitleaks-allow` exits 126 on it, so
   `gitleaks-inline` reports `crashed (exit 126)`. Not covered: eslint and clippy
   markers, and gitleaks' file-level `.gitleaksignore` and `.gitleaks.toml`

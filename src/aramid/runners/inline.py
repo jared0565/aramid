@@ -4,10 +4,10 @@ aramid runs ruff, gitleaks and semgrep with the target repo's own markers in
 force, so a committed `# noqa: S105`, a ruff `per-file-ignores` entry, a
 `# gitleaks:allow` or a `# nosemgrep` removes a BLOCK finding with no
 `.aramid-suppressions.toml` entry, no reason and no ledger row. Each of those
-three runners now runs a second pass with the markers off (`semgrep` needs no
-second process: `--disable-nosem` reports what it would have hidden) and
-reports every BLOCK-tier hit only the markers were hiding as a WARN finding
-of its own. The marker still silences the tool's own BLOCK, so nothing that
+three runners now runs a second pass with the markers off (semgrep's only
+over the files that mention `nosem`) and reports every BLOCK-tier hit only
+the markers were hiding as a WARN finding of its own: the hits the second
+pass has and the tool's own run does not. The marker still silences the tool's own BLOCK, so nothing that
 passed before starts failing. Spec:
 docs/superpowers/specs/2026-10-09-aramid-visible-inline-suppressions-design.md.
 

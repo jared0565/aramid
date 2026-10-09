@@ -377,97 +377,237 @@ def test_degraded_run_vouches_for_nothing(tmp_path, monkeypatch):
     assert result.examined is not None and not result.examined
 
 
-# --- FN-38: `--disable-nosem` and the inline label --------------------------
+# --- FN-38: the `--disable-nosem` second pass and the inline label -----------
+#
+# semgrep's own run keeps its pre-FN-38 argv exactly. A second pass with
+# `--disable-nosem` over the examined files that mention `nosem` reports what
+# a marker hid, as the hits it has and the own run does not. It never reads
+# `extra.is_ignored`: semgrep marks that only on some engine paths (logged in,
+# yes; fresh, as on every CI runner, absent), and FN-38's first build relied
+# on it and went red on all 7 CI legs while passing on a logged-in machine.
+
+import time  # noqa: E402
 
 from aramid.runners import inline  # noqa: E402
 
 _SQLI = "F.x.rules.owasp-top-ten.a03-injection.python-sqli-string-concat"
+_CANONICAL = "owasp-top-ten.a03-injection.python-sqli-string-concat"
 
 
-def _sem_item(line, ignored):
-    return {"check_id": _SQLI, "path": "q.py", "start": {"line": line},
-            "extra": {"severity": "ERROR", "message": "string-built SQL",
-                      "is_ignored": ignored}}
+def _sem_item(line, col=5, path="q.py"):
+    return {"check_id": _SQLI, "path": path,
+            "start": {"line": line, "col": col}, "end": {"line": line, "col": col + 20},
+            "extra": {"severity": "ERROR", "message": "string-built SQL"}}
 
 
-def _sem_report(*items):
-    return json.dumps({"results": list(items), "errors": [],
-                       "paths": {"scanned": ["q.py"]}})
+def _sem_report(*items, scanned=("q.py",), errors=()):
+    return json.dumps({"results": list(items), "errors": list(errors),
+                       "paths": {"scanned": list(scanned)}})
 
 
-def _sem_tree(tmp_path):
+def _sem_tree(tmp_path, marker="  # nosemgrep"):
     (tmp_path / "q.py").write_text(
         "def f(cur, n):\n"
-        "    cur.execute('SELECT ' + n)  # nosemgrep\n"
+        f"    cur.execute('SELECT ' + n){marker}\n"
         "    cur.execute('SELECT ' + n)\n", encoding="utf-8")
 
 
-def _fake_semgrep(monkeypatch, raw, rc=1):
-    calls = []
+class _FakeSemgrep:
+    """Answers semgrep's own run and the `--disable-nosem` second pass, by
+    shape. `second` is the second pass's stdout, or a RunnerResult."""
 
-    def fake(argv, cwd, timeout_s, env=None):
-        calls.append(list(argv))
-        return RunnerResult("semgrep", ToolState.OK, raw=raw, returncode=rc)
+    def __init__(self, own, second=None, own_rc=1, second_rc=1, hang_s=0.0):
+        self.own, self.second = own, second
+        self.own_rc, self.second_rc, self.hang_s = own_rc, second_rc, hang_s
+        self.calls = []
 
+    def __call__(self, argv, cwd, timeout_s, env=None):
+        self.calls.append((list(argv), timeout_s))
+        if "--disable-nosem" not in argv:
+            return RunnerResult("semgrep", ToolState.OK, raw=self.own, returncode=self.own_rc)
+        if self.hang_s:
+            time.sleep(timeout_s + self.hang_s)
+            return RunnerResult("semgrep", ToolState.TIMEOUT, duration_s=timeout_s + self.hang_s)
+        if isinstance(self.second, RunnerResult):
+            return self.second
+        return RunnerResult("semgrep", ToolState.OK, raw=self.second, returncode=self.second_rc)
+
+    def second_calls(self):
+        return [argv for argv, _ in self.calls if "--disable-nosem" in argv]
+
+
+def _inline_run(tmp_path, monkeypatch, fake, files=("q.py",), **kw):
     monkeypatch.setattr(semgrep, "run_subprocess", fake)
-    return calls
+    ctx = RunContext(root=tmp_path, files=list(files), inline_pass=True, **kw)
+    return semgrep.run(ctx), ctx
 
 
-def test_without_the_inline_pass_semgrep_keeps_its_argv_and_shape(tmp_path, monkeypatch):
+def test_without_the_inline_pass_semgrep_runs_exactly_as_before(tmp_path, monkeypatch):
     _sem_tree(tmp_path)
-    calls = _fake_semgrep(monkeypatch, _sem_report(_sem_item(3, False)))
+    fake = _FakeSemgrep(_sem_report(_sem_item(3)))
+    monkeypatch.setattr(semgrep, "run_subprocess", fake)
     result = semgrep.run(RunContext(root=tmp_path, files=["q.py"]))
-    assert "--disable-nosem" not in calls[0]
+    assert [argv for argv, _ in fake.calls] == [semgrep._build_argv(
+        RunContext(root=tmp_path, files=["q.py"]))]
+    assert "--disable-nosem" not in fake.calls[0][0]
     assert getattr(result, "sub_results", None) is None
 
 
-def test_the_inline_pass_asks_semgrep_for_what_nosem_hid(tmp_path, monkeypatch):
+def test_semgreps_own_run_never_carries_disable_nosem(tmp_path, monkeypatch):
+    # The BLOCK-tier result is semgrep's own, with its markers honoured by
+    # semgrep itself: nothing FN-38 does can change it.
     _sem_tree(tmp_path)
-    calls = _fake_semgrep(monkeypatch, _sem_report(_sem_item(2, True), _sem_item(3, False)))
-    ctx = RunContext(root=tmp_path, files=["q.py"], inline_pass=True)
+    fake = _FakeSemgrep(_sem_report(_sem_item(3)), _sem_report(_sem_item(2), _sem_item(3)))
+    _inline_run(tmp_path, monkeypatch, fake)
+    own_argv, second_argv = (argv for argv, _ in fake.calls)
+    assert "--disable-nosem" not in own_argv
+    assert second_argv.index("--disable-nosem") < second_argv.index("--")
+    assert second_argv[second_argv.index("--") + 1:] == ["q.py"]
 
-    result = semgrep.run(ctx)
 
-    [argv] = calls
-    assert "--disable-nosem" in argv
-    assert argv.index("--disable-nosem") < argv.index("--")
+def test_the_second_pass_reports_what_the_own_run_did_not(tmp_path, monkeypatch):
+    _sem_tree(tmp_path)
+    fake = _FakeSemgrep(_sem_report(_sem_item(3)), _sem_report(_sem_item(2), _sem_item(3)))
+    result, ctx = _inline_run(tmp_path, monkeypatch, fake)
+
     own, second = result.sub_results
-    assert (own.tool, second.tool) == ("semgrep", inline.SEMGREP)
-    assert second.state is ToolState.OK
+    assert (own.tool, second.tool, second.state) == ("semgrep", inline.SEMGREP, ToolState.OK)
     assert second.examined == own.examined == frozenset({"q.py"})
-    canonical = "owasp-top-ten.a03-injection.python-sqli-string-concat"
     assert [(f.tool, f.rule, f.line, f.subject) for f in semgrep.parse(result, ctx)] == [
-        ("semgrep", canonical, 3, None),
-        (inline.SEMGREP, inline.RULE, 2, ("semgrep", canonical)),
+        ("semgrep", _CANONICAL, 3, None),
+        (inline.SEMGREP, inline.RULE, 2, ("semgrep", _CANONICAL)),
     ]
 
 
-def test_an_ignored_result_never_becomes_one_of_semgreps_own_findings(tmp_path):
-    # `--disable-nosem` hands back what `# nosemgrep` hid. Read as an ordinary
-    # result, every marked line would start BLOCKING the day this shipped.
-    result = RunnerResult("semgrep", ToolState.OK,
-                          raw=_sem_report(_sem_item(2, True), _sem_item(3, False)))
-    findings = semgrep.parse(result, RunContext(root=tmp_path, files=["q.py"]))
-    assert [f.line for f in findings] == [3]
+def test_two_hits_on_one_line_are_told_apart_by_column(tmp_path, monkeypatch):
+    _sem_tree(tmp_path)
+    fake = _FakeSemgrep(_sem_report(_sem_item(2, col=5)),
+                        _sem_report(_sem_item(2, col=5), _sem_item(2, col=40)))
+    result, ctx = _inline_run(tmp_path, monkeypatch, fake)
+    assert [(f.tool, f.line) for f in semgrep.parse(result, ctx)] == [
+        ("semgrep", 2), (inline.SEMGREP, 2)]
 
 
-def test_a_degraded_semgrep_carries_no_inline_label(tmp_path, monkeypatch):
-    # One process, so the inline label has nothing of its own to report:
-    # semgrep's own degradation already says the files were not analysed.
-    calls = _fake_semgrep(monkeypatch, "", rc=2)
-    result = semgrep.run(RunContext(root=tmp_path, files=["q.py"], inline_pass=True))
-    assert calls and result.state is ToolState.CRASHED
+def test_no_file_that_mentions_nosem_starts_no_second_process(tmp_path, monkeypatch):
+    _sem_tree(tmp_path, marker="")
+    fake = _FakeSemgrep(_sem_report(_sem_item(2), _sem_item(3)))
+    result, ctx = _inline_run(tmp_path, monkeypatch, fake)
+    assert fake.second_calls() == []
+    own, second = result.sub_results
+    assert (second.tool, second.state, second.examined) == (
+        inline.SEMGREP, ToolState.OK, own.examined)
+    assert [f.tool for f in semgrep.parse(result, ctx)] == ["semgrep", "semgrep"]
+
+
+def test_the_nosem_screen_ignores_case(tmp_path, monkeypatch):
+    _sem_tree(tmp_path, marker="  # NoSemGrep")
+    fake = _FakeSemgrep(_sem_report(_sem_item(3)), _sem_report(_sem_item(2), _sem_item(3)))
+    _inline_run(tmp_path, monkeypatch, fake)
+    assert len(fake.second_calls()) == 1
+
+
+def test_only_files_that_mention_nosem_are_scanned_again(tmp_path, monkeypatch):
+    _sem_tree(tmp_path)
+    (tmp_path / "plain.py").write_text("X = 1\n", encoding="utf-8")
+    fake = _FakeSemgrep(_sem_report(_sem_item(3), scanned=("q.py", "plain.py")),
+                        _sem_report(_sem_item(2), _sem_item(3)))
+    result, _ = _inline_run(tmp_path, monkeypatch, fake, files=("q.py", "plain.py"))
+    [argv] = fake.second_calls()
+    assert argv[argv.index("--") + 1:] == ["q.py"]
+    # plain.py has no marker to hide anything, so the label vouches for it too.
+    assert result.sub_results[1].examined == frozenset({"q.py", "plain.py"})
+
+
+def test_a_file_the_screen_cannot_read_is_scanned_again(tmp_path, monkeypatch):
+    # Unread is not "no marker": a file skipped here could hide one.
+    fake = _FakeSemgrep(_sem_report(scanned=("gone.py",)), _sem_report(scanned=("gone.py",)))
+    _inline_run(tmp_path, monkeypatch, fake, files=("gone.py",))
+    [argv] = fake.second_calls()
+    assert argv[argv.index("--") + 1:] == ["gone.py"]
+
+
+def test_a_degraded_semgrep_starts_no_second_pass(tmp_path, monkeypatch):
+    _sem_tree(tmp_path)
+    fake = _FakeSemgrep("", own_rc=2)
+    result, _ = _inline_run(tmp_path, monkeypatch, fake)
+    assert result.state is ToolState.CRASHED
+    assert len(fake.calls) == 1
     assert getattr(result, "sub_results", None) is None
 
 
-def test_an_empty_report_still_reports_the_inline_label_ok_and_examining_nothing(
-        tmp_path, monkeypatch):
+def test_an_empty_report_reports_the_label_ok_and_examining_nothing(tmp_path, monkeypatch):
     # The label is in each gate's expected set. semgrep reports OK-vouching-
     # for-nothing on an empty stdout, so its inline label must say the same,
     # or status counts a skip for a run that skipped nothing.
-    _fake_semgrep(monkeypatch, "", rc=0)
-    result = semgrep.run(RunContext(root=tmp_path, files=["q.py"], inline_pass=True))
+    _sem_tree(tmp_path)
+    fake = _FakeSemgrep("", own_rc=0)
+    result, _ = _inline_run(tmp_path, monkeypatch, fake)
     own, second = result.sub_results
     assert (own.state, own.examined) == (ToolState.OK, frozenset())
     assert (second.tool, second.state, second.examined) == (
         inline.SEMGREP, ToolState.OK, frozenset())
+    assert fake.second_calls() == []
+
+
+def test_a_crashed_second_pass_is_degraded_under_its_label_only(tmp_path, monkeypatch):
+    _sem_tree(tmp_path)
+    fake = _FakeSemgrep(_sem_report(_sem_item(3)), "", second_rc=2)
+    result, ctx = _inline_run(tmp_path, monkeypatch, fake)
+    own, second = result.sub_results
+    assert (own.state, own.examined) == (ToolState.OK, frozenset({"q.py"}))
+    assert (second.tool, second.state, second.examined) == (
+        inline.SEMGREP, ToolState.CRASHED, frozenset())
+    assert [f.tool for f in semgrep.parse(result, ctx)] == ["semgrep"]
+
+
+def test_a_second_pass_with_no_report_vouches_for_nothing(tmp_path, monkeypatch):
+    _sem_tree(tmp_path)
+    fake = _FakeSemgrep(_sem_report(_sem_item(3)), "", second_rc=0)
+    result, ctx = _inline_run(tmp_path, monkeypatch, fake)
+    second = result.sub_results[1]
+    assert (second.state, second.examined) == (ToolState.OK, frozenset())
+    assert [f.tool for f in semgrep.parse(result, ctx)] == ["semgrep"]
+
+
+def test_a_file_the_second_pass_could_not_parse_is_not_vouched_for(tmp_path, monkeypatch):
+    _sem_tree(tmp_path)
+    fake = _FakeSemgrep(_sem_report(_sem_item(3)),
+                        _sem_report(errors=[{"path": "q.py", "message": "boom"}]))
+    result, _ = _inline_run(tmp_path, monkeypatch, fake)
+    assert result.sub_results[1].examined == frozenset()
+
+
+def test_an_old_semgrep_without_paths_screens_the_gate_files(tmp_path, monkeypatch):
+    # No `paths` in a real report: semgrep's own result falls back to the
+    # gate's file set (examined None), and so does its label.
+    _sem_tree(tmp_path)
+    old = json.dumps({"results": [_sem_item(3)], "errors": []})
+    fake = _FakeSemgrep(old, json.dumps({"results": [_sem_item(2), _sem_item(3)], "errors": []}))
+    result, ctx = _inline_run(tmp_path, monkeypatch, fake)
+    own, second = result.sub_results
+    assert own.examined is None and second.examined is None
+    assert [(f.tool, f.line) for f in semgrep.parse(result, ctx)] == [
+        ("semgrep", 3), (inline.SEMGREP, 2)]
+
+
+def test_the_second_pass_never_outlives_the_gate_deadline(tmp_path, monkeypatch):
+    _sem_tree(tmp_path)
+    fake = _FakeSemgrep(_sem_report(_sem_item(3)), _sem_report(_sem_item(3)))
+    _inline_run(tmp_path, monkeypatch, fake, gate_deadline=time.monotonic() + 10.0)
+    [(_, timeout_s)] = [c for c in fake.calls if "--disable-nosem" in c[0]]
+    assert timeout_s < 10.0
+
+
+def test_a_second_pass_whose_kill_hangs_never_costs_semgrep_its_own_result(
+        tmp_path, monkeypatch):
+    _sem_tree(tmp_path)
+    fake = _FakeSemgrep(_sem_report(_sem_item(3)), hang_s=6.0)
+    deadline = time.monotonic() + 4.0
+    result, ctx = _inline_run(tmp_path, monkeypatch, fake, gate_deadline=deadline)
+    returned = time.monotonic()
+
+    assert returned < deadline, f"returned {returned - deadline:.1f} s after the deadline"
+    own, second = result.sub_results
+    assert own.state is ToolState.OK
+    assert (second.tool, second.state) == (inline.SEMGREP, ToolState.TIMEOUT)
+    assert [f.tool for f in semgrep.parse(result, ctx)] == ["semgrep"]

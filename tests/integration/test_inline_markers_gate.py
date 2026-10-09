@@ -22,7 +22,7 @@ from types import SimpleNamespace
 import pytest
 
 from aramid import config as config_mod
-from aramid import pipeline
+from aramid import pipeline, toolpath
 from aramid.commands.check import cmd_check
 from aramid.models import Gate
 from aramid.runners import inline
@@ -36,6 +36,12 @@ def _find_tool(name: str) -> Path | None:
     which = shutil.which(name)
     if which:
         candidates.append(Path(which))
+    # aramid's own resolver too: `doctor --fix` puts gitleaks in
+    # ~/.aramid/tools, off PATH, and without this every gitleaks arm SKIPPED
+    # on such a machine while reading as a pass in the summary line.
+    resolved = toolpath.resolve(name)
+    if resolved:
+        candidates.append(resolved)
     exe_dir = Path(sys.executable).parent
     candidates += [exe_dir / "Scripts" / f"{name}.exe", exe_dir / name]
     for entry in sys.path:
@@ -54,6 +60,13 @@ def real(monkeypatch, tmp_path):
     """`real("ruff")`: put that binary on PATH, make every other gate runner a
     clean double, and keep the user's config out."""
     monkeypatch.setattr(config_mod, "_user_config_path", lambda: tmp_path / "no-user.toml")
+    # semgrep's output depends on its own state: logged in (a `~/.semgrep`
+    # settings file with an `api_token`), `--disable-nosem` marks what a
+    # marker hid `extra.is_ignored: true`; fresh, as on every CI runner, it
+    # does not mark it at all. A fresh state here, so this machine sees what
+    # CI sees (FN-38 went red on all 7 legs while passing here).
+    monkeypatch.setenv("SEMGREP_SETTINGS_FILE", str(tmp_path / "semgrep-settings.yml"))
+    monkeypatch.delenv("SEMGREP_APP_TOKEN", raising=False)
 
     def _use(tool: str) -> None:
         if _BINS[tool] is None:

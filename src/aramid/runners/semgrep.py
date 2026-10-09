@@ -101,18 +101,16 @@ def _canonical_rule_id(check_id: str) -> str:
     return check_id
 
 
-def _build_argv(ctx) -> list[str]:
+def _build_argv(ctx, files: list[str] | None = None, *,
+                disable_nosem: bool = False) -> list[str]:
     argv = ["semgrep", "--config", str(VENDORED_RULES_PATH)]
     for extra in getattr(ctx, "extra_semgrep_configs", ()):
         argv += ["--config", extra]
     argv += ["--json", "--metrics=off", "--quiet"]
-    # FN-38: no second process. `--disable-nosem` reports what `# nosemgrep`
-    # would have hidden, marked `extra.is_ignored: true` (measured on semgrep
-    # 1.178.0); parse() keeps those out of semgrep's own findings and reports
-    # them under the inline label instead.
-    if getattr(ctx, "inline_pass", False):
+    # FN-38's second pass only. semgrep's own run never carries it.
+    if disable_nosem:
         argv.append("--disable-nosem")
-    argv += ["--", *ctx.files]
+    argv += ["--", *(ctx.files if files is None else files)]
     return argv
 
 
@@ -170,7 +168,7 @@ def _examined(data: dict, ctx) -> frozenset[str] | None:
     )
 
 
-def run(ctx) -> RunnerResult:
+def _run_own(ctx) -> RunnerResult:
     result = run_subprocess(_build_argv(ctx), ctx.root, TIMEOUT_S)
     out = json_or_crashed(NAME, result, _OK_RETURNCODES, empty="{}")
     # A degraded semgrep vouches for nothing (see the eslint adapter).
@@ -187,27 +185,76 @@ def run(ctx) -> RunnerResult:
     # is distinguishable without a version probe: it still emits a real JSON
     # report, just without `paths`. `{}` is only ever aramid's own placeholder.
     if not (result.raw or "").strip():
-        return _with_inline(replace(out, examined=frozenset()), [], ctx)
+        return replace(out, examined=frozenset())
     try:
         data = json.loads(out.raw or "{}")
     except json.JSONDecodeError:  # pragma: no cover - json_or_crashed pre-screens
-        return _with_inline(replace(out, examined=frozenset()), [], ctx)
-    hidden = [item for item in data.get("results", []) if _is_ignored(item)]
-    return _with_inline(replace(out, examined=_examined(data, ctx)), hidden, ctx)
+        return replace(out, examined=frozenset())
+    return replace(out, examined=_examined(data, ctx))
 
 
-def _with_inline(own: RunnerResult, hidden: list, ctx) -> RunnerResult:
-    """One run answered both questions, so the inline label vouches for
-    exactly what semgrep's own OK result does: the same state, the same
-    files."""
-    if not ctx.inline_pass:
+# FN-38's second pass. It runs `--disable-nosem` and keeps the hits the own
+# run does not have, matched by rule and position, exactly as the ruff and
+# gitleaks passes do. It never reads `extra.is_ignored`: semgrep marks that
+# on some engine paths only. Logged in (a settings file with an `api_token`)
+# it is there; fresh, as on every CI runner, `--disable-nosem` returns the
+# hidden hit with nothing to tell it apart (measured on 1.180.0 both ways).
+# The first build read the mark from a SINGLE run, and on CI every
+# `# nosemgrep` hit came back as one of semgrep's own BLOCK findings.
+_NOSEM = b"nosem"
+
+
+def _mentions_nosem(path: Path) -> bool:
+    """Whether a file can hold a semgrep marker at all. Every marker semgrep
+    accepts contains `nosem`, in any case; prose that does costs a scan,
+    never a miss. A file that cannot be read is scanned: one skipped here
+    could hide a hit."""
+    try:
+        return _NOSEM in path.read_bytes().lower()
+    except OSError:
+        return True
+
+
+def _key(item: dict, root) -> tuple:
+    start, end = item.get("start") or {}, item.get("end") or {}
+    return (_canonical_rule_id(item["check_id"]), relativize(item["path"], root),
+            start.get("line"), start.get("col"), end.get("line"), end.get("col"))
+
+
+def _run_inline(own: RunnerResult, ctx) -> RunnerResult:
+    """The hits a `--disable-nosem` pass has and semgrep's own run does not,
+    over the files the own run examined that mention `nosem` (the gate's
+    file set when an old semgrep could not say). A file that does not
+    mention it can hide nothing, so the label vouches for it unscanned."""
+    base = own.examined if own.examined is not None else frozenset(ctx.files)
+    files = sorted(f for f in base if _mentions_nosem(ctx.root / f))
+    if not files:
+        return RunnerResult(inline.SEMGREP, ToolState.OK, raw='{"results": []}',
+                            examined=own.examined)
+    timeout = inline.second_pass_timeout(ctx, TIMEOUT_S)
+    if timeout is None:
+        return inline.skipped(inline.SEMGREP)
+    result = run_subprocess(_build_argv(ctx, files, disable_nosem=True), ctx.root, timeout)
+    out = json_or_crashed(inline.SEMGREP, result, _OK_RETURNCODES, empty="{}")
+    if out.state is not ToolState.OK:
+        return replace(out, examined=frozenset())
+    if not (result.raw or "").strip():
+        # As for the own run: no report is not "nothing hidden".
+        return replace(out, raw='{"results": []}', examined=frozenset())
+    data = json.loads(out.raw or "{}")
+    seen = {_key(item, ctx.root) for item in json.loads(own.raw or "{}").get("results", [])}
+    hidden = [item for item in data.get("results", []) if _key(item, ctx.root) not in seen]
+    unparsed = {relativize(p, ctx.root) for p in _error_paths(data)}
+    examined = None if own.examined is None else own.examined - unparsed
+    return replace(out, raw=json.dumps({"results": hidden}), examined=examined)
+
+
+def run(ctx) -> RunnerResult:
+    own = _run_own(ctx)
+    if not ctx.inline_pass or own.state is not ToolState.OK:
         return own
-    return inline.bundle(own, replace(own, tool=inline.SEMGREP,
-                                      raw=json.dumps({"results": hidden})))
-
-
-def _is_ignored(item: dict) -> bool:
-    return bool((item.get("extra") or {}).get("is_ignored"))
+    return inline.bundle(own, inline.within_deadline(
+        ctx, inline.SEMGREP, lambda: _run_inline(own, ctx)))
 
 
 def _parse_inline(sub: RunnerResult, ctx) -> list[RawFinding]:
@@ -249,10 +296,7 @@ def parse(result: RunnerResult, ctx) -> list[RawFinding]:
             message=item["extra"]["message"],
             line_content=line_at(item["path"], item["start"]["line"]),
         )
-        # A result `# nosemgrep` hid is never one of semgrep's own findings,
-        # whoever asked for it: read as ordinary, every marked line would
-        # start blocking the day `--disable-nosem` shipped.
-        for item in data.get("results", []) if not _is_ignored(item)
+        for item in data.get("results", [])
     ]
     for sub in getattr(result, "sub_results", None) or ():
         if sub.tool == inline.SEMGREP and sub.state is ToolState.OK:
