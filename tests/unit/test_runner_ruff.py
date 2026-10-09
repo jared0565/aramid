@@ -277,3 +277,32 @@ def test_no_python_in_scope_still_reports_the_inline_label_ok_and_empty(tmp_path
     assert (own.state, own.examined) == (ToolState.OK, frozenset())
     assert (second.tool, second.state, second.examined) == (
         inline.RUFF, ToolState.OK, frozenset())
+
+
+def test_a_code_this_ruff_does_not_know_is_dropped_not_fatal(tmp_path, monkeypatch):
+    # ruff exits 2 on an unknown `--select` code. A typo in a repo's
+    # `block_rules` additions, or a curated code a future ruff removes, would
+    # otherwise degrade the inline label on every run -- and `--strict` would
+    # refuse every push. A code ruff does not know is one it can never report,
+    # so there is nothing for a marker to hide under it.
+    _marked_tree(tmp_path)
+    fake = _FakeRuff(tmp_path, own=[], examined=["a.py"], second=[_item(tmp_path / "a.py", 1)])
+
+    def picky(argv, cwd, timeout_s, env=None):
+        if "--isolated" in argv and "S9999" in argv[argv.index("--select") + 1]:
+            fake.calls.append((list(argv), timeout_s))
+            return RunnerResult("ruff", ToolState.OK, raw="", returncode=2, stderr=(
+                "ruff failed\n  Cause: Unknown rule selector `S9999` in `select` "
+                "from the CLI\n"))
+        return fake(argv, cwd, timeout_s, env)
+
+    monkeypatch.setattr(ruff, "run_subprocess", picky)
+    ctx = RunContext(root=tmp_path, files=["a.py"], inline_pass=True,
+                     ruff_block_rules=("S105", "S9999"))
+    result = ruff.run(ctx)
+    second = result.sub_results[1]
+    assert second.state is ToolState.OK
+    first_try, retry = fake.second_calls()
+    assert retry[0][retry[0].index("--select") + 1] == "S105"
+    assert "S9999" in second.stderr
+    assert [(f.tool, f.line) for f in ruff.parse(result, ctx)] == [(inline.RUFF, 1)]

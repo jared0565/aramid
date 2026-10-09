@@ -277,3 +277,23 @@ def test_a_suppression_entry_accepts_the_marker_and_goes_stale_when_the_line_cha
     assert [f.verdict for f in changed.findings] == [Verdict.WARN]
     assert [s.id for s in changed.stale_overrides] == [finding.id]
     ledger.close()
+
+
+def test_a_degraded_second_pass_refuses_a_strict_run_like_any_degraded_runner(
+        tmp_path, monkeypatch):
+    # The decision, pinned: a second pass that did not run is UNGRADED, not
+    # clean. Non-strict hooks let exit 2 through; `--strict` (CI, and
+    # `[hooks].pre_push_match_ci`) refuses it, as it does any degraded runner.
+    import contextlib
+    import io
+    import json
+    from aramid.commands.check import cmd_check
+    root = _repo(tmp_path)
+    _cfg(root, tmp_path, monkeypatch)
+    _bundle_runner(monkeypatch, _second(ToolState.TIMEOUT), [])
+    for strict, expected in ((False, 2), (True, 1)):
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            rc = cmd_check(root, Gate.PRE_COMMIT, "all", strict=strict, as_json=True)
+        assert rc == expected, (strict, rc)
+        assert json.loads(buf.getvalue())["degraded"] == [inline.RUFF]

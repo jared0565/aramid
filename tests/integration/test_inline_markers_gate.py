@@ -166,6 +166,19 @@ def test_a_file_the_repo_excludes_is_never_reported_as_hidden(tmp_path, real):
     assert _by(payload, "ruff") == _by(payload, inline.RUFF) == []
 
 
+def test_a_block_rules_code_this_ruff_does_not_know_never_degrades_the_pass(tmp_path, real):
+    # A typo in a repo's additions reaches ruff's `--select`, where ruff exits 2.
+    # Degraded on every run, `--strict` would refuse every push.
+    real("ruff")
+    root = _repo(tmp_path, {
+        "aramid.toml": '[block_rules.ruff]\nblock = ["S102", "S105", "S106", "S107", '
+                       '"S608", "S301", "S302", "S9999"]\n',
+        "creds.py": f"{_CRED_LINE}  # noqa: S105\n"})
+    rc, payload = _gate(root, strict=True)
+    assert rc == 0, payload
+    assert payload["degraded"] == [], payload["degraded_reasons"]
+    _assert_one_inline(payload, inline.RUFF, "ruff", "S105", 1)
+
 def test_a_noqa_on_a_warn_tier_rule_reports_nothing(tmp_path, real):
     real("ruff")
     root = _repo(tmp_path, {"mod.py": "import os  # noqa: F401\n"})

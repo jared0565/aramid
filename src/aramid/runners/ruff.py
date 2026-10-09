@@ -79,7 +79,7 @@ def _run_own(ctx) -> RunnerResult:
     return replace(out, examined=_examined(ctx))
 
 
-def _inline_argv(ctx, files: list[str]) -> list[str]:
+def _inline_argv(codes: list[str], files: list[str]) -> list[str]:
     """FN-38's second pass: the repo's markers OFF. `--isolated` drops every
     config file (so `per-file-ignores` and a file-level `# ruff: noqa` with
     it), `--ignore-noqa` drops line comments, and `--select` asks for the
@@ -87,7 +87,42 @@ def _inline_argv(ctx, files: list[str]) -> list[str]:
     which is why `files` is what the first run EXAMINED, never what it was
     handed: an excluded file must never come back as "hidden"."""
     return ["ruff", "check", "--isolated", "--ignore-noqa", "--output-format", "json",
-            "--select", ",".join(ctx.ruff_block_rules), "--", *files]
+            "--select", ",".join(codes), "--", *files]
+
+
+# ruff exits 2 on a `--select` code it does not know (measured on 0.16.10:
+# "Unknown rule selector `S9999` in `select` from the CLI"), naming the first.
+_UNKNOWN_SELECTOR = re.compile(r"Unknown rule selector `([^`]+)`")
+
+
+def _inline_subprocess(ctx, files: list[str]) -> RunnerResult:
+    """Run the second pass, dropping each code this ruff does not know.
+
+    The list is the RESOLVED one, repo additions included, and nothing else
+    validates it: a typo there, or a curated code a future ruff removes, would
+    otherwise degrade the inline label on every run, and `--strict` would then
+    refuse every push. A code ruff does not know is one it can never report,
+    so no marker can hide anything under it. What was dropped is said on the
+    result's stderr, which reaches the run's log."""
+    codes, dropped = list(ctx.ruff_block_rules), []
+    while True:
+        timeout = inline.second_pass_timeout(ctx, TIMEOUT_S)
+        if timeout is None:
+            return inline.skipped(inline.RUFF)
+        if not codes:
+            return RunnerResult(inline.RUFF, ToolState.OK, raw="[]", stderr=(
+                f"aramid: this ruff knows none of {', '.join(dropped)}"))
+        result = run_subprocess(_inline_argv(codes, files), ctx.root, timeout)
+        unknown = (_UNKNOWN_SELECTOR.search(result.stderr or "")
+                   if result.returncode == 2 else None)
+        if unknown is None or unknown.group(1) not in codes:
+            if dropped:
+                result = replace(result, stderr=(
+                    f"aramid: this ruff does not know {', '.join(dropped)}; not asked "
+                    f"about them\n{result.stderr or ''}"))
+            return result
+        codes.remove(unknown.group(1))
+        dropped.append(unknown.group(1))
 
 
 def _key(item, root) -> tuple:
@@ -102,13 +137,8 @@ def _run_inline(own: RunnerResult, ctx) -> RunnerResult:
     examined = own.examined or frozenset()
     if not examined or not ctx.ruff_block_rules:
         return RunnerResult(inline.RUFF, ToolState.OK, raw="[]", examined=frozenset())
-    timeout = inline.second_pass_timeout(ctx, TIMEOUT_S)
-    if timeout is None:
-        return inline.skipped(inline.RUFF)
-    out = json_or_crashed(
-        inline.RUFF,
-        run_subprocess(_inline_argv(ctx, sorted(examined)), ctx.root, timeout),
-        _OK_RETURNCODES)
+    out = json_or_crashed(inline.RUFF, _inline_subprocess(ctx, sorted(examined)),
+                          _OK_RETURNCODES)
     if out.state is not ToolState.OK:
         return replace(out, examined=frozenset())
     seen = {_key(item, ctx.root) for item in json.loads(own.raw or "[]")}
