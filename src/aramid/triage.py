@@ -197,9 +197,12 @@ def survivor_signal(ledger, paths: list[str],
         if not test_stems:
             return 0, []
         suppressed = _suppressed_ids(root)
+        # The consumer's own row filter (`_retest_candidates`): a survivor it
+        # would skip -- suppressed, or with no file or line to regenerate
+        # from -- must not queue a drain that re-tests nothing.
         reachable = sorted(rec.get("file") for fid, rec in state.items()
                            if rec.get("tool") == "mutation" and rec.get("status") == "open"
-                           and rec.get("file") and fid not in suppressed)
+                           and rec.get("file") and rec.get("line") and fid not in suppressed)
         if not reachable:
             return 0, []
         return SURVIVOR_WEIGHT, [f"survivor-retest: a changed test may kill "

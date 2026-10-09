@@ -510,3 +510,69 @@ def test_a_test_only_push_whose_name_maps_to_no_module_reaches_min_score(
         assert not any(r.startswith("survivor-retest:") for r in result.reasons), result
     finally:
         led.close()
+
+
+def _ledger_with(tmp_path, rows):
+    """A ledger holding one finding per (id_char, tool, file, line) row."""
+    from aramid.models import Finding, Gate, Severity, Verdict
+    led = Ledger(tmp_path / "rows.db")
+    findings = [Finding(id=c * 64, tool=tool, rule="int-bound", severity_raw="medium",
+                        severity=Severity.MEDIUM, verdict=Verdict.WARN, file=file, line=line,
+                        message="mutant survived", evidence="", gate=Gate.ALL)
+                for c, tool, file, line in rows]
+    led.record_run("r1", "2026-08-30T00:00:00+00:00", "drain",
+                   {r[1] for r in rows}, {r[2] for r in rows}, findings)
+    return led
+
+
+def test_the_any_test_rule_counts_exactly_the_rows_the_re_test_would_run(tmp_path):
+    """Mirrors `consumers.mutation._retest_candidates`: a mutation row, open,
+    with a file and a line, not suppressed. Every other row in this ledger
+    is one the consumer would skip, so counting it would queue a drain that
+    re-tests nothing."""
+    led = _ledger_with(tmp_path, [
+        ("s", "mutation", _ESLINT, 4),                          # suppressed below
+        ("a", "mutation", "src/aramid/runners/ruff.py", 9),     # the one that counts
+        ("b", "ruff", "src/aramid/cli.py", 3),                  # not a mutation row
+        ("c", "mutation", "src/aramid/runners/deps.py", 0),     # no line to regenerate
+    ])
+    _suppress_survivor(tmp_path)
+    try:
+        assert triage.survivor_signal(led, [_ESLINT_TEST], root=tmp_path) == (
+            triage.SURVIVOR_WEIGHT,
+            ["survivor-retest: a changed test may kill 1 open survivor(s) "
+             "incl. src/aramid/runners/ruff.py"])
+    finally:
+        led.close()
+
+
+def test_the_any_test_rule_counts_every_reachable_survivor_and_names_the_first(tmp_path):
+    led = _ledger_with(tmp_path, [
+        ("a", "mutation", "src/aramid/runners/ruff.py", 9),
+        ("d", "mutation", "src/aramid/runners/clippy.py", 5),
+    ])
+    try:
+        assert triage.survivor_signal(led, [_ESLINT_TEST], root=tmp_path) == (
+            triage.SURVIVOR_WEIGHT,
+            ["survivor-retest: a changed test may kill 2 open survivor(s) "
+             "incl. src/aramid/runners/clippy.py"])
+    finally:
+        led.close()
+
+
+def test_no_root_or_an_unreadable_suppressions_file_binds_nothing(tmp_path, monkeypatch):
+    """The permissive answer, the same one the re-test gives: a survivor is
+    never left unqueued because its suppression could not be read."""
+    led = _survivor_ledger(tmp_path, file=_ESLINT)
+    _suppress_survivor(tmp_path)
+    try:
+        assert triage.survivor_signal(led, [_ESLINT_TEST], root=tmp_path) == (0, [])  # control
+        assert triage.survivor_signal(led, [_ESLINT_TEST])[0] == triage.SURVIVOR_WEIGHT
+
+        def unreadable(root):
+            raise OSError("unreadable")
+        monkeypatch.setattr(config_mod, "load_suppressions", unreadable)
+        assert triage.survivor_signal(led, [_ESLINT_TEST], root=tmp_path)[0] == \
+            triage.SURVIVOR_WEIGHT
+    finally:
+        led.close()
