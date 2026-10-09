@@ -25,12 +25,13 @@ REPO = Path(__file__).resolve().parents[2]
 
 # --- CI step: `aramid check --all --strict` (pre-commit tier) ---------------
 #
-# `--all` widens the FILE set, never the runner set, and the pre-push tier does
-# not include ruff (GATE_RUNNER_KEYS: pre-commit is [gitleaks, ruff], pre-push
-# is [gitleaks, semgrep, eslint, clippy, typecheck, deps, tests]). The local
-# pre-commit hook runs ruff over the STAGED scope only. So a ruff finding in a
-# file this push never touched was invisible locally and surfaced only in CI --
-# the exact round-trip this file exists to remove.
+# `--all` widens the FILE set, never the runner set. ruff used to run at the
+# pre-commit tier only, over the STAGED scope, so a ruff finding in a file this
+# push never touched was invisible locally and surfaced only in CI -- the exact
+# round-trip this file exists to remove. Since FN-32 the pre-push tier runs
+# ruff too, but the gate refuses a ruff finding only when it is BLOCK-tier or
+# NEW; a warning already recorded passes every later push. The test below
+# holds the whole tree at zero.
 
 def test_ruff_is_clean_across_every_tracked_python_file():
     files = [f for f in gitutil.all_tracked_files(REPO) if f.endswith(".py")]
@@ -56,13 +57,16 @@ def test_ruff_is_clean_across_every_tracked_python_file():
                   for f in findings[:20]))
 
 
-def test_ruff_is_not_in_the_pre_push_tier_so_this_test_is_load_bearing():
-    """Guards this file's own reason to exist. If ruff is ever added to the
-    pre-push tier, the gate covers the whole tree itself and the test above
-    becomes redundant duplication -- worth knowing rather than carrying
-    forever. If it is removed from pre-commit too, the test above is the ONLY
-    ruff coverage left and must not be deleted with it."""
-    assert "ruff" not in GATE_RUNNER_KEYS[Gate.PRE_PUSH]
+def test_ruff_runs_at_both_tiers_and_the_test_above_is_still_load_bearing():
+    """Guards this file's own reason to exist. It used to assert that ruff was
+    NOT in the pre-push tier, on the reasoning that once it was, the gate would
+    cover the whole tree and the test above would be redundant. FN-32 put it
+    there, and the reasoning did not survive contact: the gate refuses a ruff
+    finding only when it is BLOCK-tier or a new warning (the ratchet), so a
+    WARN recorded at pre-commit passes every push after it. The test above
+    refuses any ruff finding at all, on every CI leg. If ruff ever leaves
+    either tier, re-read this before deleting anything."""
+    assert "ruff" in GATE_RUNNER_KEYS[Gate.PRE_PUSH]
     assert "ruff" in GATE_RUNNER_KEYS[Gate.PRE_COMMIT]
 
 

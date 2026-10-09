@@ -238,11 +238,13 @@ def test_expected_tool_names_is_scoped_to_one_gate(tmp_path, monkeypatch):
     pre_commit = toolset.expected_tool_names(root, cfg, Gate.PRE_COMMIT)
     pre_push = toolset.expected_tool_names(root, cfg, Gate.PRE_PUSH)
 
-    # The whole point of scoping: ruff is pre-commit tier, semgrep is pre-push.
-    assert "ruff" in pre_commit
-    assert "ruff" not in pre_push, "ruff at pre-push is what produced the false skip"
+    # The whole point of scoping: semgrep is pre-push tier only. ruff was the
+    # pre-commit-only tool whose absence from pre-push runs read as a false
+    # skip; since FN-32 it runs at both, so it is expected at both.
     assert "semgrep" in pre_push
     assert "semgrep" not in pre_commit
+    assert "ruff" in pre_commit
+    assert "ruff" in pre_push
 
 
 def test_expected_tool_names_uses_recorded_labels_not_registry_keys(tmp_path,

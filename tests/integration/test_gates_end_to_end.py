@@ -170,6 +170,14 @@ def test_seeded_sqli_semgrep_warn_during_bake_then_block_after_arm(
     _git(root, "commit", "-q", "-m", "add vulnerable query")
 
     monkeypatch.setitem(pipeline.RUNNERS, "gitleaks", _gitleaks_clean())
+    # This test is about semgrep's bake-then-arm verdict. The same query also
+    # trips ruff's S608, a curated BLOCK, and ruff runs at pre-push since
+    # FN-32, so a live ruff would block run 1 before semgrep's verdict could
+    # be observed. ruff's own push-time BLOCK is covered in
+    # test_prepush_gate_runs_ruff.py.
+    monkeypatch.setitem(pipeline.RUNNERS, "ruff", SimpleNamespace(
+        run=lambda ctx: RunnerResult("ruff", ToolState.OK, raw="[]", examined=frozenset()),
+        parse=lambda result, ctx: []))
 
     # Run 1: fresh ledger -- establishes the baseline; the ratchet's own
     # escalation of this brand-new WARN finding gets downgraded right back

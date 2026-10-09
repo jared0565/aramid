@@ -57,10 +57,11 @@ def build_parser() -> argparse.ArgumentParser:
     p_init.add_argument("--discover", action="store_true")
 
     p_check = sub.add_parser("check", help="run the gate pipeline")
-    # "all" is the one invocation that sees BOTH tiers -- ruff runs only at
-    # pre-commit and semgrep only at pre-push, so neither hook gate can
-    # (interop round 126 s4b). Informational: it never ratchets, and no
-    # shim invokes it.
+    # "all" runs every runner of both tiers (interop round 126 s4b, when ruff
+    # ran only at pre-commit and so neither hook gate saw both halves; since
+    # FN-32 pre-push runs ruff too). It skips the pre-push gate's own checks
+    # (ratchet, TDD scan, red-first proof, ledger gates): it never ratchets,
+    # and no shim invokes it.
     p_check.add_argument("--gate", choices=["pre-commit", "pre-push", "all"], default="pre-commit")
     mode = p_check.add_mutually_exclusive_group()
     mode.add_argument("--staged", action="store_true")

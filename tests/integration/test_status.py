@@ -251,9 +251,10 @@ def test_a_tool_from_another_gates_tier_is_not_called_skipped(tmp_path, monkeypa
     """R64-8. `ruff: skipped last 1 run(s)` was reported to us as a puzzle: the
     reporter's `ruff check .` passed when run by hand, and nothing was broken.
 
-    Nothing was. `GATE_RUNNER_KEYS` puts ruff at PRE-COMMIT only and semgrep and
-    tests at PRE-PUSH only, so a pre-push run legitimately has no ruff in it --
-    and the streak counted that absence as a skip. One word was covering "ran
+    Nothing was. `GATE_RUNNER_KEYS` then put ruff at PRE-COMMIT only (it runs
+    at both since FN-32) and still puts semgrep and tests at PRE-PUSH only, so
+    a pre-push run of that era legitimately had no ruff in it -- and the streak
+    counted that absence as a skip. The rows below are that era's rows. One word was covering "ran
     and failed" and "not part of this gate", which are opposite things: the
     first is a hole in the gate, the second is the gate working as designed.
 
@@ -1215,10 +1216,10 @@ def test_two_real_runs_with_a_configured_tests_command_show_no_streak_at_all(
     expected = sorted(toolset.expected_tool_names(root, cfg, Gate.PRE_PUSH))
 
     lg = Ledger(root / ".aramid" / "ledger.db")
-    _run_started(lg, "pre-push", ["gitleaks", "python.exe", "semgrep"], expected=expected,
-                 at="2026-01-01T00:00:00+00:00")
-    _run_started(lg, "pre-push", ["gitleaks", "python.exe", "semgrep"], expected=expected,
-                 at="2026-01-02T00:00:00+00:00")
+    # What a pre-push run in a Python repo records. ruff is in it since FN-32.
+    ran = ["gitleaks", "python.exe", "ruff", "semgrep"]
+    _run_started(lg, "pre-push", ran, expected=expected, at="2026-01-01T00:00:00+00:00")
+    _run_started(lg, "pre-push", ran, expected=expected, at="2026-01-02T00:00:00+00:00")
     lg.close()
 
     assert cmd_status(root) == 0

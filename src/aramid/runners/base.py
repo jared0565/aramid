@@ -165,9 +165,10 @@ class RunContext:
 
     root: repo root (cwd for subprocesses, and the base gitutil paths are
       relative to).
-    files: the file set in scope (staged files for pre-commit, changed files
-      for pre-push/--all, etc.) -- adapters that scan by range/config ignore
-      this.
+    files: the file set in scope, set by the scan mode rather than the gate
+      (staged files under `staged`, the pushed range's changed files under
+      `range`, every tracked file under `--all`) -- adapters that scan by
+      range/config ignore this.
     rng: git revision range (e.g. "@{u}..HEAD") when scanning history/commits;
       None means "staged" / "not range-based". An empty string ("",
       `pipeline.FULL_HISTORY_RNG`) is a distinct sentinel meaning "range

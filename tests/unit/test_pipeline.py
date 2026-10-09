@@ -2787,13 +2787,25 @@ def test_run_finished_records_when_the_run_actually_finished(tmp_path, monkeypat
 
 def test_gate_all_runs_every_runner_either_tier_runs():
     """Interop round 126 s4b: no single tier saw both halves of one edit --
-    ruff is pre-commit-only, semgrep pre-push-only -- and `Gate.ALL` was
+    ruff was pre-commit-only (until FN-32), semgrep pre-push-only -- and `Gate.ALL` was
     the pre-push list under another name, so even `rebaseline` (which runs
     it) never saw a ruff finding. A guard, not a fixed list: the NEXT runner
     added to either tier fails this test if it is left out of ALL."""
     union = set(pipeline.GATE_RUNNER_KEYS[Gate.PRE_COMMIT]) | set(pipeline.GATE_RUNNER_KEYS[Gate.PRE_PUSH])
     missing = union - set(pipeline.GATE_RUNNER_KEYS[Gate.ALL])
     assert not missing, f"Gate.ALL omits {sorted(missing)} -- a full scan that skips a tier is not full"
+
+
+def test_every_runner_the_commit_gate_runs_also_runs_at_the_push_gate():
+    """FN-32: the push is the last local gate, and a commit can skip the first
+    one (`git commit --no-verify`, a clone without the hooks, a commit made
+    before `aramid init`). ruff ran only at pre-commit, so such a commit's
+    S105 reached the remote with nothing local ever having linted it. A guard,
+    not a fixed list: the next pre-commit runner fails this if it is left out
+    of the push."""
+    missing = set(pipeline.GATE_RUNNER_KEYS[Gate.PRE_COMMIT]) - set(pipeline.GATE_RUNNER_KEYS[Gate.PRE_PUSH])
+    assert not missing, (f"pre-push omits {sorted(missing)} -- a commit that skipped "
+                         "the pre-commit hook reaches the remote unchecked by it")
 
 
 def test_deps_is_applicable_for_a_pyproject_with_a_project_table(tmp_path):

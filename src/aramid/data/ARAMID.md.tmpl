@@ -7,9 +7,9 @@
 
 This repo is armed with **aramid** -- a deterministic security and quality gate
 that runs in git hooks (`pre-commit`, `pre-push`). Each hook gate runs one tier
-(ruff only at pre-commit; semgrep and the tests only at pre-push), and a CI
-checkout has nothing staged, so in CI run both tiers over the whole tree, as
-two steps:
+(semgrep and the tests only at pre-push; ruff at both, so a commit that skipped
+the pre-commit hook is still linted at the push), and a CI checkout has nothing
+staged, so in CI run both tiers over the whole tree, as two steps:
 
 ```
 aramid check --all --strict --json                    # pre-commit tier
@@ -25,7 +25,7 @@ aramid check --gate pre-push --all --strict --json    # pre-push tier
 | Gate | Budget | Scope | Tools | Failure mode |
 |---|---|---|---|---|
 | pre-commit | `[timeouts].pre_commit` (default 5s) | staged files | gitleaks, ruff (security rules) | fail-open |
-| pre-push | `[timeouts].pre_push` (default 300s) | changed files | gitleaks, semgrep, eslint, clippy, typecheck, dependency audit, tests | fail-closed |
+| pre-push | `[timeouts].pre_push` (default 300s) | changed files | gitleaks, ruff, semgrep, eslint, clippy, typecheck, dependency audit, tests | fail-closed |
 
 Budgets are named rather than fixed here because a repo can raise them in
 `aramid.toml`, and this file is regenerated from a template that cannot see

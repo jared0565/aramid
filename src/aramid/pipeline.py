@@ -64,14 +64,20 @@ RUNNERS: dict[str, object] = {
 
 GATE_RUNNER_KEYS: dict[Gate, list[str]] = {
     Gate.PRE_COMMIT: ["gitleaks", "ruff", "shadow"],
-    Gate.PRE_PUSH: ["gitleaks", "semgrep", "eslint", "clippy", "typecheck", "deps", "tests", "shadow"],
+    # Every pre-commit runner runs here too (FN-32). The push is the last
+    # local gate and a commit can skip the first one (`git commit
+    # --no-verify`, a clone without the hooks, a commit made before `aramid
+    # init`). ruff used to be pre-commit only, so such a commit's S105 reached
+    # the remote with nothing local ever having linted it. Pinned by
+    # test_every_runner_the_commit_gate_runs_also_runs_at_the_push_gate.
+    Gate.PRE_PUSH: ["gitleaks", "ruff", "semgrep", "eslint", "clippy", "typecheck", "deps", "tests", "shadow"],
     # Gate.ALL isn't specified by the brief's runner-selection table. It
     # used to be the pre-push list under another name, which left it BLIND
-    # to the one runner that is pre-commit-only: a consumer's `--gate
-    # pre-push --all` read exit 0 while four ruff BLOCKs waited in the other
-    # tier (interop round 126 s4b), and `rebaseline`, which runs this gate,
-    # never baselined a ruff finding. It is now the union of both tiers,
-    # pinned mechanically by test_gate_all_runs_every_runner_either_tier_runs.
+    # to ruff, then pre-commit only: a consumer's `--gate pre-push --all`
+    # read exit 0 while four ruff BLOCKs waited in the other tier (interop
+    # round 126 s4b), and `rebaseline`, which runs this gate, never
+    # baselined a ruff finding. It is the union of both tiers, pinned
+    # mechanically by test_gate_all_runs_every_runner_either_tier_runs.
     Gate.ALL: ["gitleaks", "ruff", "semgrep", "eslint", "clippy", "typecheck", "deps", "tests", "shadow"],
 }
 
@@ -1225,6 +1231,10 @@ def run_gate(root: Path, gate: Gate, mode: str, cfg: config_mod.Config, ledger: 
         #                       touches them. Holding NEW code to the standard
         #                       is the ratchet working, not the bake failing.
         #   clippy           -- a lint the author wrote and can fix.
+        #   ruff             -- the same (FN-32). A ruff WARN recorded at
+        #                       pre-commit is already seen and stays a WARN; one
+        #                       first seen here came from a commit that skipped
+        #                       the hook, and is held to the push's standard.
         def _escalates(f) -> bool:
             return (f.id in new_ids and f.verdict is Verdict.WARN
                     and f.rule != deps.DEPS_SHAPE_DRIFT_RULE

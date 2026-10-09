@@ -159,10 +159,14 @@ jobs:
       # that aramid dogfoods its own engine in CI was false. (Gate.ALL exists in
       # GATE_RUNNER_KEYS but is unreachable from the CLI.)
       #
-      # ADDITIVE ON PURPOSE, NOT A REPLACEMENT: the two tiers are complementary,
-      # not nested. ruff runs ONLY at pre-commit; semgrep and tests run ONLY at
-      # pre-push (pipeline.GATE_RUNNER_KEYS). Swapping the step above for this
-      # one would silently drop ruff from CI.
+      # ADDITIVE ON PURPOSE: when this was added the two tiers were
+      # complementary, not nested -- ruff ran ONLY at pre-commit, semgrep and
+      # tests ONLY at pre-push -- so swapping the step above for this one would
+      # have silently dropped ruff from CI. Since FN-32 every pre-commit runner
+      # also runs at pre-push (pinned by
+      # test_every_runner_the_commit_gate_runs_also_runs_at_the_push_gate), so
+      # this step now covers the one above. Both stay: they are the two steps
+      # the docs give consumers, whose CI may install an aramid older than that.
       #
       # WHAT THIS BUYS, precisely: it proves semgrep actually RUNS here, and
       # that the vendored OWASP ruleset resolves and PARSES rather than merely

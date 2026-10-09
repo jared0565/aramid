@@ -362,7 +362,7 @@ def test_the_review_record_does_not_outlive_the_runners_it_describes():
     from aramid.pipeline import GATE_RUNNER_KEYS
 
     live = {k for keys in GATE_RUNNER_KEYS.values() for k in keys}
-    # `ruff` is pre-commit-only and `tests` pre-push-only; both are in `live`.
+    # `tests` is pre-push-only and `ruff` runs at both tiers; both are in `live`.
     stale = _REVIEWED_FOR_PUBLICATION - live
 
     assert not stale, f"review record names runner(s) that no longer exist: {sorted(stale)}"

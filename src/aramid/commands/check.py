@@ -1,8 +1,10 @@
 """check -- thin wrapper over aramid.pipeline.run_gate: load config, open the
 ledger, run the gate, render, and translate the result into a process exit
 code. This is what the installed git hook shims invoke directly
-(`<interp> -m aramid check --gate <gate>`) and what CI calls with
-`--strict --json`.
+(`<interp> -m aramid check --gate <gate>`) and what CI calls over the whole
+tree, as the two steps the user guide's section 10 gives: `--all --strict
+--json`, then `--gate pre-push --all --strict --json`. (The bare `--strict
+--json` scans the STAGED files, and a CI checkout has none: FN-32.)
 
 Fresh-clone rule (design doc section 3, "Fresh clone / empty ledger"): the
 no-new-warnings ratchet (aramid.pipeline's PRE_PUSH-only WARN->BLOCK

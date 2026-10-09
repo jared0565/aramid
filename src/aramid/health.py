@@ -76,10 +76,10 @@ def skip_streaks(ledger) -> dict[str, dict[str, int]]:
     skip-visibility requirement ('semgrep: skipped last N runs').
 
     SCOPED PER GATE, and that is the whole subtlety. `GATE_RUNNER_KEYS` gives
-    each gate a different runner set: ruff is pre-commit only, semgrep and
-    tests are pre-push only. A global streak therefore counts ruff as
-    "skipped" on every pre-push run, which is not a skip -- it is the gate
-    working exactly as designed. Reported to us from a downstream repo as an
+    each gate a different runner set: semgrep and tests are pre-push only,
+    and ruff was pre-commit only until FN-32. A global streak therefore
+    counted ruff as "skipped" on every pre-push run, which was not a skip --
+    it was the gate working exactly as designed. Reported to us from a downstream repo as an
     unexplained `ruff: skipped last 1 run(s)` whose `ruff check .` passed by
     hand, and reproduced in aramid's own `status` at the same time.
 

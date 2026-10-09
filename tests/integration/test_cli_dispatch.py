@@ -545,10 +545,10 @@ def test_ledger_resolve_without_out_of_scope_flag_still_reaches_the_command(monk
 
 
 def test_check_dispatch_accepts_gate_all_and_defaults_to_the_whole_tree(monkeypatch):
-    """Interop round 126 s4b: ruff runs only at pre-commit and semgrep only
-    at pre-push, so `--gate pre-push --all` read exit 0 while four ruff
-    BLOCKs waited in the other tier. `--gate all` is the one invocation that
-    sees both halves; with no mode given it scans the whole tree, since a
+    """Interop round 126 s4b: ruff then ran only at pre-commit and semgrep
+    only at pre-push, so `--gate pre-push --all` read exit 0 while four ruff
+    BLOCKs waited in the other tier (FN-32 has since put ruff in both).
+    `--gate all` runs both tiers; with no mode given it scans the whole tree, since a
     tier that exists to see everything should not default to a range."""
     captured = {}
     monkeypatch.setattr(cli, "cmd_check",

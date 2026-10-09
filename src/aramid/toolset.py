@@ -79,10 +79,11 @@ def _build_ctx(root: Path, cfg) -> RunContext:
 def selected_tool_names(root: Path, cfg) -> set[str]:
     """Which tool names this repo would produce findings under, right now.
     Reuses pipeline._is_applicable's own rules, unioned across EVERY gate's
-    key list -- Gate.PRE_COMMIT's ["gitleaks","ruff"] is not a subset of
-    Gate.PRE_PUSH's list (ruff only ever runs at pre-commit; ruff findings
-    must still count as "selected" when checking a pre-commit-produced
-    finding). Then expands each applicable key to the tool name(s) a
+    key list, so a tool that runs at any gate counts. (Since FN-32 every
+    pre-commit runner also runs at pre-push, so the union equals the
+    pre-push list today; it is computed rather than assumed, because ruff
+    was once pre-commit only and its findings still had to count as
+    "selected".) Then expands each applicable key to the tool name(s) a
     Finding.tool actually carries for it -- the expansion is NOT identity
     for three of the keys (spec section 3's table).
 
@@ -105,8 +106,8 @@ def expected_tool_names(root: Path, cfg, gate) -> set[str]:
     `selected_tool_names` above answers the same question unioned across every
     gate, which is right for "can this finding's producer still run anywhere"
     and wrong for "did this gate run what it was supposed to". Those differ by
-    exactly the tools that are tier-specific: ruff only ever runs at
-    pre-commit, semgrep and tests only at pre-push.
+    exactly the tools that are tier-specific: semgrep and tests run only at
+    pre-push (ruff was pre-commit only until FN-32 and now runs at both).
 
     Exists because `status`'s skip streak had no way to ask this. It derived
     each gate's universe from tools that had PREVIOUSLY APPEARED in that gate's
