@@ -319,12 +319,15 @@ def test_a_second_pass_that_raises_is_crashed_under_its_label_never_an_exception
     import time
 
     def boom():
-        raise ValueError("unparseable report")
+        raise ValueError("a value quoted from the report")
 
     ctx = SimpleNamespace(gate_deadline=None if deadline is None else time.monotonic() + deadline)
-    result = inline.within_deadline(ctx, inline.RUFF, boom)
-    assert (result.tool, result.state) == (inline.RUFF, ToolState.CRASHED)
-    assert "unparseable report" in result.stderr
+    result = inline.within_deadline(ctx, inline.GITLEAKS, boom)
+    assert (result.tool, result.state) == (inline.GITLEAKS, ToolState.CRASHED)
+    # The type and nothing the exception says: stderr always reaches the
+    # label's log, and a secret only the second pass found is not among the
+    # values the log scrubber is given (a crashed pass yields no findings).
+    assert result.stderr == f"aramid: {inline.GITLEAKS} raised ValueError"
 
 
 def test_a_second_pass_still_running_at_the_margin_is_abandoned_as_a_timeout():

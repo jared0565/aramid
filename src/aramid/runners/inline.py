@@ -78,13 +78,16 @@ def within_deadline(ctx, label: str, second_pass) -> RunnerResult:
     and what it returns is discarded.
 
     A pass that raises is CRASHED under its label: raised out of the runner,
-    it would cost the whole key, the tool's own result with it."""
+    it would cost the whole key, the tool's own result with it. Only the
+    exception's TYPE is kept: stderr always reaches the label's log, the
+    gitleaks pass handles a report that quotes secrets, and a secret only it
+    found is not among the values the log scrubber is given."""
     def guarded() -> RunnerResult:
         try:
             return second_pass()
         except Exception as exc:  # noqa: BLE001 -- never the tool's own result
             return RunnerResult(label, ToolState.CRASHED,
-                                stderr=f"aramid: {label} raised {exc!r}")
+                                stderr=f"aramid: {label} raised {type(exc).__name__}")
 
     deadline = getattr(ctx, "gate_deadline", None)
     if deadline is None:
