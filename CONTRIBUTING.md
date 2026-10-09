@@ -13,14 +13,16 @@ git clone https://github.com/jared0565/aramid
 cd aramid
 python -m venv .venv && . .venv/bin/activate      # Windows: .venv\Scripts\activate
 pip install -e ".[dev]"
-aramid doctor                                      # gitleaks must be on PATH
+aramid doctor                                      # --fix installs gitleaks if it is missing
 ```
 
 `aramid doctor` probes the four analyzers (gitleaks, semgrep, ruff,
 pip-audit) and the repo's test runner, and offers a repair for anything
 missing. The Python analyzers
-arrive as dependencies; gitleaks is a binary you install yourself (the CI
-workflow pins 8.28.0).
+arrive as dependencies. gitleaks is a binary: put one on `PATH`, or let
+`aramid doctor --fix` download the pinned release into `~/.aramid/tools`,
+where aramid also looks. The two versions differ today: `doctor --fix`
+installs 8.21.2 and the CI workflow pins 8.28.0 (plan item FN-5).
 
 Requires Python 3.11 or newer. CI runs 3.11 through 3.14 on Windows, Ubuntu
 and macOS; anything platform-specific needs to work on all three or skip
