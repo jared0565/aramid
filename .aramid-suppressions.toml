@@ -282,3 +282,207 @@ tool = "llm-review"
 rule = "llm/logic"
 path = "src/aramid/mutation.py"
 reason = "FIXED, in the resolver, not at the evidence line. The finding was correct (2026-09-07 22:03Z): `auto_resolve_line_departed` asked `_survivor_mutants`, which reaches `generate_mutants`, which swallows SyntaxError and returns [] -- so an unparseable file read as departed and every survivor in it was written `fixed`. Fixed in 5eba4d3: the resolver decides by the line hashes alone (`consumers.mutation._survivor_lines`) and never calls generation; pinned by tests/unit/test_mutation_gate.py::test_a_survivor_whose_line_is_present_in_an_unparseable_file_is_left_alone. The evidence anchor -- `generate_mutants` returning [] on a SyntaxError -- is the generator's documented behaviour for the drain (an unparseable head has no mutants) and is unchanged by design, which is why `evidence_gone` cannot close this and the reviewer could not refute it from the fix's own packet. Retire by deleting this entry once the finding ages out; do not edit the generator to satisfy it."
+
+# --- 2026-10-10: the markers that hide ruff's hard-coded-secret rules (FN-38) -
+# Since 0.20.7 a marker that hides a BLOCK-tier rule is reported as a WARN
+# (`inline-suppressed-block`) where it used to pass unseen. This repo had 27
+# on its first gate under that rule, all for S105/S106/S107. Those rules key
+# on a NAME (`secret`, `SECRET`), not on the value. Two kinds:
+#
+#   - 2 in src: a `# noqa: S105` on an enum member whose name holds SECRET;
+#   - 25 in tests: `per-file-ignores` for `tests/**` in pyproject.toml. The
+#     value is always an AWS-shaped placeholder that a test hands to the code
+#     that must redact it, fingerprint it or block on it.
+#
+# The markers stay: without them every gate here would BLOCK on aramid's own
+# fixtures. Each entry says what the value is, and each line was read on the
+# day. An entry stops matching when its line changes; that is the point.
+
+[[suppress]]
+id = "178388d93f286c3b7c62c33167e3dfb431159a8c363954e7067ae5cae142f33c"
+tool = "ruff-inline"
+rule = "inline-suppressed-block"
+path = "src/aramid/models.py"
+reason = "Not a credential: the Status member NOT_A_SECRET and its value, the status of a secret finding a person reviewed as a false positive. ruff S105 matches the word SECRET in the member's name. The `# noqa: S105` on the line stays."
+
+[[suppress]]
+id = "449f1921ba134365983171ae009843f1502c71aaa2f61add8e1728d3cb6fdaf0"
+tool = "ruff-inline"
+rule = "inline-suppressed-block"
+path = "src/aramid/models.py"
+reason = "Not a credential: the EventType member FINDING_NOT_A_SECRET and its value, the ledger event `ledger mark-not-a-secret` writes. ruff S105 matches the word SECRET in the member's name. The `# noqa: S105` on the line stays."
+
+[[suppress]]
+id = "08283c8d2f9cbbac3c781d80361936e017775b6c9a87c6a77196ebfd20ae1da1"
+tool = "ruff-inline"
+rule = "inline-suppressed-block"
+path = "tests/integration/test_check.py"
+reason = "Test fixture: `secret=` of the RawFinding a fake gitleaks returns in test_seeded_secret_repo_pre_commit_returns_1. The value is an AKIA-prefixed placeholder of 16 characters where a real AWS key ID has 20, with a sequential body: malformed, not a credential. Hidden by `per-file-ignores` for `tests/**` in pyproject.toml, which stays: ruff fires on the name, and the name is the field under test."
+
+[[suppress]]
+id = "d360485c3b6a3c48469037de36220f182e1a103547f1658264e6e1561ec60b5d"
+tool = "ruff-inline"
+rule = "inline-suppressed-block"
+path = "tests/integration/test_check.py"
+reason = "Test fixture: `secret=` of the RawFinding a fake gitleaks returns in test_fresh_ledger_prepush_genuine_secret_still_blocks. The value is an AKIA-prefixed placeholder of 16 characters where a real AWS key ID has 20, with a sequential body: malformed, not a credential. Hidden by `per-file-ignores` for `tests/**` in pyproject.toml, which stays: ruff fires on the name, and the name is the field under test."
+
+[[suppress]]
+id = "817dcb43ffa281ceb865bd8fd3473d47f24ba64483bd27550e6853ce97d36321"
+tool = "ruff-inline"
+rule = "inline-suppressed-block"
+path = "tests/integration/test_gates_end_to_end.py"
+reason = "Test helper: the default of `_gitleaks_secret(secret=...)`, which builds the fake gitleaks runner the end-to-end gate tests block on. The value is the prefix AKIA followed by the word FAKE four times: a placeholder, and an access-key ID alone cannot authenticate. Hidden by `per-file-ignores` for `tests/**` in pyproject.toml, which stays: ruff fires on the name, and the name is the field under test."
+
+[[suppress]]
+id = "e262a3dc2555c178abd1ee7e2f5830bd9a998dddc6fe9f71d6f5aa6a1c070451"
+tool = "ruff-inline"
+rule = "inline-suppressed-block"
+path = "tests/integration/test_gates_end_to_end.py"
+reason = "Test fixture: `secret=` of a RawFinding placed under graph-out/, to show graphite's artifacts are kept out of findings and the ledger. The value is the prefix AKIA followed by the word FAKE four times: a placeholder, and an access-key ID alone cannot authenticate. Hidden by `per-file-ignores` for `tests/**` in pyproject.toml, which stays: ruff fires on the name, and the name is the field under test."
+
+[[suppress]]
+id = "c852321ee78bbab6ab9e33e9f67bdfac8ccc9fcb13d814cbf4d4b78b38a3f641"
+tool = "ruff-inline"
+rule = "inline-suppressed-block"
+path = "tests/integration/test_gitleaks_live.py"
+reason = "Test fixture `_SECRET` of the live-gitleaks tests. It has to look well-formed: the comment above it says an example key could be allowlisted. The value is an invented access-key ID with no secret half in the repository, the same value the two gitleaks entries for this line cover. Hidden by `per-file-ignores` for `tests/**` in pyproject.toml, which stays: ruff fires on the name, and the name is the field under test."
+
+[[suppress]]
+id = "c9cbb68c5d0945eaad6c181e8cc61ee784057b39aeca6a3d836d7544a4922ed4"
+tool = "ruff-inline"
+rule = "inline-suppressed-block"
+path = "tests/integration/test_history_fingerprint.py"
+reason = "Test fixture `_SECRET`, the value in the `AWS_KEY = ...` line the history-fingerprint tests build their repos from. The value is the example key ID from AWS's own documentation (it ends in EXAMPLE). Hidden by `per-file-ignores` for `tests/**` in pyproject.toml, which stays: ruff fires on the name, and the name is the field under test."
+
+[[suppress]]
+id = "a724412e6534db1e8ca526dff83da00cd66a011434a1311d81f14d91f0120d64"
+tool = "ruff-inline"
+rule = "inline-suppressed-block"
+path = "tests/integration/test_init.py"
+reason = "Test fixture: `secret=` of a RawFinding in test_scan_history_honours_committed_suppressions. The value is the prefix AKIA followed by the word FAKE four times: a placeholder, and an access-key ID alone cannot authenticate. Hidden by `per-file-ignores` for `tests/**` in pyproject.toml, which stays: ruff fires on the name, and the name is the field under test."
+
+[[suppress]]
+id = "655ba2ab79c3da5cf7020a9a7588223d461f754690581c8207d455934198c562"
+tool = "ruff-inline"
+rule = "inline-suppressed-block"
+path = "tests/integration/test_init.py"
+reason = "Test fixture: `secret=` of the second RawFinding in test_scan_history_honours_committed_suppressions. The value is an AKIA-prefixed placeholder of 21 characters where a real AWS key ID has 20, spelling FAKE three times and then OTHER: malformed, not a credential. Hidden by `per-file-ignores` for `tests/**` in pyproject.toml, which stays: ruff fires on the name, and the name is the field under test."
+
+[[suppress]]
+id = "886daa63b4fd939738e58542a67becc03c01b3d79c2ed021a7e7407ce794129c"
+tool = "ruff-inline"
+rule = "inline-suppressed-block"
+path = "tests/integration/test_init.py"
+reason = "Test fixture: `secret=` of a RawFinding in test_scan_history_suppression_does_not_hide_unlisted_secrets. The value is an AKIA-prefixed placeholder of 21 characters where a real AWS key ID has 20, spelling FAKE three times and then OTHER: malformed, not a credential. Hidden by `per-file-ignores` for `tests/**` in pyproject.toml, which stays: ruff fires on the name, and the name is the field under test."
+
+[[suppress]]
+id = "6581378442a92ca8058e258dae0f8ff72e0cc3cd3984a275814039ab00b8e22b"
+tool = "ruff-inline"
+rule = "inline-suppressed-block"
+path = "tests/integration/test_init.py"
+reason = "Test fixture: `secret=` of a RawFinding in test_scan_history_drops_findings_under_ignored_graphite_paths. The value is the prefix AKIA followed by the word FAKE four times: a placeholder, and an access-key ID alone cannot authenticate. Hidden by `per-file-ignores` for `tests/**` in pyproject.toml, which stays: ruff fires on the name, and the name is the field under test."
+
+[[suppress]]
+id = "5a86ef1e4363e6499120280d00dcbc34d3b6bbdae720f395a56c51efb20d2710"
+tool = "ruff-inline"
+rule = "inline-suppressed-block"
+path = "tests/integration/test_init.py"
+reason = "Test fixture: `secret=` of the second RawFinding in test_scan_history_drops_findings_under_ignored_graphite_paths. The value is an AKIA-prefixed placeholder of 21 characters where a real AWS key ID has 20, spelling FAKE three times and then OTHER: malformed, not a credential. Hidden by `per-file-ignores` for `tests/**` in pyproject.toml, which stays: ruff fires on the name, and the name is the field under test."
+
+[[suppress]]
+id = "14f6e8093e61b9431a2c745252f47b6c5f4028af23600edbd432c3be88efa2dc"
+tool = "ruff-inline"
+rule = "inline-suppressed-block"
+path = "tests/integration/test_prepush_new_repo_full_scan.py"
+reason = "Test fixture: `secret=` of the RawFinding whose own message reads 'Identified a fake AWS access token', in the new-repo pre-push test. The value is the prefix AKIA followed by the word FAKE four times: a placeholder, and an access-key ID alone cannot authenticate. Hidden by `per-file-ignores` for `tests/**` in pyproject.toml, which stays: ruff fires on the name, and the name is the field under test."
+
+[[suppress]]
+id = "4577c3218e6d13cc8f6a968445d46f67c9afcb7bcab8837442f4f6019fd951ca"
+tool = "ruff-inline"
+rule = "inline-suppressed-block"
+path = "tests/unit/test_check_hook_stdin.py"
+reason = "Test fixture: `secret=` of the RawFinding in test_a_fresh_ledger_never_grandfathers_a_genuine_block, the unit twin of the fixture in tests/integration/test_check.py. The value is an AKIA-prefixed placeholder of 16 characters where a real AWS key ID has 20, with a sequential body: malformed, not a credential. Hidden by `per-file-ignores` for `tests/**` in pyproject.toml, which stays: ruff fires on the name, and the name is the field under test."
+
+[[suppress]]
+id = "1049287e7b99c3e6318ec9fff8170f83935a9c1d447974718e20c229ae3f889a"
+tool = "ruff-inline"
+rule = "inline-suppressed-block"
+path = "tests/unit/test_gate_log_shows_why.py"
+reason = "Test fixture `secret` in test_stdout_is_scrubbed_exactly_like_stderr: the value the gate log must not contain. The value is the example key ID from AWS's own documentation (it ends in EXAMPLE). Hidden by `per-file-ignores` for `tests/**` in pyproject.toml, which stays: ruff fires on the name, and the name is the field under test."
+
+[[suppress]]
+id = "c5722b8295e406c09b30826e6066fefa65ce283aa40533395d4a451d14df1359"
+tool = "ruff-inline"
+rule = "inline-suppressed-block"
+path = "tests/unit/test_gate_log_shows_why.py"
+reason = "Test fixture `secret` in test_the_secret_scanners_stdout_is_never_persisted: the value the gate log must not contain. The value is the example key ID from AWS's own documentation (it ends in EXAMPLE). Hidden by `per-file-ignores` for `tests/**` in pyproject.toml, which stays: ruff fires on the name, and the name is the field under test."
+
+[[suppress]]
+id = "24612aad85a550b8bb84cf413c33eb9658f8d3c7cdce716bcf3b8b9c6ec758ea"
+tool = "ruff-inline"
+rule = "inline-suppressed-block"
+path = "tests/unit/test_init_onboarding.py"
+reason = "Test helper: the default of `_raw(secret=...)`, which builds the RawFindings the scan-history unit tests record. The value is the prefix AKIA followed by the word FAKE four times: a placeholder, and an access-key ID alone cannot authenticate. Hidden by `per-file-ignores` for `tests/**` in pyproject.toml, which stays: ruff fires on the name, and the name is the field under test."
+
+[[suppress]]
+id = "05937fedcead34d50d678a456a495b66552d750212264b9f9513c23245fd52b7"
+tool = "ruff-inline"
+rule = "inline-suppressed-block"
+path = "tests/unit/test_init_onboarding.py"
+reason = "Test fixture: `secret=` of the second RawFinding in test_scan_history_records_each_hit_once_as_historical. The value is an AKIA-prefixed placeholder of 9 characters where a real AWS key ID has 20: malformed, not a credential. Hidden by `per-file-ignores` for `tests/**` in pyproject.toml, which stays: ruff fires on the name, and the name is the field under test."
+
+[[suppress]]
+id = "c5bde12b8f3eceba0ab3b073e183747b1e1539caf4d829cd52d1dfcfd7b79900"
+tool = "ruff-inline"
+rule = "inline-suppressed-block"
+path = "tests/unit/test_init_onboarding.py"
+reason = "Test fixture: `secret=` of the second RawFinding in test_scan_history_honours_a_committed_suppression_and_prints_the_count. The value is an AKIA-prefixed placeholder of 9 characters where a real AWS key ID has 20: malformed, not a credential. Hidden by `per-file-ignores` for `tests/**` in pyproject.toml, which stays: ruff fires on the name, and the name is the field under test."
+
+[[suppress]]
+id = "b6ebe1b44c21392b9d1b0e61f65b69fbde6cd326b628462dacca2116682bbff0"
+tool = "ruff-inline"
+rule = "inline-suppressed-block"
+path = "tests/unit/test_normalizer.py"
+reason = "Test fixture: `secret=` of the RawFinding in test_secret_is_redacted_into_evidence. The value is an AKIA-prefixed placeholder of 12 characters where a real AWS key ID has 20, with a sequential body: malformed, not a credential. Hidden by `per-file-ignores` for `tests/**` in pyproject.toml, which stays: ruff fires on the name, and the name is the field under test."
+
+[[suppress]]
+id = "3b66746e2cc00b417a2ea13705f45a473b3e923532e4c74b0e24f83b42c207cb"
+tool = "ruff-inline"
+rule = "inline-suppressed-block"
+path = "tests/unit/test_normalizer.py"
+reason = "Test fixture `secret` in test_secret_is_scrubbed_from_message_too. The value is an AKIA-prefixed placeholder of 12 characters where a real AWS key ID has 20, with a sequential body: malformed, not a credential. Hidden by `per-file-ignores` for `tests/**` in pyproject.toml, which stays: ruff fires on the name, and the name is the field under test."
+
+[[suppress]]
+id = "23ef54dca72694c72f74d2f2005063fe53a23633a6c08566b849e86760eb92f6"
+tool = "ruff-inline"
+rule = "inline-suppressed-block"
+path = "tests/unit/test_pack.py"
+reason = "Test fixture: the module constant SECRET, from which test_pack.py builds the redacted evidence of a sample record. The value is the example key ID from AWS's own documentation (it ends in EXAMPLE). Hidden by `per-file-ignores` for `tests/**` in pyproject.toml, which stays: ruff fires on the name, and the name is the field under test."
+
+[[suppress]]
+id = "6f94bf9088d6c434adc6b32cfbeaada22dfc4ecb28219b36875dc570ec9e7487"
+tool = "ruff-inline"
+rule = "inline-suppressed-block"
+path = "tests/unit/test_pipeline.py"
+reason = "Test fixture `secret` in test_raw_secret_never_lands_in_scrubbed_log, the line the gitleaks entry above also covers. The value is an AKIA-prefixed placeholder of 16 characters where a real AWS key ID has 20, with a sequential body: malformed, not a credential. Hidden by `per-file-ignores` for `tests/**` in pyproject.toml, which stays: ruff fires on the name, and the name is the field under test."
+
+[[suppress]]
+id = "6e01662703e5ec453f872bae89e255990be85180581530e6e57a9e5f0ffae80a"
+tool = "ruff-inline"
+rule = "inline-suppressed-block"
+path = "tests/unit/test_reporter.py"
+reason = "Test fixture `raw_secret` in test_render_json_never_contains_raw_secret, the line the gitleaks entry above also covers. The value is an AKIA-prefixed placeholder of 16 characters where a real AWS key ID has 20, with a sequential body: malformed, not a credential. Hidden by `per-file-ignores` for `tests/**` in pyproject.toml, which stays: ruff fires on the name, and the name is the field under test."
+
+[[suppress]]
+id = "1611a760f38b1a6676f6103dd4d54afd847213436f8948bd24f0baa568f47e73"
+tool = "ruff-inline"
+rule = "inline-suppressed-block"
+path = "tests/unit/test_runner_gitleaks.py"
+reason = "An assertion: the `secret` parsed from the gitleaks JSON fixture is compared with this literal in test_parse_fixture_produces_finding_with_secret. The value is the example key ID from AWS's own documentation (it ends in EXAMPLE). Hidden by `per-file-ignores` for `tests/**` in pyproject.toml, which stays: ruff fires on the name, and the name is the field under test."
+
+[[suppress]]
+id = "42904fadd8f184fa70acdb5e63ca4e2c9178ac44e326df576a0b486037197a8e"
+tool = "ruff-inline"
+rule = "inline-suppressed-block"
+path = "tests/unit/test_runner_gitleaks.py"
+reason = "An assertion: the `secret` read back from a gitleaks report is compared with this literal in test_run_reads_back_the_report_file_gitleaks_wrote. The value is the example key ID from AWS's own documentation (it ends in EXAMPLE). Hidden by `per-file-ignores` for `tests/**` in pyproject.toml, which stays: ruff fires on the name, and the name is the field under test."
