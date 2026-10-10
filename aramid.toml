@@ -138,6 +138,36 @@ pre_push_match_ci = true
 # standalone one. `extra["baseline_s"]` on every successful run now records
 # what the baseline actually took, so the next revision of this number is
 # measured rather than guessed.
+#
+# REVISED 2026-10-10 from that record (`aramid ledger consumers --consumer
+# mutation --json`, `extra.baseline_s`, seconds, in the order the drains ran):
+#
+#   10-05   535   774   525   560
+#   10-06   timed out (over 900)   621
+#   10-07   887   645
+#   10-08   666   661
+#   10-09   660   762
+#   10-10   803   timed out (over 900)
+#
+# The recorded baseline went from about 530 s to about 800 s in five days,
+# and 900 s is now inside the observed range: two drains recorded "baseline
+# timeout" and tested nothing. 1600 s keeps the ratio the 900 was set at
+# (900 against ~480 measured) for a baseline of about 850 s, which is the
+# last 803 plus the unit tests added since. The same suite took 736 s under
+# coverage in the working tree that day, which is not the drain's figure and
+# was not used.
+#
+# wall_budget_s rises by the same 700 s, to 2500. Its clock starts before the
+# baseline, so raising the baseline limit alone would leave the mutants less
+# time than before and turn a loud timeout into a quiet "no mutants tested"
+# (the note under CERTIFIED NOTHING in consumers/mutation.py).
+#
+# What it costs. The whole-suite confirm runs use baseline_timeout_s as their
+# own limit, and items already ran past wall_budget_s under the old numbers
+# (2601 s against 1800 on 10-10), so one drain may now spend about an hour
+# here. A drain that runs long defers the other repos' items to the next one
+# ([drain].wall_clock_budget_s): another repo's item deferred this repo's at
+# 18:00Z on 10-10. A faster unit suite is the fix; this is the limit moved.
 [mutation]
 # Mutation's baseline is NOT the gate's suite -- see `mutation._full_argv`.
 # `[tests].command` is now CI's whole tree (~1141 s) and the mutation baseline
@@ -147,8 +177,8 @@ pre_push_match_ci = true
 # (~305 s) fits, and `test_this_repos_mutation_baseline_is_not_the_whole_tree`
 # fails if these two ever converge again.
 test_command = ["python", "-m", "pytest", "-q", "tests/unit"]
-wall_budget_s = 1800
-baseline_timeout_s = 900
+wall_budget_s = 2500
+baseline_timeout_s = 1600
 
 [shadow]
 # Armed HERE, on the repo that ships the check. A module-shadow of this tool at
