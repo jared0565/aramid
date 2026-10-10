@@ -1,7 +1,9 @@
 # Evidenced close for a fixed LLM finding (FN-36) — design
 
-Status: DRAFT, 2026-10-09. Shape chosen by the operator ("go with your
-recommendations": shape 2 of FN-36). Not built.
+Status: DECIDED 2026-10-10, not built. Shape chosen by the operator ("go with
+your recommendations": shape 2 of FN-36). The four questions in section 5
+were answered by the operator on 2026-10-10; sections 2 and 4 below are
+amended to match, and each amendment says so.
 
 ## 1. The problem, re-measured
 
@@ -45,8 +47,20 @@ have.
 ## 2. The command
 
 ```
-aramid ledger resolve <id> --fixed <commit> --test "<test command>" --reason "..."
+aramid ledger resolve <id> --fixed <commit> --test "<test command>" --reason "..." [--red-proof]
 ```
+
+`--red-proof` (decided 2026-10-10, section 5 questions 1 to 3) also runs the
+test against the tree before the fix and requires it to FAIL there. It is:
+
+- optional at the command line for an ordinary finding;
+- required for a confirmed-critical finding, at the command line and through
+  MCP alike;
+- always applied to a close made through the MCP tool, for every finding.
+
+How the pre-fix run is built (a throwaway worktree at `<commit>^`, and what
+happens to a test file that did not exist there) follows the existing
+`[red_proof]` machinery and is settled when the build is planned.
 
 `--test` takes the command that runs the test, for example
 `npx vitest run src/orders.test.ts -t "routes CN"` or
@@ -66,8 +80,11 @@ refuses when:
 2. the finding's tool is not `llm-review`. Mutation survivors have a verified
    re-test, and deterministic tools re-run every gate, so neither needs a
    manual close;
-3. the finding is confirmed-critical (`review.is_confirmed_critical_llm`),
-   armed or not. This mirrors `override`'s refusal; see section 5, question 1;
+3. the finding is confirmed-critical (`review.is_confirmed_critical_llm`,
+   armed or not) and red proof was not run, or the test did not fail before
+   the fix. *Amended 2026-10-10 (section 5, question 1):* the draft refused
+   every confirmed critical, mirroring `override`. A confirmed critical now
+   closes, but only with red proof;
 4. `<commit>` is not an ancestor of HEAD. It is also refused when it is an
    ancestor of the `head` the finding was raised at (recorded on its
    detection), because a fix cannot predate the finding. The commit need NOT
@@ -85,6 +102,11 @@ On success it appends one `finding_resolved` event with this payload:
 {"auto_resolved": "evidenced_close", "commit": "<full sha>",
  "test_argv": ["..."], "test_rc": 0, "reason": "...", "head": "<HEAD sha>"}
 ```
+
+*Amended 2026-10-10:* the payload also records whether red proof ran and
+what the pre-fix run returned, so a reviewer can tell a close that showed
+the test failing from one that did not (section 5, question 2). The field
+names are fixed when the build is planned.
 
 The status fold already maps a plain `finding_resolved` to `fixed`. No new
 status and no fold change are needed. `ledger show` prints the payload, so
@@ -110,34 +132,50 @@ the evidence sits on the event.
 
 ## 4. What it does not do
 
-- It does not prove that the command tests the finding at all. A command
-  that runs no test (`true`) satisfies rule 6. The recorded argv and the
-  reason are the human evidence, and both sit on the event for review.
-  Section 5, question 2 offers the stronger, optional check.
+- Without `--red-proof` it does not prove that the command tests the finding
+  at all. A command that runs no test (`true`) satisfies rule 6. The recorded
+  argv and the reason are the human evidence, and both sit on the event for
+  review. Red proof is the stronger check: optional for a person closing an
+  ordinary finding, and never optional for a confirmed critical or for a
+  close made through MCP (section 5).
 - It does not cover `historical` or `overridden` rows. An already-overridden
   fixed finding stays as it is; its owner can leave it.
 
-## 5. Open questions for the operator
+## 5. Questions for the operator (all decided 2026-10-10)
 
-1. **Confirmed-critical findings.** Rule 3 refuses them, as `override` does.
-   But a fixed critical then has no exit except editing the quoted line or a
-   `.aramid-suppressions.toml` entry, which asserts "acceptable", not
-   "fixed". Option: allow it only when the test also FAILS at `<commit>^`
-   (question 2), which is the evidence a critical deserves.
+1. **Confirmed-critical findings.** The draft's rule 3 refused them, as
+   `override` does. But a fixed critical then has no exit except editing the
+   quoted line or a `.aramid-suppressions.toml` entry, which asserts
+   "acceptable", not "fixed". Option: allow it only when the test also FAILS
+   at `<commit>^` (question 2), which is the evidence a critical deserves.
+
+   **Decided: allowed, red proof required.** At the command line and through
+   MCP alike.
 2. **Red proof (optional flag `--red-proof`).** Run the test at `<commit>^`
    in a throwaway worktree and require it to fail there. This proves the test
    detects what the commit fixed. It costs a worktree and a second test run,
    and aramid already has the machinery (`[red_proof]`). Proposed: optional
    for ordinary findings, required for confirmed-critical ones if question 1
    is answered yes.
+
+   **Decided: an optional flag for an ordinary finding.** The event records
+   whether it ran.
 3. **MCP.** Should the tool be exposed as `aramid_ledger_resolve`? An agent
    could then close its own findings, with the same rules. Proposed: yes;
    the rules are the guard, and `override` is already exposed. Given the
    `true` case in section 4, an agent's close could require `--red-proof`.
+
+   **Decided: yes, and a close through MCP always requires red proof**, for
+   an ordinary finding too. A person at the command line keeps it optional
+   (question 2).
 4. **Its own status, as round 316 asked?** Proposed: no; `fixed` plus the
    payload (section 3) keeps the re-open path. Say yes if a filterable
    status matters more than that path, and the re-open list and the dedupe
    gain it too.
+
+   **Decided: no new status.** The close writes `fixed` with the evidence on
+   the event; `ledger show` prints it and `ledger filter --json` exposes the
+   close kind as a field.
 
 ## 6. Tests (to write first)
 

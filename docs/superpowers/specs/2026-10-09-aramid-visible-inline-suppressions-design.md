@@ -3,7 +3,9 @@
 Status: BUILT 2026-10-09, on the PROPOSED answers to section 5. Shape chosen by
 the operator ("go with your recommendations"): make the markers VISIBLE, do not
 refuse them. Section 8 records where the build departs from sections 2-4 (the
-tool is a per-tool label, not `aramid`) and why.
+tool is a per-tool label, not `aramid`) and why. The three questions in
+section 5 were DECIDED by the operator on 2026-10-10, each as proposed and as
+built.
 
 ## 1. The problem (measured 2026-10-09, plan FN-38)
 
@@ -107,12 +109,22 @@ sees.
 
    Proposed: (a) for 1.0, because the entries already exist for gitleaks
    test fixtures. Revisit (b) if consumers object.
+
+   **Decided 2026-10-10: (a), as built.** Each hit is reported.
 2. **gitleaks' file-level channels** (`.gitleaksignore`, a repo
    `.gitleaks.toml` allowlist). Proposed: out of scope here. They are files
    in the repo root a reviewer sees, unlike a marker at the end of a line.
    File them as a follow-up if wanted.
+
+   **Decided 2026-10-10: out of scope, as built.** Recorded as plan item
+   FN-40, not scheduled.
 3. **Arming.** Proposed: keep it WARN-only for 1.0 and decide arming after
    the fleet has run it for one bake period.
+
+   **Decided 2026-10-10: WARN-only and ratchet-exempt for 1.0.** Arming is
+   revisited after one bake period. The llm-review finding that raised the
+   same question (`fb989b05`, the ratchet exemption in `pipeline._escalates`)
+   is overridden with this decision as its reason.
 
 ## 6. Tests (to write first)
 
