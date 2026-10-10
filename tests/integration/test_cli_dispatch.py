@@ -521,27 +521,30 @@ def test_schedule_dispatch_maps_action(monkeypatch):
 
 
 def test_ledger_resolve_out_of_scope_dispatch(monkeypatch):
+    """`ledger resolve` has two resolutions since FN-36, and the cli hands the
+    whole launch to one dispatcher, `cmd_ledger_resolve_args`, which decides
+    between them."""
     captured = {}
-    monkeypatch.setattr(cli, "cmd_ledger_resolve",
-                         lambda root, id, out_of_scope, reason: captured.update(
-                             id=id, out_of_scope=out_of_scope, reason=reason) or 0)
+    monkeypatch.setattr(cli, "cmd_ledger_resolve_args",
+                         lambda root, ids, **kw: captured.update(ids=ids, **kw) or 0)
 
     assert cli.main(["ledger", "resolve", "abc123", "--out-of-scope",
                      "--reason", "runner scoped to .py/.pyi"]) == 0
 
-    assert captured == {"id": "abc123", "out_of_scope": True,
+    assert captured == {"ids": ["abc123"], "out_of_scope": True, "fixed": None,
+                        "test": None, "red_proof": False,
                         "reason": "runner scoped to .py/.pyi"}
 
 
 def test_ledger_resolve_without_out_of_scope_flag_still_reaches_the_command(monkeypatch):
     """The refusal is the command's, with its own message -- not argparse's."""
     captured = {}
-    monkeypatch.setattr(cli, "cmd_ledger_resolve",
-                         lambda root, id, out_of_scope, reason: captured.update(
-                             out_of_scope=out_of_scope) or 3)
+    monkeypatch.setattr(cli, "cmd_ledger_resolve_args",
+                         lambda root, ids, **kw: captured.update(kw) or 3)
 
     assert cli.main(["ledger", "resolve", "abc123", "--reason", "x"]) == 3
     assert captured["out_of_scope"] is False
+    assert captured["fixed"] is None
 
 
 def test_check_dispatch_accepts_gate_all_and_defaults_to_the_whole_tree(monkeypatch):
@@ -587,10 +590,15 @@ def test_check_dispatch_passes_no_record_only_when_asked(monkeypatch):
 def test_ledger_resolve_accepts_several_ids_and_returns_the_worst_rc(monkeypatch):
     """Interop round 155 s4: 683 retirements at one id per launch took ~11
     minutes. Several ids per call; a refusal on one (rc 3) must not stop the
-    rest, and the exit is the worst of them so a script still sees it."""
+    rest, and the exit is the worst of them so a script still sees it.
+
+    Through the real dispatcher: since FN-36 the loop over the ids is in
+    `ledger_cmd.cmd_ledger_resolve_args`, not in the cli."""
+    from aramid.commands import ledger_cmd
+
     calls = []
     rcs = {"aaa": 0, "bbb": 3, "ccc": 0}
-    monkeypatch.setattr(cli, "cmd_ledger_resolve",
+    monkeypatch.setattr(ledger_cmd, "cmd_ledger_resolve",
                          lambda root, id, out_of_scope, reason: calls.append(id) or rcs[id])
 
     rc = cli.main(["ledger", "resolve", "aaa", "bbb", "ccc",

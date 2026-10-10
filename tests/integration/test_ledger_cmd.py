@@ -593,10 +593,16 @@ def test_mark_unreachable_refuses_producer_tool_finding(tmp_path, capsys, monkey
     rc2 = cmd_ledger_mark_unreachable(root, "f2", "trying anyway")
     err2 = capsys.readouterr().err
 
+    # The wording changed with FN-36: an llm-review finding that a commit
+    # fixed now HAS a way to be closed by hand, and the refusal names it.
+    tail = ("finding -- producer/consumer findings (tdd, red-proof, mutation, "
+            "mutation-score, llm-review, js-mutation, fuzz, dast) resolve through their "
+            "own producer's mechanism, not by this mark; an llm-review finding that a "
+            "commit fixed has `aramid ledger resolve --fixed`\n")
     assert rc1 == 3
-    assert "never by hand" in err1
+    assert err1 == f"aramid: ledger mark-unreachable: f1 is a 'mutation' {tail}"
     assert rc2 == 3
-    assert "never by hand" in err2
+    assert err2 == f"aramid: ledger mark-unreachable: f2 is a 'llm-review' {tail}"
     ledger = _ledger(root)
     try:
         assert ledger.open_findings()["f1"]["status"] == "open"
