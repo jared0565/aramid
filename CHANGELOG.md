@@ -82,6 +82,29 @@ to publish a tag that disagrees with it.
   CI steps the docs give are unchanged: the second now covers the first,
   and both stay because a CI job may install an older aramid.
 
+- **gitleaks is pinned at 8.30.1, for `doctor --fix` and for aramid's own
+  CI (FN-5).** `doctor --fix` installed 8.21.2 while the CI workflow
+  installed 8.28.0. gitleaks moves hits between rules from release to
+  release, and the rule id is part of a finding's id, so one line had one
+  id on a developer's machine and another in CI. Both now pin 8.30.1, and a
+  test fails if they part. **What to do:** run `aramid doctor`. If its
+  gitleaks line names aramid's own copy as off the pin, `aramid doctor
+  --fix` replaces it (see *Fixed*). A gitleaks on PATH is yours and stays as
+  it is. If your own CI installs gitleaks, pin the same release there.
+  **What changes when the binary does:** that copy serves every repo on the
+  machine, so each is scanned by the new release from its next gate on. A
+  hit the new release files under another rule gets a new finding id. A
+  `.aramid-suppressions.toml` entry, an override or a `mark-not-a-secret`
+  made against the old id does not bind the new one, and gitleaks is
+  BLOCK-tier: the line blocks the next time it is scanned (a commit or push
+  that includes it, or a whole-tree scan such as CI's) until it is set
+  aside again under its new id. Entries for the old ids can go once no
+  machine or CI job runs the old release. Measured on aramid's own tree and
+  history, 8.21.2 against 8.30.1: two `aws-access-token` hits became
+  `generic-api-key`, one `private-key` hit was no longer reported, and the
+  other eight were unchanged. Findings recorded under 8.21.2 are a lead
+  after the upgrade, not a fact. No `aramid init` re-run is needed.
+
 ### Fixed
 
 - **`aramid doctor --fix` now updates aramid's own gitleaks (FN-5, the
@@ -96,8 +119,7 @@ to publish a tag that disagrees with it.
   mismatch. The new binary is written beside the old one and moved into
   place, so a download or write that fails leaves the working copy, and
   says why; a download that fails its sha256 check used to return with no
-  message at all. The pin itself is unchanged: which version doctor and CI
-  should share is still open.
+  message at all. The pin itself moves in this release: see *Changed*.
 
 - **A commit that only adds a test now reaches the drain that re-tests a
   mutation survivor.** Triage queued a survivor re-test only when a changed

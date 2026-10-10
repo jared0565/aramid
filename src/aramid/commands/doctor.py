@@ -72,22 +72,32 @@ ALL_TOOLS = ("gitleaks", "semgrep", "ruff", "pip-audit")
 
 # Pinned gitleaks release. Real values sourced from the project's published
 # `gitleaks_<ver>_checksums.txt` (github.com/gitleaks/gitleaks release
-# v8.21.2 assets), not placeholders -- verified via sha256 before a
-# downloaded binary is ever trusted/extracted/executed. `_fix_gitleaks`'s
-# download/checksum/extract path is covered offline via a synthetic archive +
-# injected checksum (tests/integration/test_doctor_fix_gitleaks.py); the real
-# network fetch itself is never exercised in tests.
-GITLEAKS_VERSION = "8.21.2"
+# assets for GITLEAKS_VERSION), not placeholders -- verified via sha256
+# before a downloaded binary is ever trusted/extracted/executed.
+# `_fix_gitleaks`'s download/checksum/extract path is covered offline via a
+# synthetic archive + injected checksum
+# (tests/integration/test_doctor_fix_gitleaks.py); the real network fetch
+# itself is never exercised in tests.
+#
+# CI installs the same version (`.github/workflows/aramid.yml`), and
+# tests/unit/test_gitleaks_version_parity.py fails when the two part: the
+# rule id is in a finding's id, and gitleaks moves hits between rules from
+# release to release (FN-5). Move the version, the five hashes and the
+# workflow input together, and sweep the prose that names the version (user
+# guide, knowledge base, CONTRIBUTING.md). When 8.30.1 was pinned, each of the five assets
+# was downloaded and hashed against the published file, and the archive
+# member `_fix_gitleaks` extracts was checked in each.
+GITLEAKS_VERSION = "8.30.1"
 # NOTE: no "windows_x32" entry -- `_gitleaks_platform_key` below can never
 # return that key (32-bit Windows falls to the `None` branch), so a pinned
 # checksum for it would be unreachable dead weight. Dropped rather than
 # wired up: 32-bit Windows is not a supported target.
 GITLEAKS_SHA256 = {
-    "windows_x64": "f238c85e5f47e18fac779ce71ee11091cf70a0a8fb4415f165efba2800eef133",
-    "linux_x64": "5bc41815076e6ed6ef8fbecc9d9b75bcae31f39029ceb55da08086315316e3ba",
-    "linux_arm64": "654c935542c89f565aabe7bf7c6c500830f116c114f0aeb509d2460c1ac2e6da",
-    "darwin_x64": "5b42c6e4b1fd693eaeb2b5b7faa5f17a1434299d4deb2de63d4b2efd7c753128",
-    "darwin_arm64": "cad3de5dc9a4d5447d967a70a4d49499c557f04db028274cc324f9ff983f6502",
+    "windows_x64": "d29144deff3a68aa93ced33dddf84b7fdc26070add4aa0f4513094c8332afc4e",
+    "linux_x64": "551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb",
+    "linux_arm64": "e4a487ee7ccd7d3a7f7ec08657610aa3606637dab924210b3aee62570fb4b080",
+    "darwin_x64": "dfe101a4db2255fc85120ac7f3d25e4342c3c20cf749f2c20a18081af1952709",
+    "darwin_arm64": "b40ab0ae55c505963e365f271a8d3846efbc170aa17f2607f13df610a9aeb6a5",
 }
 GITLEAKS_RELEASE_URL = (
     f"https://github.com/gitleaks/gitleaks/releases/download/v{GITLEAKS_VERSION}/{{asset}}"

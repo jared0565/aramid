@@ -21,8 +21,8 @@ pip-audit) and the repo's test runner, and offers a repair for anything
 missing. The Python analyzers
 arrive as dependencies. gitleaks is a binary: put one on `PATH`, or let
 `aramid doctor --fix` download the pinned release into `~/.aramid/tools`,
-where aramid also looks. The two versions differ today: `doctor --fix`
-installs 8.21.2 and the CI workflow pins 8.28.0 (plan item FN-5).
+where aramid also looks. `doctor --fix` and the CI workflow pin the same
+release, 8.30.1, and a test fails if the two part.
 
 Requires Python 3.11 or newer. CI runs 3.11 through 3.14 on Windows, Ubuntu
 and macOS; anything platform-specific needs to work on all three or skip

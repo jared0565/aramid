@@ -50,7 +50,7 @@ If gitleaks or semgrep (the two BLOCK-tier tools) are missing, `doctor` exits `2
 aramid doctor --fix
 ```
 
-`--fix` runs `pip install --upgrade` for the tools aramid owns (`ruff`, `semgrep`, `pip-audit`) into the current interpreter, and, when gitleaks is missing, downloads a pinned gitleaks `v8.21.2` release binary into `~/.aramid/tools/` (sha256-verified against a hardcoded checksum table before it's ever trusted/executed), then re-probes. It also replaces aramid's own copy there when that copy is at another version than the pin; a gitleaks on your PATH is yours, and is never replaced. See [section 6](#6-diagnostics--aramid-doctor-and-aramid-update-rules) for the full doctor picture.
+`--fix` runs `pip install --upgrade` for the tools aramid owns (`ruff`, `semgrep`, `pip-audit`) into the current interpreter, and, when gitleaks is missing, downloads a pinned gitleaks `v8.30.1` release binary into `~/.aramid/tools/` (sha256-verified against a hardcoded checksum table before it's ever trusted/executed), then re-probes. It also replaces aramid's own copy there when that copy is at another version than the pin; a gitleaks on your PATH is yours, and is never replaced. See [section 6](#6-diagnostics--aramid-doctor-and-aramid-update-rules) for the full doctor picture.
 
 `aramid init` (next section) itself gates on `doctor`: if a BLOCK-tier tool is still missing, `init` refuses outright (exit `3`) rather than arming hooks against a toolchain that can't actually run.
 
@@ -638,7 +638,7 @@ Two more sections print on every non-init `doctor` run (suppressed during `arami
 aramid doctor --fix
 ```
 
-Upgrades the owned toolchain (`ruff`, `semgrep`, `pip-audit`) via `pip install --upgrade` into the current interpreter, downloads a pinned gitleaks `v8.21.2` release (sha256-verified before extraction) into `~/.aramid/tools/` if missing, or over aramid's own copy there when that copy is at another version, then re-probes. A gitleaks on PATH is never replaced, whatever its version. The new binary is written beside the old one and moved into place, so a download or write that fails leaves the old one working. Without `--fix`, doctor's gitleaks line names an own copy that is off the pin.
+Upgrades the owned toolchain (`ruff`, `semgrep`, `pip-audit`) via `pip install --upgrade` into the current interpreter, downloads a pinned gitleaks `v8.30.1` release (sha256-verified before extraction) into `~/.aramid/tools/` if missing, or over aramid's own copy there when that copy is at another version, then re-probes. A gitleaks on PATH is never replaced, whatever its version. The new binary is written beside the old one and moved into place, so a download or write that fails leaves the old one working. Without `--fix`, doctor's gitleaks line names an own copy that is off the pin.
 
 ### `aramid resolvers` — is auto-resolution actually working?
 

@@ -191,8 +191,8 @@ def test_fix_gitleaks_extracts_a_verified_zip_and_marks_it_executable(wired, tmp
     dest = tmp_path / "tools" / exe
     assert dest.read_bytes() == b"#!/fake gitleaks\n"
     assert calls["urlopen"] == [(
-        "https://github.com/gitleaks/gitleaks/releases/download/v8.21.2/"
-        "gitleaks_8.21.2_windows_x64.zip", 60)]
+        f"https://github.com/gitleaks/gitleaks/releases/download/v{doctor.GITLEAKS_VERSION}/"
+        f"gitleaks_{doctor.GITLEAKS_VERSION}_windows_x64.zip", 60)]
     # Made executable BEFORE it is moved into place (a rename keeps the
     # mode), so the gate never finds an un-executable gitleaks at `dest`.
     assert calls["chmod"] == [(dest.with_name(dest.name + ".part"), 0o755)]
