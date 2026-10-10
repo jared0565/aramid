@@ -394,9 +394,10 @@ _SQLI = "F.x.rules.owasp-top-ten.a03-injection.python-sqli-string-concat"
 _CANONICAL = "owasp-top-ten.a03-injection.python-sqli-string-concat"
 
 
-def _sem_item(line, col=5, path="q.py"):
+def _sem_item(line, col=5, path="q.py", end=None):
+    end_line, end_col = end or (line, col + 20)
     return {"check_id": _SQLI, "path": path,
-            "start": {"line": line, "col": col}, "end": {"line": line, "col": col + 20},
+            "start": {"line": line, "col": col}, "end": {"line": end_line, "col": end_col},
             "extra": {"severity": "ERROR", "message": "string-built SQL"}}
 
 
@@ -486,6 +487,35 @@ def test_two_hits_on_one_line_are_told_apart_by_column(tmp_path, monkeypatch):
     result, ctx = _inline_run(tmp_path, monkeypatch, fake)
     assert [(f.tool, f.line) for f in semgrep.parse(result, ctx)] == [
         ("semgrep", 2), (inline.SEMGREP, 2)]
+
+
+# `_sem_item` derives a hit's end from its start, so in every test above the
+# two move together and either one alone tells the hits apart. The next two
+# hold one still. A second-pass hit is one of semgrep's own only when it
+# starts AND ends where that finding does: matched on less, a hit a marker
+# hid is taken for a reported one and never shown.
+
+
+def test_two_hits_that_start_together_are_told_apart_by_where_they_end(
+        tmp_path, monkeypatch):
+    _sem_tree(tmp_path)
+    own = _sem_item(3)
+    fake = _FakeSemgrep(_sem_report(own), _sem_report(own, _sem_item(3, end=(3, 60))))
+    result, ctx = _inline_run(tmp_path, monkeypatch, fake)
+    assert [(f.tool, f.line) for f in semgrep.parse(result, ctx)] == [
+        ("semgrep", 3), (inline.SEMGREP, 3)]
+
+
+def test_two_hits_that_end_together_are_told_apart_by_where_they_start(
+        tmp_path, monkeypatch):
+    # The hidden hit begins on the marked line and ends where the reported
+    # one does.
+    _sem_tree(tmp_path)
+    own = _sem_item(3)
+    fake = _FakeSemgrep(_sem_report(own), _sem_report(own, _sem_item(2, end=(3, 25))))
+    result, ctx = _inline_run(tmp_path, monkeypatch, fake)
+    assert [(f.tool, f.line) for f in semgrep.parse(result, ctx)] == [
+        ("semgrep", 3), (inline.SEMGREP, 2)]
 
 
 def test_no_file_that_mentions_nosem_starts_no_second_process(tmp_path, monkeypatch):
