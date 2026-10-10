@@ -336,6 +336,68 @@ def test_dedupe_skips_known_open_finding_no_refute_spend(tmp_path, monkeypatch):
     assert len(b.calls) == 1                                 # refute NOT re-spent
 
 
+def _recorded(led, r, head_sha, raws, run):
+    """Record a consumer's findings the way the drain does; return their ids."""
+    import functools
+    from aramid import policy, redact
+    from aramid.models import Gate
+    from aramid.normalizer import normalize
+    salt = redact.load_or_create_salt(r / ".aramid")
+    cfg_real = SimpleNamespace(llm=_cfg().llm, ignore_paths=[".git/"],
+                               semgrep_block_armed=False, block_rules={},
+                               pack={"pack_block_armed": True})
+    findings = normalize(raws, r, lambda f: head_sha, salt, Gate.ALL,
+                         functools.partial(policy.classify, cfg=cfg_real))
+    led.record_run(run, NOW.isoformat(), "drain", set(), set(), findings)
+    return [f.id for f in findings]
+
+
+def _reviewed_again_after(tmp_path, monkeypatch, event_type, payload):
+    """An llm-review finding is recorded, one ledger event moves it out of
+    `open`, and the next drain's reviewer raises the very same finding.
+    Returns (how many findings the second review handed the drain, the row's
+    status once the drain has recorded them)."""
+    r, base_sha, head_sha = _repo(tmp_path)
+    a = _Fake("fake-a", [ProviderResponse(text=_finding_json("high")),
+                         ProviderResponse(text=_finding_json("high"))])
+    _wire(monkeypatch, a, _Fake("fake-b", []))
+    led = Ledger(tmp_path / "l.db")
+    try:
+        ctx = _ctx(r, led)
+        first = llm_review.consume(_item(base_sha, head_sha), ctx)
+        (fid,) = _recorded(led, r, head_sha, first.findings, "r1")
+        led.append(Event(event_type, "r2", NOW.isoformat(), finding_id=fid, payload=payload))
+        llm_review.begin_drain()
+        second = llm_review.consume(_item(base_sha, head_sha), ctx)
+        _recorded(led, r, head_sha, second.findings, "r3")
+        return len(second.findings), led.open_findings()[fid]["status"]
+    finally:
+        led.close()
+
+
+def test_a_finding_closed_on_evidence_reopens_when_a_review_raises_it_again(
+        tmp_path, monkeypatch):
+    """FN-36's safety net. `ledger resolve --fixed` writes a plain
+    `finding_resolved`, so the row reads `fixed`: the dedupe lets the same
+    finding through and recording it re-opens the row. A close that was wrong
+    is undone by the next review that still sees the bug."""
+    raised, status = _reviewed_again_after(
+        tmp_path, monkeypatch, EventType.FINDING_RESOLVED,
+        {"auto_resolved": "evidenced_close", "commit": "c" * 40})
+
+    assert (raised, status) == (1, "open")
+
+
+def test_an_overridden_finding_is_never_raised_again(tmp_path, monkeypatch):
+    """The contrast, and why a fix is not recorded as an override: the dedupe
+    drops an `overridden` id before anything is recorded, so that row stays
+    as it is whatever a later review sees."""
+    raised, status = _reviewed_again_after(
+        tmp_path, monkeypatch, EventType.FINDING_OVERRIDDEN, {"reason": "fixed in abc"})
+
+    assert (raised, status) == (0, "overridden")
+
+
 def test_dedupe_within_response_refutes_once(tmp_path, monkeypatch):
     """Two fresh CRITICAL findings in ONE review response that share a
     fingerprint (same rule/file/line_content) collapse to one: only ONE refute

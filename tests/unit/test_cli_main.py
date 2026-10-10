@@ -277,19 +277,28 @@ def test_ledger_mark_without_a_reason_is_exit_3(capsys):
     assert "--reason" in capsys.readouterr().err
 
 
-def test_ledger_resolve_visits_every_id_and_returns_the_worst_rc(monkeypatch):
+def test_ledger_resolve_hands_every_flag_to_the_one_dispatcher(monkeypatch):
+    """Which resolution was asked for, and the every-id / worst-exit rule of
+    --out-of-scope, are `cmd_ledger_resolve_args`' to decide
+    (test_ledger_resolve_fixed.py). The parser's part is to pass all of it on
+    and to return what comes back."""
     calls = []
-    rcs = {"aaa": 0, "bbb": 3, "ccc": 0}
-    monkeypatch.setattr(cli, "cmd_ledger_resolve",
-                        lambda *a, **kw: calls.append((a, kw)) or rcs[a[1]])
+    monkeypatch.setattr(cli, "cmd_ledger_resolve_args",
+                        lambda *a, **kw: calls.append((a, kw)) or 3)
 
-    assert cli.main(["ledger", "resolve", "aaa", "bbb", "ccc",
-                     "--out-of-scope", "--reason", "outside [tool.mypy] files"]) == 3
-    assert cli.main(["ledger", "resolve", "aaa", "--reason", "fixed upstream"]) == 0
-    assert calls == [((_root(), "aaa", True, "outside [tool.mypy] files"), {}),
-                     ((_root(), "bbb", True, "outside [tool.mypy] files"), {}),
-                     ((_root(), "ccc", True, "outside [tool.mypy] files"), {}),
-                     ((_root(), "aaa", False, "fixed upstream"), {})]
+    assert cli.main(["ledger", "resolve", "aaa", "bbb", "--out-of-scope",
+                     "--reason", "outside [tool.mypy] files"]) == 3
+    assert cli.main(["ledger", "resolve", "aaa", "--fixed", "abc123", "--test",
+                     "python -m pytest tests/test_x.py::test_y", "--red-proof",
+                     "--reason", "guard added"]) == 3
+    assert calls == [
+        ((_root(), ["aaa", "bbb"]),
+         {"out_of_scope": True, "fixed": None, "test": None, "red_proof": False,
+          "reason": "outside [tool.mypy] files"}),
+        ((_root(), ["aaa"]),
+         {"out_of_scope": False, "fixed": "abc123",
+          "test": "python -m pytest tests/test_x.py::test_y", "red_proof": True,
+          "reason": "guard added"})]
 
 
 def test_ledger_without_a_subcommand_names_them_all_and_exits_3(capsys):

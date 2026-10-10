@@ -345,7 +345,7 @@ versioned on its own.
 | Command | Document |
 |---|---|
 | `check --json` | the report; every key is in [`check --json` keys](#check---json-keys) below |
-| `ledger filter --json` | `{"schema_version": 1, "findings": [...]}` -- one row per finding: `id`, the `ledger show` fields, `verdict_now`, `suppressed`, `suppressed_reason` |
+| `ledger filter --json` | `{"schema_version": 1, "findings": [...]}` -- one row per finding: `id`, the `ledger show` fields, `verdict_now`, `suppressed`, `suppressed_reason`, `resolved_by` (the resolver a resolved row's last resolution names, such as `evidence_gone` or `evidenced_close`; `null` on every other row, and on a row its own tool resolved by no longer reporting it) |
 | `ledger consumers --json` | `{"schema_version": 1, "runs": [...]}` -- one row per consumer run: `at`, `run_id`, `consumer`, `item_id`, `state`, `duration_s`, `cost`, `finding_count`, `note` (null when an old row lacks one), and `extra`, everything else that consumer recorded |
 | `resolvers --json` | `{"schema_version": 1, "resolvers": [...]}` -- one row per resolver and tool |
 | `mutation-score --json` | `{"schema_version": 1, "targets": [...], "regressions": [...]}` |
@@ -480,7 +480,7 @@ A repo's stack can change: a test file gets removed, `[tests].enabled` gets set 
 aramid ledger mark-unreachable <id> --reason "no python stack in this repo anymore"
 ```
 
-`--reason` is required. The command refuses (exit `3`) for: an unknown id; a finding whose tool is a producer/consumer (`tdd`, `red-proof`, `mutation`, `mutation-score`, `llm-review`, `js-mutation`, `fuzz`, `dast`) — those resolve through their own producer's mechanism, never by hand; a finding whose status isn't exactly `open` (a historical secret is redirected to `mark-rotated`/`mark-not-a-secret` instead); or a finding whose tool still runs here — that is a broken-toolchain problem (`aramid doctor`), not a ghost, and retiring it would hide a real gap rather than an obsolete one. Unlike `mark-not-a-secret`, this transition **does** resurrect: if the tool ever comes back and re-detects the same finding, it automatically re-opens — a repo that flips detection off and back on cannot permanently launder an open finding this way.
+`--reason` is required. The command refuses (exit `3`) for: an unknown id; a finding whose tool is a producer/consumer (`tdd`, `red-proof`, `mutation`, `mutation-score`, `llm-review`, `js-mutation`, `fuzz`, `dast`) — those resolve through their own producer's mechanism, not by this mark (an `llm-review` finding that a commit fixed has `ledger resolve --fixed`, see [An LLM finding you fixed that stays open anyway](#an-llm-finding-you-fixed-that-stays-open-anyway)); a finding whose status isn't exactly `open` (a historical secret is redirected to `mark-rotated`/`mark-not-a-secret` instead); or a finding whose tool still runs here — that is a broken-toolchain problem (`aramid doctor`), not a ghost, and retiring it would hide a real gap rather than an obsolete one. Unlike `mark-not-a-secret`, this transition **does** resurrect: if the tool ever comes back and re-detects the same finding, it automatically re-opens — a repo that flips detection off and back on cannot permanently launder an open finding this way.
 
 ### Findings on a path the runner no longer examines
 
@@ -490,7 +490,7 @@ The other stranded shape: the tool still runs here, so `mark-unreachable` refuse
 aramid ledger resolve <id> [<id> ...] --out-of-scope --reason "typecheck scoped to .py/.pyi in 0.6.1"
 ```
 
-Several ids per launch are accepted: every id is attempted, a refusal on one does not stop the rest, and the exit is the worst of them. It records `finding_out_of_scope` -- its own event kind, so the ledger can later tell "the tool left the repo" (`unreachable`) from "the path left the tool's scope" (`out_of_scope`) without reading payloads. The guard that keeps it from becoming a silencer: it refuses (exit `3`) while the runner **can still examine the path**, decided by that runner's own file-suffix rule (`ruff`/`mypy`: `.py`/`.pyi`; `eslint`: JS/TS suffixes; `clippy`: `.rs`) and, for mypy, by the repo's own `[tool.mypy] files`/`exclude` -- a `.py` that scope leaves untyped is one mypy will never examine here; it refuses outright for a tool with no suffix scope (`gitleaks`, `semgrep`, `tests`, dependency audits -- "cannot say" is not "no"); and it redirects to `mark-unreachable` when the tool is not selected at all. `--out-of-scope` is the only kind it accepts: a finding that is simply gone resolves on the next run that examines its file. Like `fixed` and `unreachable`, the row re-opens if a runner ever reports it again, and `aramid override` refuses it.
+Several ids per launch are accepted: every id is attempted, a refusal on one does not stop the rest, and the exit is the worst of them. It records `finding_out_of_scope` -- its own event kind, so the ledger can later tell "the tool left the repo" (`unreachable`) from "the path left the tool's scope" (`out_of_scope`) without reading payloads. The guard that keeps it from becoming a silencer: it refuses (exit `3`) while the runner **can still examine the path**, decided by that runner's own file-suffix rule (`ruff`/`mypy`: `.py`/`.pyi`; `eslint`: JS/TS suffixes; `clippy`: `.rs`) and, for mypy, by the repo's own `[tool.mypy] files`/`exclude` -- a `.py` that scope leaves untyped is one mypy will never examine here; it refuses outright for a tool with no suffix scope (`gitleaks`, `semgrep`, `tests`, dependency audits -- "cannot say" is not "no"); and it redirects to `mark-unreachable` when the tool is not selected at all. Without `--out-of-scope` it refuses, unless `--fixed` is given (the other resolution, for an `llm-review` finding a commit fixed, described below): a finding that is simply gone resolves on the next run that examines its file. Like `fixed` and `unreachable`, the row re-opens if a runner ever reports it again, and `aramid override` refuses it.
 
 ### Findings on a file you deleted
 
@@ -537,15 +537,40 @@ LLM findings resolve deterministically and for free: each one stores the verbati
 
 That is a proxy, and it has one honest failure mode. **A fix that guards the path *leading to* the quoted line leaves the quote byte-identical** — an early return, a new precondition, a call site that stops being reached — so the finding stays open even though it is genuinely fixed.
 
-The match is deliberately not loosened, because resolving too eagerly is how a confirmed-critical finding disappears from the block gate. Close it by hand instead, and say what fixed it:
+The match is deliberately not loosened, because resolving too eagerly is how a confirmed-critical finding disappears from the block gate. Close the finding yourself instead, with the commit that fixed it and a test that shows the fix:
 
 ```powershell
-aramid override <id> --reason "fixed in e3270a3; the guard is in run(), so the quoted line in _examined never changed"
+aramid ledger resolve <id> --fixed <commit> --test "python -m pytest tests/test_orders.py::test_cn_is_routed" --reason "the guard is in route(), so the quoted line never changed"
 ```
 
-That works for a WARN-tier finding. A confirmed-critical LLM finding counts as BLOCK-tier for `override`, whether or not `[llm].llm_block_armed` is set, so `override` refuses it and prints the `.aramid-suppressions.toml` entry to commit instead; for that finding, committing the entry is the way to suppress it by hand.
+aramid records the close only when all of this holds:
 
-For a WARN-tier finding, use `override` rather than `.aramid-suppressions.toml`. A suppression asserts something is *acceptable*; this one is *fixed*. A tracked entry would also never go stale — the quote never moves, so it never near-misses — leaving a permanent record of a transient fact. Machine-local is right: the next drain re-reviews the file and re-raises the finding if the fix was incomplete.
+- the finding is an `llm-review` finding and is `open`;
+- the commit is in `HEAD`'s history and was not already in the tree when the finding was raised;
+- no tracked file has uncommitted changes, so the test runs on the commit that gets recorded;
+- the test command exits `0` from the repo root.
+
+`--test` is one string holding the whole command, split like a string `[tests].command`; on Windows, write paths in it with forward slashes. Any test runner works: `--test "npx vitest run src/orders.test.ts -t 'routes CN'"` is read the same way. Each run is bounded by `[tests].timeout_s`. One id per launch, because each finding needs the test that proves its own fix.
+
+**`--red-proof` also shows that the test fails without the fix.** aramid checks `HEAD` out into a throwaway worktree and runs the test there twice:
+
+1. As it is. The test must pass. This run is the control: a test that fails in a clean checkout (the test file is not committed, or dependencies are not installed there) would also "fail without the fix", for a reason that says nothing about the fix.
+2. With the commit backed out (`git revert --no-commit`). The test must now fail.
+
+Only that commit is backed out; commits after it stay. Three kinds of file from the commit are kept as they are at `HEAD`: its test files, the files it added, and any file the test command names. That is how a test written together with the fix is run against the code without it. Red proof is refused, and nothing is recorded, when:
+
+- the commit changes no existing source file (only tests, or only new files);
+- a later commit changed the same lines, so git can no longer back the commit out;
+- the control run does not pass;
+- the test also passes without the fix, or does not finish.
+
+**A confirmed-critical finding closes only with `--red-proof`.** For any other finding it is optional.
+
+One thing red proof cannot tell: test support that the fixing commit *modified*, outside every test location aramid recognises and not named in the command, is backed out with the fix. A failure caused by that reads as red.
+
+The close writes `fixed`. The event carries the commit, the command, the `HEAD` the test passed at, your reason and the red proof; `aramid ledger show <id>` prints them, including `red proof: not run` when there was none, and `aramid ledger filter --json` names the route in `resolved_by` (`evidenced_close`). If a later review raises the same finding again, it re-opens.
+
+Do not use `aramid override` for a fix. An override records an accepted risk, and it is final: a later review that raises the finding again changes nothing. Do not use `.aramid-suppressions.toml` either. A suppression asserts something is *acceptable*; this one is *fixed*, and the entry would never go stale, because the quote never moves.
 
 ### Suppressing a finding for the whole team — `.aramid-suppressions.toml`
 
@@ -1102,7 +1127,7 @@ What aramid does not do, or does imperfectly, in one place. Each entry says what
 
 ### Findings and the ledger
 
-**An LLM finding can stay open after a real fix.** An LLM finding closes when the line it quotes is gone from the file at `HEAD`. A fix made elsewhere, such as an early return or a new check before the quoted line, leaves that line as it was, so the finding stays open. Close it by hand: `aramid override <id> --reason "fixed in <sha>; ..."` for a WARN finding. `override` refuses a confirmed-critical finding and prints the `.aramid-suppressions.toml` entry to add instead. [An LLM finding you fixed that stays open anyway](#an-llm-finding-you-fixed-that-stays-open-anyway) in section 5 explains why the match is not loosened.
+**An LLM finding can stay open after a real fix.** An LLM finding closes when the line it quotes is gone from the file at `HEAD`. A fix made elsewhere, such as an early return or a new check before the quoted line, leaves that line as it was, so the finding stays open until someone closes it: `aramid ledger resolve <id> --fixed <commit> --test "<command>" --reason "..."` records the close once the named test passes at `HEAD`, and a confirmed-critical finding also needs `--red-proof`. [An LLM finding you fixed that stays open anyway](#an-llm-finding-you-fixed-that-stays-open-anyway) in section 5 has the rules and explains why the match is not loosened.
 
 **An LLM finding closes when its quoted code moves to another file.** If the quoted line leaves its file while the file itself stays, the finding is resolved as fixed, even when the same code now sits in another file. (When the file itself is renamed or moved, aramid looks for the quote in the other tracked files and keeps the finding open if it is there.) A confirmed-critical finding closed this way stops blocking, and comes back only if a later drain review raises it again. If you move flagged code rather than fix it, check it yourself.
 

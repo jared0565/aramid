@@ -12,6 +12,50 @@ to publish a tag that disagrees with it.
 
 ## [Unreleased]
 
+### Added
+
+- **An LLM finding that is fixed, though its quoted line never changed, can
+  be closed on evidence (FN-36).** An `llm-review` finding closes by itself
+  when the line it quotes leaves the file. A fix that guards the path to that
+  line, or lands in a caller, leaves the quote where it was, and the finding
+  stayed open for good. The only exit was `aramid override`, which records an
+  accepted risk, refuses a confirmed critical, and is never re-opened. Now:
+
+  ```
+  aramid ledger resolve <id> --fixed <commit> --test "<command>" --reason "..." [--red-proof]
+  ```
+
+  It is a second mode of the existing `ledger resolve`; `--out-of-scope`
+  works as before. It takes one id, and records the close only when the
+  finding is an open `llm-review` finding, the commit is in HEAD's history
+  and was not already there when the finding was raised, no tracked file has
+  uncommitted changes, and the test command exits 0 from the repo root.
+  `--test` is one string, split like a string `[tests].command`; each run is
+  bounded by `[tests].timeout_s`.
+
+  `--red-proof` adds two runs in a throwaway worktree of HEAD: a control,
+  which must pass there, and one with the commit backed out (`git revert
+  --no-commit`; later commits stay), which must fail. The commit's test
+  files, the files it added and any file the command names are kept as at
+  HEAD. It is refused when the commit changes no existing source file, when
+  a later commit changed the same lines, when the control fails, and when
+  the test passes or does not finish without the fix. **A confirmed critical
+  closes only with `--red-proof`.**
+
+  The close writes `fixed`, with the commit, the command, the HEAD it passed
+  at, the reason and the red proof on the event, so a later review that
+  raises the finding again re-opens it. `ledger show <id>` prints that
+  evidence under the event, and says `red proof: not run` when there was
+  none. `ledger filter --json` gains a `resolved_by` key on every row: the
+  resolver a resolved row's last resolution names (`evidenced_close` for
+  this command), `null` otherwise. Adding a key does not change
+  `schema_version`.
+
+  Three refusal messages changed with it. `ledger resolve` without either
+  mode now names both. `resolve --out-of-scope` and `mark-unreachable` on a
+  producer finding no longer say "never by hand", and both point an
+  `llm-review` finding at `--fixed`. There is no MCP tool for the close yet.
+
 ## [0.20.7] — 2026-10-10
 
 ### Added

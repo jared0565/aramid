@@ -48,7 +48,10 @@ RUNNER_TOOL_NAMES = frozenset({
 # appended outside the runner dict (tdd, red-proof, mutation-score). Each
 # has its own resolution mechanism (an auto_resolve_* function, or -- for
 # mutation-score -- no persistence to resolve at all, see
-# mutation_score_gate.py's own docstring); none is ever retired by hand.
+# mutation_score_gate.py's own docstring); none is ever retired by a mark
+# (`mark-unreachable`, `resolve --out-of-scope`). One has a hand-recorded
+# exit of its own: an llm-review finding a commit fixed closes on evidence
+# with `ledger resolve --fixed` (FN-36).
 #
 # "regression_pack" is deliberately NOT here: it reuses the tool name
 # "semgrep" for its findings (consumers/regression_pack.py:41,46 --

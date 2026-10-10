@@ -17,13 +17,14 @@ genuinely removed), so no future run can ever resolve it the normal way.
 All three guards error rather than silently no-op'ing; transitions only
 ever move toward more caution, and there is no un-mark."""
 import json
+import shlex
 import sys
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 
 from aramid import config as config_mod
-from aramid import tier, toolset
+from aramid import gitutil, review, tier, toolset
 from aramid.ledger import Ledger
 from aramid.models import Event, EventType, Severity, Status
 
@@ -159,9 +160,41 @@ def cmd_ledger_show(root, finding_id: str) -> int:
         for e in ledger.events():
             if e.finding_id == finding_id:
                 print(f"  {e.at}  {e.type.value}  run={e.run_id}")
+                for line in _close_evidence(e):
+                    print(f"      {line}")
         return 0
     finally:
         ledger.close()
+
+
+EVIDENCED_CLOSE = "evidenced_close"
+
+
+def _close_evidence(event) -> list[str]:
+    """What a `resolve --fixed` close rests on, for `ledger show` (FN-36):
+    the commit, who closed it and why, the test command and the HEAD it
+    passed at, and whether the test was also shown to fail without the fix.
+    Every other event prints its one line and nothing more.
+
+    This is where a reviewer tells a close that showed the test failing
+    from one that did not, so "red proof: not run" is printed rather than
+    left out."""
+    payload = event.payload or {}
+    if event.type.value != "finding_resolved" \
+            or payload.get("auto_resolved") != EVIDENCED_CLOSE:
+        return []
+    proof = payload.get("red_proof")
+    if isinstance(proof, dict):
+        red = (f"red proof: exit {proof.get('pre_fix_rc')} with that commit backed out "
+               f"against {proof.get('base')} -- {proof.get('backed_out')} of its path(s); "
+               f"its tests, the files it added and the files the command names stayed")
+    else:
+        red = "red proof: not run"
+    return [f"closed as fixed in {payload.get('commit')} ({payload.get('via')}): "
+            f"{payload.get('reason')}",
+            f"test: {shlex.join(payload.get('test_argv') or [])} -- exit "
+            f"{payload.get('test_rc')} at {payload.get('head')}",
+            red]
 
 
 # ----------------------------------------------------------------- filter ---
@@ -181,6 +214,19 @@ _JSON_KEYS = ("tool", "rule", "file", "line", "severity", "verdict",
 # renamed or retyped; adding a key is not one. Each `--json` document is
 # versioned on its own, so one command's change never moves another's.
 FILTER_JSON_SCHEMA_VERSION = 1
+# The statuses a `finding_resolved` event produces (`ledger._materialize`).
+# A row that was resolved and then raised again, overridden or marked is no
+# longer one of them, and its `resolved_by` reads null: the resolution is
+# not what the row is showing.
+_RESOLVED_STATUSES = ("fixed", "pending_retest", "superseded")
+
+
+def _resolved_by(events) -> dict[str, str | None]:
+    """Finding id -> the `auto_resolved` its LAST resolution carries, for
+    the caller to show only on a row whose status is one a resolution
+    produces (`_RESOLVED_STATUSES`)."""
+    return {e.finding_id: e.payload.get("auto_resolved")
+            for e in events if e.type.value == "finding_resolved"}
 
 
 def cmd_ledger_filter(root, tool: str | None = None, rule: str | None = None,
@@ -246,12 +292,23 @@ def cmd_ledger_filter(root, tool: str | None = None, rule: str | None = None,
             # snapshot, `verdict_now` is always the recomputed truth, and which
             # one you are reading is answered structurally rather than by a
             # provenance flag nobody can check.
+            # `resolved_by` on EVERY row, like `verdict_now`: the resolver the
+            # row's last resolution names (`evidence_gone`, `evidenced_close`,
+            # ...). Null on a row no resolution produced, and on one its own
+            # tool resolved by no longer reporting it, which names none. It
+            # is how a script tells a close a person or an agent recorded on
+            # evidence (FN-36) from one aramid made by itself; both read
+            # `fixed`.
+            resolved_by = _resolved_by(ledger.events())
             print(json.dumps({
                 "schema_version": FILTER_JSON_SCHEMA_VERSION,
                 "findings": [{"id": fid, **{k: rec.get(k) for k in _JSON_KEYS},
                               "verdict_now": str(tier.verdict_now(cfg, rec)),
                               "suppressed": fid in suppressed_reasons,
-                              "suppressed_reason": suppressed_reasons.get(fid)}
+                              "suppressed_reason": suppressed_reasons.get(fid),
+                              "resolved_by": (resolved_by.get(fid)
+                                              if rec.get("status") in _RESOLVED_STATUSES
+                                              else None)}
                              for fid, rec in matched.items()]}, indent=2))
             return 0
         if not matched:
@@ -462,8 +519,9 @@ def cmd_ledger_mark_unreachable(root, finding_id: str, reason: str) -> int:
             print(f"aramid: ledger mark-unreachable: {finding_id} is a {tool!r} finding "
                   f"-- producer/consumer findings (tdd, red-proof, mutation, "
                   f"mutation-score, llm-review, js-mutation, fuzz, dast) resolve "
-                  f"through their own producer's mechanism, never by hand",
-                  file=sys.stderr)
+                  f"through their own producer's mechanism, not by this mark; an "
+                  f"llm-review finding that a commit fixed has `aramid ledger resolve "
+                  f"--fixed`", file=sys.stderr)
             return 3
 
         status = rec.get("status")
@@ -529,8 +587,9 @@ def cmd_ledger_resolve(root, finding_id: str, out_of_scope: bool, reason: str) -
     root = Path(root)
     reason = (reason or "").strip()
     if not out_of_scope:
-        print("aramid: ledger resolve: --out-of-scope is required -- it is the only "
-              "resolution a person can record; a finding that is simply gone "
+        print("aramid: ledger resolve: give --out-of-scope (a runner finding whose path "
+              "left its runner's scope) or --fixed <commit> --test \"<command>\" (an "
+              "llm-review finding a commit fixed) -- a finding that is simply gone "
               "resolves on the next run that examines its file", file=sys.stderr)
         return 3
     if not reason:
@@ -554,9 +613,15 @@ def cmd_ledger_resolve(root, finding_id: str, out_of_scope: bool, reason: str) -
         tool = str(rec.get("tool"))
         path = str(rec.get("file") or "")
         if tool not in toolset.RUNNER_TOOL_NAMES:
-            print(f"aramid: ledger resolve: {finding_id} is a {tool!r} finding -- "
-                  f"producer/consumer findings resolve through their own producer's "
-                  f"mechanism, never by hand", file=sys.stderr)
+            # llm-review has an exit of its own since FN-36; say so here, where
+            # someone holding a fixed llm-review finding lands first.
+            how = ("an llm-review finding that a commit fixed closes with `--fixed "
+                   "<commit> --test \"<command>\"`, not --out-of-scope"
+                   if tool == _LLM_TOOL else
+                   "producer/consumer findings resolve through their own producer's "
+                   "mechanism, not by --out-of-scope")
+            print(f"aramid: ledger resolve: {finding_id} is a {tool!r} finding -- {how}",
+                  file=sys.stderr)
             return 3
 
         status = rec.get("status")
@@ -594,3 +659,156 @@ def cmd_ledger_resolve(root, finding_id: str, out_of_scope: bool, reason: str) -
         return 0
     finally:
         ledger.close()
+
+
+# ------------------------------------------------------- resolve --fixed ---
+
+_LLM_TOOL = "llm-review"
+
+
+def cmd_ledger_resolve_fixed(root, finding_id: str, commit: str, test: str, reason: str,
+                             *, red_proof: bool = False, via: str = "cli") -> int:
+    """`aramid ledger resolve <id> --fixed <commit> --test "<command>"
+    --reason R [--red-proof]`: close an OPEN llm-review finding that is
+    fixed although its evidence quote never left its file (FN-36).
+
+    `review.auto_resolve_llm` closes a finding when the quoted line goes. A
+    fix that guards the path to that line, or lands in a caller, leaves the
+    quote alone, and the finding then stays open for ever. Until this
+    command the only exit was `aramid override`, which records a fix as an
+    accepted risk and -- unlike a close -- is never re-opened: the consumer
+    drops a candidate whose id is `overridden` before it records anything.
+
+    A close writes a plain `finding_resolved`, so the row reads `fixed` and
+    a later drain that raises the same finding again RE-OPENS it
+    (`Ledger.record_run`). That re-open is the safety net this design rests
+    on, and it is why there is no status of its own.
+
+    The evidence, all of it on the event: the commit, the test command as
+    split, the HEAD it passed at, and -- with `red_proof` -- that it failed
+    once the commit was backed out (`evidenced_close.red_proof`). A
+    confirmed-critical finding closes only with red proof; `override`
+    refuses those outright, so before this they had no exit that said
+    "fixed".
+
+    Every refusal is exit 3 and writes nothing."""
+    from aramid import evidenced_close
+
+    root = Path(root)
+    reason = (reason or "").strip()
+    if not reason:
+        print("aramid: ledger resolve: --reason is required", file=sys.stderr)
+        return 3
+    try:
+        argv = evidenced_close.split_command(test)
+    except evidenced_close.Refused as exc:
+        print(f"aramid: ledger resolve: {exc}", file=sys.stderr)
+        return 3
+    try:
+        cfg = config_mod.load_config(root)
+    except Exception as exc:
+        print(f"aramid: ledger resolve: engine error: {exc}", file=sys.stderr)
+        return 3
+
+    ledger = Ledger(root / ".aramid" / "ledger.db")
+    try:
+        rec = ledger.open_findings().get(finding_id)
+        if rec is None:
+            print(f"aramid: ledger resolve: unknown finding id {finding_id}", file=sys.stderr)
+            return 3
+        tool = str(rec.get("tool"))
+        if tool != _LLM_TOOL:
+            print(f"aramid: ledger resolve: {finding_id} is a {tool!r} finding -- --fixed "
+                  f"closes an llm-review finding only. A deterministic tool resolves or "
+                  f"re-reports its own finding on its next run, and a mutation survivor "
+                  f"closes on a verified re-test", file=sys.stderr)
+            return 3
+        status = rec.get("status")
+        if status != "open":
+            print(f"aramid: ledger resolve: {finding_id} is not open (status={status}) "
+                  f"-- resolve --fixed only applies to an open finding", file=sys.stderr)
+            return 3
+        if review.is_confirmed_critical_llm(rec) and not red_proof:
+            print(f"aramid: ledger resolve: {finding_id} is a confirmed critical finding "
+                  f"-- it closes only with red proof. Add --red-proof: the test is then "
+                  f"also run with the fix backed out and must fail there",
+                  file=sys.stderr)
+            return 3
+
+        try:
+            sha = gitutil.rev_sha(root, commit or "")
+            head = gitutil.rev_sha(root, "HEAD")
+            if sha is None:
+                print(f"aramid: ledger resolve: --fixed {commit!r} is not a commit in this "
+                      f"repo", file=sys.stderr)
+                return 3
+            if head is None or not gitutil.is_ancestor(root, sha, head):
+                print(f"aramid: ledger resolve: {sha[:12]} is not part of HEAD's history "
+                      f"-- the fix must be in the tree the test runs on", file=sys.stderr)
+                return 3
+            raised_at = rec.get("head")
+            if raised_at and gitutil.is_ancestor(root, sha, str(raised_at)):
+                print(f"aramid: ledger resolve: {sha[:12]} was already in the tree when "
+                      f"{finding_id} was raised (at {str(raised_at)[:12]}) -- a fix cannot "
+                      f"predate its finding", file=sys.stderr)
+                return 3
+
+            timeout_s = evidenced_close.run_timeout(cfg)
+            evidenced_close.passes_at_head(root, argv, timeout_s)
+            proof = (evidenced_close.red_proof(root, sha, head, argv, timeout_s)
+                     if red_proof else None)
+        except evidenced_close.Refused as exc:
+            print(f"aramid: ledger resolve: {exc}", file=sys.stderr)
+            return 3
+        except gitutil.GitTimeout as exc:
+            print(f"aramid: ledger resolve: engine error: {exc}", file=sys.stderr)
+            return 3
+
+        # The test ran for as long as it liked, and another aramid process
+        # may have written to this ledger meanwhile (a gate's auto-resolve,
+        # an override). A close is recorded against an OPEN finding only.
+        now = (ledger.open_findings().get(finding_id) or {}).get("status")
+        if now != "open":
+            print(f"aramid: ledger resolve: {finding_id} is no longer open (status={now}) "
+                  f"-- it changed while the test ran; nothing was recorded",
+                  file=sys.stderr)
+            return 3
+
+        ledger.append(Event(EventType.FINDING_RESOLVED, uuid.uuid4().hex, _now(),
+                            finding_id=finding_id,
+                            payload={"auto_resolved": EVIDENCED_CLOSE, "commit": sha,
+                                     "test_argv": argv, "test_rc": 0, "reason": reason,
+                                     "head": head, "red_proof": proof, "via": via}))
+        shown = (f"failed (exit {proof['pre_fix_rc']}) without the fix" if proof
+                 else "red proof not run")
+        print(f"aramid: ledger: {finding_id} closed as fixed in {sha[:12]} -- the test "
+              f"passes at HEAD, {shown} ({reason})")
+        return 0
+    finally:
+        ledger.close()
+
+
+def cmd_ledger_resolve_args(root, ids, *, out_of_scope: bool = False,
+                            fixed: str | None = None, test: str | None = None,
+                            red_proof: bool = False, reason: str = "") -> int:
+    """Which of `ledger resolve`'s two resolutions was asked for. They share
+    a subcommand and nothing else: `--out-of-scope` retires a runner finding
+    whose path left the runner's scope, `--fixed` closes an llm-review
+    finding on evidence. A mix of the two is refused rather than guessed."""
+    if fixed is None:
+        if test is not None or red_proof:
+            print("aramid: ledger resolve: --test and --red-proof belong to --fixed "
+                  "<commit> -- they are the evidence that an llm-review finding is "
+                  "fixed", file=sys.stderr)
+            return 3
+        return max(cmd_ledger_resolve(root, fid, out_of_scope, reason) for fid in ids)
+    if out_of_scope:
+        print("aramid: ledger resolve: --fixed and --out-of-scope are two different "
+              "resolutions -- give one", file=sys.stderr)
+        return 3
+    if len(ids) != 1:
+        print(f"aramid: ledger resolve: --fixed closes one finding at a time ({len(ids)} "
+              f"ids given) -- each needs the test that proves its own fix",
+              file=sys.stderr)
+        return 3
+    return cmd_ledger_resolve_fixed(root, ids[0], fixed, test, reason, red_proof=red_proof)

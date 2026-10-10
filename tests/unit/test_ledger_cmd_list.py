@@ -232,7 +232,8 @@ def test_filter_json_exits_0_with_every_promised_key(tmp_path, capsys):
         "id": "f1", "tool": "ruff", "rule": "F401", "file": "a.py", "line": 1,
         "severity": "low", "verdict": "warn", "message": "SQL built by concat",
         "evidence": "e", "historical": False, "status": "open", "reason": None,
-        "verdict_now": "warn", "suppressed": False, "suppressed_reason": None}]
+        "verdict_now": "warn", "suppressed": False, "suppressed_reason": None,
+        "resolved_by": None}]
     doc = {"schema_version": 1, "findings": rows}
     assert json.loads(out) == doc
     # pretty-printed at two spaces, key order as promised: a human reads this
@@ -259,3 +260,109 @@ def test_filter_refuses_a_bad_status_before_opening_the_ledger(tmp_path, capsys)
     assert cmd_ledger_filter(tmp_path, status="stale") == 3
     assert "unknown --status value 'stale'" in capsys.readouterr().err
     assert not (tmp_path / ".aramid" / "ledger.db").exists()
+
+
+# ------------------------------------------- an evidenced close (FN-36) --
+
+def _evidenced_close(fid, red_proof=None, via="cli"):
+    return Event(EventType.FINDING_RESOLVED, "r2", "2026-09-14T01:00:00+00:00",
+                 finding_id=fid,
+                 payload={"auto_resolved": "evidenced_close", "commit": "c" * 40,
+                          "test_argv": ["npx", "vitest", "run", "src/orders.test.ts",
+                                        "-t", "routes CN"],
+                          "test_rc": 0, "reason": "guard added in route()",
+                          "head": "d" * 40, "red_proof": red_proof, "via": via})
+
+
+def _append(root, *events):
+    led = Ledger(root / ".aramid" / "ledger.db")
+    try:
+        for event in events:
+            led.append(event)
+    finally:
+        led.close()
+
+
+def test_show_prints_what_an_evidenced_close_rests_on(tmp_path, capsys):
+    """The commit, who closed it and why, the test and the HEAD it passed
+    at, and the red proof -- under the event that carries them, and under no
+    other event."""
+    _seed(tmp_path, _f("f1", tool="llm-review", rule="llm/logic"))
+    _append(tmp_path, _evidenced_close(
+        "f1", via="mcp",
+        red_proof={"base": "b" * 40, "control_rc": 0, "pre_fix_rc": 1, "backed_out": 3}))
+
+    assert cmd_ledger_show(tmp_path, "f1") == 0
+    out = capsys.readouterr().out
+    assert out[out.index("status: "):] == (
+        "status: fixed\n"
+        "reason: None\n"
+        "verdict_now: warn\n"
+        "events:\n"
+        "  2026-09-14T00:00:00+00:00  finding_detected  run=r1\n"
+        "  2026-09-14T01:00:00+00:00  finding_resolved  run=r2\n"
+        f"      closed as fixed in {'c' * 40} (mcp): guard added in route()\n"
+        f"      test: npx vitest run src/orders.test.ts -t 'routes CN' -- exit 0 at "
+        f"{'d' * 40}\n"
+        f"      red proof: exit 1 with that commit backed out against {'b' * 40} -- 3 of "
+        f"its path(s); its tests, the files it added and the files the command names "
+        f"stayed\n")
+
+
+def test_show_says_so_when_a_close_carried_no_red_proof(tmp_path, capsys):
+    """A reviewer has to be able to tell the two kinds of close apart, so
+    the missing proof is a line, not an absence."""
+    _seed(tmp_path, _f("f1", tool="llm-review", rule="llm/logic"))
+    _append(tmp_path, _evidenced_close("f1"))
+
+    assert cmd_ledger_show(tmp_path, "f1") == 0
+    assert capsys.readouterr().out.splitlines()[-3:] == [
+        f"      closed as fixed in {'c' * 40} (cli): guard added in route()",
+        f"      test: npx vitest run src/orders.test.ts -t 'routes CN' -- exit 0 at {'d' * 40}",
+        "      red proof: not run"]
+
+
+def test_show_adds_nothing_under_a_resolution_aramid_made_by_itself(tmp_path, capsys):
+    _seed(tmp_path, _f("f1", tool="llm-review", rule="llm/logic"))
+    _append(tmp_path, Event(EventType.FINDING_RESOLVED, "r2", "2026-09-14T01:00:00+00:00",
+                            finding_id="f1", payload={"auto_resolved": "evidence_gone"}))
+
+    assert cmd_ledger_show(tmp_path, "f1") == 0
+    assert capsys.readouterr().out.splitlines()[-2:] == [
+        "  2026-09-14T00:00:00+00:00  finding_detected  run=r1",
+        "  2026-09-14T01:00:00+00:00  finding_resolved  run=r2"]
+
+
+def test_filter_json_names_the_resolver_on_a_resolved_row_and_null_elsewhere(tmp_path, capsys):
+    """`fixed` reads the same whether aramid resolved the row or a person
+    closed it on evidence; `resolved_by` tells them apart. A row its own tool
+    stopped reporting names no resolver, so it reads null too."""
+    _seed(tmp_path, _f("still_open"), _f("auto", file="b.py"),
+          _f("closed", tool="llm-review", rule="llm/logic", file="c.py"),
+          _f("closed_then_overridden", tool="llm-review", rule="llm/logic", file="d.py"),
+          _f("closed_then_raised_again", tool="llm-review", rule="llm/logic", file="e.py"),
+          _f("resolved_away", tool="llm-review", rule="llm/logic", file="f.py"))
+    # a second run examines b.py and reports nothing: `auto` resolves
+    _seed(tmp_path, at="2026-09-14T01:00:00+00:00", run="r2", files={"b.py"})
+    _append(tmp_path,
+            Event(EventType.FINDING_RESOLVED, "r2", "2026-09-14T01:00:00+00:00",
+                  finding_id="resolved_away", payload={"auto_resolved": "evidence_gone"}),
+            _evidenced_close("closed"),
+            _evidenced_close("closed_then_overridden"),
+            Event(EventType.FINDING_OVERRIDDEN, "r3", "2026-09-14T02:00:00+00:00",
+                  finding_id="closed_then_overridden", payload={"reason": "ok"}),
+            _evidenced_close("closed_then_raised_again"))
+    _seed(tmp_path, _f("closed_then_raised_again", tool="llm-review", rule="llm/logic",
+                       file="e.py"),
+          at="2026-09-14T03:00:00+00:00", run="r4")
+
+    assert cmd_ledger_filter(tmp_path, as_json=True) == 0
+    rows = {r["id"]: (r["status"], r["resolved_by"])
+            for r in json.loads(capsys.readouterr().out)["findings"]}
+    assert rows == {
+        "still_open": ("open", None),
+        "auto": ("fixed", None),
+        "resolved_away": ("fixed", "evidence_gone"),
+        "closed": ("fixed", "evidenced_close"),
+        "closed_then_overridden": ("overridden", None),
+        "closed_then_raised_again": ("open", None)}

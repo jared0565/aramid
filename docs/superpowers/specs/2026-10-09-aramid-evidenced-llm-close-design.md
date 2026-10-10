@@ -1,9 +1,13 @@
 # Evidenced close for a fixed LLM finding (FN-36) — design
 
-Status: DECIDED 2026-10-10, not built. Shape chosen by the operator ("go with
-your recommendations": shape 2 of FN-36). The four questions in section 5
-were answered by the operator on 2026-10-10; sections 2 and 4 below are
-amended to match, and each amendment says so.
+Status: BUILT 2026-10-10 as a command-line close; the MCP tool is not built
+and waits on two questions for the operator (section 8.6). Shape chosen by
+the operator ("go with your recommendations": shape 2 of FN-36). The four
+questions in section 5 were answered by the operator on 2026-10-10; sections
+2 and 4 below are amended to match, and each amendment says so. **Section 8
+records what was built and holds where it disagrees with an earlier
+section**: red proof backs out the one commit and has a control (8.2), and
+`ledger show` had to be taught to print the evidence (8.4).
 
 ## 1. The problem, re-measured
 
@@ -203,3 +207,192 @@ the evidence sits on the event.
 - `review.auto_resolve_llm`'s docstring: correct the "re-raises" claim
   (section 1);
 - CHANGELOG `Added`.
+
+## 8. As built (2026-10-10)
+
+Read from the code and tried in scratch repositories before anything was
+written in the tree. This section settles what sections 2 and 5 left open
+and corrects what they got wrong. Where it disagrees with an earlier
+section, this one holds.
+
+### 8.1 The subcommand already existed
+
+`aramid ledger resolve <id>... --out-of-scope --reason R` shipped in 0.6.1.
+It retires a RUNNER finding whose path left its runner's scope, and it
+refuses every producer finding, llm-review included. The evidenced close is
+a second mode of the same subcommand:
+
+- `--fixed <commit>` selects it, and `--test` and `--red-proof` belong to it;
+- `--fixed` together with `--out-of-scope` is refused, and so is `--test` or
+  `--red-proof` without `--fixed`;
+- `--fixed` takes exactly one id, because each finding needs the test that
+  proves its own fix. `--out-of-scope` still takes several.
+
+### 8.2 Red proof backs out one commit, and has a control
+
+Section 2 said the pre-fix run "follows the existing `[red_proof]`
+machinery". That machinery runs `python -m pytest` and reads pytest's exit
+codes. It cannot serve a vitest command, and vitest is the case FN-36 was
+filed for. A command can also fail in a fresh worktree for reasons that say
+nothing about the fix: the test file is not committed, dependencies are not
+installed there, the selector matches nothing. Exit codes do not tell those
+apart across runners.
+
+So one throwaway worktree of HEAD is used twice:
+
+1. As checked out, the command must exit 0. This is the control. The repo's
+   `node_modules` is linked in when it has one, the way the js_mutation
+   consumer does it.
+2. The fixing commit is backed out with `git revert --no-commit` (`-m 1` for
+   a merge commit). The command must then exit non-zero.
+
+Only that commit is backed out, so commits after it stay and the proof reads
+"fails without `<commit>`". Three kinds of path the commit changed are put
+back to their content at HEAD after the back-out:
+
+- its test files, by the two naming rules aramid already has (pytest's and
+  the js_mutation consumer's). A test added with the fix has to exist to be
+  run against the tree without it;
+- any file the command names. A test in a file no naming rule recognises is
+  still the file under test;
+- every file the commit added. Taking one away fails the command when it is
+  test support, and that failure would read as red.
+
+Refused, each with nothing recorded:
+
+- a `<commit>` with no parent;
+- a `<commit>` that changes no existing source file (only tests, or only new
+  files): nothing is left to back out;
+- a control run that does not exit 0;
+- a `<commit>` git can no longer back out, because a later commit changed
+  the same lines. A guess at the tree without it would prove nothing;
+- a run without the fix that exits 0, times out or cannot start.
+
+**The first design was wrong, and a prototype showed it.** It put every
+non-test path that differs between `<commit>^` and HEAD back to its content
+at `<commit>^`. Two faults:
+
+- it proved "fails without everything since `<commit>^`", not "fails without
+  `<commit>`";
+- a helper or a test in an unrecognised location, added by any later commit,
+  went missing with the rest, and the command then failed for that reason.
+  That is a false red.
+
+Tried in scratch repositories, nine shapes: plain, with CRLF files under
+`core.autocrlf`, a later commit in another file, a later commit in another
+hunk of the fixed file (with and without autocrlf), a later commit on the
+fix's own lines (refused), a fix that adds a helper outside `tests/`, a fix
+made only of new files (refused), and a test in an unrecognised file named
+in the command. Each came out as intended, the repo's own tree was untouched
+and no worktree was left behind.
+
+Hooks, measured: `git worktree add` runs the repo's `post-checkout` hook, as
+it does for every worktree aramid builds. It runs before the control, so
+both runs see what it did. Putting the kept paths back is a `git checkout`
+too and would run the hook between the two runs; that call is made with
+hooks off. `git revert --no-commit` runs no hook.
+
+What red proof still cannot tell: test support that the fixing commit
+MODIFIED, outside every recognised test location and not named in the
+command, is backed out with the fix. A failure caused by that reads as red.
+
+### 8.3 The event
+
+```
+{"auto_resolved": "evidenced_close", "commit": "<full sha>",
+ "test_argv": ["..."], "test_rc": 0, "reason": "...", "head": "<HEAD sha>",
+ "red_proof": null,
+ "via": "cli"}
+```
+
+With red proof, `red_proof` is
+`{"base": "<sha of the commit's first parent>", "control_rc": 0, "pre_fix_rc": N, "backed_out": K}`,
+where K is the number of the commit's paths that were backed out. `via` is
+`cli`; `mcp` is reserved for 8.6.
+
+### 8.4 `ledger show` and `ledger filter --json`
+
+Sections 2 and 5 said `ledger show` prints the event's payload. It did not
+[V, 2026-10-10: it printed each event's time, type and run id]. The build
+adds three lines under an evidenced close: the commit with who closed it and
+why, the test command with the HEAD it passed at, and the red proof or "red
+proof: not run".
+
+`ledger filter --json` gains `resolved_by` on every row. It is the resolver
+named on the row's last resolution, and `evidenced_close` for this command.
+It is null on a row that is not resolved, and on one its own tool resolved
+by no longer reporting it, since that route names no resolver.
+
+### 8.5 Rules settled from the code
+
+- `<commit>` may be any rev git resolves. The event records the full sha.
+- A finding whose detection recorded no `head` (detections before
+  2026-09-06) skips the "a fix cannot predate its finding" check. Refusing
+  would strand every older finding.
+- No tracked file may have uncommitted changes. The event records the commit
+  the test passed at, and an edited tracked file makes the tree something
+  else. Untracked files do not count.
+- The finding's status is read again after the test ran. A test can run for
+  minutes, and a gate or an override may have changed the row meanwhile.
+- Each run is bounded by `[tests].timeout_s`: one at HEAD, and two more with
+  red proof. A value the config loader has already called wrong (text, a
+  boolean, zero or less, or a `tests` that is not a table) is read as the
+  default, 300 s.
+- `--test` is split POSIX-style, like a string `[tests].command`. On Windows
+  a path in it wants forward slashes.
+- Rule 5 of section 2, as built: the command goes through
+  `runners.tests._argv` and `run_subprocess`, as a `[tests].command` does. A
+  relative path to a program is anchored at the repo root, so it names the
+  same program in the worktree, and a program that cannot be found is a
+  refusal.
+
+### 8.6 The MCP tool is not built: two questions for the operator
+
+Section 5, question 3 was decided: expose `aramid_ledger_resolve`, and always
+require red proof through it. Found while planning the build: `--test` is a
+command line. Through MCP that makes aramid's server run whatever program
+the caller names. No MCP tool does that today: `aramid_check` runs only the
+repo's own test suite, which is the command its tracked config declares or
+the suite aramid detects. An agent host that allows aramid's tools without
+asking, but asks before a shell command, would be bypassed by it.
+
+The command-line close does not have this problem: whoever can type it can
+already run the program. So the command-line close is built, and the MCP
+tool waits for the operator to choose its shape:
+
+1. test selectors only: the caller names tests, and aramid appends them to
+   a command the repo declares in tracked config;
+2. any command, as at the command line;
+3. no MCP tool.
+
+A second point for the same decision: an agent with a shell can run the
+command-line close without `--red-proof`. If "an agent's close always shows
+red proof" is meant for those agents too, the agent hook is where it would
+be enforced. The hook today looks at git commands only (`--no-verify`, a
+changed hooks path); it does not read an `aramid` command line, so that
+would be a new kind of rule for it.
+
+Waiting on the same two answers: the `ARAMID.md` template. Its command list
+is where an agent in a consumer repo learns what exists, and it does not
+name the close yet, because the line to write depends on both answers (an
+MCP tool name or the command line, and whether red proof is required).
+Changing the template also makes every consumer's `ARAMID.md` stale until
+`aramid init` is run again there, so it is done once, not twice.
+
+### 8.7 Tests, as written
+
+`tests/unit/test_ledger_resolve_fixed.py` holds the command's tests at unit
+scope, because the drain confirms a mutant against the unit suite alone.
+
+- A small real git repository is built once for the module. Tests that only
+  read it share it; a test that commits, edits a file or builds a real
+  worktree gets a private copy.
+- Three tests build a real worktree and really run the checks, because what
+  they pin is the tree git leaves: what is backed out, what stays, what a
+  later rewrite of the fix does, and that no hook runs between the two runs.
+- The rest decide nothing about the tree, so `git worktree`, `git revert`
+  and `git checkout` answer without acting and the runs are scripted.
+
+The safety net of section 6 is in `tests/unit/test_llm_consumer.py`: a
+finding closed on evidence that a review raises again is `open` again, and
+an overridden one is not raised and stays `overridden`.

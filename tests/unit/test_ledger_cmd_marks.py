@@ -290,7 +290,8 @@ def test_mark_unreachable_refuses_a_producer_finding(tmp_path, capsys, clock):
     assert capsys.readouterr() == (
         "", "aramid: ledger mark-unreachable: m1 is a 'mutation' finding -- producer/consumer "
             "findings (tdd, red-proof, mutation, mutation-score, llm-review, js-mutation, "
-            "fuzz, dast) resolve through their own producer's mechanism, never by hand\n")
+            "fuzz, dast) resolve through their own producer's mechanism, not by this mark; "
+            "an llm-review finding that a commit fixed has `aramid ledger resolve --fixed`\n")
 
 
 @pytest.mark.parametrize("status, tail", [
@@ -363,9 +364,10 @@ def test_resolve_without_out_of_scope_is_refused_before_the_reason_is_looked_at(
 
     assert cmd_ledger_resolve(tmp_path, "f1", False, "") == 3
     assert capsys.readouterr() == (
-        "", "aramid: ledger resolve: --out-of-scope is required -- it is the only resolution "
-            "a person can record; a finding that is simply gone resolves on the next run "
-            "that examines its file\n")
+        "", "aramid: ledger resolve: give --out-of-scope (a runner finding whose path left "
+            "its runner's scope) or --fixed <commit> --test \"<command>\" (an llm-review "
+            "finding a commit fixed) -- a finding that is simply gone resolves on the next "
+            "run that examines its file\n")
 
 
 @pytest.mark.parametrize("reason", ["", "   ", None])
@@ -397,7 +399,21 @@ def test_resolve_refuses_a_producer_finding(tmp_path, capsys, clock):
     assert cmd_ledger_resolve(tmp_path, "m1", True, "r") == 3
     assert capsys.readouterr() == (
         "", "aramid: ledger resolve: m1 is a 'mutation' finding -- producer/consumer findings "
-            "resolve through their own producer's mechanism, never by hand\n")
+            "resolve through their own producer's mechanism, not by --out-of-scope\n")
+
+
+def test_resolve_out_of_scope_points_an_llm_review_finding_at_its_own_exit(tmp_path, capsys,
+                                                                          clock):
+    """Since FN-36 an llm-review finding a commit fixed has `--fixed`; this
+    refusal is where someone holding one lands first."""
+    _seed(tmp_path, _f("l1", tool="llm-review", rule="llm/logic", file="src/pay.py"))
+
+    assert cmd_ledger_resolve(tmp_path, "l1", True, "r") == 3
+    assert capsys.readouterr() == (
+        "", "aramid: ledger resolve: l1 is a 'llm-review' finding -- an llm-review finding "
+            "that a commit fixed closes with `--fixed <commit> --test \"<command>\"`, not "
+            "--out-of-scope\n")
+    assert _appended(tmp_path, EventType.FINDING_OUT_OF_SCOPE) == []
 
 
 @pytest.mark.parametrize("status", ["fixed", "unreachable", "out_of_scope", "pending_retest"])
