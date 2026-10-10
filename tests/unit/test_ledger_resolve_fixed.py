@@ -69,6 +69,19 @@ if calc.other() != 2:
     sys.exit(6)
 sys.exit(0 if calc.route("CN") == "ASIA" else 1)
 """
+# Exits 7 when tests/check_obsolete.py is not there, and otherwise 1 for the
+# missing fix.
+_CHECK_BACK = _ROOT + """
+if not os.path.exists(os.path.join(ROOT, "tests", "check_obsolete.py")):
+    sys.exit(7)
+sys.exit(0 if calc.route("CN") == "ASIA" else 1)
+"""
+# Passes when app/i/rate.py, the neighbour of app/[id]/, holds the fixed rate.
+_CHECK_RATE = _ROOT + """
+sys.path.insert(0, os.path.join(ROOT, "app", "i"))
+import rate
+sys.exit(0 if rate.RATE == 2 else 1)
+"""
 _CALC_BUG = "def route(country):\n    return 'EU'\n\n\ndef other():\n    return 1\n"
 _CALC_FIXED = ("def route(country):\n    if country == 'CN':\n        return 'ASIA'\n"
                "    return 'EU'\n\n\ndef other():\n    return 1\n")
@@ -167,7 +180,7 @@ def _fresh(template, finding, head=None):
 
 # What these git subcommands say about the shared repository depends on its
 # commits alone, and no test moves them.
-_ASKED_ONCE = (("rev-parse",), ("merge-base",), ("diff",))
+_ASKED_ONCE = (("rev-parse",), ("merge-base",), ("diff",), ("ls-tree",))
 
 
 @pytest.fixture
@@ -588,23 +601,30 @@ def _hook_log(root):
     return log
 
 
-def _git_stub(monkeypatch, *subcommands, rc=0, stderr=""):
+def _git_stub(monkeypatch, *subcommands, rc=0, stderr="", stdout=""):
     """Real git, except a call whose subcommand starts with one of
-    `subcommands`: that answers `rc` and `stderr` and does nothing. Returns
-    the stubbed calls, each as it was made."""
+    `subcommands`: that answers `rc`, `stdout` and `stderr` and does nothing.
+    Returns the stubbed calls, each as it was made."""
     real = gitutil._run
     calls = []
 
     def fake(root, *args):
         if any(_sub(args)[:len(sub)] == sub for sub in subcommands):
             calls.append(args)
-            return subprocess.CompletedProcess(args, rc, "", stderr)
+            return subprocess.CompletedProcess(args, rc, stdout, stderr)
         return real(root, *args)
     monkeypatch.setattr(gitutil, "_run", fake)
     return calls
 
 
 _TREE = (("worktree",), ("revert",), ("checkout",))
+
+
+def _lit(*paths):
+    """The paths as `git checkout` is given them: literal, never a pattern."""
+    return tuple(f":(literal){path}" for path in paths)
+
+
 _OK = RunnerResult("python", ToolState.OK, returncode=0)
 _RED = RunnerResult("python", ToolState.OK, returncode=1)
 _TIMEOUT = RunnerResult("python", ToolState.TIMEOUT, stderr="killed")
@@ -668,22 +688,69 @@ def test_red_proof_refuses_when_a_later_commit_rewrote_the_fix(own_repo, capsys)
            .replace("return 1", "return 2"))
     _commit(repo.root, "c4: the fix's own lines again")
 
-    assert cmd_ledger_resolve_fixed(repo.root, FID, repo.c2, CHECK_CN, "r",
-                                    red_proof=True) == 3
-    out, err = capsys.readouterr()
-    assert out == ""
-    assert err.startswith(f"aramid: ledger resolve: red proof could not be run: "
-                          f"{repo.c2[:12]} can no longer be backed out of HEAD (")
-    assert err.endswith(") -- a later commit changed the same lines\n")
-    assert _closes(repo.root) == [] and _status(repo.root) == "open"
+    rc = cmd_ledger_resolve_fixed(repo.root, FID, repo.c2, CHECK_CN, "r", red_proof=True)
+
+    _refused(capsys, repo.root, rc,
+             f"red proof could not be run: {repo.c2[:12]} can no longer be backed out of "
+             f"HEAD -- it conflicts with later changes to calc.py")
     assert len(_worktrees(repo.root)) == 1
+
+
+def test_the_kept_paths_are_as_head_has_them_whatever_happened_since_the_fix(
+        own_repo, clock):
+    """c4 touches three paths that c2's back-out leaves alone, each its own
+    way, and red proof still shows exit 1, the missing fix:
+
+      tests/check_cn.py        c2 added it, c4 edits it. Backing c2 out
+                               would delete a file that changed since: a
+                               conflict, and no obstacle, in a kept path.
+      tests/check_obsolete.py  c2 deleted it, c4 brings it back. Another
+                               conflict. Removed as "deleted by the fix",
+                               the command would exit 7.
+      support/helper.py        c2 added it, c4 deletes it. git refuses to
+                               check out a path HEAD does not hold."""
+    repo = own_repo
+    _write(repo.root, "tests/check_cn.py",
+           _CHECK_ROUTE.format(country="CN", want="ASIA") + "# edited later\n")
+    _write(repo.root, "tests/check_obsolete.py", "import sys\nsys.exit(0)  # back\n")
+    _write(repo.root, "tests/check_back.py", _CHECK_BACK)
+    (repo.root / "support" / "helper.py").unlink()
+    _commit(repo.root, "c4: the fix's own tests and helper, again")
+
+    assert cmd_ledger_resolve_fixed(repo.root, FID, repo.c2,
+                                    _run_script("tests/check_back.py"), "r",
+                                    red_proof=True) == 0
+    assert _closes(repo.root)[0].payload["red_proof"] == {
+        "base": repo.c1, "control_rc": 0, "pre_fix_rc": 1, "backed_out": 2}
+    assert _git(repo.root, "status", "--porcelain") == ""
+    assert len(_worktrees(repo.root)) == 1
+
+
+def test_a_kept_path_with_brackets_in_its_name_brings_back_only_itself(own_repo, clock):
+    """app/[id]/rate.py is new in the fix, so it stays. Read as a git
+    pattern it also names app/i/rate.py, which the fix CHANGED. Checked out
+    along with it, the fix would be back and the test would pass."""
+    repo = own_repo
+    _write(repo.root, "app/i/rate.py", "RATE = 1\n")
+    _write(repo.root, "tests/check_rate.py", _CHECK_RATE)
+    _commit(repo.root, "c4: a rate, and it is wrong")
+    _write(repo.root, "app/i/rate.py", "RATE = 2\n")
+    _write(repo.root, "app/[id]/rate.py", "RATE = 2\n")
+    fix = _commit(repo.root, "c5: the rate fixed")
+
+    assert cmd_ledger_resolve_fixed(repo.root, FID, fix, _run_script("tests/check_rate.py"),
+                                    "r", red_proof=True) == 0
+    assert _closes(repo.root)[0].payload["red_proof"] == {
+        "base": _git(repo.root, "rev-parse", "HEAD~1"), "control_rc": 0, "pre_fix_rc": 1,
+        "backed_out": 1}
 
 
 def test_the_tree_is_built_by_git_in_this_order(repo, clock, monkeypatch):
     """A detached worktree of HEAD; the fix backed out without committing;
-    the kept paths checked out from HEAD again with hooks off -- the helper
-    the fix added and its tests, but not the test it deleted, which is
-    removed instead; then the worktree goes."""
+    the kept paths that HEAD holds checked out from it again, as literal
+    paths and with hooks off -- the helper the fix added and its tests, but
+    not the test it deleted, which HEAD does not hold and which is removed
+    instead; then the worktree goes."""
     calls = _git_stub(monkeypatch, *_TREE)
     seen = _scripted(monkeypatch, _OK, _OK, _RED)
 
@@ -694,7 +761,7 @@ def test_the_tree_is_built_by_git_in_this_order(repo, clock, monkeypatch):
         ("worktree", "add", "--detach", str(wt), repo.c3),
         ("revert", "--no-commit", repo.c2),
         ("-c", f"core.hooksPath={wt.parent / 'no-hooks'}", "checkout", repo.c3, "--",
-         "support/helper.py", "tests/check_cn.py", "tests/check_tree.py"),
+         *_lit("support/helper.py", "tests/check_cn.py", "tests/check_tree.py")),
         ("worktree", "remove", "--force", str(wt)),
         ("worktree", "prune")]
 
@@ -710,9 +777,39 @@ def test_a_test_file_the_command_names_stays_where_no_naming_rule_knows_it(
                                     _run_script("checks/routes_check.py"), "r",
                                     red_proof=True) == 0
     checkout = [_sub(c) for c in calls if _sub(c)[0] == "checkout"]
-    assert checkout == [("checkout", repo.c3, "--", "checks/routes_check.py",
-                         "support/helper.py", "tests/check_cn.py", "tests/check_tree.py")]
+    assert checkout == [("checkout", repo.c3, "--", *_lit(
+        "checks/routes_check.py", "support/helper.py", "tests/check_cn.py",
+        "tests/check_tree.py"))]
     assert _closes(repo.root)[0].payload["red_proof"]["backed_out"] == 1
+
+
+def test_head_decides_which_kept_paths_come_back(repo, clock, monkeypatch):
+    """Not what the commit did to the path. Here HEAD is said to hold the
+    test c2 deleted and to have lost the helper c2 added: the first is
+    checked out, and git is not asked for the second, which it would
+    refuse."""
+    calls = _git_stub(monkeypatch, *_TREE)
+    _git_stub(monkeypatch, ("ls-tree",),
+              stdout="calc.py\0tests/check_cn.py\0tests/check_obsolete.py\0"
+                     "tests/check_tree.py\0")
+    _scripted(monkeypatch, _OK, _OK, _RED)
+
+    assert cmd_ledger_resolve_fixed(repo.root, FID, repo.c2, CHECK_CN, "r",
+                                    red_proof=True) == 0
+    checkout = [_sub(c) for c in calls if _sub(c)[0] == "checkout"]
+    assert checkout == [("checkout", repo.c3, "--", *_lit(
+        "tests/check_cn.py", "tests/check_obsolete.py", "tests/check_tree.py"))]
+
+
+def test_no_checkout_is_made_when_head_holds_none_of_the_kept_paths(repo, clock,
+                                                                   monkeypatch):
+    calls = _git_stub(monkeypatch, *_TREE)
+    _git_stub(monkeypatch, ("ls-tree",), stdout="calc.py\0")
+    _scripted(monkeypatch, _OK, _OK, _RED)
+
+    assert cmd_ledger_resolve_fixed(repo.root, FID, repo.c2, CHECK_CN, "r",
+                                    red_proof=True) == 0
+    assert [c[0] for c in calls] == ["worktree", "revert", "worktree", "worktree"]
 
 
 def test_the_paths_a_command_names():
@@ -972,6 +1069,18 @@ def test_red_proof_refuses_when_git_cannot_read_what_the_commit_changed(repo, ca
              f"git could not read what {repo.c2[:12]} changed: fatal: bad object")
 
 
+def test_red_proof_refuses_when_git_cannot_list_the_files_of_head(repo, capsys,
+                                                                   monkeypatch):
+    _git_stub(monkeypatch, ("ls-tree",), rc=128, stderr="fatal: not a tree object\n")
+    _scripted(monkeypatch, _OK)
+
+    rc = cmd_ledger_resolve_fixed(repo.root, FID, repo.c2, CHECK_CN, "r", red_proof=True)
+
+    _refused(capsys, repo.root, rc,
+             "red proof could not be run: git could not list the files of HEAD "
+             "(fatal: not a tree object)")
+
+
 def test_a_worktree_git_cannot_create_is_a_refusal(repo, capsys, monkeypatch):
     _git_stub(monkeypatch, ("worktree", "add"), rc=128, stderr="fatal: no space left\n")
     _scripted(monkeypatch, _OK)
@@ -982,19 +1091,68 @@ def test_a_worktree_git_cannot_create_is_a_refusal(repo, capsys, monkeypatch):
              "red proof could not be run: git worktree add failed (fatal: no space left)")
 
 
-def test_a_fix_git_cannot_back_out_quotes_gits_first_line_only(repo, capsys, monkeypatch):
-    _git_stub(monkeypatch, ("worktree",))
+def _revert_fails(monkeypatch, unmerged, listing_rc=0):
+    """`git revert` exits 1 and leaves `unmerged` in conflict, as `git diff
+    --name-only` lists them (or cannot: `listing_rc`). Returns the listing
+    calls, each as it was made."""
+    _git_stub(monkeypatch, ("worktree",), ("checkout",))
     _git_stub(monkeypatch, ("revert",), rc=1,
               stderr="error: could not revert 0a1b2c3... c2: the fix\n"
                      "hint: After resolving the conflicts, mark them with\n")
+    return _git_stub(monkeypatch, ("diff", "--name-only"), rc=listing_rc,
+                     stdout="".join(f"{path}\0" for path in unmerged))
+
+
+@pytest.mark.parametrize("unmerged, named", [
+    (["calc.py"], "calc.py"),
+    (["calc.py", "legacy.py"], "calc.py and 1 more file(s)"),
+    # tests/check_cn.py stays at HEAD, so it is not one of them
+    (["tests/check_cn.py", "calc.py", "CHANGELOG.md", "docs/guide.md"],
+     "CHANGELOG.md and 2 more file(s)"),
+])
+def test_a_conflict_in_a_path_that_has_to_be_backed_out_ends_red_proof_and_is_named(
+        repo, capsys, monkeypatch, unmerged, named):
+    """Named, so the person sees WHICH file a later commit changed. It is
+    often a CHANGELOG and not the fix. A path that stays at HEAD is not
+    among them."""
+    _revert_fails(monkeypatch, unmerged)
     _scripted(monkeypatch, _OK, _OK)
 
     rc = cmd_ledger_resolve_fixed(repo.root, FID, repo.c2, CHECK_CN, "r", red_proof=True)
 
     _refused(capsys, repo.root, rc,
              f"red proof could not be run: {repo.c2[:12]} can no longer be backed out of "
-             f"HEAD (error: could not revert 0a1b2c3... c2: the fix) -- a later commit "
-             f"changed the same lines")
+             f"HEAD -- it conflicts with later changes to {named}")
+
+
+def test_a_conflict_only_in_paths_that_stay_at_head_does_not_stop_red_proof(
+        repo, clock, monkeypatch):
+    """Both are among c2's kept paths; `_keep_at_head` overwrites them. git
+    is asked for the UNMERGED paths, once."""
+    listed = _revert_fails(monkeypatch, ["tests/check_cn.py", "support/helper.py"])
+    _scripted(monkeypatch, _OK, _OK, _RED)
+
+    assert cmd_ledger_resolve_fixed(repo.root, FID, repo.c2, CHECK_CN, "r",
+                                    red_proof=True) == 0
+    assert _closes(repo.root)[0].payload["red_proof"]["pre_fix_rc"] == 1
+    assert listed == [("diff", "--name-only", "--diff-filter=U", "-z")]
+
+
+@pytest.mark.parametrize("unmerged, listing_rc", [
+    ([], 0),                # the back-out failed and left no conflict
+    (["calc.py"], 128),     # ... or git cannot say what it left
+])
+def test_a_back_out_that_fails_with_no_conflict_git_can_name_quotes_gits_first_line(
+        repo, capsys, monkeypatch, unmerged, listing_rc):
+    """Not known to be harmless, so it is refused, with what git said."""
+    _revert_fails(monkeypatch, unmerged, listing_rc)
+    _scripted(monkeypatch, _OK, _OK)
+
+    rc = cmd_ledger_resolve_fixed(repo.root, FID, repo.c2, CHECK_CN, "r", red_proof=True)
+
+    _refused(capsys, repo.root, rc,
+             f"red proof could not be run: git could not back {repo.c2[:12]} out of HEAD "
+             f"(error: could not revert 0a1b2c3... c2: the fix)")
 
 
 def test_red_proof_refuses_when_the_kept_paths_cannot_be_put_back(repo, capsys,
@@ -1035,14 +1193,15 @@ def test_the_kept_paths_are_put_back_a_hundred_at_a_time(repo, clock, monkeypatc
     wide = [("M", "calc.py")] + [("A", f"tests/t{i:03}.py") for i in range(101)]
     monkeypatch.setattr(evidenced_close, "_changed", lambda root, base, commit: wide)
     calls = _git_stub(monkeypatch, *_TREE)
+    _git_stub(monkeypatch, ("ls-tree",), stdout="".join(f"{rel}\0" for _, rel in wide))
     _scripted(monkeypatch, _OK, _OK, _RED)
 
     assert cmd_ledger_resolve_fixed(repo.root, FID, repo.c2, CHECK_CN, "r",
                                     red_proof=True) == 0
     checkouts = [_sub(c) for c in calls if _sub(c)[0] == "checkout"]
     assert [c[:3] for c in checkouts] == [("checkout", repo.c3, "--")] * 2
-    assert [list(c[3:]) for c in checkouts] == [
-        [rel for _, rel in wide[1:101]], [wide[101][1]]]
+    assert [c[3:] for c in checkouts] == [
+        _lit(*(rel for _, rel in wide[1:101])), _lit(wide[101][1])]
     assert _closes(repo.root)[0].payload["red_proof"]["backed_out"] == 1
 
 

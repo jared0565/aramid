@@ -38,9 +38,16 @@ to publish a tag that disagrees with it.
   --no-commit`; later commits stay), which must fail. The commit's test
   files, the files it added and any file the command names are kept as at
   HEAD. It is refused when the commit changes no existing source file, when
-  a later commit changed the same lines, when the control fails, and when
-  the test passes or does not finish without the fix. **A confirmed critical
-  closes only with `--red-proof`.**
+  a later commit changed the same lines of a file that has to be backed out
+  (the refusal names the file), when the control fails, and when the test
+  passes or does not finish without the fix. **A confirmed critical closes
+  only with `--red-proof`.**
+
+  Red proof has a limit that shows on old fixes: git backs out the whole
+  commit, so a later change that overlaps it anywhere outside the kept
+  files, a `CHANGELOG` included, ends the proof. Tried on this repo's own
+  month-old case, it was refused; the close without `--red-proof` worked.
+  The user guide lists this and the two things red proof cannot tell.
 
   The close writes `fixed`, with the commit, the command, the HEAD it passed
   at, the reason and the red proof on the event, so a later review that

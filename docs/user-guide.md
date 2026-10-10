@@ -557,16 +557,20 @@ aramid records the close only when all of this holds:
 1. As it is. The test must pass. This run is the control: a test that fails in a clean checkout (the test file is not committed, or dependencies are not installed there) would also "fail without the fix", for a reason that says nothing about the fix.
 2. With the commit backed out (`git revert --no-commit`). The test must now fail.
 
-Only that commit is backed out; commits after it stay. Three kinds of file from the commit are kept as they are at `HEAD`: its test files, the files it added, and any file the test command names. That is how a test written together with the fix is run against the code without it. Red proof is refused, and nothing is recorded, when:
+Only that commit is backed out; commits after it stay. Three kinds of file from the commit are kept as they are at `HEAD`: its test files, the files it added, and any file the test command names. That is how a test written together with the fix is run against the code without it. "As they are at `HEAD`" includes not being there: a file the commit added that a later commit deleted stays deleted. Red proof is refused, and nothing is recorded, when:
 
 - the commit changes no existing source file (only tests, or only new files);
-- a later commit changed the same lines, so git can no longer back the commit out;
+- git can no longer back the commit out, because a later commit changed the same lines of one of its files. The refusal names the file. A conflict in a file that is kept as at `HEAD` does not count;
 - the control run does not pass;
 - the test also passes without the fix, or does not finish.
 
 **A confirmed-critical finding closes only with `--red-proof`.** For any other finding it is optional.
 
-One thing red proof cannot tell: test support that the fixing commit *modified*, outside every test location aramid recognises and not named in the command, is backed out with the fix. A failure caused by that reads as red.
+What red proof cannot do, and cannot tell:
+
+- **It cannot be shown for a fix whose lines were changed again later.** git backs out the whole commit, so one later change that overlaps it in any file that has to be backed out ends the proof. A `CHANGELOG` or a guide the fix also touched counts like source. How often that happens has been measured on one case only: this repo's own month-old fix, where it was refused with four of the files that had to be backed out in conflict (the changelog, this guide and two source files). Close such a finding without `--red-proof`; a confirmed critical in that state cannot be closed this way.
+- Test support that the fixing commit *modified*, outside every test location aramid recognises and not named in the command, is backed out with the fix. A failure caused by that reads as red.
+- `HEAD` with one commit taken out is a tree nobody committed. When a later commit uses something the fix introduced (a function, a parameter), the test fails there because the code no longer fits together. That also reads as red, and it shows less: the test needs the commit, not necessarily that it detects the bug.
 
 The close writes `fixed`. The event carries the commit, the command, the `HEAD` the test passed at, your reason and the red proof; `aramid ledger show <id>` prints them, including `red proof: not run` when there was none, and `aramid ledger filter --json` names the route in `resolved_by` (`evidenced_close`). If a later review raises the same finding again, it re-opens.
 

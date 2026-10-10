@@ -1,7 +1,7 @@
 # Evidenced close for a fixed LLM finding (FN-36) — design
 
 Status: BUILT 2026-10-10 as a command-line close; the MCP tool is not built
-and waits on two questions for the operator (section 8.6). Shape chosen by
+and waits on three questions for the operator (section 8.6). Shape chosen by
 the operator ("go with your recommendations": shape 2 of FN-36). The four
 questions in section 5 were answered by the operator on 2026-10-10; sections
 2 and 4 below are amended to match, and each amendment says so. **Section 8
@@ -258,6 +258,10 @@ back to their content at HEAD after the back-out:
 - every file the commit added. Taking one away fails the command when it is
   test support, and that failure would read as red.
 
+HEAD decides what "put back" means for each, not what the commit did to the
+path: a kept path that HEAD holds is checked out from it, and one HEAD does
+not hold is removed. The checkout is given literal pathspecs.
+
 Refused, each with nothing recorded:
 
 - a `<commit>` with no parent;
@@ -265,7 +269,12 @@ Refused, each with nothing recorded:
   files): nothing is left to back out;
 - a control run that does not exit 0;
 - a `<commit>` git can no longer back out, because a later commit changed
-  the same lines. A guess at the tree without it would prove nothing;
+  the same lines of a path that has to be backed out. The refusal names the
+  path (the first by name, and how many more). A guess at the tree without
+  the commit would prove nothing. A conflict in a kept path is not a
+  refusal: that path is put back as HEAD has it whatever the back-out did;
+- a back-out that fails and leaves no conflict git can list. The refusal
+  quotes git;
 - a run without the fix that exits 0, times out or cannot start.
 
 **The first design was wrong, and a prototype showed it.** It put every
@@ -292,9 +301,97 @@ both runs see what it did. Putting the kept paths back is a `git checkout`
 too and would run the hook between the two runs; that call is made with
 hooks off. `git revert --no-commit` runs no hook.
 
-What red proof still cannot tell: test support that the fixing commit
-MODIFIED, outside every recognised test location and not named in the
-command, is backed out with the fix. A failure caused by that reads as red.
+What red proof still cannot tell, two things:
+
+- test support that the fixing commit MODIFIED, outside every recognised
+  test location and not named in the command, is backed out with the fix. A
+  failure caused by that reads as red;
+- HEAD with one commit taken out is a tree nobody ever committed. When a
+  later commit uses something the fix introduced (a function, a
+  parameter), the command fails there because the tree no longer fits
+  together, and that also reads as red. It shows the test needs the commit,
+  which is less than showing it detects the bug. Seen while reviewing the
+  build, not measured.
+
+**Replayed on real state, and what it found (2026-10-10 18:15Z).** This
+repo has one finding of FN-36's kind: `ea21b2a8`, an llm-review finding
+raised 2026-09-07 at `mutation.py:88`, fixed the next day in `5eba4d3` in
+the resolver, not at the quoted line, and open ever since under a
+suppression entry. Fourteen later commits touch the two files that fix
+changed. The built command was run from the committed tree
+(`c6a1589`) in a scratch clone, against a copy of this repo's ledger file
+(the main database file only, without its write-ahead log; the real ledger's
+path was never opened by the command):
+
+- with `--red-proof`: **refused**. "`5eba4d3d1e8f` can no longer be backed
+  out of HEAD ... a later commit changed the same lines". Nothing recorded.
+  Tried by hand in the same clone: `git revert --no-commit 5eba4d3`
+  conflicts in six of the eight files the commit changed. Both source files
+  with later edits are among them, and so are `CHANGELOG.md` and the user
+  guide, which a later release rewrites whatever the fix was;
+- without it: closed. The named unit test passes at HEAD, `ledger show`
+  prints the three evidence lines with `red proof: not run`, and
+  `ledger filter --json` gives `resolved_by: evidenced_close`.
+
+The refusal is the command doing what it says. It is also a limit that
+matters, found on the first real case tried: **once the lines a fix
+changed have been edited again, red proof cannot be shown, and this repo's
+one real case, a month old, is in that state.** How common that is has not
+been measured beyond this one case. Two consequences for decisions already
+made:
+
+- A confirmed critical closes only with red proof (section 5, question 1).
+  One whose fix was edited later has no exit again, which is the gap that
+  decision was meant to close.
+- "A close through MCP always requires red proof" (question 3) would refuse
+  every finding in that state that an agent tries to close.
+
+A way out exists and is not built, because it changes what the proof
+claims: when the commit cannot be backed out of HEAD, show red at the fix
+itself. Check out `<commit>`, bring in the named test as it is at HEAD,
+require the control to pass there, back the commit out (always clean, it is
+the tip) and require the test to fail. That proves "the test passes with
+the fix and fails without it, as the code stood when the fix was made",
+not "at HEAD". The source in both runs is a state that was committed
+(`<commit>` and its parent), so the second limit above does not apply to
+it; its own limit is a test that no longer runs against the old code, which
+the control would refuse. It is a question for
+the operator (8.6).
+
+**Second pass, the same evening: four defects in the committed back-out,
+fixed before any push.** The replay's six conflicts included two test files,
+which are kept at HEAD whatever the back-out does to them. That was the
+first defect, and measuring git for it in a throwaway repository showed
+three more. Each is now a test:
+
+- A conflict in a kept path refused the proof. Measured: a `git revert
+  --no-commit` that conflicts still backs out every path it can, and `git
+  checkout <head> -- <path>` puts an unmerged kept path back. So only a
+  conflict in a path that has to be backed out is a refusal, and it names
+  the path.
+- A file the fix added that a later commit deleted refused the proof with
+  "git could not put the test files back": `git checkout` refuses a path
+  its tree does not hold. Measured.
+- A test the fix deleted that a later commit brought back unchanged was
+  removed again, because the rule looked at what the commit did to the path.
+  Measured: that back-out is clean and leaves the file in place; the old
+  rule then deleted it. A command that needs the file fails for a missing
+  file, and that reads as red. This one was a false red, not a refusal.
+- A kept path named `app/[id]/page.test.ts` is a pattern to `git checkout`.
+  Measured: checking out that one path also restored `app/i/page.test.ts`.
+  Had the fix changed that neighbour, it would have come back and the test
+  would have passed without the fix, a wrong refusal.
+
+The rule now is the one stated above: HEAD decides which kept paths come
+back, and the pathspecs are literal.
+
+The replay was run again with that code (imported from the working tree,
+acting on a fresh scratch clone of `c6a1589` and a fresh copy of the ledger
+file): still **refused**, now as "`5eba4d3d1e8f` can no longer be backed out
+of HEAD -- it conflicts with later changes to CHANGELOG.md and 3 more
+file(s)". The four are `CHANGELOG.md`, the user guide and the two source
+files; the two test files no longer count. So the limit stands as written,
+and the question for the operator with it.
 
 ### 8.3 The event
 
@@ -346,7 +443,7 @@ by no longer reporting it, since that route names no resolver.
   same program in the worktree, and a program that cannot be found is a
   refusal.
 
-### 8.6 The MCP tool is not built: two questions for the operator
+### 8.6 The MCP tool is not built: three questions for the operator
 
 Section 5, question 3 was decided: expose `aramid_ledger_resolve`, and always
 require red proof through it. Found while planning the build: `--test` is a
@@ -372,7 +469,12 @@ be enforced. The hook today looks at git commands only (`--no-verify`, a
 changed hooks path); it does not read an `aramid` command line, so that
 would be a new kind of rule for it.
 
-Waiting on the same two answers: the `ARAMID.md` template. Its command list
+A third question came out of the replay in 8.2: whether red proof should
+fall back to the fix commit itself when the commit can no longer be backed
+out of HEAD. Without it, "always red proof" for MCP and for a confirmed
+critical refuses every fix whose lines were edited afterwards.
+
+Waiting on the first two answers: the `ARAMID.md` template. Its command list
 is where an agent in a consumer repo learns what exists, and it does not
 name the close yet, because the line to write depends on both answers (an
 MCP tool name or the command line, and whether red proof is required).
@@ -387,9 +489,11 @@ scope, because the drain confirms a mutant against the unit suite alone.
 - A small real git repository is built once for the module. Tests that only
   read it share it; a test that commits, edits a file or builds a real
   worktree gets a private copy.
-- Three tests build a real worktree and really run the checks, because what
+- Five tests build a real worktree and really run the checks, because what
   they pin is the tree git leaves: what is backed out, what stays, what a
-  later rewrite of the fix does, and that no hook runs between the two runs.
+  later rewrite of the fix does, what later changes to the kept paths do,
+  that a kept path with brackets in its name brings back only itself, and
+  that no hook runs between the two runs.
 - The rest decide nothing about the tree, so `git worktree`, `git revert`
   and `git checkout` answer without acting and the runs are scripted.
 

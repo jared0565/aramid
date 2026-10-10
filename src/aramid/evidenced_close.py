@@ -25,8 +25,10 @@ number them differently). So the same worktree is used twice:
 
 The only difference between the two runs is what that one commit changed,
 so a failure in the second is a failure for want of the fix. Commits after
-the fix stay. If one of them rewrote the fix's own lines, git cannot back
-the fix out and red proof is refused rather than guessed.
+the fix stay. If one of them changed the fix's own lines again, git cannot
+back the fix out of that file, and red proof is refused rather than guessed
+-- unless the file is one that stays at HEAD anyway (next section), where
+the conflict is undone with everything else the back-out did to it.
 
 WHAT STAYS AT HEAD WHEN THE FIX IS BACKED OUT, and why each:
 
@@ -47,9 +49,22 @@ is made with hooks off, so nothing but the back-out separates them.
 `git revert --no-commit` makes no commit and runs no hook (measured
 2026-10-10).
 
-WHAT IT STILL CANNOT TELL: test support that the fixing commit MODIFIED,
-outside every recognised test location and not named in the command, is
-backed out with the fix. A failure caused by that reads as red.
+WHAT IT STILL CANNOT TELL, two things:
+
+  - test support that the fixing commit MODIFIED, outside every recognised
+    test location and not named in the command, is backed out with the fix.
+    A failure caused by that reads as red;
+  - HEAD with one commit taken out is a tree nobody committed. When a later
+    commit uses something the fix introduced, the command fails there
+    because the tree no longer fits together, and that reads as red too. It
+    shows the test needs the commit, which is less than showing it detects
+    the bug.
+
+AND WHAT IT CANNOT DO: back out a commit whose lines were changed again
+afterwards. `git revert` takes the whole commit, so one later change that
+overlaps it in any backed-out file refuses the proof, and a CHANGELOG or a
+guide counts there like source. The refusal names the file. Replayed on
+this repo's own month-old case, 2026-10-10: refused (spec section 8.2).
 """
 import shlex
 import shutil
@@ -173,17 +188,46 @@ def _changed(root: Path, base: str, commit: str) -> list[tuple[str, str]]:
     return list(zip(fields[0::2], fields[1::2]))
 
 
-def _keep_at_head(wt: Path, head: str, kept: list[tuple[str, str]], no_hooks: Path) -> None:
-    """Undo the back-out for the paths that stay: a path the commit deleted
-    goes again, every other is checked out from `head`. `no_hooks` is an
-    empty directory: with it as the hooks path the checkout cannot run the
-    repo's `post-checkout` (see HOOKS in the module docstring)."""
+def _held(root: Path, head: str) -> set[str]:
+    """Every path `head` holds."""
+    cp = gitutil._run(root, "ls-tree", "-r", "-z", "--name-only", head)
+    if cp.returncode != 0:
+        raise Refused(f"red proof could not be run: git could not list the files of "
+                      f"HEAD ({_said(cp)})")
+    return {f for f in cp.stdout.split("\0") if f}
+
+
+def _conflicts(wt: Path) -> set[str]:
+    """The paths a failed back-out left in conflict. Empty when it left none,
+    and when git cannot say."""
+    cp = gitutil._run(wt, "diff", "--name-only", "--diff-filter=U", "-z")
+    if cp.returncode != 0:
+        return set()
+    return {f for f in cp.stdout.split("\0") if f}
+
+
+def _keep_at_head(wt: Path, head: str, kept: list[str], held: set[str],
+                  no_hooks: Path) -> None:
+    """Put the paths that stay back as `head` has them, whatever the back-out
+    did to them, a conflict included: a kept path that `head` holds (`held`)
+    is checked out from it, any other is removed.
+
+    `head` decides, and not what the commit did to the path. A later commit
+    may have deleted a file the fix added, and `git checkout` refuses a path
+    its tree does not hold; or brought back a test the fix deleted, and
+    removing that one would fail the command for a missing file.
+
+    The pathspecs are literal: `app/[id]/page.test.ts` is a character class
+    to git, and unmarked it also checks out `app/i/` and `app/d/` (all three
+    measured 2026-10-10). `no_hooks` is an empty directory: with it as the
+    hooks path the checkout cannot run the repo's `post-checkout` (see HOOKS
+    in the module docstring)."""
     restore = []
-    for status, rel in kept:
-        if status == "D":
-            (wt / rel).unlink(missing_ok=True)
+    for rel in kept:
+        if rel in held:
+            restore.append(f":(literal){rel}")
         else:
-            restore.append(rel)
+            (wt / rel).unlink(missing_ok=True)
     for i in range(0, len(restore), _CHECKOUT_CHUNK):
         cp = gitutil._run(wt, "-c", f"core.hooksPath={no_hooks}", "checkout", head, "--",
                           *restore[i:i + _CHECKOUT_CHUNK])
@@ -204,13 +248,14 @@ def red_proof(root: Path, commit: str, head: str, argv: list[str],
                       f"commit to go back to")
     changed = _changed(root, base, commit)
     named = _named_paths(argv)
-    kept = [(status, rel) for status, rel in changed
+    kept = [rel for status, rel in changed
             if status == "A" or _is_test_path(rel) or rel in named]
     backed_out = len(changed) - len(kept)
     if not backed_out:
         raise Refused(f"{commit[:12]} changes no existing source file -- only tests, or "
                       f"only new files. Red proof backs the commit out and reruns the "
                       f"test, so there is nothing it could take away")
+    held = _held(root, head)
 
     tmp = Path(tempfile.mkdtemp(prefix="aramid-close-"))
     wt = tmp / "wt"
@@ -244,10 +289,21 @@ def red_proof(root: Path, commit: str, head: str, argv: list[str],
         mainline = ("-m", "1") if gitutil.rev_sha(root, f"{commit}^2") else ()
         cp = gitutil._run(wt, "revert", "--no-commit", *mainline, commit)
         if cp.returncode != 0:
-            raise Refused(f"red proof could not be run: {commit[:12]} can no longer be "
-                          f"backed out of HEAD ({_said(cp)}) -- a later commit changed "
-                          f"the same lines")
-        _keep_at_head(wt, head, kept, no_hooks)
+            # A back-out that conflicts has still backed out every path it
+            # could (measured 2026-10-10). A conflict in a path that stays at
+            # HEAD is undone below with the rest of what the back-out did to
+            # that path. One anywhere else leaves no tree to run the test on.
+            conflicts = _conflicts(wt)
+            if not conflicts:
+                raise Refused(f"red proof could not be run: git could not back "
+                              f"{commit[:12]} out of HEAD ({_said(cp)})")
+            stuck = sorted(conflicts - set(kept))
+            if stuck:
+                more = f" and {len(stuck) - 1} more file(s)" if len(stuck) > 1 else ""
+                raise Refused(f"red proof could not be run: {commit[:12]} can no longer be "
+                              f"backed out of HEAD -- it conflicts with later changes to "
+                              f"{stuck[0]}{more}")
+        _keep_at_head(wt, head, kept, held, no_hooks)
 
         before = _run(argv, root, wt, timeout_s, env)
         if before.state is not ToolState.OK:
