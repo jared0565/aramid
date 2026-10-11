@@ -252,10 +252,14 @@ def _argv(command: str | list, root: Path | None = None) -> list[str]:
     accident; the drain runs from wherever the scheduler started it and
     launches into a throwaway worktree, and the same command resolved
     against neither (interop round 174: 43 `baseline failing` rows that
-    never started a process). A path that does not exist under `root` is
-    left alone -- `run_subprocess` reports it MISSING, which is the verdict
-    a misconfiguration deserves. Bare names stay bare: PATH lookup is
-    `toolpath.resolve`'s job, not this function's.
+    never started a process). On Windows the file may carry an extension
+    the command leaves out (`.venv/Scripts/python` is `python.exe`,
+    `tools/run` is `run.cmd`): `_under` looks for it as Windows would. Left
+    unanchored, such a name was looked up from the directory aramid's
+    process was started in, the same accident again. A path that does not
+    exist under `root` is left alone -- `run_subprocess` reports it MISSING,
+    which is the verdict a misconfiguration deserves. Bare names stay bare:
+    PATH lookup is `toolpath.resolve`'s job, not this function's.
 
     Note there is no shell anywhere in this path -- run_subprocess execs the
     argv directly, so a command is exactly as trusted as the repo's own test
@@ -266,10 +270,31 @@ def _argv(command: str | list, root: Path | None = None) -> list[str]:
     if argv and root is not None:
         head = argv[0]
         if ("/" in head or os.sep in head) and not Path(head).is_absolute():
-            anchored = Path(root) / head
-            if anchored.is_file():
+            anchored = _under(Path(root), head)
+            if anchored is not None:
                 argv[0] = str(anchored.resolve())
     return argv
+
+
+def _program_extensions() -> list[str]:
+    """What Windows may add to a program's name to find its file: PATHEXT,
+    in its order. Nothing on any other platform."""
+    if sys.platform != "win32":
+        return []
+    return [ext for ext in os.environ.get("PATHEXT", ".COM;.EXE;.BAT;.CMD").split(";") if ext]
+
+
+def _under(root: Path, head: str) -> Path | None:
+    """The file `head` names under `root`: the name itself, or the name with
+    one of the extensions the platform adds. None when `root` holds neither."""
+    exact = root / head
+    if exact.is_file():
+        return exact
+    for ext in _program_extensions():
+        candidate = exact.with_name(exact.name + ext)
+        if candidate.is_file():
+            return candidate
+    return None
 
 
 # --- progress: what the suite is doing while the gate waits on it ----------

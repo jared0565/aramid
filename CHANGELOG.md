@@ -39,7 +39,9 @@ to publish a tag that disagrees with it.
   files, the files it added and any file the command names are kept as at
   HEAD. It is refused when the commit changes no existing source file, when
   the control fails, and when the test passes or does not finish without the
-  fix. **A confirmed critical closes only with `--red-proof`.**
+  fix. The repo's git hooks run when a worktree is made, before the first
+  run in it, and not between the two runs, so nothing but the back-out
+  separates them. **A confirmed critical closes only with `--red-proof`.**
 
   An old fix often cannot be backed out of HEAD: git backs out the whole
   commit, so a later change that overlaps it anywhere outside the kept
@@ -93,17 +95,29 @@ to publish a tag that disagrees with it.
   `select_command` is refused, and the refusal names the key. Nothing else
   reads the key: the gate still runs `[tests].command`.
 
-  Every run of a close through MCP is in a clean checkout of HEAD, made
-  with git's hooks off, and never in the working tree. Whoever calls the
-  tool may be able to write files in the repository and not to run a
-  program, and a run in the working tree would load an untracked
-  `conftest.py`, or a `pytest.py` beside the code, for them. So the run the
-  command line makes first, at the repo root, is left out; red proof always
-  runs, and its control is what shows the test passing at HEAD. The test
-  runs twice, or three times at the fix commit. Uncommitted changes do not
-  stop the close and are not tested. The event records `"via": "mcp"`.
-  What is installed is used as it stands and is not checked: `node_modules`,
-  a virtualenv the declared command names, the interpreter's packages.
+  Every run of a close through MCP is in a clean checkout of HEAD, never
+  in the working tree, and no git call of the close runs a hook of the
+  repo. Whoever calls the tool may be able to write files in the
+  repository and not to run a program, and a run in the working tree would
+  load an untracked `conftest.py`, or a `pytest.py` beside the code, for
+  them. So the run the command line makes first, at the repo root, is left
+  out; red proof always runs, and its control is what shows the test
+  passing at HEAD. The test runs twice, or three times at the fix commit.
+  Uncommitted changes do not stop the close and are not tested. A program
+  the declared command names by a path is started from the checkout when
+  HEAD holds it, so it runs as committed, however the path is written
+  (without the extension Windows adds to it, or absolute). The event
+  records `"via": "mcp"`.
+
+  The tool is not a sandbox. What is installed is used as it stands and is
+  not checked, and part of it lies in the repository's own directory:
+  `node_modules` is linked into the checkout, and a program the declared
+  command names by a path HEAD does not hold (a virtualenv, a tool git
+  ignores, the output of a build) is the one in the repo. No commit holds
+  these, so whoever can write files there can still have code run by the
+  tool. Whoever can write files under `.git` is not held at all: they can
+  write the commit HEAD names. Give aramid's MCP tools only to an agent
+  you would let run the repository's tests.
 
 - **The agent hook asks for red proof on an agent's close (FN-36).** The
   `pre-tool-use` hook now also reads an `aramid ledger resolve` command
@@ -156,6 +170,18 @@ to publish a tag that disagrees with it.
 
 ### Fixed
 
+- **On Windows a test command's program is found from the repo root
+  without its extension.** `[tests].command = [".venv/Scripts/python", ...]`
+  names `python.exe`, and `tools/run` names `run.cmd`. A program named by a
+  relative path was anchored at the repo root only when a file had exactly
+  that name. Such a name was looked up from the directory aramid was
+  started in instead, which is the repo for a gate and need not be for the
+  drain. The extensions of `PATHEXT` are tried now, in its order, after the
+  name itself.
+- **Red proof does not look for the test's program outside the repo.** A
+  relative path in the command that names no file under the repo root is
+  reported as missing. It was looked up from the directory aramid was
+  started in.
 - **The agent hook cuts a command up as the shell does.** Found while
   fixing the new close rule, and the git rules read the same way, so five
   things change for `git commit` and `git push` in an armed session:

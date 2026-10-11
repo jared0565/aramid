@@ -44,14 +44,16 @@ WHAT STAYS AT HEAD WHEN THE FIX IS BACKED OUT, and why each:
 
 HOOKS. `git worktree add` runs the repo's `post-checkout` hook, as it does
 for every worktree aramid builds, and it runs before the control, so both
-runs see whatever it did. Putting the kept paths back is a `git checkout`
-too and would run the hook a second time, BETWEEN the two runs; every
-checkout of paths here is made with hooks off (`_checkout`), so nothing
-but the back-out separates them. `git revert --no-commit` makes no commit
-and runs no hook (measured 2026-10-10). A close through MCP makes the
-worktree itself with hooks off too (`_worktree`): the hook is a file in the
-repository that no commit holds, and that route runs nothing its caller
-could have written there (see `selected_command`).
+runs see whatever it did. Every other git call is made with an empty
+directory as the hooks path (`_git`), so nothing but the back-out separates
+the two runs in a worktree. That is more than the checkouts of paths. Measured
+2026-10-11 with every hook name planted (git 2.53): `git revert
+--no-commit` makes no commit and still runs `post-index-change` and
+`reference-transaction`, between the two runs. (This section said it runs
+no hook. The probe of 2026-10-10 had planted eight hook names, and these
+two were not among them.) A close through MCP makes the worktree itself
+with hooks off too (`_worktree`), so no git call of that route runs a hook
+(`selected_command` says what that holds and what it does not).
 
 WHAT IT STILL CANNOT TELL, two things:
 
@@ -88,6 +90,7 @@ Replayed on this repo's own month-old case: refused at HEAD 2026-10-10,
 closed at the fix commit 2026-10-11 (spec section 9).
 """
 import contextlib
+import posixpath
 import shlex
 import shutil
 import sys
@@ -98,7 +101,7 @@ from pathlib import Path
 from aramid import gitutil
 from aramid.consumers import js_mutation
 from aramid.runners import tests as tests_runner
-from aramid.runners.base import ToolState, run_subprocess, worktree_import_env
+from aramid.runners.base import RunnerResult, ToolState, run_subprocess, worktree_import_env
 
 # `git checkout <rev> -- <paths>` is given this many paths at a time: one
 # call per path is slow on a wide commit, and one call for all of them can
@@ -167,12 +170,76 @@ def _said(cp) -> str:
     return lines[0][:200] if lines else ""
 
 
-def _run(argv: list[str], root: Path, cwd: Path, timeout_s: float, env=None):
-    """One run of the command. The executable is anchored against the REPO
-    root, not the cwd, so `.venv/Scripts/python` names the same interpreter
-    in the worktree as in the repo (a worktree has no virtualenv)."""
+def _git(cwd: Path, no_hooks: Path, *args):
+    """git in `cwd` with `no_hooks`, an empty directory, as its hooks path:
+    the call runs no hook of the repo (see HOOKS in the module docstring)."""
+    return gitutil._run(cwd, "-c", f"core.hooksPath={no_hooks}", *args)
+
+
+def _name_at_head(root: Path, spelled: str, started: str, held: set[str]) -> str | None:
+    """The file of `held` that a program in the repo is, by either of its
+    names: the one the command spells (`tools/../tools/run` is `tools/run`,
+    and so is `Tools/Run`, because Windows and macOS open that file under
+    either), or the one of the file that would be started (`tools/run.cmd`
+    for `tools/run` on Windows). None when HEAD holds neither."""
+    names = {posixpath.normpath(spelled.replace("\\", "/")).casefold()}
+    with contextlib.suppress(ValueError):
+        names.add(Path(started).relative_to(root.resolve()).as_posix().casefold())
+    return next((name for name in sorted(held) if name.casefold() in names), None)
+
+
+def _from_the_root(argv: list[str], root: Path) -> list[str]:
+    """`argv` with a program that is named by an absolute path INTO the repo
+    named from its root instead (`./tools/run`), so that it is anchored like
+    any other program of the repo. Any other argv is returned as it is."""
+    with contextlib.suppress(ValueError):
+        if Path(argv[0]).is_absolute():
+            inside = Path(argv[0]).resolve().relative_to(root.resolve())
+            return ["./" + inside.as_posix(), *argv[1:]]
+    return argv
+
+
+def _run(argv: list[str], root: Path, cwd: Path, timeout_s: float, env=None,
+         held: set[str] | None = None):
+    """One run of the command. A program it names by a relative path is
+    anchored against the REPO root, not the cwd, so `.venv/Scripts/python`
+    names the same interpreter in the worktree as in the repo (a worktree
+    has no virtualenv). A relative path that names no file there is not
+    found: handed on, it would be looked up from the directory aramid's own
+    process was started in, which is nothing the command said.
+
+    A close through MCP gives `held`, the files HEAD holds. That route does
+    not ask for a clean tree, so at the repo root a tracked `tools/test.sh`
+    may hold an edit nobody committed, and anchored there it would run as
+    its caller left it (the review of 3697181). With `held` the checkout is
+    asked first, and the repo root only for a file HEAD does not hold. A
+    file HEAD holds that the checkout lacks is refused, never filled in from
+    the working tree. An absolute path into the repo is the same file named
+    another way, and is read as the path from the root. At the command line
+    the tree is clean, so the program at the repo root is the one HEAD
+    holds."""
     try:
-        return run_subprocess(tests_runner._argv(argv, root), cwd, timeout_s, env=env)
+        if held is not None:
+            argv = _from_the_root(argv, root)
+        program = tests_runner._argv(argv, root)
+        if held is not None:
+            own = tests_runner._argv(argv, cwd)
+            if own[0] != argv[0]:
+                program = own
+            elif program[0] != argv[0]:
+                name = _name_at_head(root, argv[0], program[0], held)
+                if name is not None:
+                    raise Refused(f"the command starts `{argv[0]}`, which HEAD holds as "
+                                  f"{name}, and the checkout this run is in does not hold "
+                                  f"it under the name the command uses -- through MCP a "
+                                  f"committed program is run from a checkout, never from "
+                                  f"the working tree. Write it in [tests].select_command "
+                                  f"as HEAD holds it, or close at the command line with "
+                                  f"--test")
+        head = program[0]
+        if Path(head).name != head and not Path(head).is_absolute():
+            return RunnerResult(Path(head).name, ToolState.MISSING)
+        return run_subprocess(program, cwd, timeout_s, env=env)
     except OSError as exc:
         raise Refused(f"`{argv[0]}` could not be started ({exc})") from None
 
@@ -320,10 +387,27 @@ def selected_command(root: Path, selectors) -> list[str]:
     checkouts made with hooks off, because a caller who may write files and
     not run programs could otherwise leave a `conftest.py` there, a
     `pytest.py` that `python -m pytest` imports in place of pytest, or a
-    `post-checkout` hook, and have it run. Still used as it stands: what is
-    installed for the repo (its `node_modules`, a virtualenv the command
-    names, the interpreter's own packages). That is not a file of the
-    working tree, and it is not checked."""
+    hook of the repo, and have it run. A program the command names by a path
+    is the checkout's own when HEAD holds it (`_run`), and no git call of
+    the close runs a hook (`_git`).
+
+    NOT bounded, and so not a sandbox: what is installed for the repo is
+    used as it stands. The repo's `node_modules` is linked into the
+    checkout, and a program the command names by a path that HEAD does not
+    hold is the one in the repo: a virtualenv, a tool that is ignored, the
+    output of a build. All of these are files in the repository's directory
+    that no commit holds, so the same caller can write there and have this
+    tool run it. The interpreter's own packages are outside the repository.
+    Whether an MCP caller of that kind is one aramid's tools have to hold is
+    an open question for all of them (`aramid_check` at the pre-push tier
+    runs the working tree's tests): FN-44.
+
+    `.git/` is no boundary at all. Whoever can write files there can write
+    the commit HEAD names, as loose objects and a branch file, with no git
+    program started (measured 2026-10-11, spec 9.5). So "HEAD holds it"
+    holds a caller who can write the working tree and not `.git/`. A
+    `.git/config`, and a hook that fires when the command itself runs git,
+    are in the same place."""
     if not isinstance(selectors, (list, tuple)) or not selectors \
             or not all(isinstance(s, str) and s.strip() for s in selectors):
         raise Refused("no test selector was given -- name at least one committed test "
@@ -337,10 +421,10 @@ def selected_command(root: Path, selectors) -> list[str]:
     return argv + [_selector(s, held, node_ids) for s in selectors]
 
 
-def _conflicts(wt: Path) -> set[str]:
+def _conflicts(wt: Path, no_hooks: Path) -> set[str]:
     """The paths a failed back-out left in conflict. Empty when it left none,
     and when git cannot say."""
-    cp = gitutil._run(wt, "diff", "--name-only", "--diff-filter=U", "-z")
+    cp = _git(wt, no_hooks, "diff", "--name-only", "--diff-filter=U", "-z")
     if cp.returncode != 0:
         return set()
     return {f for f in cp.stdout.split("\0") if f}
@@ -366,8 +450,8 @@ def _checkout(wt: Path, rev: str, paths: list[str], no_hooks: Path):
     the checkout cannot run the repo's `post-checkout` (see HOOKS in the
     module docstring)."""
     for i in range(0, len(paths), _CHECKOUT_CHUNK):
-        cp = gitutil._run(wt, "-c", f"core.hooksPath={no_hooks}", "checkout", rev, "--",
-                          *(f":(literal){rel}" for rel in paths[i:i + _CHECKOUT_CHUNK]))
+        cp = _git(wt, no_hooks, "checkout", rev, "--",
+                  *(f":(literal){rel}" for rel in paths[i:i + _CHECKOUT_CHUNK]))
         if cp.returncode != 0:
             return cp
     return None
@@ -394,20 +478,22 @@ def _keep_at_head(wt: Path, head: str, kept: list[str], held: set[str],
 
 
 @contextlib.contextmanager
-def _worktree(root: Path, wt: Path, rev: str, leaks: list[Path],
-              no_hooks: Path | None = None):
+def _worktree(root: Path, wt: Path, rev: str, leaks: list[Path], no_hooks: Path,
+              hooks: bool):
     """A detached worktree of `rev` at `wt`, the repo's `node_modules` linked
     in when it has one, the way the js_mutation consumer does it. Yields the
     environment for a run there. The worktree is removed on the way out,
     whatever happened; one that could not be removed is named and put in
     `leaks`, and the caller then leaves its directory alone.
 
-    `no_hooks`, when given, is an empty directory that is the hooks path
-    while the worktree is made, so the repo's `post-checkout` is not run."""
+    `hooks` says whether making the worktree runs the repo's hooks
+    (`post-checkout`, and the two git runs beside it): at the command line
+    yes, through MCP no. Taking it away runs none either way: `no_hooks` is
+    an empty directory, and the hooks path of every other call."""
     linked = False
     try:
-        quiet = ("-c", f"core.hooksPath={no_hooks}") if no_hooks else ()
-        cp = gitutil._run(root, *quiet, "worktree", "add", "--detach", str(wt), rev)
+        add = ("worktree", "add", "--detach", str(wt), rev)
+        cp = gitutil._run(root, *add) if hooks else _git(root, no_hooks, *add)
         if cp.returncode != 0:
             raise Refused(f"red proof could not be run: git worktree add failed "
                           f"({_said(cp)})")
@@ -423,8 +509,8 @@ def _worktree(root: Path, wt: Path, rev: str, leaks: list[Path],
                 # BEFORE the directory goes: removing through the link would
                 # reach the repo's real node_modules (js_mutation invariant).
                 js_mutation._unlink_node_modules(wt)
-            gitutil._run(root, "worktree", "remove", "--force", str(wt))
-            gitutil._run(root, "worktree", "prune")
+            _git(root, no_hooks, "worktree", "remove", "--force", str(wt))
+            _git(root, no_hooks, "worktree", "prune")
         except Exception:
             leaks.append(wt)
             print(f"aramid: ledger resolve: worktree cleanup leaked at {wt}",
@@ -456,10 +542,12 @@ def _at_head(root: Path, wt: Path, commit: str, head: str, argv: list[str],
     exit code of the run without the fix; raises `_Stuck` when the back-out
     conflicts in a path that has to be backed out. `in_repo` says whether
     the command was first run in the repo itself. When it was not (a close
-    through MCP) the worktree is made with hooks off, and a failing control
-    is refused in other words."""
-    with _worktree(root, wt, head, leaks, None if in_repo else no_hooks) as env:
-        control = _run(argv, root, wt, timeout_s, env)
+    through MCP) the worktree is made with hooks off, a program the command
+    names by a path is the checkout's own (`_run`), and a failing control is
+    refused in other words."""
+    committed = None if in_repo else held
+    with _worktree(root, wt, head, leaks, no_hooks, hooks=in_repo) as env:
+        control = _run(argv, root, wt, timeout_s, env, committed)
         if control.state is not ToolState.OK or control.returncode != 0:
             if not in_repo:
                 raise Refused(f"the test {_how(control, timeout_s)} in a clean checkout of "
@@ -474,13 +562,13 @@ def _at_head(root: Path, wt: Path, commit: str, head: str, argv: list[str],
         # A merge commit is backed out against its first parent: the branch
         # the fix was merged INTO.
         mainline = ("-m", "1") if gitutil.rev_sha(root, f"{commit}^2") else ()
-        cp = gitutil._run(wt, "revert", "--no-commit", *mainline, commit)
+        cp = _git(wt, no_hooks, "revert", "--no-commit", *mainline, commit)
         if cp.returncode != 0:
             # A back-out that conflicts has still backed out every path it
             # could (measured 2026-10-10). A conflict in a path that stays at
             # HEAD is undone below with the rest of what the back-out did to
             # that path. One anywhere else leaves no tree to run the test on.
-            conflicts = _conflicts(wt)
+            conflicts = _conflicts(wt, no_hooks)
             if not conflicts:
                 raise Refused(f"red proof could not be run: git could not back "
                               f"{commit[:12]} out of HEAD ({_said(cp)})")
@@ -489,7 +577,7 @@ def _at_head(root: Path, wt: Path, commit: str, head: str, argv: list[str],
                 raise _Stuck(stuck)
         _keep_at_head(wt, head, kept, held, no_hooks)
 
-        before = _run(argv, root, wt, timeout_s, env)
+        before = _run(argv, root, wt, timeout_s, env, committed)
         if before.state is not ToolState.OK:
             raise Refused(f"red proof could not be shown: with {commit[:12]} backed out "
                           f"the test did not finish ({_unfinished(before, timeout_s)}) "
@@ -503,21 +591,24 @@ def _at_head(root: Path, wt: Path, commit: str, head: str, argv: list[str],
 
 def _at_the_fix_commit(root: Path, wt: Path, commit: str, head: str, base: str,
                        argv: list[str], timeout_s: float, backed: list[str],
-                       brought: list[str], stuck: list[str], no_hooks: Path,
-                       leaks: list[Path], in_repo: bool) -> int:
+                       brought: list[str], stuck: list[str], held: set[str],
+                       no_hooks: Path, leaks: list[Path], in_repo: bool) -> int:
     """The proof for a fix that can no longer be backed out of HEAD (see the
     module docstring): a worktree of `commit`, the files the command names
     brought in from `head`, the control, then the paths that have to be
     backed out (`backed`) put back to `base`. Returns the exit code of the
-    run without the fix. `in_repo` as for `_at_head`: hooks off when the
-    close came through MCP."""
+    run without the fix. `in_repo` as for `_at_head`: through MCP the hooks
+    are off, and a program the command names by a path is the checkout's
+    own. That is HEAD's when the command names it as HEAD holds it, since it
+    is then one of the files brought in."""
     c = commit[:12]
-    with _worktree(root, wt, commit, leaks, None if in_repo else no_hooks) as env:
+    committed = None if in_repo else held
+    with _worktree(root, wt, commit, leaks, no_hooks, hooks=in_repo) as env:
         failed = _checkout(wt, head, brought, no_hooks)
         if failed is not None:
             raise Refused(f"red proof could not be run: git could not bring the test in "
                           f"from HEAD ({_said(failed)})")
-        control = _run(argv, root, wt, timeout_s, env)
+        control = _run(argv, root, wt, timeout_s, env, committed)
         if control.state is not ToolState.OK or control.returncode != 0:
             raise Refused(f"red proof could not be run: {c} can no longer be backed out "
                           f"of HEAD -- it conflicts with later changes to {_named(stuck)} "
@@ -532,7 +623,7 @@ def _at_the_fix_commit(root: Path, wt: Path, commit: str, head: str, base: str,
         if failed is not None:
             raise Refused(f"red proof could not be run: git could not put {c}'s files "
                           f"back to its parent ({_said(failed)})")
-        before = _run(argv, root, wt, timeout_s, env)
+        before = _run(argv, root, wt, timeout_s, env, committed)
         if before.state is not ToolState.OK:
             raise Refused(f"red proof could not be shown: at {c}, with that commit backed "
                           f"out, the test did not finish ({_unfinished(before, timeout_s)}) "
@@ -585,8 +676,8 @@ def red_proof(root: Path, commit: str, head: str, argv: list[str],
         except _Stuck as stuck:
             brought = sorted(named & held)
             rc = _at_the_fix_commit(root, tmp / "wt-fix", commit, head, base, argv,
-                                    timeout_s, backed, brought, stuck.paths, no_hooks,
-                                    leaks, in_repo)
+                                    timeout_s, backed, brought, stuck.paths, held,
+                                    no_hooks, leaks, in_repo)
             return {"at": "commit", **proof, "pre_fix_rc": rc,
                     "head_conflicts": len(stuck.paths), "brought": len(brought)}
     finally:

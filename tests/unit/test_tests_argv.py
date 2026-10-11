@@ -9,7 +9,10 @@ a throwaway worktree, so the same path resolved against neither -- 43
 `baseline failing` rows over three weeks, none of which started a process.
 """
 import os
+import sys
 from pathlib import Path
+
+import pytest
 
 from aramid.runners import tests as tests_runner
 
@@ -51,3 +54,68 @@ def test_a_relative_path_that_does_not_exist_under_root_is_left_for_resolve(tmp_
 def test_without_a_root_the_old_behaviour_holds(tmp_path):
     rel = _launcher(tmp_path)
     assert tests_runner._argv([rel, "-q"]) == [rel, "-q"]
+
+
+# --- the extension a Windows command leaves out ---------------------------
+#
+# These run on every platform: the platform and PATHEXT are the test's own,
+# and each file is written with its extension in the case PATHEXT has it, for
+# a file system that tells case apart.
+
+@pytest.fixture
+def as_windows(monkeypatch):
+    monkeypatch.setattr(sys, "platform", "win32")
+    monkeypatch.setenv("PATHEXT", ".exe;.cmd")
+
+
+def _files(root: Path, *rels: str) -> None:
+    for rel in rels:
+        (root / rel).parent.mkdir(parents=True, exist_ok=True)
+        (root / rel).write_text("", encoding="utf-8")
+
+
+def test_on_windows_a_name_without_its_extension_is_anchored_to_the_file_it_starts(
+        tmp_path, monkeypatch, as_windows):
+    """`.venv/Scripts/python` is python.exe there and `tools/run` is run.cmd.
+    No file has the name the command uses, so nothing was anchored, and the
+    name was looked up from the directory aramid's process was started in:
+    the drain's `baseline failing` again, and through MCP the working tree's
+    copy of a committed launcher (the review of 3697181)."""
+    _files(tmp_path, "tools/run.cmd", "tools/go.v2.cmd")
+    monkeypatch.chdir(tmp_path / "tools")     # a cwd where the path does not resolve
+
+    assert tests_runner._argv(["tools/run", "-q"], tmp_path) == [
+        str((tmp_path / "tools" / "run.cmd").resolve()), "-q"]
+    # The extension is added to the whole name, as Windows adds it.
+    assert tests_runner._argv(["tools/go.v2"], tmp_path) == [
+        str((tmp_path / "tools" / "go.v2.cmd").resolve())]
+
+
+def test_the_extensions_are_tried_in_the_order_pathext_has_them(tmp_path, as_windows):
+    _files(tmp_path, "tools/run.cmd", "tools/run.exe")
+
+    assert tests_runner._argv(["tools/run"], tmp_path) == [
+        str((tmp_path / "tools" / "run.exe").resolve())]
+
+
+def test_a_file_of_the_very_name_is_taken_before_any_extension(tmp_path, as_windows):
+    _files(tmp_path, "tools/run", "tools/run.exe")
+
+    assert tests_runner._argv(["tools/run"], tmp_path) == [
+        str((tmp_path / "tools" / "run").resolve())]
+
+
+def test_no_extension_is_added_on_another_platform(tmp_path, monkeypatch):
+    monkeypatch.setattr(sys, "platform", "linux")
+    monkeypatch.setenv("PATHEXT", ".exe;.cmd")
+    _files(tmp_path, "tools/run.cmd")
+
+    assert tests_runner._argv(["tools/run", "-q"], tmp_path) == ["tools/run", "-q"]
+
+
+def test_pathext_is_read_as_windows_writes_it(monkeypatch):
+    monkeypatch.setattr(sys, "platform", "win32")
+    monkeypatch.setenv("PATHEXT", ".COM;.EXE;;.BAT")
+    assert tests_runner._program_extensions() == [".COM", ".EXE", ".BAT"]
+    monkeypatch.delenv("PATHEXT")
+    assert tests_runner._program_extensions() == [".COM", ".EXE", ".BAT", ".CMD"]

@@ -879,3 +879,108 @@ commands; and quoting that is not POSIX quoting (PowerShell's, and bash's
 `$'...'`), where the reader can see a quote that never closes and reads
 nothing after it. A reading of PowerShell by its own rules is recorded as
 FN-45, with the misses above.
+
+### 9.5 The security review of `3697181` (2026-10-11)
+
+The review of the fix in 9.4 reported two more findings, again by title
+only, both in `evidenced_close.py`: incomplete isolation, and code
+execution through repository state that is not committed. They were
+rebuilt by asking one question of the MCP route: what in the repository's
+directory, other than what HEAD holds, takes part in a run?
+
+- **The program the command names.** `_run` anchored a relative `argv[0]`
+  at the repo root, for the runs in a worktree too, so that
+  `.venv/Scripts/python` names the repo's interpreter there. A declared
+  `tools/test.sh` was therefore the working tree's file, with whatever edit
+  nobody committed, and through MCP an uncommitted edit no longer stops the
+  close. Measured with a launcher that leaves a marker: it ran, in the
+  worktree of HEAD and in the one at the fix commit. As fixed, a close
+  through MCP hands `_run` the files HEAD holds. The checkout is asked
+  first, and the repo root only for a file HEAD does not hold. At the fix
+  commit the launcher is one of the files brought in from HEAD, since the
+  command names it. When the command spells it another way than HEAD holds
+  it (`tools/../tools/run`, another case) it is not brought in, that
+  checkout lacks it, and the close is refused. It is never filled in from
+  the working tree.
+
+  The same file named another way is the same file, and three ways of
+  naming it went past the first version of this fix:
+  - On Windows `tools/run` starts `tools/run.cmd`. No file has the name the
+    command uses, so nothing was anchored, in the checkout or at the root,
+    and the name was looked up from the directory aramid's process runs in.
+    For an MCP server that is the repo. Measured: the working tree's
+    launcher ran. `runners.tests._argv` now tries the extensions of
+    `PATHEXT`, in its order, after the name itself. That is the gate's and
+    the drain's anchoring too, and there it mends
+    `.venv/Scripts/python` for `python.exe`, which was found from the
+    directory aramid was started in and so not by a drain started elsewhere.
+  - An absolute path into the repo is read through MCP as the path from its
+    root, and so is asked of the checkout like any other.
+  - A relative path that names no file under the root is reported missing,
+    on both routes. Handed on, it was looked up from the directory aramid's
+    process runs in, which is nothing the command said.
+
+  A bare name (`python`) is for PATH to find, whatever HEAD holds under
+  that name.
+
+  At the command line nothing else changes, and on purpose. The tree is
+  clean there, so the program at the repo root is the one HEAD holds, and a
+  launcher that finds what it needs from where it lies (a virtualenv beside
+  it) goes on finding it. A test pins that every run starts it there.
+- **The hooks git runs.** 9.4 turned the hooks off while a worktree is made
+  and while paths are checked out, and the module said that `git revert
+  --no-commit` runs no hook. That came from a probe on 2026-10-10 that
+  planted eight hook names. With all 28 planted (git 2.53):
+
+  | git call | hooks it ran |
+  |----------|--------------|
+  | `worktree add --detach` | `post-checkout`, `post-index-change`, `reference-transaction` |
+  | `revert --no-commit` | `post-index-change`, `reference-transaction` |
+  | `status --porcelain` | `post-index-change` |
+  | `rev-parse`, `show`, `ls-tree`, `diff` of two commits | none |
+  | `diff --name-only --diff-filter=U`, `worktree remove`, `prune` | none |
+  | any of them with an empty directory as the hooks path | none |
+
+  So a close through MCP ran two of the repo's hooks, and at the command
+  line the same two ran BETWEEN the control and the run without the fix,
+  which the two-run comparison rules out. As fixed, every git call after
+  the worktree is made has the empty hooks path, on both routes (`_git`),
+  whether or not it was seen to run a hook: which hook git runs for which
+  call is git's business and changes with its version. Through MCP the
+  `worktree add` has it too. At the command line each `worktree add` runs
+  the repo's hooks as before, ahead of the first run in that worktree, and
+  so does the `git status` that asks whether the tree is clean.
+- **`node_modules`, and a program named by a path that HEAD does not
+  hold.** Not fixed. A virtualenv is one such program; a tool that git
+  ignores and the output of a build are others. All are files in the
+  repository's directory that no commit holds. The worktree is given the
+  first by a link and the others by the anchoring above, and a caller who
+  can write there can have code run by the tool. 9.4 called this "what is
+  installed", and its docstring said it was not a file of the working tree.
+  That was wrong: it is not a *tracked* file. Without them a JavaScript
+  test cannot run in a clean checkout at all, so closing this means
+  refusing the MCP close to such a repo. That is the operator's decision,
+  and the same one as FN-44 (`aramid_check` through MCP), where it is
+  recorded.
+- **`.git/`.** 9.4 called `.git/config` out of reach. The whole directory
+  is. Measured here: a blob, a tree and a commit written as loose object
+  files (zlib, no git program started for the writes) and the branch file
+  rewritten are HEAD to git, with `fsck` clean, and `HEAD:aramid.toml` then
+  declares whatever the writer likes. So "the file HEAD holds" holds a
+  caller who can write the working tree and not `.git/`, and that is the
+  caller this design is about. The hooks are under `.git/` by default, and
+  then they are that caller's to write no more than the config is. A repo
+  that sets `core.hooksPath` may keep them in the working tree (husky's
+  `.husky`, graphite's `.githooks`, as in aramid's own repo), and there the
+  empty hooks path is what holds this caller. At the command line the
+  comparison of the two runs needs it either way. A hook still runs when
+  the test command itself runs git: the close's own calls run none, and the
+  command's are the command's.
+- **`[tests].timeout_s`**, as in 9.4: it bounds a run and chooses nothing.
+
+66 perturbations of this fix in a scratch copy, each failing a test
+(147 over the whole MCP close, counting those). The user guide, the
+knowledge base, the changelog and the docstring of `selected_command` now
+say what is not bounded, in those words, and the guide says who the MCP
+tools are for: an agent that would be let run the repository's tests
+anyway.

@@ -554,6 +554,300 @@ def test_an_uncommitted_edit_neither_stops_a_close_through_mcp_nor_takes_part(
     assert _status(repo.root) == "fixed"
 
 
+def _with_a_launcher(repo, marker=None, where=False):
+    """A program inside the repo that starts this interpreter with what it is
+    given: `tools/run`, or `tools/run.cmd` on Windows. With `marker`, one that
+    leaves the marker first; with `where`, one that adds the directory it
+    lies in to the marker each time. Returns its path in the repo; nothing
+    is committed here."""
+    if sys.platform == "win32":
+        rel = "tools/run.cmd"
+        mark = f'echo ran> "{marker}"\r\n' if marker else ""
+        if where:
+            mark = f'echo %~dp0>> "{marker}"\r\n'
+        text = f'@echo off\r\n{mark}"{PY}" %*\r\n'
+    else:
+        rel = "tools/run"
+        mark = f"echo ran > '{marker}'\n" if marker else ""
+        if where:
+            mark = f"dirname \"$0\" >> '{marker}'\n"
+        text = f'#!/bin/sh\n{mark}exec "{PY}" "$@"\n'
+    path = repo.root / rel
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(text, encoding="utf-8", newline="")
+    path.chmod(0o755)
+    return rel
+
+
+@pytest.mark.parametrize("later_commit, at", [(False, "head"), (True, "commit")])
+def test_a_program_in_the_repo_is_run_as_committed_by_a_close_through_mcp(
+        repo, tmp_path, capsys, later_commit, at):
+    """The declared command may name a program inside the repo. Anchored at
+    the repo root, the file that runs is the working tree's, with whatever
+    edit nobody committed; and through MCP an uncommitted edit does not stop
+    the close. The checkout holds the committed one, and that is the one that
+    runs: in the worktree of HEAD, and in the one at the fix commit, where
+    it is brought in from HEAD."""
+    rel = _with_a_launcher(repo)
+    _write(repo.root, "aramid.toml", _toml(f'["{rel}"]'))
+    _commit(repo.root, "c3: a launcher, declared")
+    if later_commit:
+        _rewrite_the_fix(repo)
+    marker = tmp_path / "launcher.marker"
+    _with_a_launcher(repo, marker)      # the edit nobody committed
+
+    rc = cmd_ledger_resolve_selected(repo.root, FID, repo.c2, ["tests/check_cn.py"], "guarded")
+
+    assert (rc, capsys.readouterr().err) == (0, "")
+    assert not marker.exists()
+    assert _closes(repo.root)[0].payload["red_proof"]["at"] == at
+
+
+@pytest.mark.skipif(sys.platform != "win32",
+                    reason="Windows starts tools/run.cmd for the name tools/run")
+def test_a_launcher_declared_without_its_extension_is_run_as_committed_too(
+        repo, tmp_path, capsys, monkeypatch):
+    """No file has the name the command uses, so nothing was anchored, and the
+    lookup went on from the directory aramid's own process was started in.
+    For an MCP server that is the repo: the working tree's `tools/run.cmd`,
+    with the edit nobody committed. The checkout's is the one that runs."""
+    rel = _with_a_launcher(repo)
+    _write(repo.root, "aramid.toml", _toml(f'["{rel.removesuffix(".cmd")}"]'))
+    _commit(repo.root, "c3: a launcher, declared without its extension")
+    marker = tmp_path / "launcher.marker"
+    _with_a_launcher(repo, marker)      # the edit nobody committed
+    monkeypatch.chdir(repo.root)
+
+    rc = cmd_ledger_resolve_selected(repo.root, FID, repo.c2, ["tests/check_cn.py"], "guarded")
+
+    assert not marker.exists()
+    assert (rc, capsys.readouterr().err) == (0, "")
+    assert _closes(repo.root)[0].payload["red_proof"]["at"] == "head"
+
+
+def test_a_committed_program_is_the_repos_own_and_runs(repo, tmp_path, capsys):
+    """The other half, and what shows the marker above can fire."""
+    marker = tmp_path / "launcher.marker"
+    rel = _with_a_launcher(repo, marker)
+    _write(repo.root, "aramid.toml", _toml(f'["{rel}"]'))
+    _commit(repo.root, "c3: a launcher that leaves a mark, declared")
+
+    rc = cmd_ledger_resolve_selected(repo.root, FID, repo.c2, ["tests/check_cn.py"], "guarded")
+
+    assert (rc, capsys.readouterr().err) == (0, "")
+    assert marker.exists()
+
+
+@pytest.mark.parametrize("later_commit, at, runs", [(False, "head", 3), (True, "commit", 4)])
+def test_at_the_command_line_a_launcher_is_started_where_it_lies_in_the_repo(
+        repo, tmp_path, capsys, later_commit, at, runs):
+    """Why the checkout is asked first through MCP alone. A launcher may find
+    what it needs from where it lies, a virtualenv beside it for one, and
+    that is in no checkout. At the command line the tree is clean, so the
+    launcher in the repo is the committed one, and every run starts it
+    there: the one in the repo, and those in either worktree."""
+    marker = tmp_path / "where.marker"
+    rel = _with_a_launcher(repo, marker, where=True)
+    _commit(repo.root, "c3: a launcher that says where it lies")
+    if later_commit:
+        _rewrite_the_fix(repo)
+
+    rc = lc.cmd_ledger_resolve_fixed(repo.root, FID, repo.c2, [rel, "tests/check_cn.py"], "r",
+                                     red_proof=True)
+
+    assert (rc, capsys.readouterr().err) == (0, "")
+    assert _closes(repo.root)[0].payload["red_proof"]["at"] == at
+    lain = [Path(line.strip()).resolve()
+            for line in marker.read_text(encoding="utf-8").splitlines()]
+    assert lain == [(repo.root / "tools").resolve()] * runs
+
+
+def _started(monkeypatch, root, wt, held, programs):
+    """What `_run` starts for each of `programs`, the run being in `wt`: the
+    program handed on, or `None` when nothing was started and the answer was
+    that the program is missing."""
+    seen = []
+    monkeypatch.setattr(evidenced_close, "run_subprocess",
+                        lambda argv, cwd, timeout_s, env=None: seen.append((argv, cwd)) or _OK)
+    started = []
+    for program in programs:
+        before = len(seen)
+        result = evidenced_close._run([program, "x"], root, wt, 5, held=held)
+        if len(seen) == before:
+            assert (result.state, result.tool) == (ToolState.MISSING, Path(program).name)
+            started.append(None)
+        else:
+            assert (result, seen[-1][0][1:], seen[-1][1]) == (_OK, ["x"], wt)
+            started.append(seen[-1][0][0])
+    return started
+
+
+_PROGRAMS = ("tools/run", ".venv/python", "tools/none", "python")
+
+
+def _a_repo_and_a_checkout(tmp_path):
+    """Two directories: a repo with a launcher and a virtualenv, and a
+    checkout that holds the launcher alone, as a commit would."""
+    root, wt = tmp_path / "repo", tmp_path / "wt"
+    _write(root, "tools/run", "")
+    _write(root, ".venv/python", "")
+    _write(wt, "tools/run", "")
+    return root, wt
+
+
+def test_at_the_command_line_a_program_named_by_a_path_is_the_one_in_the_repo(
+        tmp_path, monkeypatch):
+    """`_run` anchors a program the command names by a relative path at the
+    repo root. The tree is clean there, so the launcher is the one HEAD
+    holds, and a virtualenv is in no checkout. A bare name is passed on as
+    it is. A path that names no file there is not started at all: handed
+    on, it would be looked up from the directory aramid was started in."""
+    root, wt = _a_repo_and_a_checkout(tmp_path)
+
+    assert _started(monkeypatch, root, wt, None, _PROGRAMS) == [
+        str((root / "tools/run").resolve()), str((root / ".venv/python").resolve()),
+        None, "python"]
+
+
+def test_through_mcp_it_is_the_checkouts_and_the_repos_only_when_head_does_not_hold_it(
+        tmp_path, monkeypatch):
+    """Given the files HEAD holds, `_run` asks the checkout first. What the
+    checkout does not hold is taken from the repo when HEAD does not hold it
+    either: the virtualenv. A bare name is for PATH to find, whatever HEAD
+    holds under that name."""
+    root, wt = _a_repo_and_a_checkout(tmp_path)
+
+    assert _started(monkeypatch, root, wt, {"tools/run", "calc.py", "python"}, _PROGRAMS) == [
+        str((wt / "tools/run").resolve()), str((root / ".venv/python").resolve()),
+        None, "python"]
+
+
+def test_a_path_that_names_no_file_is_not_looked_up_where_aramid_was_started(
+        tmp_path, monkeypatch):
+    """The directory aramid's process runs in holds `tools/none`; the repo and
+    the checkout do not. Nothing is started, on either route."""
+    root, wt = _a_repo_and_a_checkout(tmp_path)
+    _write(tmp_path / "elsewhere", "tools/none", "")
+    monkeypatch.chdir(tmp_path / "elsewhere")
+
+    assert _started(monkeypatch, root, wt, None, ["tools/none"]) == [None]
+    assert _started(monkeypatch, root, wt, {"tools/run"}, ["tools/none"]) == [None]
+
+
+def test_through_mcp_an_absolute_path_into_the_repo_is_the_path_from_its_root(
+        tmp_path, monkeypatch):
+    """The same file named another way. Through MCP it is the checkout's;
+    at the command line, where the tree is clean, it is started as written.
+    An absolute path that leaves the repo is nobody's but the command's."""
+    root, wt = _a_repo_and_a_checkout(tmp_path)
+    _write(root, "go", "")
+    _write(wt, "go", "")
+    inside, outside = str(root / "tools" / "run"), str(tmp_path / "elsewhere" / "run")
+    top = str(root / "go")      # in the root itself: its name alone has no directory
+
+    assert _started(monkeypatch, root, wt, {"tools/run", "go"}, [inside, top, outside]) == [
+        str((wt / "tools/run").resolve()), str((wt / "go").resolve()), outside]
+    assert _started(monkeypatch, root, wt, None, [inside, top, outside]) == [
+        inside, top, outside]
+
+
+@pytest.mark.parametrize("spelled", [
+    "tools/../tools/run",
+    "./tools/run",
+    pytest.param("Tools/RUN", marks=pytest.mark.skipif(
+        sys.platform not in ("win32", "darwin"),
+        reason="needs a file system that opens a name whatever its case")),
+])
+def test_a_program_head_holds_and_the_checkout_lacks_is_not_taken_from_the_working_tree(
+        tmp_path, monkeypatch, spelled):
+    """The one way left to the working tree's copy of a committed program:
+    the checkout does not hold it under the name the command uses. Whatever
+    the spelling, the file in the repo is one HEAD holds, and it is refused."""
+    root, wt = tmp_path / "repo", tmp_path / "wt"
+    _write(root, "tools/run", "")
+    wt.mkdir()
+
+    def never(*a, **k):
+        raise AssertionError("the working tree's copy may not be started")
+    monkeypatch.setattr(evidenced_close, "run_subprocess", never)
+
+    with pytest.raises(Refused) as exc:
+        evidenced_close._run([spelled, "x"], root, wt, 5, held={"calc.py", "tools/run"})
+
+    assert str(exc.value) == (
+        f"the command starts `{spelled}`, which HEAD holds as tools/run, and the checkout "
+        f"this run is in does not hold it under the name the command uses -- through MCP a "
+        f"committed program is run from a checkout, never from the working tree. Write it "
+        f"in [tests].select_command as HEAD holds it, or close at the command line with "
+        f"--test")
+
+
+@pytest.mark.parametrize("spelled, started, name", [
+    ("tools/run", "tools/run", "tools/run"),
+    ("./tools/run", "tools/run", "tools/run"),
+    ("tools/../tools/run", "tools/run", "tools/run"),
+    ("tools\\run", "tools/run", "tools/run"),
+    ("Tools/RUN", "Tools/RUN", "tools/run"),
+    ("docs/build.sh", "docs/build.sh", "Docs/Build.sh"),
+    ("Docs/Build.sh", "Docs/Build.sh", "Docs/Build.sh"),
+    # The file Windows starts for a name without its extension.
+    ("tools/go", "tools/go.cmd", "tools/go.cmd"),
+    # Reached through a directory that is a link nobody committed.
+    ("link/run", "tools/run", "tools/run"),
+    ("link/RUN", "Tools/RUN", "tools/run"),
+    # Started from outside the repo, where a directory was replaced by a
+    # link: the spelling is all that is left to ask.
+    ("./tools/run", "../elsewhere/run", "tools/run"),
+    ("tools/../tools/run", "../elsewhere/run", "tools/run"),
+    ("tools\\run", "../elsewhere/run", "tools/run"),
+    ("Tools/RUN", "../elsewhere/run", "tools/run"),
+    (".venv/python", ".venv/python", None),
+    ("../tools/run", "../tools/run", None),
+    ("tools", "tools", None),
+])
+def test_the_file_head_holds_whatever_way_the_command_names_it(tmp_path, spelled, started,
+                                                               name):
+    """What `_run` asks before it takes a program from the repo: is this a
+    file HEAD holds, by the name the command spells or by the name of the
+    file that would be started? Case does not tell two files apart on
+    Windows or macOS, so it does not here, on any platform."""
+    root = tmp_path.resolve()
+    held = {"calc.py", "tools/run", "Docs/Build.sh", "tools/go.cmd"}
+    assert evidenced_close._name_at_head(root, spelled, str(root / started), held) == name
+
+
+def test_a_file_that_is_started_from_outside_the_repo_is_none_of_heads(tmp_path):
+    """`../.venvs/dev/python` leaves the repo; only its spelling is asked."""
+    root = (tmp_path / "repo").resolve()
+    outside = str(tmp_path.resolve() / "tools" / "run")
+    assert evidenced_close._name_at_head(root, "../tools/run", outside, {"tools/run"}) is None
+
+
+def test_a_launcher_named_another_way_is_refused_at_the_fix_commit(repo, tmp_path, capsys):
+    """Where that happens. At the fix commit the files the command names are
+    brought in from HEAD by name; a launcher that was committed after the fix
+    and is declared as `tools/../tools/run` is not among them, so that
+    checkout lacks it. The working tree's copy, with the edit nobody
+    committed, is not run in its place."""
+    rel = _with_a_launcher(repo)
+    odd = f"tools/../{rel}"
+    _write(repo.root, "aramid.toml", _toml(f'["{odd}"]'))
+    _commit(repo.root, "c3: a launcher, declared another way")
+    _rewrite_the_fix(repo)
+    marker = tmp_path / "launcher.marker"
+    _with_a_launcher(repo, marker)      # the edit nobody committed
+
+    rc = cmd_ledger_resolve_selected(repo.root, FID, repo.c2, ["tests/check_cn.py"], "guarded")
+
+    assert not marker.exists()
+    _refused(capsys, repo.root, rc,
+             f"the command starts `{odd}`, which HEAD holds as {rel}, and the checkout this "
+             f"run is in does not hold it under the name the command uses -- through MCP a "
+             f"committed program is run from a checkout, never from the working tree. Write "
+             f"it in [tests].select_command as HEAD holds it, or close at the command line "
+             f"with --test")
+
+
 def _plant_post_checkout(repo, marker):
     """A `post-checkout` hook in the repo's own hooks directory: a file no
     commit holds, which git runs whenever it checks a tree out. It adds the
@@ -622,6 +916,87 @@ def test_at_the_command_line_the_hook_runs_as_for_every_worktree(repo, tmp_path,
     assert _closes(repo.root)[0].payload["red_proof"]["at"] == at
     ran_for = set(marker.read_text(encoding="utf-8").split())
     assert ran_for == ({head, repo.c2} if later_commit else {head})
+
+
+# Every hook `git help hooks` names (git 2.53).
+_HOOKS = (
+    "applypatch-msg", "pre-applypatch", "post-applypatch", "pre-commit", "pre-merge-commit",
+    "prepare-commit-msg", "commit-msg", "post-commit", "pre-rebase", "post-checkout",
+    "post-merge", "pre-push", "pre-receive", "update", "proc-receive", "post-receive",
+    "post-update", "reference-transaction", "push-to-checkout", "pre-auto-gc",
+    "post-rewrite", "sendemail-validate", "fsmonitor-watchman", "p4-changelist",
+    "p4-prepare-changelist", "p4-post-changelist", "p4-pre-submit", "post-index-change")
+
+
+def _plant_every_hook(repo, marker):
+    """Every hook git knows, in the repo's own hooks directory, each adding
+    its name to the marker, one a line."""
+    hooks = repo.root / ".git" / "hooks"
+    hooks.mkdir(exist_ok=True)
+    for name in _HOOKS:
+        hook = hooks / name
+        hook.write_text(f"#!/bin/sh\necho {name} >> '{marker.as_posix()}'\n",
+                        encoding="utf-8", newline="\n")
+        hook.chmod(0o755)
+
+
+def _marked(marker):
+    """What the marker holds, in order. The marker is taken away."""
+    if not marker.exists():
+        return []
+    names = marker.read_text(encoding="utf-8").split()
+    marker.unlink()
+    return names
+
+
+@pytest.mark.parametrize("later_commit, at", [(False, "head"), (True, "commit")])
+def test_no_hook_of_the_repo_is_run_by_a_close_through_mcp(repo, tmp_path, capsys,
+                                                           later_commit, at):
+    """`post-checkout` is not the only hook in reach. git runs
+    `post-index-change` whenever it writes an index and
+    `reference-transaction` whenever it moves a ref, and backing a commit out
+    does both. Every hook name is planted; a `git reset` shows that they
+    fire here; the close runs none of them, in either worktree."""
+    if later_commit:
+        _rewrite_the_fix(repo)
+    marker = tmp_path / "hooks.marker"
+    _plant_every_hook(repo, marker)
+    _git(repo.root, "reset", "-q", "--hard", "HEAD")
+    assert {"post-index-change", "reference-transaction"} <= set(_marked(marker))
+
+    rc = cmd_ledger_resolve_selected(repo.root, FID, repo.c2, ["tests/check_cn.py"], "guarded")
+
+    assert (rc, capsys.readouterr().err) == (0, "")
+    assert _closes(repo.root)[0].payload["red_proof"]["at"] == at
+    assert _marked(marker) == []
+
+
+@pytest.mark.parametrize("later_commit, at", [(False, "head"), (True, "commit")])
+def test_at_the_command_line_no_hook_runs_between_the_control_and_the_run_without_the_fix(
+        repo, tmp_path, capsys, later_commit, at):
+    """Red proof compares two runs, and nothing but the back-out may separate
+    them. The check adds `RUN` to the same marker the hooks write to, so the
+    marker holds the order of things: making the worktree runs the repo's
+    hooks, before the control, and after the control comes the run without
+    the fix and nothing else."""
+    marker = tmp_path / "order.marker"
+    _write(repo.root, "tests/check_mark.py",
+           f"with open({str(marker)!r}, 'a', encoding='utf-8') as f:\n"
+           f"    f.write('RUN\\n')\n" + CHECK)
+    _commit(repo.root, "c3: a check that leaves a mark")
+    if later_commit:
+        _rewrite_the_fix(repo)
+    _plant_every_hook(repo, marker)
+
+    rc = lc.cmd_ledger_resolve_fixed(repo.root, FID, repo.c2, [PY, "tests/check_mark.py"], "r",
+                                     red_proof=True)
+
+    assert (rc, capsys.readouterr().err) == (0, "")
+    assert _closes(repo.root)[0].payload["red_proof"]["at"] == at
+    order = _marked(marker)
+    control = [i for i, name in enumerate(order) if name == "RUN"][-2]
+    assert "post-checkout" in order[:control]
+    assert order[control:] == ["RUN", "RUN"]
 
 
 def test_a_test_that_fails_in_the_clean_checkout_is_refused_in_those_words(repo, capsys):

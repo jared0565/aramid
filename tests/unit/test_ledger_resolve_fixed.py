@@ -778,24 +778,26 @@ def test_a_kept_path_with_brackets_in_its_name_brings_back_only_itself(own_repo,
 
 
 def test_the_tree_is_built_by_git_in_this_order(repo, clock, monkeypatch):
-    """A detached worktree of HEAD; the fix backed out without committing;
-    the kept paths that HEAD holds checked out from it again, as literal
-    paths and with hooks off -- the helper the fix added and its tests, but
-    not the test it deleted, which HEAD does not hold and which is removed
-    instead; then the worktree goes."""
+    """A detached worktree of HEAD, made as the repo makes any, hooks and
+    all; the fix backed out without committing; the kept paths that HEAD
+    holds checked out from it again, as literal paths -- the helper the fix
+    added and its tests, but not the test it deleted, which HEAD does not
+    hold and which is removed instead; then the worktree goes. Every call
+    after the first has an empty directory as its hooks path."""
     calls = _git_stub(monkeypatch, *_TREE)
     seen = _scripted(monkeypatch, _OK, _OK, _RED)
 
     assert cmd_ledger_resolve_fixed(repo.root, FID, repo.c2, CHECK_CN, "r",
                                     red_proof=True) == 0
     wt = seen[1][0]
+    off = ("-c", f"core.hooksPath={wt.parent / 'no-hooks'}")
     assert calls == [
         ("worktree", "add", "--detach", str(wt), repo.c3),
-        ("revert", "--no-commit", repo.c2),
-        ("-c", f"core.hooksPath={wt.parent / 'no-hooks'}", "checkout", repo.c3, "--",
+        (*off, "revert", "--no-commit", repo.c2),
+        (*off, "checkout", repo.c3, "--",
          *_lit("support/helper.py", "tests/check_cn.py", "tests/check_tree.py")),
-        ("worktree", "remove", "--force", str(wt)),
-        ("worktree", "prune")]
+        (*off, "worktree", "remove", "--force", str(wt)),
+        (*off, "worktree", "prune")]
 
 
 def test_a_test_file_the_command_names_stays_where_no_naming_rule_knows_it(
@@ -841,7 +843,7 @@ def test_no_checkout_is_made_when_head_holds_none_of_the_kept_paths(repo, clock,
 
     assert cmd_ledger_resolve_fixed(repo.root, FID, repo.c2, CHECK_CN, "r",
                                     red_proof=True) == 0
-    assert [c[0] for c in calls] == ["worktree", "revert", "worktree", "worktree"]
+    assert [_sub(c)[0] for c in calls] == ["worktree", "revert", "worktree", "worktree"]
 
 
 def test_the_paths_a_command_names():
@@ -872,7 +874,7 @@ def test_a_merge_commit_is_backed_out_against_the_branch_it_was_merged_into(
 
     assert cmd_ledger_resolve_fixed(repo.root, FID, merge, CHECK_CN, "r",
                                     red_proof=True) == 0
-    assert [c for c in calls if c[0] == "revert"] == [
+    assert [_sub(c) for c in calls if _sub(c)[0] == "revert"] == [
         ("revert", "--no-commit", "-m", "1", merge)]
 
 
@@ -987,7 +989,7 @@ def test_node_modules_is_linked_for_the_runs_and_unlinked_before_the_worktree_go
 
     def spy(root, *args):
         if _sub(args)[:1] in _TREE:
-            if args[:2] == ("worktree", "remove"):
+            if _sub(args)[:2] == ("worktree", "remove"):
                 order.append("remove")
             return subprocess.CompletedProcess(args, 0, "", "")
         return real(root, *args)
@@ -1009,13 +1011,14 @@ def test_each_worktree_gets_its_own_node_modules_link_and_loses_it_first(repo, c
     real = gitutil._run
 
     def fake(root, *args):
-        if args[:2] == ("worktree", "remove"):
+        sub = _sub(args)
+        if sub[:2] == ("worktree", "remove"):
             order.append(("remove", Path(args[-1]).name))
-        if args[:1] == ("revert",):
+        if sub[:1] == ("revert",):
             return subprocess.CompletedProcess(args, 1, "", "error: could not revert\n")
-        if args[:2] == ("diff", "--name-only"):
+        if sub[:2] == ("diff", "--name-only"):
             return subprocess.CompletedProcess(args, 0, "calc.py\0", "")
-        if _sub(args)[:1] in _TREE:
+        if sub[:1] in _TREE:
             return subprocess.CompletedProcess(args, 0, "", "")
         return real(root, *args)
     monkeypatch.setattr(gitutil, "_run", fake)
@@ -1055,7 +1058,8 @@ def test_a_node_modules_link_that_fails_is_a_refusal(repo, capsys, monkeypatch):
     _refused(capsys, repo.root, rc,
              "red proof could not be run: node_modules could not be linked into the "
              "worktree (mklink /J failed: access denied)")
-    assert [c[:2] for c in calls][-2:] == [("worktree", "remove"), ("worktree", "prune")]
+    assert [_sub(c)[:2] for c in calls][-2:] == [("worktree", "remove"),
+                                                 ("worktree", "prune")]
 
 
 def test_a_confirmed_critical_closes_with_red_proof(template, clock, monkeypatch):
@@ -1086,7 +1090,7 @@ def test_a_cleanup_git_cannot_do_is_named_and_does_not_change_the_answer(
     real = gitutil._run
 
     def fake(root, *args):
-        if args[:2] == ("worktree", "remove"):
+        if _sub(args)[:2] == ("worktree", "remove"):
             raise gitutil.GitTimeout("git worktree timed out after 600 s and was killed")
         if _sub(args)[:1] in _TREE:
             return subprocess.CompletedProcess(args, 0, "", "")
@@ -1209,7 +1213,9 @@ def test_the_proof_at_the_fix_commit_is_built_by_git_in_this_order(repo, clock,
     """HEAD's worktree goes before the one at the fix commit is made. The
     test the command names comes in from HEAD before the control. The
     commit's two source paths go back to its parent before the last run.
-    Both checkouts are of literal paths, with hooks off."""
+    Both checkouts are of literal paths. Each worktree is made as the repo
+    makes any, and every other call has an empty directory as its hooks
+    path."""
     calls = _git_stub(monkeypatch, ("worktree",), ("checkout",))
     _git_stub(monkeypatch, ("revert",), rc=1, stderr="error: could not revert\n")
     _git_stub(monkeypatch, ("diff", "--name-only"), stdout="calc.py\0")
@@ -1222,13 +1228,13 @@ def test_the_proof_at_the_fix_commit_is_built_by_git_in_this_order(repo, clock,
     off = ("-c", f"core.hooksPath={wt.parent / 'no-hooks'}")
     assert calls == [
         ("worktree", "add", "--detach", str(wt), repo.c3),
-        ("worktree", "remove", "--force", str(wt)),
-        ("worktree", "prune"),
+        (*off, "worktree", "remove", "--force", str(wt)),
+        (*off, "worktree", "prune"),
         ("worktree", "add", "--detach", str(fix), repo.c2),
         (*off, "checkout", repo.c3, "--", *_lit("tests/check_cn.py")),
         (*off, "checkout", repo.c1, "--", *_lit("calc.py", "checks/routes_check.py")),
-        ("worktree", "remove", "--force", str(fix)),
-        ("worktree", "prune")]
+        (*off, "worktree", "remove", "--force", str(fix)),
+        (*off, "worktree", "prune")]
     # Both runs there are in that worktree, on its own source.
     assert [cwd for cwd, _env in seen] == [repo.root, wt, fix, fix]
     assert seen[2][1] == seen[3][1]
@@ -1370,14 +1376,16 @@ def test_a_confirmed_critical_closes_on_a_proof_at_the_fix_commit(template, cloc
 def test_a_conflict_only_in_paths_that_stay_at_head_does_not_stop_red_proof(
         repo, clock, monkeypatch):
     """Both are among c2's kept paths; `_keep_at_head` overwrites them. git
-    is asked for the UNMERGED paths, once."""
+    is asked for the UNMERGED paths, once, and that call runs no hook
+    either."""
     listed = _revert_fails(monkeypatch, ["tests/check_cn.py", "support/helper.py"])
-    _scripted(monkeypatch, _OK, _OK, _RED)
+    seen = _scripted(monkeypatch, _OK, _OK, _RED)
 
     assert cmd_ledger_resolve_fixed(repo.root, FID, repo.c2, CHECK_CN, "r",
                                     red_proof=True) == 0
     assert _closes(repo.root)[0].payload["red_proof"]["pre_fix_rc"] == 1
-    assert listed == [("diff", "--name-only", "--diff-filter=U", "-z")]
+    off = ("-c", f"core.hooksPath={seen[1][0].parent / 'no-hooks'}")
+    assert listed == [(*off, "diff", "--name-only", "--diff-filter=U", "-z")]
 
 
 @pytest.mark.parametrize("unmerged, listing_rc", [
