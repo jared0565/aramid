@@ -267,10 +267,12 @@ TOOLS: dict[str, dict] = {
             "Close an open llm-review finding that a commit fixed although the"
             " line it quotes never changed. Names tests, never a command: the"
             " selectors are appended to the repo's committed"
-            " `[tests].select_command`. The tests must pass at HEAD and fail"
-            " with the fix backed out (red proof, always), so the call takes"
-            " up to four runs of them. Ledger-logged; a later review that"
-            " raises the finding again re-opens it."),
+            " `[tests].select_command`. Every run is in a clean checkout of"
+            " HEAD, never in the working tree, so commit the test first. The"
+            " tests must pass there and fail with the fix backed out (red"
+            " proof, always): two runs of them, or three when the proof moves"
+            " to the fix commit. Ledger-logged; a later review that raises"
+            " the finding again re-opens it."),
         "inputSchema": {
             "type": "object",
             "properties": {

@@ -87,12 +87,23 @@ to publish a tag that disagrees with it.
   A selector is a test file HEAD holds (under `tests/` or `__tests__/`, or
   named `test_*.py`, `*_test.py`, `*.test.*`, `*.spec.*`); when the declared
   command is pytest it may go on with `::` and a test in that file. It is
-  made of letters, digits and `_ . / [ ] : @ + -`, and does not start with
-  `-`: on Windows `npx` starts through cmd.exe, which reads `&`, `|`, `%`
-  and quotes in an argument as syntax. Red proof always runs, and the event
-  records `"via": "mcp"`. A repo that has committed no `select_command` is
-  refused, and the refusal names the key. Nothing else reads the key: the
-  gate still runs `[tests].command`.
+  made of ASCII letters, digits and `_ . / [ ] : @ + -`, and does not start
+  with `-`: on Windows `npx` starts through cmd.exe, which reads `&`, `|`,
+  `%` and quotes in an argument as syntax. A repo that has committed no
+  `select_command` is refused, and the refusal names the key. Nothing else
+  reads the key: the gate still runs `[tests].command`.
+
+  Every run of a close through MCP is in a clean checkout of HEAD, made
+  with git's hooks off, and never in the working tree. Whoever calls the
+  tool may be able to write files in the repository and not to run a
+  program, and a run in the working tree would load an untracked
+  `conftest.py`, or a `pytest.py` beside the code, for them. So the run the
+  command line makes first, at the repo root, is left out; red proof always
+  runs, and its control is what shows the test passing at HEAD. The test
+  runs twice, or three times at the fix commit. Uncommitted changes do not
+  stop the close and are not tested. The event records `"via": "mcp"`.
+  What is installed is used as it stands and is not checked: `node_modules`,
+  a virtualenv the declared command names, the interpreter's packages.
 
 - **The agent hook asks for red proof on an agent's close (FN-36).** The
   `pre-tool-use` hook now also reads an `aramid ledger resolve` command
@@ -102,13 +113,47 @@ to publish a tag that disagrees with it.
   (`--fix`, `--fixed=<commit>`, `--red`), and the values of `--fixed`,
   `--test` and `--reason` are skipped, so text inside them is not a flag.
   aramid is recognised by the name of the file that is started, whatever
-  the path or launcher. Two things it does not see: a close made inside
-  another program (`python -c`), and aramid started by an unquoted Windows
-  path. A person at a terminal is not touched.
+  the path or launcher. A person at a terminal is not touched.
+
+  The rule looks for a flag that is missing, so the hook now cuts a command
+  up as the shell does (see Fixed, below): a `--red-proof` on the next
+  line, in a comment, behind `;` or `|`, inside `$( )` or standing where a
+  redirection goes does not count, and a redirection, a comment sign in the
+  middle of a word or a `$( )` cannot hide `--fixed`. Inside double quotes
+  a backtick is read both ways, as PowerShell's escape and as a plain
+  character, and either reading that holds a close without red proof is
+  answered. What it does not see: a close made inside another program
+  (`python -c`, `sh -c`), a command built when it runs (backticks, a
+  variable, `eval`), aramid started by an unquoted Windows path, and
+  whatever follows a quote that does not close by the POSIX rule (a
+  PowerShell string that ends in a backslash reads as one). The user guide
+  lists these under Agent surfaces.
 
   `ARAMID.md` gains a section, "Closing an LLM finding you fixed", and the
   tool in its MCP list. A repo's copy changes when `aramid init` is run
   again after upgrading.
+
+### Fixed
+
+- **The agent hook cuts a command up as the shell does.** Found while
+  fixing the new close rule, and the git rules read the same way, so five
+  things change for `git commit` and `git push` in an armed session:
+  - a `#` in the middle of a word is no longer a comment: `git commit -m
+    fix#12 --no-verify` was let through and is now refused;
+  - a redirection no longer ends the command: `git commit -m x >/dev/null
+    --no-verify` and `... 2>&1 --no-verify` were let through and are now
+    refused, and so is a flag that follows `$( )`;
+  - a newline ends a command: `git commit -m x` with `git push -n` on the
+    next line was refused as a commit with `-n`, and is now let through
+    (`push -n` is a dry run);
+  - an operator character inside quotes is text: `git commit -m "|"
+    --no-verify` was let through and is now refused;
+  - a quote that never closes no longer lets the whole call through. bash
+    runs a script line by line, so `git commit --no-verify` with an open
+    quote on a later line was let through and is now refused; so is one in
+    front of a heredoc whose text holds an apostrophe, and PowerShell's
+    `git commit --no-verify -m "C:\src\"`. What follows the open quote
+    is still not read.
 
 ## [0.20.7] — 2026-10-10
 

@@ -27,7 +27,7 @@ structurally hard:
 
 Known residuals, all false-negative direction: bundled short flags, `git
 config alias.*` indirection, commands built by shell variables or eval,
-and PowerShell-only syntax shlex cannot lex (which fails open).
+and PowerShell-only syntax, which is read by the POSIX rule.
 
 THE CLOSE RULE (FN-36). `aramid ledger resolve --fixed` closes an LLM
 finding on a passing test. `--red-proof` is optional at the command line; an
@@ -49,14 +49,97 @@ reason:
 
 Residuals of the close rule, false-negative direction: an unquoted Windows
 path (shlex eats the backslashes), and a close built inside `python -c`.
+
+WHERE A COMMAND STARTS AND ENDS (`_shell_text`, `_segments`). The close rule
+is the one rule here that looks for a flag that is ABSENT, so for it text
+the reader takes in and the shell does not hand to aramid is not a false
+alarm, it is a close let through: `--red-proof` on the next line, or after
+a `#`. And text the shell does hand over, read as something else, hides
+`--fixed`: a `#` in the middle of a word read as a comment, the words after
+a redirection read as another command. The security review of 9b37b81
+found this, and each case here was measured. So a command is cut up as the
+shell cuts it, for every rule:
+
+- a newline outside quotes ends the command, like `;`;
+- `#` starts a comment only where a word starts, and the comment ends with
+  its line. `fix#12` is one word;
+- a backslash before a newline, or PowerShell's backtick before one,
+  continues the line;
+- a redirection does not end the command. It goes with the one word after
+  it, and with the file descriptor number written in front of it (`2>&1`);
+  the words after that are still arguments of the same program;
+- `( )` holds commands of its own (`$( )`, `<( )`, a subshell), and the
+  command around it goes on after the `)`;
+- an operator character inside quotes, or escaped, is text.
+
+For the git rules the same reading removes misses (`git commit -m fix#12
+--no-verify`, `git commit -m x >/dev/null --no-verify`) and a false alarm
+(`git commit -m x` with `git push -n` on the next line, which read as one
+line was a refused commit).
+
+TWO READINGS OF A BACKTICK, for the close rule. Inside double quotes
+PowerShell's backtick escapes the next character, so a quote written with
+one in front does not end the string; to a POSIX shell that quote does end
+it. Whichever way the reader takes it, the other shell has a command whose
+string ends somewhere else, and with it a `#` that is or is not a comment.
+So the close rule reads the command both ways and answers if either reading
+holds a close without red proof. The cost is a false alarm, in PowerShell,
+for a reason that quotes something with escaped quotes and has a `#` or an
+operator between them. The git rules keep the POSIX reading they always
+had.
+
+A QUOTE THAT NEVER CLOSES (`_tokens`). Until this fix a command shlex could
+not lex was let through unread, whole. bash does not treat it so: it runs a
+script line by line, so a close on the first line has been made by the time
+an open quote on the third is a syntax error. And what does not pair up by
+the POSIX rule can be a command that runs as written: a heredoc body with an
+apostrophe in it, a PowerShell string that ends in a backslash. So the
+command is read up to the quote that does not close. What comes after it is
+not read. For the git rules that is a miss, as before; for the close rule a
+`--red-proof` after it does not count, which is a false alarm when the shell
+did pair the quotes.
+
+The two readings are not treated alike here. The POSIX reading counts as far
+as it gets, always: it is bash's own, and bash ran what it shows. The
+reading with PowerShell's backtick counts when it gets to the end, or when
+neither does. Cut off while the POSIX reading is whole it is left out,
+because in bash that is an everyday command: in `--reason "by `whoami`"
+--red-proof` the backtick before the last quote would escape it, the string
+would never close, and a proper close would be answered.
+
+What this leaves, for every rule. The quoting is POSIX quoting: where
+PowerShell differs otherwise (a backslash escapes nothing there, a quote is
+doubled inside single quotes, `<# #>` is a comment) the command is read by
+the POSIX rule. bash's `$'...'` is not followed either, nor a heredoc body:
+its lines are read as commands. And a command that is built when it runs
+(backticks, a variable, `eval`, the output of `$( )`) is read as written,
+not as built.
 """
 from __future__ import annotations
 
 import shlex
 from dataclasses import dataclass
 
-# Characters shlex groups into operator tokens under punctuation_chars.
-_PUNCT = set("();<>|&")
+# Characters shlex groups into operator tokens under punctuation_chars. A
+# newline is one of them: outside quotes it ends a command.
+_OPERATORS = "();<>|&\n"
+_PUNCT = set(_OPERATORS)
+# After one of these, outside quotes, the next character starts a word.
+_BREAKS = " \t\r" + _OPERATORS
+# The operators that are redirections, the longest first: `&>>` is one
+# operator, not `&` and `>>`.
+_REDIRECTS = ("&>>", "<<<", "&>", "<<", "<>", "<&", ">>", ">&", ">|", "<", ">")
+# A process substitution opens with one of these, and is no redirection.
+_SUBSTITUTIONS = ("<(", ">(")
+# A quoted or escaped operator character is text. The lexer is handed a
+# stand-in from the private-use area for it, so that no token it is part of
+# reads as an operator, and the character is put back when the token is
+# taken as a word.
+_STAND_IN = {ord(ch): 0xE000 + i for i, ch in enumerate(_OPERATORS)}
+# The stand-in for a double quote that PowerShell's backtick escapes.
+_QUOTE = "\ue010"
+_PUT_BACK = {stand_in: ord_ for ord_, stand_in in _STAND_IN.items()} | {ord(_QUOTE): ord('"')}
+_DIGITS = "0123456789"
 
 # Subcommand flags that take a SEPARATE value token: the value is skipped
 # so it can never be read as a flag. `=`-attached forms are one token and
@@ -87,25 +170,131 @@ class Bypass:
     token: str       # the exact matched token / -c value, for messages
 
 
-def _tokens(command: str) -> list[str] | None:
-    lex = shlex.shlex(command, posix=True, punctuation_chars=True)
+def _shell_text(command: str, backtick: bool) -> str:
+    """`command` as the lexer is to read it: comments taken out, continued
+    lines joined, the number in front of a redirection dropped, and every
+    quoted or escaped operator character replaced by its stand-in. Quotes
+    and escapes stay where they are, for shlex to read.
+
+    `backtick` picks the reading of a backtick inside double quotes: True
+    for PowerShell's, where it escapes the next character and a quote after
+    it does not end the string; False for a character like any other.
+
+    shlex has a comment rule of its own, and it is not the shell's: it ends
+    the line at a `#` in the middle of a word, and it takes the newline with
+    the comment, so the next line reads as more of this one. That is why
+    the comments are taken out here. This walk cannot raise."""
+    out: list[str] = []
+    quote = ""      # the quote the walk is inside: "", "'" or '"'
+    fresh = True    # the next character would start a word
+    i, n = 0, len(command)
+    while i < n:
+        ch = command[i]
+        if quote != "'" and ch in "\\`" and command.startswith(("\n", "\r\n"), i + 1):
+            # a continued line: the shell's backslash, PowerShell's backtick
+            i += 3 if command[i + 1] == "\r" else 2
+            continue
+        if quote != "'" and (ch == "\\" or (ch == "`" and quote and backtick)):
+            # an escaped character: text, whatever it is
+            escaped = command[i + 1:i + 2]
+            out.append(ch + (_QUOTE if ch == "`" and escaped == '"'
+                             else escaped.translate(_STAND_IN)))
+            i, fresh = i + 2, False
+            continue
+        if quote:
+            out.append(ch.translate(_STAND_IN))
+            quote = "" if ch == quote else quote
+            i += 1
+            continue
+        if ch == "#" and fresh:
+            # a comment: to the end of its line, the newline not included
+            while i < n and command[i] != "\n":
+                i += 1
+            continue
+        if ch in _DIGITS and fresh:
+            j = i
+            while j < n and command[j] in _DIGITS:
+                j += 1
+            if command[j:j + 1] in ("<", ">"):
+                i = j       # the file descriptor of a redirection: `2>&1`
+                continue
+        if ch in "'\"":
+            quote = ch
+        out.append(ch)
+        fresh = ch in _BREAKS
+        i += 1
+    return "".join(out)
+
+
+def _tokens(command: str, backtick: bool) -> tuple[list[str], bool]:
+    """The words and operators of `command` as far as it can be read, and
+    whether that was to its end. A quote that never closes (or a backslash
+    with nothing after it) stops the lexer; the tokens before it are
+    returned and the word it stopped in is not. They still count: bash has
+    run every line before the one with the open quote by the time it finds
+    it, and what does not pair up by the POSIX rule may pair up in the shell
+    that runs it (a heredoc body, a PowerShell string that ends in a
+    backslash). What follows the open quote is not read: for the git rules a
+    flag there is missed, for the close rule a `--red-proof` there does not
+    count."""
+    lex = shlex.shlex(_shell_text(command, backtick), posix=True,
+                      punctuation_chars=_OPERATORS)
     lex.whitespace_split = True
+    lex.whitespace = " \t\r"   # not the newline: it is an operator here
+    lex.commenters = ""         # `_shell_text` has taken the comments out
+    tokens: list[str] = []
     try:
-        return list(lex)
+        for token in lex:
+            tokens.append(token)
     except ValueError:
-        return None  # unbalanced quotes etc. -- fail open (spec §6)
+        return tokens, False
+    return tokens, True
+
+
+def _operators(token: str):
+    """The operators an operator token is made of: shlex hands over a run of
+    operator characters as one token, `)>` or `>;`, and each is read for
+    itself."""
+    i = 0
+    while i < len(token):
+        op = next((known for known in _SUBSTITUTIONS + _REDIRECTS
+                   if token.startswith(known, i)), token[i])
+        yield op
+        i += len(op)
 
 
 def _segments(tokens: list[str]) -> list[list[str]]:
-    """Split the token stream at shell operators (&&, ;, |, ...), so each
-    simple command is scanned on its own."""
-    segs: list[list[str]] = [[]]
+    """The simple commands in the token stream, each to be scanned on its
+    own, cut up as the shell cuts them (module docstring): `;`, `|`, `&`
+    and a newline end a command; a redirection and the word after it are
+    left out of it; `( )` holds commands of its own, and the command around
+    it goes on after the `)`."""
+    done: list[list[str]] = []
+    nested: list[list[str]] = [[]]   # the command being read, per depth of ( )
+    target = False                   # the next word is where a redirection goes
     for tok in tokens:
-        if tok and all(ch in _PUNCT for ch in tok):
-            segs.append([])
-        else:
-            segs[-1].append(tok)
-    return [s for s in segs if s]
+        if not (tok and all(ch in _PUNCT for ch in tok)):
+            if not target:
+                nested[-1].append(tok.translate(_PUT_BACK))
+            target = False
+            continue
+        for op in _operators(tok):
+            if op in _REDIRECTS:
+                target = True
+                continue
+            if op in _SUBSTITUTIONS and not target:
+                # `<( )` stands where a word would: it is one, to the
+                # command around it, unless a redirection was waiting for it
+                nested[-1].append(op)
+            target = False
+            if op == "(" or op in _SUBSTITUTIONS:
+                nested.append([])
+            elif op == ")" and len(nested) > 1:
+                done.append(nested.pop())
+            else:
+                done.append(nested[-1])
+                nested[-1] = []
+    return [seg for seg in done + nested if seg]
 
 
 def _is_git(token: str) -> bool:
@@ -197,14 +386,22 @@ def _scan_one_aramid(seg: list[str], start: int) -> Bypass | None:
     `ledger resolve` that carries `--fixed` and no `--red-proof`."""
     if not 0 <= start < len(seg):
         return None
+    # Up to `ledger`: global options (`--version`), none of which takes a
+    # value. There and before `resolve`: words the shell may make nothing of
+    # -- `$(true)`, an empty `$VAR` -- which would otherwise stand in between
+    # and hide the close (found by running generated commands under bash).
     i = start + 1
-    # Global options (`--version`): none takes a value.
-    while i < len(seg) and seg[i].startswith("-"):
+    while i < len(seg) and seg[i].startswith(("-", "$")):
         i += 1
-    if seg[i:i + 2] != ["ledger", "resolve"]:
+    if seg[i:i + 1] != ["ledger"]:
+        return None
+    i += 1
+    while i < len(seg) and seg[i].startswith("$"):
+        i += 1
+    if seg[i:i + 1] != ["resolve"]:
         return None
     seen = set()
-    j = i + 2
+    j = i + 1
     while j < len(seg):
         tok = seg[j]
         if tok == "--":
@@ -225,24 +422,31 @@ def find_bypass(command) -> Bypass | None:
     evidenced close without red proof, or None.
 
     Compound commands (&&, ;, |, ||) are scanned in full, not just the
-    head (spec §6). One match is enough to decide the tool call.
+    head (spec §6). One match is enough to decide the tool call. The
+    command is read twice, the second time with PowerShell's backtick; only
+    the close rule is asked on that second reading, and a second reading
+    that stops at an open quote is left out when the first got to the end
+    (module docstring).
     """
     if not isinstance(command, str):
         return None
     low = command.lower()
     if "git" not in low and "aramid" not in low:
         return None
-    tokens = _tokens(command)
-    if tokens is None:
-        return None
-    for seg in _segments(tokens):
-        for i, tok in enumerate(seg):
-            if _is_git(tok):
-                found = _scan_one_git(seg, i)
-            elif _is_aramid(tok):
-                found = _scan_one_aramid(seg, i)
-            else:
-                continue
-            if found is not None:
-                return found
+    posix, posix_whole = _tokens(command, False)
+    powershell, powershell_whole = _tokens(command, True)
+    readings = [(False, posix)]
+    if powershell_whole or not posix_whole:
+        readings.append((True, powershell))
+    for backtick, tokens in readings:
+        for seg in _segments(tokens):
+            for i, tok in enumerate(seg):
+                if _is_aramid(tok):
+                    found = _scan_one_aramid(seg, i)
+                elif _is_git(tok) and not backtick:
+                    found = _scan_one_git(seg, i)
+                else:
+                    continue
+                if found is not None:
+                    return found
     return None

@@ -328,6 +328,13 @@ def test_a_selector_cannot_be_an_option(shared, selector):
     ("tests/a,b.py", "','"),
     ("tests/a=b.py", "'='"),
     ("tests/a'b.py", '"\'"'),
+    # Letters and digits to Python, and not ASCII. U+02BA is a letter that
+    # Windows turns into a double quote when a program reads its command line
+    # in the ANSI code page ("best fit"), so "a letter" is no safe class.
+    ("tests/caf\u00e9.py", "'\u00e9'"),
+    ("tests/x\u02ba.py", "'\u02ba'"),
+    ("tests/\uff41.py", "'\uff41'"),
+    ("tests/x\u00b2.py", "'\u00b2'"),
 ])
 def test_a_selector_holds_plain_characters_only(shared, selector, bad):
     """On Windows a declared command such as `npx vitest run` starts a `.cmd`
@@ -338,8 +345,8 @@ def test_a_selector_holds_plain_characters_only(shared, selector, bad):
 
     assert str(exc.value) == (
         f"test selector {selector!r} holds {bad} -- through MCP a selector is made of "
-        f"letters, digits and `_ . / [ ] : @ + -` only; close this one at the command "
-        f"line with --test")
+        f"ASCII letters, digits and `_ . / [ ] : @ + -` only; close this one at the "
+        f"command line with --test")
 
 
 @pytest.mark.parametrize("selector, path", [
@@ -459,12 +466,13 @@ def test_a_close_through_selectors_really_runs_and_records_red_proof(repo, capsy
 
 
 def test_red_proof_is_not_optional_through_selectors(repo, monkeypatch):
-    """Three runs, always: HEAD, the control, and the one without the fix."""
+    """Two runs, always, and neither in the working tree: the control in a
+    clean checkout of HEAD, and the one without the fix."""
     seen = []
 
     def fake(argv, cwd, timeout_s, env=None):
-        seen.append(list(argv))
-        return [_OK, _OK, _RED][len(seen) - 1]
+        seen.append((list(argv), Path(cwd)))
+        return [_OK, _RED][len(seen) - 1]
     monkeypatch.setattr(evidenced_close, "run_subprocess", fake)
     real = gitutil._run
 
@@ -477,8 +485,169 @@ def test_red_proof_is_not_optional_through_selectors(repo, monkeypatch):
 
     assert cmd_ledger_resolve_selected(repo.root, FID, repo.c2, ["tests/check_cn.py"],
                                        "r") == 0
-    assert [argv[1:] for argv in seen] == [["tests/check_cn.py"]] * 3
+    assert [argv[1:] for argv, _cwd in seen] == [["tests/check_cn.py"]] * 2
+    assert all(cwd.name == "wt" and cwd.resolve() != repo.root.resolve() for _a, cwd in seen)
     assert _closes(repo.root)[0].payload["red_proof"]["pre_fix_rc"] == 1
+
+
+# ------------------------------- nothing uncommitted takes part (the review) --
+
+_MARK = "import pathlib\npathlib.Path({marker!r}).write_text('ran', encoding='utf-8')\n"
+_ROUTE_TEST = "tests/unit/test_route.py::test_cn_is_routed"
+
+
+def _with_a_pytest_test(repo):
+    """`repo` with pytest as the declared command and a pytest test of the
+    fix, both committed."""
+    _write(repo.root, "tests/unit/test_route.py",
+           "import calc\n\n\ndef test_cn_is_routed():\n    assert calc.route('CN') == 'ASIA'\n")
+    _write(repo.root, "aramid.toml",
+           _toml(f'["{PY}", "-m", "pytest", "-q", "-p", "no:cacheprovider"]'))
+    return _commit(repo.root, "c3: a pytest test of the fix")
+
+
+@pytest.mark.parametrize("planted", ["conftest.py", "pytest.py"])
+def test_an_untracked_file_in_the_working_tree_is_not_run_by_a_close_through_mcp(
+        repo, tmp_path, capsys, planted):
+    """Whoever calls the MCP tool may be able to write files and not to run
+    programs. pytest loads every conftest.py it finds, and `python -m pytest`
+    imports a pytest.py standing where it starts in place of pytest, so in the
+    working tree a file nobody committed would be run for that caller. No run
+    of a close through MCP is in the working tree."""
+    _with_a_pytest_test(repo)
+    marker = tmp_path / "ran.marker"
+    _write(repo.root, planted, _MARK.format(marker=str(marker)))
+
+    rc = cmd_ledger_resolve_selected(repo.root, FID, repo.c2, [_ROUTE_TEST], "guarded")
+
+    assert (rc, capsys.readouterr().err) == (0, "")
+    assert not marker.exists()
+    assert _closes(repo.root)[0].payload["red_proof"]["at"] == "head"
+
+
+def test_a_committed_conftest_is_the_repos_own_code_and_runs(repo, tmp_path, capsys):
+    """The other half, and what shows the marker above can fire: what a
+    commit holds is what the repo declared, and it runs."""
+    _with_a_pytest_test(repo)
+    marker = tmp_path / "ran.marker"
+    _write(repo.root, "conftest.py", _MARK.format(marker=str(marker)))
+    _commit(repo.root, "c4: a conftest")
+
+    rc = cmd_ledger_resolve_selected(repo.root, FID, repo.c2, [_ROUTE_TEST], "guarded")
+
+    assert (rc, capsys.readouterr().err) == (0, "")
+    assert marker.read_text(encoding="utf-8") == "ran"
+
+
+def test_an_uncommitted_edit_neither_stops_a_close_through_mcp_nor_takes_part(
+        repo, capsys):
+    """At the command line a tracked file with uncommitted changes refuses the
+    close, because the test runs on the working tree. Through MCP it runs on
+    HEAD as committed, so the edit is simply not there: this one takes the
+    fix back out, and the close still stands."""
+    _with_a_pytest_test(repo)
+    _write(repo.root, "calc.py", "def route(country):\n    return 'EU'\n")
+
+    rc = cmd_ledger_resolve_selected(repo.root, FID, repo.c2, [_ROUTE_TEST], "guarded")
+
+    assert (rc, capsys.readouterr().err) == (0, "")
+    assert _status(repo.root) == "fixed"
+
+
+def _plant_post_checkout(repo, marker):
+    """A `post-checkout` hook in the repo's own hooks directory: a file no
+    commit holds, which git runs whenever it checks a tree out. It adds the
+    commit it was run for (git's second argument) to the marker, one a line."""
+    hooks = repo.root / ".git" / "hooks"
+    hooks.mkdir(exist_ok=True)
+    hook = hooks / "post-checkout"
+    hook.write_text(f"#!/bin/sh\necho \"$2\" >> '{marker.as_posix()}'\n", encoding="utf-8",
+                    newline="\n")
+    hook.chmod(0o755)
+
+
+def _rewrite_the_fix(repo):
+    """A later commit changes the fix's own line again, so git can no longer
+    back the fix out of HEAD and red proof moves to the fix commit."""
+    _write(repo.root, "calc.py",
+           "def route(country):\n    return 'ASIA' if country in ('CN', 'JP') else 'EU'\n")
+    return _commit(repo.root, "c3: JP too")
+
+
+def test_the_repos_post_checkout_hook_is_not_run_by_a_close_through_mcp(repo, tmp_path, capsys):
+    """git runs `post-checkout` when it makes a worktree, and the hook is a
+    file in the repository that no commit holds: the same caller who can
+    write a conftest.py can write that. Through MCP the worktree is made
+    with hooks off."""
+    marker = tmp_path / "hook.marker"
+    _plant_post_checkout(repo, marker)
+
+    rc = cmd_ledger_resolve_selected(repo.root, FID, repo.c2, ["tests/check_cn.py"], "guarded")
+
+    assert (rc, capsys.readouterr().err) == (0, "")
+    assert not marker.exists()
+    assert _closes(repo.root)[0].payload["red_proof"]["at"] == "head"
+
+
+def test_nor_by_the_worktree_at_the_fix_commit(repo, tmp_path, capsys):
+    """The second worktree, the one red proof moves to, is made the same way."""
+    _rewrite_the_fix(repo)
+    marker = tmp_path / "hook.marker"
+    _plant_post_checkout(repo, marker)
+
+    rc = cmd_ledger_resolve_selected(repo.root, FID, repo.c2, ["tests/check_cn.py"], "guarded")
+
+    assert (rc, capsys.readouterr().err) == (0, "")
+    assert _closes(repo.root)[0].payload["red_proof"]["at"] == "commit"
+    assert not marker.exists()
+
+
+@pytest.mark.parametrize("later_commit, at", [(False, "head"), (True, "commit")])
+def test_at_the_command_line_the_hook_runs_as_for_every_worktree(repo, tmp_path, capsys,
+                                                                later_commit, at):
+    """The other half, and what shows the marker above can fire: the close
+    at the command line is unchanged, in either worktree. The hook names
+    the commit of each checkout it ran for, so the worktree at the fix
+    commit is told apart from the one at HEAD that is made before it."""
+    if later_commit:
+        _rewrite_the_fix(repo)
+    head = _git(repo.root, "rev-parse", "HEAD")
+    marker = tmp_path / "hook.marker"
+    _plant_post_checkout(repo, marker)
+
+    rc = lc.cmd_ledger_resolve_fixed(repo.root, FID, repo.c2, [PY, "tests/check_cn.py"], "r",
+                                     red_proof=True)
+
+    assert (rc, capsys.readouterr().err) == (0, "")
+    assert _closes(repo.root)[0].payload["red_proof"]["at"] == at
+    ran_for = set(marker.read_text(encoding="utf-8").split())
+    assert ran_for == ({head, repo.c2} if later_commit else {head})
+
+
+def test_a_test_that_fails_in_the_clean_checkout_is_refused_in_those_words(repo, capsys):
+    """There is no run in the repo to compare with, so the refusal does not
+    say the test passes there."""
+    _with_a_pytest_test(repo)
+    _write(repo.root, "tests/unit/test_route.py",
+           "def test_cn_is_routed():\n    assert False\n")
+    _commit(repo.root, "c4: the test is broken")
+
+    rc = cmd_ledger_resolve_selected(repo.root, FID, repo.c2, [_ROUTE_TEST], "guarded")
+
+    _refused(capsys, repo.root, rc,
+             "the test exits 1 in a clean checkout of HEAD -- through MCP every run is in "
+             "one, never in the working tree, and it must pass (exit 0) there")
+
+
+def test_a_close_marked_as_made_through_mcp_always_carries_red_proof(repo, capsys):
+    """`red_proof=False` cannot be combined with the MCP route: the control of
+    red proof is the only run that shows the test passing at HEAD, so without
+    it a close would rest on no run at all."""
+    rc = lc.cmd_ledger_resolve_fixed(repo.root, FID, repo.c2, [PY, "tests/check_cn.py"], "r",
+                                     red_proof=False, via="mcp")
+
+    assert (rc, capsys.readouterr().err) == (0, "")
+    assert _closes(repo.root)[0].payload["red_proof"]["at"] == "head"
 
 
 def test_a_refused_selector_runs_nothing_and_records_nothing(repo, capsys, monkeypatch):
@@ -491,8 +660,8 @@ def test_a_refused_selector_runs_nothing_and_records_nothing(repo, capsys, monke
 
     _refused(capsys, repo.root, rc,
              "test selector 'tests/check_cn.py & calc' holds ' ' '&' -- through MCP a "
-             "selector is made of letters, digits and `_ . / [ ] : @ + -` only; close this "
-             "one at the command line with --test")
+             "selector is made of ASCII letters, digits and `_ . / [ ] : @ + -` only; close "
+             "this one at the command line with --test")
 
 
 def test_a_git_that_does_not_answer_is_an_engine_error(repo, capsys, monkeypatch):

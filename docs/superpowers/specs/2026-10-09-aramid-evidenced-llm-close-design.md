@@ -632,8 +632,9 @@ four are required.
   cmd.exe reads `&`, `|`, `<`, `>`, `^`, `%` and a double quote in an
   argument as syntax.
 - Red proof is always run. The event records `"via": "mcp"`.
-- Everything else is the command-line close: same checks, same refusals,
-  same event.
+- The checks on the finding and on the commit are those of the
+  command-line close, and so is the event. Where the test is run is not:
+  see 9.4.
 
 As built (`evidenced_close.selected_command`, `ledger_cmd.
 cmd_ledger_resolve_selected`, `mcp_tools._ledger_resolve`):
@@ -648,7 +649,8 @@ cmd_ledger_resolve_selected`, `mcp_tools._ledger_resolve`):
   `*.spec.*`. This was added during the build. pytest imports any file it
   is handed, so "a file HEAD holds" alone would let a committed script be
   run by calling it a test.
-- **The characters**: letters and digits, and `_ . / [ ] : @ + -`. No space,
+- **The characters**: ASCII letters and digits (ASCII since 9.4), and
+  `_ . / [ ] : @ + -`. No space,
   no parentheses, none of `= , ; & | < > ^ % " ' ! $` or a backtick. A
   backslash is let in for the path only and rewritten to `/`. A test on
   Windows starts a real `.cmd` shim and shows that
@@ -662,12 +664,13 @@ cmd_ledger_resolve_selected`, `mcp_tools._ledger_resolve`):
   `a.test.js::x` names no file HEAD holds and is refused.
 - **Order of the checks**: the list of selectors is well-formed; HEAD names
   a commit; the committed `aramid.toml` declares a command; each selector.
-  Then the command-line close runs with the argv as built, `red_proof=True`
-  and `via="mcp"`. A refusal comes back as an MCP result with `isError`
+  Then `cmd_ledger_resolve_fixed` runs with the argv as built and
+  `via="mcp"`, and the route is what makes red proof unconditional (9.4).
+  A refusal comes back as an MCP result with `isError`
   true and the same sentence the command line prints.
 - **The handler reads four arguments and no others.** A `test`, a `command`
   or a `red_proof` that a caller adds is not looked at.
-- Tests: `tests/unit/test_ledger_resolve_selected.py` (70),
+- Tests: `tests/unit/test_ledger_resolve_selected.py` (84 after 9.4),
   `tests/unit/test_mcp_tools.py` (the tool's schema, its argument checks,
   and one refusal end to end), `tests/integration/test_mcp_server.py` (the
   tool list a client is served).
@@ -706,10 +709,173 @@ As built (`agent_bypass._scan_one_aramid`, `agent_hook._said`):
   unquoted Windows path (the command is split as a POSIX shell splits it,
   so the backslashes go; the git rules have the same gap), and a close made
   inside another program (`python -c`). A close the parser would reject
-  anyway gets the same advice.
+  anyway gets the same advice. The list was looked at again in 9.4.
 - **What the rule is not**: the guard on a confirmed critical. The command
   refuses that close without red proof for everyone. The rule adds that an
   agent shows red for every close.
 - Tests: `tests/unit/test_agent_bypass_resolve.py`, four in
   `tests/unit/test_agent_hook_dispatch.py`, and one through the real hook
   process in `tests/integration/test_agent_hook_cli.py`.
+
+### 9.4 The security review of `9b37b81`, and what it changed (2026-10-11)
+
+`9b37b81` carried 9.2 and 9.3. The security review that runs on each commit
+reported two findings on it. Only their titles reached the session that
+fixed them: code execution across a trust boundary in `evidenced_close.py`,
+and a policy bypass through a parser differential in `agent_bypass.py`. The
+text of the findings did not. So each was rebuilt by testing what its title
+could mean, and this section records what those tests found, not what the
+review said. `9b37b81` was not pushed before the fix was on top of it.
+
+**Whose files a close through MCP runs.** The caller of an MCP tool may be
+one who can write files in the working tree and cannot run a program.
+Measured, each with a planted file that writes a marker when it is run:
+
+- The first run of a close was at the repo root. An untracked `conftest.py`
+  there was run by pytest, and an untracked `pytest.py` was imported by
+  `python -m pytest` in place of pytest. The check for uncommitted changes
+  looks at tracked files only, which is right at the command line.
+- As fixed, a close through MCP makes no run in the working tree.
+  `cmd_ledger_resolve_fixed` is told the route, leaves out the run at the
+  repo root, and always shows red proof. The control of red proof, in a
+  clean checkout of HEAD, is then the run that shows the test passing at
+  HEAD. Two runs, or three at the fix commit. Uncommitted changes no longer
+  stop a close through MCP, and they are not tested.
+- git runs `post-checkout` when a worktree is made, and the hook is a file
+  the same caller could write (`.githooks/` in a repo aramid gates). Through
+  MCP both worktrees are made with an empty hooks path. At the command line
+  the hook runs as before, in both worktrees; that run is the control.
+- A selector is made of ASCII letters and digits. `str.isalnum` accepts
+  U+02BA, and Windows turns that character into a double quote when it
+  converts a command line to the ANSI code page (measured with
+  `WideCharToMultiByte` for code pages 1252, 437, 850 and 1250; U+02B9
+  becomes an apostrophe).
+- Not closed, and said in the guide: what is installed. `node_modules` is
+  linked into the worktree, a virtualenv the declared command names is the
+  repo's own, and the interpreter's packages are what they are. The tool is
+  not a sandbox. Nor does any of this help against a caller who can write
+  `.git/config`: git then runs what that file names on the next git call,
+  whoever makes it.
+- `[tests].timeout_s` is still read from the working tree's config. It
+  bounds a run. It does not choose what is run.
+
+**How the hook reads a command.** The close rule is the one rule that
+looks for a flag that is absent. So wherever the reader cuts a command up
+differently from the shell, a close gets through: words the reader takes in
+and the shell does not hand to aramid can supply `--red-proof`, and words
+the shell does hand over, read as something else, hide `--fixed`. Each row
+was measured against the reader `9b37b81` shipped:
+
+| Command (shortened; `C` is a close without red proof) | `9b37b81` | Now |
+|---|---|---|
+| `C`, and `echo --red-proof` on the next line | let through | answered |
+| `aramid ledger resolve id --reason issue#12 --fixed c --test t` | let through | answered |
+| `aramid ledger resolve id >log --fixed c --test t --reason r` | let through | answered |
+| `aramid ledger resolve id --reason ";" --fixed c --test t` | let through | answered |
+| `aramid ledger resolve id --reason $(cat why) --fixed c --test t` | let through | answered |
+| `aramid $(true) ledger resolve id --fixed c --test t --reason r` | let through | answered |
+| `C`, and `echo 'oops` on the next line (a quote that never closes) | let through | answered |
+| `... --fixed $(git rev-parse HEAD) --test t --reason r --red-proof` | answered, wrongly | let through |
+
+The first two are what the review's title pointed at. The redirection came
+from a second reading of the first fix. The rows with `$(true)` and with
+the open quote came from running generated commands under bash (below).
+
+As fixed (`agent_bypass._shell_text`, `_operators`, `_segments`), for every
+rule:
+
+- a newline outside quotes ends a command;
+- `#` starts a comment only where a word starts, and the comment ends with
+  its line;
+- a backslash or a backtick before a newline continues the line;
+- a redirection goes with the one word after it and with the number in
+  front of it, and does not end the command;
+- `( )` holds commands of its own, and the command around it goes on after
+  the `)`. A process substitution is one word of the command around it;
+- an operator character inside quotes, or escaped, is text. The lexer is
+  handed a private-use stand-in for it and the word gets the character back;
+- a quote that never closes ends the reading (`_tokens`). The words before
+  it are read, the word it opened in and what follows are not. The spec of
+  2026-08-31 (section 6) let such a command through whole, as a way to fail
+  open. But bash runs a script line by line: a close on the first line has
+  been made by the time an open quote on the third is a syntax error. And
+  what does not pair up by the POSIX rule can run as written: a heredoc
+  with an apostrophe in its text, a PowerShell string that ends in a
+  backslash.
+
+In the close rule a word that starts with `$` is stepped over between
+`aramid`, `ledger` and `resolve`, since the shell may make nothing of it.
+shlex still splits the words. Its own comment rule is switched off: it is
+the rule that ends a line at `fix#12`.
+
+The git rules read the same way, and that changes released behaviour. Five
+misses are gone (`-m fix#12 --no-verify`, a flag after a redirection, a
+flag after `$( )`, a flag after a quoted operator, a commit in front of an
+open quote) and one false alarm (a `git push -n` on the line after a
+commit). One command that runs in no shell is refused where it was let
+through: `git commit -n "unclosed`. Measured against the reader of 0.20.7;
+CHANGELOG, Fixed.
+
+**A backtick is read twice.** The first version of this fix read a backtick
+inside double quotes as PowerShell's escape, for every rule. In bash that
+let ``--reason "by `whoami`" # --red-proof`` through, which `9b37b81` had
+answered: bash ends that string at its quote, and the rest is a comment.
+Read the POSIX way, PowerShell's ``--reason "see `"issue #12`" now" --fixed
+c ...`` hides the close instead. Neither reading is right for both shells.
+The close rule makes both and answers if either holds a close without red
+proof. The cost is pinned by a test: a false alarm in PowerShell when a
+reason has escaped quotes with a `#` or an operator between them. The git
+rules keep the one reading they had.
+
+Reading up to an open quote has a cost of the same kind, pinned by tests
+too. Where the shell pairs quotes the POSIX rule does not, a `--red-proof`
+after them is not read and the close is answered: in PowerShell a reason
+that ends in a backslash or holds an odd number of escaped quotes, in bash
+a reason written as `$'it\'s'`. With the flag in front of the reason all
+three are read right, and ARAMID.md now says to put it there.
+
+The two readings are not treated alike when one is cut off. The POSIX
+reading counts as far as it gets, always: it is bash's own, and bash ran
+what it shows. The reading with PowerShell's backtick counts when it gets
+to the end, or when neither does. Cut off while the POSIX reading is whole
+it is left out. Counting it there was tried first and measured: it answers
+a proper bash close whose reason ends in backticks, ``--reason "by
+`whoami`" --red-proof``, because the backtick before the last quote would
+escape it. Leaving out a cut-off POSIX reading whenever the other is whole
+was weighed too and not done: two lines of bash get a close past that (a
+comment that holds one quote and the flag, then a line that only the
+second reading can pair up). A test pins those two lines, and bash was
+asked what it does with them.
+
+**Compared with the shells themselves.** Reading shell syntax from memory
+is what produced the differences above, so the reader was run against the
+shells. A fake `aramid` and a fake `git` record their arguments and do
+nothing else. Each command is run under the shell, the module's own flag
+rules are applied to the arguments the shell built, and that answer is
+compared with `find_bypass` on the command text. The two can differ only
+where the reader and the shell cut the command differently.
+
+- bash (Git Bash on Windows), 1406 commands: a fixed list of
+  125 and 1281 generated ones, each a close or a
+  `git commit --no-verify` with one to three fragments dropped between its
+  words (redirections, comment signs, operators, newlines, substitutions,
+  quoted operators, a lone quote). 1296 agree. Five are
+  misses, of four kinds: a flag inside backticks (twice), a flag that `$( )` produces, `git $(true) commit`, and a flag after `$'it\'s'`. 105 are
+  false alarms: in 87 bash runs neither program, because the command is a syntax error (an empty `( )`, a quote that never closes on the command's own line, a stray `&` or `|`) and the reader reads its words all the same; in 16 a `$( )` between `aramid`, `ledger` and `resolve` turns into a word, where the reader steps over it; one is a heredoc whose text is the line `git commit --no-verify`; and one is a `--red-proof` after `$'it\'s'`.
+- PowerShell 7, 97 commands from a fixed list: 79 agree.
+  Twelve are false alarms: five are a cost of reading PowerShell by POSIX rules, each a proper close that is answered (the two that the test above pins, and a `--red-proof` after a reason that ends in a backslash, after one that holds one escaped quote, and after a `<# #>` comment); three are commands PowerShell does not run as written; three hold a word that `$( )` or `$null` builds; one uses `--%`. Six are misses, all
+  PowerShell quoting that the reader does not follow: a string that ends in a backslash with `--fixed`, or `--no-verify`, after it (two commands); one escaped quote in a `git commit` message with the flag after it; an escaped quote and a `#` in such a message (the git rules read a backtick one way); a backtick that escapes `;` outside quotes; and a `<# #>` comment. The
+  fakes are PowerShell functions there, so this measures how PowerShell
+  parses a command and not how it passes arguments to a native program.
+
+**Perturbations**, each made in a scratch copy of the tree, each failing
+the test named for it: 100 of the reader, 39 of the rule
+and the hook, 81 of the MCP close.
+
+**What is left**, each named in the guide under Agent surfaces: a close
+made inside another program; a command that is built when it runs; aramid
+started by an unquoted Windows path; the lines of a heredoc, read as
+commands; and quoting that is not POSIX quoting (PowerShell's, and bash's
+`$'...'`), where the reader can see a quote that never closes and reads
+nothing after it. A reading of PowerShell by its own rules is recorded as
+FN-45, with the misses above.

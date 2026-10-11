@@ -253,15 +253,20 @@ aramid ledger resolve <id> --fixed <commit> --test "<command>" --reason "..." --
 The test must pass at `HEAD`. With `--red-proof` it must also fail with the
 commit backed out. **As an agent, always pass `--red-proof`.** The agent
 hook warns about `aramid ledger resolve --fixed` without it, and rejects
-the call once `aramid arm --agent` is set.
+the call once `aramid arm --agent` is set. Put the flag on the same
+command and in front of `--reason`: one on another line, in a comment or
+behind `;` does not count. In PowerShell, write a `--reason` that needs
+quotes inside it in single quotes.
 
 Through MCP the tool is `aramid_ledger_resolve`, with `id`, `commit`,
 `tests` and `reason`. It takes no command. `tests` is a list of committed
 test files (for pytest, `file::test` as well), which aramid appends to the
 `[tests].select_command` that this repo has committed in `aramid.toml`, for
-example `select_command = "python -m pytest -q"`. Red proof always runs.
-If the repo has committed no `select_command`, the tool refuses and names
-the key: ask the operator to add it, or close at the command line.
+example `select_command = "python -m pytest -q"`. Red proof always runs,
+and every run is in a clean checkout of `HEAD`: commit the test first,
+because a test that is not committed is not in that checkout. If the repo
+has committed no `select_command`, the tool refuses and names the key: ask
+the operator to add it, or close at the command line.
 
 ## Session handover
 

@@ -850,6 +850,14 @@ def test_the_paths_a_command_names():
     ) == {"python", "-m", "pytest", "tests/a.py", "b/c.py", "d/e.py", "-k", "x"}
 
 
+def test_the_paths_in_conflict_as_a_refusal_names_them():
+    """The one caller has at least one path. An empty list is answered in
+    words all the same (fuzz ledger 81288b6e: it raised IndexError)."""
+    assert evidenced_close._named(["calc.py"]) == "calc.py"
+    assert evidenced_close._named(["a.py", "b.py", "c.py"]) == "a.py and 2 more file(s)"
+    assert evidenced_close._named([]) == "no file"
+
+
 def test_a_merge_commit_is_backed_out_against_the_branch_it_was_merged_into(
         own_repo, clock, monkeypatch):
     repo = own_repo
@@ -1061,8 +1069,10 @@ def test_a_confirmed_critical_closes_with_red_proof(template, clock, monkeypatch
 
 
 def test_a_close_through_mcp_is_marked_as_one(repo, clock, monkeypatch):
+    # Two runs, not three: through MCP there is none in the working tree
+    # (tests/unit/test_ledger_resolve_selected.py has the reason).
     _git_stub(monkeypatch, *_TREE)
-    _scripted(monkeypatch, _OK, _OK, _RED)
+    _scripted(monkeypatch, _OK, _RED)
 
     assert cmd_ledger_resolve_fixed(repo.root, FID, repo.c2, CHECK_CN, "r",
                                     red_proof=True, via="mcp") == 0

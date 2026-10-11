@@ -680,9 +680,10 @@ def cmd_ledger_resolve_selected(root, finding_id: str, commit: str, selectors,
 
     The caller names test selectors, never a command: the command is the
     one the repo's committed `aramid.toml` declares
-    (`evidenced_close.selected_command`). Red proof is always shown, and the
-    event says the close came through MCP. Everything else is
-    `cmd_ledger_resolve_fixed`: the same checks, refusals and event."""
+    (`evidenced_close.selected_command`). The rest is
+    `cmd_ledger_resolve_fixed` told that the close comes through MCP: it
+    then makes no run in the working tree, always shows red proof, and says
+    so on the event. The checks on the finding and the commit are the same."""
     from aramid import evidenced_close
 
     try:
@@ -693,8 +694,7 @@ def cmd_ledger_resolve_selected(root, finding_id: str, commit: str, selectors,
     except gitutil.GitTimeout as exc:
         print(f"aramid: ledger resolve: engine error: {exc}", file=sys.stderr)
         return 3
-    return cmd_ledger_resolve_fixed(root, finding_id, commit, argv, reason,
-                                    red_proof=True, via="mcp")
+    return cmd_ledger_resolve_fixed(root, finding_id, commit, argv, reason, via="mcp")
 
 
 def cmd_ledger_resolve_fixed(root, finding_id: str, commit: str, test, reason: str,
@@ -728,6 +728,13 @@ def cmd_ledger_resolve_fixed(root, finding_id: str, commit: str, test, reason: s
     from aramid import evidenced_close
 
     root = Path(root)
+    # Through MCP no run is made in the working tree. Its files are not all
+    # committed, and the caller may be one who can write files there and not
+    # run programs. The control of red proof, in a clean checkout of HEAD, is
+    # then the only run that shows the test passing at HEAD, so red proof is
+    # not left to the caller.
+    in_repo = via != "mcp"
+    red_proof = red_proof or not in_repo
     reason = (reason or "").strip()
     if not reason:
         print("aramid: ledger resolve: --reason is required", file=sys.stderr)
@@ -789,8 +796,10 @@ def cmd_ledger_resolve_fixed(root, finding_id: str, commit: str, test, reason: s
                 return 3
 
             timeout_s = evidenced_close.run_timeout(cfg)
-            evidenced_close.passes_at_head(root, argv, timeout_s)
-            proof = (evidenced_close.red_proof(root, sha, head, argv, timeout_s)
+            if in_repo:
+                evidenced_close.passes_at_head(root, argv, timeout_s)
+            proof = (evidenced_close.red_proof(root, sha, head, argv, timeout_s,
+                                               in_repo=in_repo)
                      if red_proof else None)
         except evidenced_close.Refused as exc:
             print(f"aramid: ledger resolve: {exc}", file=sys.stderr)

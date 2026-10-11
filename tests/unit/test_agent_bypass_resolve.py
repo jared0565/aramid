@@ -162,9 +162,13 @@ def test_text_that_only_looks_like_fixed_is_not_a_close(command):
     "aramid check --staged",
     "aramid resolve llm1 --fixed abc",          # no such subcommand: argparse exits 2
     "aramid ledger --fixed abc resolve llm1",   # `--fixed` is not a `ledger` option
+    "aramid ledger --help resolve llm1 --fixed abc --test t --reason r",  # prints help, exits
     "aramid ledger show llm1 --fixed abc",      # ... nor one of another subcommand
     "aramid ledger filter --fixed abc",
     "aramid fleet resolve llm1 --fixed abc",    # `resolve` belongs to `ledger` alone
+    "aramid $(true) ledger show llm1 --fixed abc",
+    "aramid ledger $X show resolve --fixed abc",
+    "aramid $X",
     "aramid",
     "aramid ledger",
     "python -m aramid",
@@ -199,14 +203,113 @@ def test_a_close_built_inside_python_is_a_documented_false_negative():
         'python -c "from aramid.cli import main; main([\'ledger\', \'resolve\'])"') is None
 
 
+def test_reading_a_backtick_both_ways_costs_a_false_alarm_in_powershell():
+    # PowerShell does hand aramid --red-proof here: the reason goes on to its
+    # last quote. To a POSIX shell the string ends at the first escaped quote,
+    # and what follows is a comment, or another command. The close is answered
+    # if either reading holds one without red proof.
+    assert find_bypass('aramid ledger resolve llm1 --fixed abc --test t '
+                       '--reason "see `"issue #12`" now" --red-proof') == NO_RED
+    assert find_bypass('aramid ledger resolve llm1 --fixed abc --test t '
+                       '--reason "a `"b; c`" d" --red-proof') == NO_RED
+
+
+def test_a_flag_inside_backticks_is_a_documented_false_negative():
+    # the shell hands aramid no --red-proof here: it is the argument of `true`.
+    # Written with $( ) it is a command of its own, and is read right.
+    assert find_bypass(f"aramid {CLOSE} `true --red-proof `") is None
+    # nor here, inside double quotes: read the POSIX way the flag stands
+    # outside them, and that reading gets to the end
+    assert find_bypass(
+        'aramid ledger resolve llm1 --fixed abc --test t --reason "x`" --red-proof "`y"'
+    ) is None
+
+
+def test_a_powershell_string_that_ends_in_a_backslash_hides_what_follows_it():
+    # PowerShell ends the string at the quote; by the POSIX rule it is escaped
+    # and the string never ends. The words before it are read, and nothing
+    # after it: a --fixed there is a miss, a --red-proof there a false alarm.
+    ends_in_a_backslash = '--reason "in C:\\src\\"'
+    assert find_bypass(
+        f"aramid ledger resolve llm1 {ends_in_a_backslash} --fixed abc --test t") is None
+    assert find_bypass(
+        f"aramid ledger resolve llm1 --fixed abc --test t {ends_in_a_backslash}") == NO_RED
+    assert find_bypass(
+        f"aramid ledger resolve llm1 --fixed abc --test t --red-proof {ends_in_a_backslash}"
+    ) is None
+    assert find_bypass(
+        f"aramid ledger resolve llm1 --fixed abc --test t {ends_in_a_backslash} --red-proof"
+    ) == NO_RED
+
+
+def test_an_odd_escaped_quote_costs_a_false_alarm_in_powershell_when_the_flag_follows():
+    # PowerShell's string is `5" disk`. Read the POSIX way it ends at the
+    # escaped quote and the last quote opens one that never closes, so the
+    # --red-proof after it is not read. Before the reason, it is.
+    reason = '--reason "5`" disk"'
+    assert find_bypass(
+        f"aramid ledger resolve llm1 --fixed abc --test t {reason} --red-proof") == NO_RED
+    assert find_bypass(
+        f"aramid ledger resolve llm1 --fixed abc --test t --red-proof {reason}") is None
+
+
 def test_a_close_argparse_would_reject_gets_the_same_answer():
     # Missing --test and --reason: argparse exits 2 and nothing closes. The
     # advice is the same either way, so the rule does not try to tell.
     assert find_bypass("aramid ledger resolve llm1 --fixed abc") == NO_RED
 
 
-def test_an_unlexable_command_fails_open():
-    assert find_bypass('aramid ledger resolve llm1 --fixed abc --test "unclosed') is None
+def test_a_close_on_a_line_before_an_open_quote_is_answered():
+    # bash has made the close by the time the open quote is a syntax error;
+    # found by running generated commands under bash (the second one).
+    assert find_bypass(f"aramid {CLOSE}\necho 'oops") == NO_RED
+    assert find_bypass(
+        "aramid ledger resolve llm1 --fixed abc --test # 'a\nb' t --reason r") == NO_RED
+    assert find_bypass(f"aramid {CLOSE}\ngit commit -F - <<'EOF'\nit's done\nEOF") == NO_RED
+    assert find_bypass(f"aramid {CLOSE} --red-proof\necho 'oops") is None
+
+
+def test_a_close_is_read_up_to_a_quote_that_never_closes():
+    assert find_bypass('aramid ledger resolve llm1 --fixed abc --test "unclosed') == NO_RED
+    assert find_bypass(f"aramid {CLOSE} --red-proof 'unclosed") is None
+    # after the quote nothing is read: no --fixed, so no close; and no --red-proof
+    assert find_bypass(
+        "aramid ledger resolve llm1 --reason 'unclosed --fixed abc --test t") is None
+    assert find_bypass(f"aramid {CLOSE} 'unclosed --red-proof") == NO_RED
+    # a backslash with nothing after it: the word it ends is not read
+    assert find_bypass(f"aramid {CLOSE} \\") == NO_RED
+    assert find_bypass(f"aramid {CLOSE} --red-proof\\") == NO_RED
+    assert find_bypass("aramid '") is None
+
+
+def test_a_cut_off_second_reading_is_left_out_when_the_first_gets_to_the_end():
+    # bash, and proper closes: aramid is handed --red-proof. Read with
+    # PowerShell's backtick, the backtick before the last quote escapes it and
+    # the string never closes; cut off there, that reading holds a close
+    # without red proof every time.
+    for reason in ('"by `whoami`"', '"ran `echo "hi"`"', '"at `date` by `whoami`"'):
+        assert find_bypass(
+            f"aramid ledger resolve llm1 --fixed abc --test t --reason {reason} --red-proof"
+        ) is None, reason
+
+
+def test_a_cut_off_first_reading_still_counts_when_the_second_gets_to_the_end():
+    # bash. The first line is a close without red proof, its flag in a comment,
+    # and bash has made it by the time the second line is a syntax error. Read
+    # with PowerShell's backtick both lines pair up and the flag is a word, so
+    # leaving out the cut-off POSIX reading would let this through. (It is the
+    # same choice that costs the false alarm for an odd escaped quote, above.)
+    assert find_bypass(
+        f'aramid {CLOSE} --reason "by `whoami`" # 5" wide --red-proof\necho "a`"b"') == NO_RED
+
+
+def test_a_cut_off_second_reading_counts_when_the_first_is_cut_off_too():
+    # PowerShell. The reason hides --fixed from the POSIX reading, where its #
+    # starts a comment; and the string on the next line ends in a backslash, so
+    # neither reading gets to the end.
+    assert find_bypass(
+        'aramid ledger resolve llm1 --reason "see `"issue #12`" now" --fixed abc --test t'
+        '\necho "C:\\src\\"') == NO_RED
 
 
 def test_an_out_of_contract_start_fails_open():
@@ -253,3 +356,123 @@ def test_no_global_option_takes_a_value():
     holds while none of them takes a value."""
     parser = cli.build_parser()
     assert all(action.nargs == 0 for action in parser._actions if action.option_strings)
+
+
+# ---- what the shell hands to aramid, and what it does not ----
+#
+# Every other rule in this module looks for a flag that is PRESENT, so text
+# the hook reads and the shell does not pass on can only cost a false alarm.
+# This rule looks for a flag that is ABSENT. Read the same way, such text
+# would let a close through (the security review of 9b37b81).
+
+@pytest.mark.parametrize("tail", [
+    "\necho --red-proof",                        # the next line is another command
+    "\r\necho --red-proof",
+    "\n\n  echo --red-proof",
+    " # --red-proof",                            # a comment
+    " #--red-proof",
+    " # see below\necho --red-proof",            # a comment, then another command
+    "\n# --red-proof",
+    "; echo --red-proof",
+    ";# --red-proof",
+    " && echo --red-proof",
+    " | tee --red-proof",
+    " > --red-proof",                            # where a redirection goes
+    " 2> --red-proof",
+    " >log; echo --red-proof",
+    " $(true --red-proof)",                      # a command of its own
+    " <(echo --red-proof)",
+    " `date` # --red-proof",                     # outside quotes a backtick escapes nothing
+    ' --reason "by `whoami`" # --red-proof',     # bash ends that string at its quote
+    # the same with a quote in the comment: read with PowerShell's backtick the
+    # string ends there, and the flag after it is a word
+    ' --reason "by `whoami`" # 5" wide --red-proof',
+    "\naramid ledger resolve llm2 --fixed abc --test t --reason r --red-proof",
+])
+def test_a_red_proof_the_shell_does_not_hand_to_aramid_does_not_count(tail):
+    assert find_bypass(f"aramid {CLOSE}{tail}") == NO_RED
+
+
+@pytest.mark.parametrize("command", [
+    f"aramid {CLOSE} \\\n  --red-proof",         # a line continued with a backslash
+    f"aramid {CLOSE} \\\r\n  --red-proof",
+    f"aramid {CLOSE} `\n  --red-proof",          # and with PowerShell's backtick
+    "aramid ledger resolve llm1 --fixed abc --test t --reason 'two\nlines' --red-proof",
+    'aramid ledger resolve llm1 --fixed abc --test t --reason "two\nlines" --red-proof',
+    'aramid ledger resolve llm1 --fixed abc --test t --reason "see #12" --red-proof',
+    "aramid ledger resolve llm1 --fixed abc --test t --reason '#12' --red-proof",
+    "aramid ledger resolve llm1 --fixed abc --test t --reason issue#12 --red-proof",
+    'aramid ledger resolve llm1 --fixed abc --test t --reason "a \\" # b" --red-proof',
+    # quotes PowerShell escapes with a backtick, read either way
+    'aramid ledger resolve llm1 --fixed abc --test t --reason "say `"hi`" now" --red-proof',
+    # a redirection does not end the command: what follows it is still handed over
+    f"aramid {CLOSE} >log --red-proof",
+    f"aramid {CLOSE} > log 2>&1 --red-proof",
+    f"aramid {CLOSE} 2>/dev/null --red-proof",
+    f"aramid {CLOSE} &>>log --red-proof",
+    f"aramid {CLOSE} --red-proof 2>&1 | tail -n 3",
+    # and neither do parentheses
+    "aramid ledger resolve llm1 --fixed $(git rev-parse HEAD) --test t --reason r --red-proof",
+    "aramid ledger resolve llm1 --fixed abc --test t --reason $(cat why; echo) --red-proof",
+    "aramid ledger resolve llm1 --fixed abc --test t --reason <(cat why) --red-proof",
+    'aramid ledger resolve llm1 --fixed abc --test t --reason ";" --red-proof',
+    "aramid ledger resolve llm1 --fixed abc --test t --reason 'a | b' --red-proof",
+    f"# close it\naramid {CLOSE} --red-proof",
+    f"aramid {CLOSE} --red-proof # with red proof",
+    f"aramid {CLOSE} --red-proof\ngit status",
+    f"cd repo\naramid {CLOSE} --red-proof\n",
+])
+def test_a_red_proof_that_does_reach_aramid_still_counts(command):
+    assert find_bypass(command) is None
+
+
+@pytest.mark.parametrize("command", [
+    # `#` inside a word is no comment to the shell, so what follows is live
+    "aramid ledger resolve llm1 --reason issue#12 --fixed abc --test t",
+    "aramid ledger resolve llm1 --reason '#12' --fixed abc --test t",
+    # PowerShell's escaped quotes: there the reason goes on to its last quote
+    'aramid ledger resolve llm1 --reason "see `"issue #12`" now" --fixed abc --test t',
+    'aramid ledger resolve llm1 --reason "5`" wide" --fixed abc --test t',
+    'aramid ledger resolve llm1 --reason "a `"b; c`" d" --fixed abc --test t',
+    "aramid ledger resolve llm1 --reason r \\\n  --fixed abc --test t",
+    # the words after a redirection are still arguments of the same program
+    "aramid ledger resolve llm1 >log --fixed abc --test t --reason r",
+    "aramid ledger resolve llm1 > log --fixed abc --test t --reason r",
+    "aramid ledger resolve llm1 2>&1 --fixed abc --test t --reason r",
+    "aramid ledger resolve llm1 >>log --fixed abc --test t --reason r",
+    "aramid ledger resolve llm1 <in --fixed abc --test t --reason r",
+    "aramid ledger resolve llm1 &>log --fixed abc --test t --reason r",
+    "aramid ledger resolve llm1 2>log --fixed abc --test t --reason r",
+    "aramid 2>/dev/null ledger resolve llm1 --fixed abc --test t --reason r",
+    "aramid >log ledger resolve llm1 --fixed abc --test t --reason r",
+    # and so are the words after a closing parenthesis
+    "aramid ledger resolve llm1 --reason $(cat why) --fixed abc --test t",
+    "aramid ledger resolve llm1 --reason <(cat why) --fixed abc --test t",
+    "aramid ledger resolve llm1 --reason $(cat a; cat b) --fixed abc --test t",
+    # a word the shell may make nothing of does not part `aramid ledger resolve`
+    "aramid $(true) ledger resolve llm1 --fixed abc --test t --reason r",
+    "aramid ledger $(true) resolve llm1 --fixed abc --test t --reason r",
+    "aramid --version $EMPTY ledger ${EMPTY} resolve llm1 --fixed abc --test t --reason r",
+    'aramid "$@" ledger resolve llm1 --fixed abc --test t --reason r',
+    # a quoted operator is a value, not the end of the command
+    'aramid ledger resolve llm1 --reason "|" --fixed abc --test t',
+    "aramid ledger resolve llm1 --reason ';' --fixed abc --test t",
+    'aramid ledger resolve llm1 --reason ">" --fixed abc --test t',
+    'aramid ledger resolve llm1 --reason "\n" --fixed abc --test t',
+    "aramid ledger resolve llm1 --reason \\; --fixed abc --test t",
+    "git status\naramid ledger resolve llm1 --fixed abc --test t --reason r",
+    "echo done # then\naramid ledger resolve llm1 --fixed abc --test t --reason r",
+])
+def test_text_the_shell_does_hand_over_cannot_hide_the_close(command):
+    assert find_bypass(command) == NO_RED
+
+
+@pytest.mark.parametrize("command", [
+    "aramid ledger resolve llm1 --out-of-scope --reason r # not --fixed abc",
+    "# aramid ledger resolve llm1 --fixed abc --test t --reason r",
+    "git status # aramid ledger resolve llm1 --fixed abc --test t --reason r",
+    # outside quotes a backtick escapes nothing, on either reading
+    "aramid ledger resolve llm1 --out-of-scope --reason r `date` # not --fixed abc",
+])
+def test_a_close_that_only_a_comment_holds_is_not_a_close(command):
+    assert find_bypass(command) is None

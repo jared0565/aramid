@@ -48,7 +48,10 @@ runs see whatever it did. Putting the kept paths back is a `git checkout`
 too and would run the hook a second time, BETWEEN the two runs; every
 checkout of paths here is made with hooks off (`_checkout`), so nothing
 but the back-out separates them. `git revert --no-commit` makes no commit
-and runs no hook (measured 2026-10-10).
+and runs no hook (measured 2026-10-10). A close through MCP makes the
+worktree itself with hooks off too (`_worktree`): the hook is a file in the
+repository that no commit holds, and that route runs nothing its caller
+could have written there (see `selected_command`).
 
 WHAT IT STILL CANNOT TELL, two things:
 
@@ -103,7 +106,7 @@ from aramid.runners.base import ToolState, run_subprocess, worktree_import_env
 _CHECKOUT_CHUNK = 100
 
 
-# The punctuation a test selector may hold, besides letters and digits
+# The punctuation a test selector may hold, besides ASCII letters and digits
 # (`selected_command`). A backslash is let in for the path alone, where it is
 # rewritten to a forward slash before anything else looks at it.
 _SELECTOR_PUNCT = frozenset("_./\\[]:@+-")
@@ -266,7 +269,10 @@ def _selector(selector: str, held: set[str], node_ids: bool) -> str:
       - no leading `-`, so it is never an option of the command;
       - plain characters only. A declared command such as `npx vitest run`
         starts a `.cmd` shim on Windows, and cmd.exe reads `& | < > ^ % "`
-        in an argument as syntax whatever quoting was applied;
+        in an argument as syntax whatever quoting was applied. ASCII letters
+        and digits, not `str.isalnum`: U+02BA is a letter to Python, and
+        Windows turns it into a double quote for a program that reads its
+        command line in the ANSI code page;
       - a file HEAD holds, so nothing outside the repository and nothing
         uncommitted;
       - a test file by aramid's own rules. pytest imports any file it is
@@ -275,10 +281,10 @@ def _selector(selector: str, held: set[str], node_ids: bool) -> str:
         raise Refused(f"test selector {selector!r} starts with `-` -- a selector names a "
                       f"test file, it is never an option of the command")
     bad = [ch for ch in dict.fromkeys(selector)
-           if not (ch.isalnum() or ch in _SELECTOR_PUNCT)]
+           if not (ch.isascii() and ch.isalnum() or ch in _SELECTOR_PUNCT)]
     if bad:
         raise Refused(f"test selector {selector!r} holds {' '.join(map(repr, bad))} -- "
-                      f"through MCP a selector is made of letters, digits and "
+                      f"through MCP a selector is made of ASCII letters, digits and "
                       f"`_ . / [ ] : @ + -` only; close this one at the command line "
                       f"with --test")
     path, sep, rest = selector.partition("::") if node_ids else (selector, "", "")
@@ -306,8 +312,18 @@ def selected_command(root: Path, selectors) -> list[str]:
 
     At the command line `--test` is a command, and whoever can type it can
     run that program anyway. Through MCP the same argument would make
-    aramid's server run whatever its caller names, which no aramid MCP tool
-    does: `aramid_check` runs only the repo's own suite."""
+    aramid's server run whatever its caller names.
+
+    What this bounds is the command line. What the command then loads is
+    bounded by where it runs: a close through MCP makes no run in the
+    working tree (`ledger_cmd.cmd_ledger_resolve_fixed`), only in clean
+    checkouts made with hooks off, because a caller who may write files and
+    not run programs could otherwise leave a `conftest.py` there, a
+    `pytest.py` that `python -m pytest` imports in place of pytest, or a
+    `post-checkout` hook, and have it run. Still used as it stands: what is
+    installed for the repo (its `node_modules`, a virtualenv the command
+    names, the interpreter's own packages). That is not a file of the
+    working tree, and it is not checked."""
     if not isinstance(selectors, (list, tuple)) or not selectors \
             or not all(isinstance(s, str) and s.strip() for s in selectors):
         raise Refused("no test selector was given -- name at least one committed test "
@@ -378,15 +394,20 @@ def _keep_at_head(wt: Path, head: str, kept: list[str], held: set[str],
 
 
 @contextlib.contextmanager
-def _worktree(root: Path, wt: Path, rev: str, leaks: list[Path]):
+def _worktree(root: Path, wt: Path, rev: str, leaks: list[Path],
+              no_hooks: Path | None = None):
     """A detached worktree of `rev` at `wt`, the repo's `node_modules` linked
     in when it has one, the way the js_mutation consumer does it. Yields the
     environment for a run there. The worktree is removed on the way out,
     whatever happened; one that could not be removed is named and put in
-    `leaks`, and the caller then leaves its directory alone."""
+    `leaks`, and the caller then leaves its directory alone.
+
+    `no_hooks`, when given, is an empty directory that is the hooks path
+    while the worktree is made, so the repo's `post-checkout` is not run."""
     linked = False
     try:
-        cp = gitutil._run(root, "worktree", "add", "--detach", str(wt), rev)
+        quiet = ("-c", f"core.hooksPath={no_hooks}") if no_hooks else ()
+        cp = gitutil._run(root, *quiet, "worktree", "add", "--detach", str(wt), rev)
         if cp.returncode != 0:
             raise Refused(f"red proof could not be run: git worktree add failed "
                           f"({_said(cp)})")
@@ -419,21 +440,31 @@ def _how(res, timeout_s: float) -> str:
 
 def _named(stuck: list[str]) -> str:
     """The paths in conflict, as a refusal names them: the first, and how
-    many more."""
+    many more. The one caller has at least one; an empty list is answered
+    in words all the same, not with an IndexError."""
+    if not stuck:
+        return "no file"
     more = f" and {len(stuck) - 1} more file(s)" if len(stuck) > 1 else ""
     return f"{stuck[0]}{more}"
 
 
 def _at_head(root: Path, wt: Path, commit: str, head: str, argv: list[str],
              timeout_s: float, kept: list[str], held: set[str], no_hooks: Path,
-             leaks: list[Path]) -> int:
+             leaks: list[Path], in_repo: bool) -> int:
     """The proof the module docstring describes first: a worktree of `head`,
     the control, `commit` backed out, the kept paths put back. Returns the
     exit code of the run without the fix; raises `_Stuck` when the back-out
-    conflicts in a path that has to be backed out."""
-    with _worktree(root, wt, head, leaks) as env:
+    conflicts in a path that has to be backed out. `in_repo` says whether
+    the command was first run in the repo itself. When it was not (a close
+    through MCP) the worktree is made with hooks off, and a failing control
+    is refused in other words."""
+    with _worktree(root, wt, head, leaks, None if in_repo else no_hooks) as env:
         control = _run(argv, root, wt, timeout_s, env)
         if control.state is not ToolState.OK or control.returncode != 0:
+            if not in_repo:
+                raise Refused(f"the test {_how(control, timeout_s)} in a clean checkout of "
+                              f"HEAD -- through MCP every run is in one, never in the "
+                              f"working tree, and it must pass (exit 0) there")
             raise Refused(f"red proof could not be run: the test passes in the repo but "
                           f"{_how(control, timeout_s)} in a clean checkout of HEAD -- it "
                           f"depends on something that is not committed (an untracked "
@@ -473,14 +504,15 @@ def _at_head(root: Path, wt: Path, commit: str, head: str, argv: list[str],
 def _at_the_fix_commit(root: Path, wt: Path, commit: str, head: str, base: str,
                        argv: list[str], timeout_s: float, backed: list[str],
                        brought: list[str], stuck: list[str], no_hooks: Path,
-                       leaks: list[Path]) -> int:
+                       leaks: list[Path], in_repo: bool) -> int:
     """The proof for a fix that can no longer be backed out of HEAD (see the
     module docstring): a worktree of `commit`, the files the command names
     brought in from `head`, the control, then the paths that have to be
     backed out (`backed`) put back to `base`. Returns the exit code of the
-    run without the fix."""
+    run without the fix. `in_repo` as for `_at_head`: hooks off when the
+    close came through MCP."""
     c = commit[:12]
-    with _worktree(root, wt, commit, leaks) as env:
+    with _worktree(root, wt, commit, leaks, None if in_repo else no_hooks) as env:
         failed = _checkout(wt, head, brought, no_hooks)
         if failed is not None:
             raise Refused(f"red proof could not be run: git could not bring the test in "
@@ -513,12 +545,17 @@ def _at_the_fix_commit(root: Path, wt: Path, commit: str, head: str, base: str,
 
 
 def red_proof(root: Path, commit: str, head: str, argv: list[str],
-              timeout_s: float) -> dict:
+              timeout_s: float, *, in_repo: bool = True) -> dict:
     """Show that the command FAILS without `commit`: backed out of `head`,
     or, when later commits make that impossible, at `commit` itself. Both
     are full shas, `head` the one the caller records on the event. Returns
     what the event records, `at` saying which of the two was shown; raises
-    `Refused` when red cannot be shown."""
+    `Refused` when red cannot be shown.
+
+    The first thing either way is the control: the command must pass in a
+    clean checkout of `head`. A caller that made no run in the repo
+    (`in_repo=False`, a close through MCP) rests "the test passes at HEAD"
+    on that run alone."""
     base = gitutil.first_parent(root, commit)
     if base is None:
         raise Refused(f"red proof backs the fix out, and {commit[:12]} has no parent "
@@ -543,13 +580,13 @@ def red_proof(root: Path, commit: str, head: str, argv: list[str],
         proof = {"base": base, "control_rc": 0, "backed_out": len(backed)}
         try:
             rc = _at_head(root, tmp / "wt", commit, head, argv, timeout_s, kept, held,
-                          no_hooks, leaks)
+                          no_hooks, leaks, in_repo)
             return {"at": "head", **proof, "pre_fix_rc": rc}
         except _Stuck as stuck:
             brought = sorted(named & held)
             rc = _at_the_fix_commit(root, tmp / "wt-fix", commit, head, base, argv,
                                     timeout_s, backed, brought, stuck.paths, no_hooks,
-                                    leaks)
+                                    leaks, in_repo)
             return {"at": "commit", **proof, "pre_fix_rc": rc,
                     "head_conflicts": len(stuck.paths), "brought": len(brought)}
     finally:
