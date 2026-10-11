@@ -14,7 +14,7 @@ def _spend(tmp_path, monkeypatch):
 def _capture_argv(monkeypatch, module):
     seen = {}
 
-    def fake_run(argv, prompt, timeout_s):
+    def fake_run(argv, prompt, timeout_s, **kw):
         seen["argv"] = argv
         # minimal valid envelope per module so review() parses cleanly
         if module is claude_cli:

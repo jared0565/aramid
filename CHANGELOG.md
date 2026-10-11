@@ -133,6 +133,27 @@ to publish a tag that disagrees with it.
   tool in its MCP list. A repo's copy changes when `aramid init` is run
   again after upgrading.
 
+### Security
+
+- **The `claude-cli` reviewer is started with no tools, no MCP servers and
+  none of your Claude Code setup (FN-41).** The reviewer reads a packet
+  built from a diff, so part of its prompt is written by whoever wrote the
+  commit. Until now `claude -p` was started with nothing held back, in the
+  directory the drain was started in; on 2026-10-10 its process was seen
+  with two MCP servers as children. It is now started with `--tools ""`,
+  `--strict-mcp-config`, `--safe-mode`, `--restricted`,
+  `--no-session-persistence` and `--permission-prompts none`, in an empty
+  temporary directory of its own. Measured with two real calls on Claude
+  Code 2.1.296, with a packet that asks for a tool: with the settings files
+  still loaded the reviewer named one tool, switched on by a user setting;
+  with `--restricted` added it had none. The subscription login still
+  works.
+
+  A `claude` that does not take these options is not run without them: the
+  provider prints one line that quotes what the CLI said and counts as
+  unavailable, so the ladder moves on. **If your Claude Code is older than
+  the options, `claude-cli` reviews stop until you upgrade it.**
+
 ### Fixed
 
 - **The agent hook cuts a command up as the shell does.** Found while

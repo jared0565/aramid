@@ -909,6 +909,10 @@ cascade_hallucination_min = 3
 
 Requirement: at least one provider CLI in `provider_order` must be installed and reachable, or the consumer OK-skips (`"llm skipped: no providers installed"`) or degrades (`"all providers unavailable"`). `openrouter` is opt-in only — add it to `provider_order` and give it its own `[[llm.ladder]]` entry; it's capped by `openrouter_monthly_cap_usd` (default `5.0`, read from `[llm]`).
 
+**The `claude-cli` reviewer is started with nothing to act with.** What it reads is a review packet built from a diff, so part of it is written by whoever wrote the commit, and a reviewer that holds tools can be told by that text to use them. aramid starts `claude -p` with `--tools ""` (no built-in tool), `--strict-mcp-config` (no MCP server), `--safe-mode` (no `CLAUDE.md`, hook, skill, plugin or custom command), `--restricted` (no user, project or local settings file), `--no-session-persistence` and `--permission-prompts none`, in an empty temporary directory of its own (`aramid-review-...`) and not in the repo. Before this the reviewer started where the drain did, with your Claude Code setup around it (seen on 2026-10-10: its process had started two MCP servers). Measured 2026-10-11 with Claude Code 2.1.296, two real calls with a packet that asks the reviewer to read a file and to name its tools: with the settings files still loaded it named one tool (`advisor`, switched on by a user setting), and with `--restricted` added it answered that it had none. The subscription login still works under these options.
+
+A `claude` that does not take one of these options is never run without them. The provider prints one line to stderr, which starts `aramid: providers: claude-cli:` and quotes what the CLI said, and counts as unavailable, so the ladder moves to the next provider. Upgrade Claude Code.
+
 ### mutation (Python)
 
 Mutation-tests the Python functions a queue item's commits touched, in a throwaway git worktree, reporting WARN findings for mutants your own test suite fails to kill.

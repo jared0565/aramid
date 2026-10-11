@@ -75,12 +75,13 @@ def _tree_kill(pid: int) -> None:
                        errors="replace", timeout=30)
 
 
-def run_provider_subprocess(argv: list[str], prompt: str,
-                            timeout_s: float) -> tuple[int, str, str] | None:
+def run_provider_subprocess(argv: list[str], prompt: str, timeout_s: float,
+                            *, cwd=None) -> tuple[int, str, str] | None:
     """Returns (returncode, stdout, stderr), or None on timeout (after
     killing the whole child tree) -- and None, unstarted, once the drain's
     hard deadline has closed the registry (FN-14), or for a child it
-    killed."""
+    killed. `cwd` is the directory the child starts in; without it the
+    child starts where this process is."""
     if runners_base.closed():
         return None
     # S603 justification: the LLM-provider counterpart of
@@ -91,7 +92,7 @@ def run_provider_subprocess(argv: list[str], prompt: str,
     # as an argument. No shell is involved.
     proc = subprocess.Popen(argv, stdin=subprocess.PIPE, stdout=subprocess.PIPE,  # noqa: S603
                             stderr=subprocess.PIPE, text=True,
-                            encoding="utf-8", errors="replace")
+                            encoding="utf-8", errors="replace", cwd=cwd)
     def kill() -> None:
         _tree_kill(proc.pid)
         proc.kill()

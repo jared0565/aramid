@@ -1,3 +1,4 @@
+import os
 import sys
 from types import SimpleNamespace
 
@@ -37,6 +38,19 @@ def test_run_provider_subprocess_pipes_prompt_utf8():
         "héllo prompt", timeout_s=30.0)
     assert rc == 0
     assert "héllo prompt" in out
+
+
+def test_run_provider_subprocess_starts_the_child_in_the_directory_it_is_given(tmp_path):
+    """FN-41: the claude-cli reviewer is started in an empty directory, not
+    wherever the drain runs. Without `cwd` the child stays where the caller is."""
+    here = [sys.executable, "-c", "import os; print(os.getcwd())"]
+
+    rc, out, _ = base.run_provider_subprocess(here, "", timeout_s=30.0, cwd=tmp_path)
+    assert (rc, os.path.realpath(out.strip())) == (0, os.path.realpath(tmp_path))
+
+    rc, out, _ = base.run_provider_subprocess(here, "", timeout_s=30.0)
+    assert (rc, os.path.realpath(out.strip())) == (0, os.path.realpath(os.getcwd()))
+    assert os.path.realpath(os.getcwd()) != os.path.realpath(tmp_path)
 
 
 def test_run_provider_subprocess_timeout_returns_none():
