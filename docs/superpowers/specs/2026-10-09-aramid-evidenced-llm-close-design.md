@@ -1,7 +1,8 @@
 # Evidenced close for a fixed LLM finding (FN-36) — design
 
-Status: BUILT 2026-10-10 as a command-line close; the MCP tool is not built
-and waits on three questions for the operator (section 8.6). Shape chosen by
+Status: BUILT 2026-10-10 as a command-line close, and on 2026-10-11 as an MCP
+tool too (section 9; the three questions of 8.6 were answered that day, and
+those that three security reviews left are answered in 9.7). Shape chosen by
 the operator ("go with your recommendations": shape 2 of FN-36). The four
 questions in section 5 were answered by the operator on 2026-10-10; sections
 2 and 4 below are amended to match, and each amendment says so. **Section 8
@@ -1061,3 +1062,31 @@ that starts a program named by a path. A declared command that may only
 begin with a bare name would delete that branch. It would also end the MCP
 close for a repo whose runner is a committed launcher (`./gradlew`,
 `bin/rails`) or an interpreter named by its path.
+
+### 9.7 The operator's decisions of 2026-10-11, evening
+
+Three questions, asked one at a time. Each answer was the recommended one.
+
+1. **The caller model (FN-44).** aramid's MCP tools do not have to hold a
+   caller who can write files in the repository and cannot run a program.
+   They run the repository's own code and are for an agent one would let run
+   its tests. The docs say so plainly, and it is measured:
+   `aramid_check` at `pre-push` runs an untracked `conftest.py`
+   (`tests/integration/test_mcp_check_runs_the_working_tree.py`).
+2. **Finding `02d70457`, and the branch for a program named by a path.** The
+   branch stays as built and the finding is accepted, overridden with the
+   reason: the command is read from `HEAD`, which that caller cannot write,
+   and the caller may run the repository's tests. A fixed list of runners was
+   offered and not taken, since `npm test` and `python -m pytest` run what
+   the repo commits and a list bounds nothing.
+3. **Reading a command up to a quote that never closes (9.4).** Confirmed.
+   It reverses section 6 of the spec of 2026-08-31, which now carries a note.
+
+What this changes in how 9.4 to 9.6 are to be read: the clean checkout of
+`HEAD` is what makes red proof a proof of what is committed. The tests pass,
+and fail with the fix backed out, on the code `HEAD` holds, whatever lies
+beside it in the working tree. It is not a security boundary, and the guide
+no longer gives it as one. The measured rows of 9.4 to 9.6 stand as they
+are, each pinned by its test. A later review that finds another way to have
+a file of the working tree started is a defect in the proof's correctness,
+to fix as one. It is not a hole in something the tool promises to hold.

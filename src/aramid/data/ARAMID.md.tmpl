@@ -225,7 +225,7 @@ territory. Don't mistake a clean `aramid check` for full security coverage.
 
 ## Commands
 
-MCP-capable agents reach the same loop as tools, via the `.mcp.json` entry `aramid init` registers (`python -P -m aramid.mcp`): `aramid_check`, `aramid_status`, `aramid_ledger_filter`, `aramid_resolvers`, `aramid_override`, `aramid_mark_not_a_secret`, `aramid_mark_rotated`, `aramid_ledger_resolve`, `aramid_handover_show`, `aramid_handover_write`, and `aramid_handover_done`.
+MCP-capable agents reach the same loop as tools, via the `.mcp.json` entry `aramid init` registers (`python -P -m aramid.mcp`): `aramid_check`, `aramid_status`, `aramid_ledger_filter`, `aramid_resolvers`, `aramid_override`, `aramid_mark_not_a_secret`, `aramid_mark_rotated`, `aramid_ledger_resolve`, `aramid_handover_show`, `aramid_handover_write`, and `aramid_handover_done`. These tools run this repository's own code: `aramid_check` at `pre-push` or `all` runs the test suite in the working tree, files that no commit holds included, and `aramid_ledger_resolve` runs the committed tests with what is installed here (`node_modules`, a virtualenv). They are not a sandbox. They are for an agent that may run this repository's tests.
 
 - `aramid check [--gate pre-commit|pre-push] [--staged|--range|--all]` -- run the gate manually.
 - `aramid status` -- open findings, new-since-baseline, unrotated historical secrets, unreachable candidates (see `ledger mark-rotated` / `mark-not-a-secret` / `mark-unreachable` below).

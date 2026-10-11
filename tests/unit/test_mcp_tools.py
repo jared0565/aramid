@@ -58,6 +58,19 @@ def test_check_snapshot_never_writes_ledger(tmp_path, monkeypatch):
     assert not (r / ".aramid" / "ledger.db").exists()
 
 
+def test_check_says_of_itself_that_it_runs_the_suite_in_the_working_tree():
+    """FN-44. A description is what an MCP client shows an agent, and the
+    operator's decision (2026-10-11) is that the tool says plainly what it
+    runs. The sentence is measured in
+    tests/integration/test_mcp_check_runs_the_working_tree.py."""
+    assert mcp_tools.TOOLS["aramid_check"]["description"] == (
+        "Run aramid's security/quality gate against a read-only SNAPSHOT of"
+        " the ledger (nothing is written). gate: pre-commit (default, staged"
+        " scope), pre-push, or all. pre-push and all run the repo's test suite"
+        " in the working tree, uncommitted files included: give this tool only"
+        " to an agent you would let run the repo's tests.")
+
+
 def test_check_rejects_unknown_gate(tmp_path, monkeypatch):
     r = _repo(tmp_path)
     monkeypatch.chdir(r)

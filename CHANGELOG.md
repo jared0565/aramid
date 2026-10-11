@@ -197,6 +197,18 @@ to publish a tag that disagrees with it.
   provider prints one line that quotes what the CLI said and counts as
   unavailable, so the ladder moves on. **If your Claude Code is older than
   the options, `claude-cli` reviews stop until you upgrade it.**
+- **What aramid's MCP tools run, said plainly (FN-44).** The tools are not a
+  sandbox. They do not hold a caller who can write files in the repository
+  and cannot start a program, and they are not meant to (the operator's
+  decision, 2026-10-11). `aramid_check` at `pre-push` or `all` runs the
+  repository's test suite in the working tree: an untracked `conftest.py`
+  is run (measured, and pinned by a test). `aramid_ledger_resolve` runs the
+  committed tests in a clean checkout of `HEAD`, with what is installed in
+  the repository (`node_modules`, a virtualenv). The checkout is what makes
+  its proof a proof of what is committed; it is not a boundary. No tool
+  changed what it does. The description of `aramid_check`, `ARAMID.md` and
+  the guide now say it. **Give aramid's MCP tools only to an agent you
+  would let run the repository's tests.**
 
 ### Fixed
 

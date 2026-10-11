@@ -175,6 +175,16 @@ the rules above are written to make them structurally hard.
   is defense-in-depth above a gate that still runs; a hook crash must not take unrelated tool
   calls down with it.
 
+> **Superseded in part, 2026-10-11 (FN-36). The operator confirmed it the same day.**
+> A command the tokenizer cannot finish, because a quote never closes, used to fall
+> under "fail-open" and was let through whole. It is now read up to the open quote,
+> and the words before it are judged. Measured: bash runs a script line by line, so a
+> `git commit --no-verify`, or a close without red proof, on the first line has run
+> by the time an open quote on a later line is a syntax error. Unparseable stdin and
+> an internal error are still allowed, as above. The cost is in the CHANGELOG:
+> `git commit -n "unclosed`, which runs in no shell, is refused once armed. The
+> record is section 9.4 of `2026-10-09-aramid-evidenced-llm-close-design.md`.
+
 **Latency:** the hook runs on every Bash/PowerShell call. Top-level imports in `agent_hook.py` are
 stdlib-only; aramid's heavy modules load lazily inside the matched branch. Target < 500 ms on the
 non-matching path (the overwhelming majority).
