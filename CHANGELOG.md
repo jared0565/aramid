@@ -12,6 +12,8 @@ to publish a tag that disagrees with it.
 
 ## [Unreleased]
 
+## [0.20.8] — 2026-10-11
+
 ### Added
 
 - **An LLM finding that is fixed, though its quoted line never changed, can
@@ -6089,7 +6091,8 @@ Stated plainly because each one changes how you should deploy this:
 - **PyPI publishing is not set up.** Install from a GitHub Release artifact or
   from git; `pip install aramid` does not work.
 
-[Unreleased]: https://github.com/jared0565/aramid/compare/v0.20.7...HEAD
+[Unreleased]: https://github.com/jared0565/aramid/compare/v0.20.8...HEAD
+[0.20.8]: https://github.com/jared0565/aramid/releases/tag/v0.20.8
 [0.20.7]: https://github.com/jared0565/aramid/releases/tag/v0.20.7
 [0.20.6]: https://github.com/jared0565/aramid/releases/tag/v0.20.6
 [0.20.5]: https://github.com/jared0565/aramid/releases/tag/v0.20.5
