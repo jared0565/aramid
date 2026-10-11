@@ -204,12 +204,12 @@ _ID_REASON_SCHEMA = {
 TOOLS: dict[str, dict] = {
     "aramid_check": {
         "description": (
-            "Run aramid's security/quality gate against a read-only"
-            " SNAPSHOT of the ledger (nothing is written). gate:"
-            " pre-commit (default, staged scope), pre-push, or all."
-            " pre-push and all run the repo's test suite in the working"
-            " tree, uncommitted files included: give this tool only to an"
-            " agent you would let run the repo's tests."),
+            "Run aramid's security/quality gate. It reads a SNAPSHOT of"
+            " the ledger and writes nothing to it. gate: pre-commit"
+            " (default, staged scope), pre-push, or all. This is not a"
+            " read-only tool: pre-push and all run the repo's test suite"
+            " in the working tree, uncommitted files included. Give it"
+            " only to an agent you would let run the repo's tests."),
         "inputSchema": {
             "type": "object",
             "properties": {
