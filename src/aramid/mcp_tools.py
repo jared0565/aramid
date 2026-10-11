@@ -1,4 +1,4 @@
-"""mcp_tools -- the ten MCP tools over the CLI internals (spec §7).
+"""mcp_tools -- the eleven MCP tools over the CLI internals (spec §7).
 
 Tools call the SAME functions the CLI commands use -- no subprocess
 self-reinvocation, one code path to test, and suppression over MCP
@@ -52,15 +52,15 @@ def _run(fn, *args, ok_codes=(0,), report_codes=(), **kwargs) -> dict:
     return _text_result(text, is_error=rc not in (*ok_codes, *report_codes))
 
 
-def _require_id_and_reason(args: dict) -> tuple[str, str]:
+def _require_id_and_reason(args: dict, what: str = "suppression") -> tuple[str, str]:
     fid = args.get("id")
     reason = args.get("reason")
     if not isinstance(fid, str) or not fid.strip():
         raise _InvalidParams("`id` is required (a finding id string)")
     if not isinstance(reason, str) or not reason.strip():
         raise _InvalidParams(
-            "`reason` is required and must be non-empty -- suppression"
-            " without a reason is not recordable")
+            f"`reason` is required and must be non-empty -- {what}"
+            f" without a reason is not recordable")
     return fid, reason
 
 
@@ -137,6 +137,25 @@ def _mark_rotated(repo, args):
     from aramid.commands.ledger_cmd import cmd_ledger_mark_rotated
     fid, reason = _require_id_and_reason(args)
     return _run(cmd_ledger_mark_rotated, repo, fid, reason)
+
+
+@_onboarded
+def _ledger_resolve(repo, args):
+    """The evidenced close (FN-36). The caller names tests, never a command:
+    `cmd_ledger_resolve_selected` appends them to the command the repo's
+    committed aramid.toml declares, and always shows red proof."""
+    from aramid.commands.ledger_cmd import cmd_ledger_resolve_selected
+    fid, reason = _require_id_and_reason(args, "a close")
+    commit = args.get("commit")
+    if not isinstance(commit, str) or not commit.strip():
+        raise _InvalidParams("`commit` is required (the commit that fixed the finding)")
+    tests = args.get("tests")
+    if not isinstance(tests, list) or not tests \
+            or not all(isinstance(t, str) and t.strip() for t in tests):
+        raise _InvalidParams(
+            "`tests` is required: a non-empty list of test selectors, each a"
+            " committed test file (for pytest, optionally `file::test`)")
+    return _run(cmd_ledger_resolve_selected, repo, fid, commit, tests, reason)
 
 
 @_onboarded
@@ -242,6 +261,34 @@ TOOLS: dict[str, dict] = {
                        " ledger-logged.",
         "inputSchema": _ID_REASON_SCHEMA,
         "handler": _mark_rotated,
+    },
+    "aramid_ledger_resolve": {
+        "description": (
+            "Close an open llm-review finding that a commit fixed although the"
+            " line it quotes never changed. Names tests, never a command: the"
+            " selectors are appended to the repo's committed"
+            " `[tests].select_command`. The tests must pass at HEAD and fail"
+            " with the fix backed out (red proof, always), so the call takes"
+            " up to four runs of them. Ledger-logged; a later review that"
+            " raises the finding again re-opens it."),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "id": {"type": "string", "minLength": 1,
+                       "description": "the finding id (from aramid_ledger_filter)"},
+                "commit": {"type": "string", "minLength": 1,
+                           "description": "the commit that fixed it"},
+                "tests": {"type": "array", "minItems": 1,
+                          "items": {"type": "string", "minLength": 1},
+                          "description": "test selectors: committed test files,"
+                                         " or file::test when the declared"
+                                         " command is pytest"},
+                "reason": {"type": "string", "minLength": 1,
+                           "description": "why -- recorded in the ledger"},
+            },
+            "required": ["id", "commit", "tests", "reason"],
+        },
+        "handler": _ledger_resolve,
     },
     "aramid_handover_show": {
         "description": "The pending session handover for this repo, if any."

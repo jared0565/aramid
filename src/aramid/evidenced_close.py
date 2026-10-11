@@ -89,6 +89,7 @@ import shlex
 import shutil
 import sys
 import tempfile
+import tomllib
 from pathlib import Path
 
 from aramid import gitutil
@@ -100,6 +101,12 @@ from aramid.runners.base import ToolState, run_subprocess, worktree_import_env
 # call per path is slow on a wide commit, and one call for all of them can
 # pass Windows' command-line limit.
 _CHECKOUT_CHUNK = 100
+
+
+# The punctuation a test selector may hold, besides letters and digits
+# (`selected_command`). A backslash is let in for the path alone, where it is
+# rewritten to a forward slash before anything else looks at it.
+_SELECTOR_PUNCT = frozenset("_./\\[]:@+-")
 
 
 class Refused(Exception):
@@ -207,13 +214,111 @@ def _changed(root: Path, base: str, commit: str) -> list[tuple[str, str]]:
     return list(zip(fields[0::2], fields[1::2]))
 
 
-def _held(root: Path, head: str) -> set[str]:
-    """Every path `head` holds."""
+def _held(root: Path, head: str, doing: str = "red proof could not be run") -> set[str]:
+    """Every path `head` holds. `doing` opens the refusal when git cannot say."""
     cp = gitutil._run(root, "ls-tree", "-r", "-z", "--name-only", head)
     if cp.returncode != 0:
-        raise Refused(f"red proof could not be run: git could not list the files of "
-                      f"HEAD ({_said(cp)})")
+        raise Refused(f"{doing}: git could not list the files of HEAD ({_said(cp)})")
     return {f for f in cp.stdout.split("\0") if f}
+
+
+def _declared(root: Path, head: str) -> list[str]:
+    """`[tests].select_command` as the `aramid.toml` that `head` holds declares
+    it, as an argv. The committed file and no other: not the working tree's
+    copy, and not the user-level config that `load_config` merges in. Either
+    of those could be written by whoever is asking for the run."""
+    text = gitutil.blob_at(root, head, "aramid.toml")
+    if text is None:
+        raise Refused("HEAD holds no aramid.toml -- through MCP the close runs only a "
+                      "command the repo has committed ([tests].select_command); commit "
+                      "the file, or close at the command line with --test")
+    try:
+        data = tomllib.loads(text)
+    except tomllib.TOMLDecodeError as exc:
+        raise Refused(f"the aramid.toml at HEAD does not parse ({exc})") from None
+    tests = data.get("tests")
+    command = tests.get("select_command") if isinstance(tests, dict) else None
+    if command is None or command == "" or command == []:
+        raise Refused("the aramid.toml at HEAD declares no [tests].select_command -- "
+                      "through MCP the close runs only a command the repo has committed, "
+                      "with the test selectors appended. Declare one, for example "
+                      "select_command = \"python -m pytest -q\", commit it and call again; "
+                      "or close at the command line with --test")
+    if isinstance(command, str):
+        try:
+            return shlex.split(command)
+        except ValueError as exc:
+            raise Refused(f"[tests].select_command at HEAD does not parse as a command "
+                          f"({exc})") from None
+    if isinstance(command, list) and all(isinstance(part, str) for part in command):
+        return list(command)
+    raise Refused(f"[tests].select_command at HEAD should be a string or a list of "
+                  f"strings, got {command!r}")
+
+
+def _selector(selector: str, held: set[str], node_ids: bool) -> str:
+    """One test selector as the argument the command is given.
+
+    A selector can only be a committed test file, and for pytest (`node_ids`)
+    a test in it. Each rule closes one way of turning "name a test" into
+    "run something else":
+
+      - no leading `-`, so it is never an option of the command;
+      - plain characters only. A declared command such as `npx vitest run`
+        starts a `.cmd` shim on Windows, and cmd.exe reads `& | < > ^ % "`
+        in an argument as syntax whatever quoting was applied;
+      - a file HEAD holds, so nothing outside the repository and nothing
+        uncommitted;
+      - a test file by aramid's own rules. pytest imports any file it is
+        handed, so a committed script named as a "test" would be run."""
+    if selector.startswith("-"):
+        raise Refused(f"test selector {selector!r} starts with `-` -- a selector names a "
+                      f"test file, it is never an option of the command")
+    bad = [ch for ch in dict.fromkeys(selector)
+           if not (ch.isalnum() or ch in _SELECTOR_PUNCT)]
+    if bad:
+        raise Refused(f"test selector {selector!r} holds {' '.join(map(repr, bad))} -- "
+                      f"through MCP a selector is made of letters, digits and "
+                      f"`_ . / [ ] : @ + -` only; close this one at the command line "
+                      f"with --test")
+    path, sep, rest = selector.partition("::") if node_ids else (selector, "", "")
+    if "\\" in rest:
+        raise Refused(f"test selector {selector!r} holds a backslash after the file name "
+                      f"-- only the path may be written with one")
+    path = path.replace("\\", "/").removeprefix("./")
+    if path not in held:
+        raise Refused(f"test selector {selector!r} names no file that HEAD holds ({path}) "
+                      f"-- a selector is a committed test file, and for pytest it may go "
+                      f"on with `::` and a test in that file")
+    if not _is_test_path(path):
+        raise Refused(f"test selector {selector!r} is not a test file by aramid's rules "
+                      f"(under tests/ or __tests__/, test_*.py, *_test.py, *.test.*, "
+                      f"*.spec.*) -- through MCP only such a file is run; close this one "
+                      f"at the command line with --test")
+    return path + sep + rest
+
+
+def selected_command(root: Path, selectors) -> list[str]:
+    """The command of a close made through MCP: what the repo's committed
+    `aramid.toml` declares as `[tests].select_command`, with `selectors`
+    appended. Raises `Refused` when the repo declares none or a selector is
+    anything but a committed test file (`_selector`).
+
+    At the command line `--test` is a command, and whoever can type it can
+    run that program anyway. Through MCP the same argument would make
+    aramid's server run whatever its caller names, which no aramid MCP tool
+    does: `aramid_check` runs only the repo's own suite."""
+    if not isinstance(selectors, (list, tuple)) or not selectors \
+            or not all(isinstance(s, str) and s.strip() for s in selectors):
+        raise Refused("no test selector was given -- name at least one committed test "
+                      "file")
+    head = gitutil.rev_sha(root, "HEAD")
+    if head is None:
+        raise Refused("HEAD names no commit -- there is nothing to run a test on")
+    argv = _declared(root, head)
+    held = _held(root, head, "the test selectors could not be checked")
+    node_ids = tests_runner._is_pytest_argv(argv)
+    return argv + [_selector(s, held, node_ids) for s in selectors]
 
 
 def _conflicts(wt: Path) -> set[str]:

@@ -674,7 +674,30 @@ def cmd_ledger_resolve(root, finding_id: str, out_of_scope: bool, reason: str) -
 _LLM_TOOL = "llm-review"
 
 
-def cmd_ledger_resolve_fixed(root, finding_id: str, commit: str, test: str, reason: str,
+def cmd_ledger_resolve_selected(root, finding_id: str, commit: str, selectors,
+                                reason: str) -> int:
+    """The evidenced close as aramid's MCP server makes it (FN-36, spec 9.2).
+
+    The caller names test selectors, never a command: the command is the
+    one the repo's committed `aramid.toml` declares
+    (`evidenced_close.selected_command`). Red proof is always shown, and the
+    event says the close came through MCP. Everything else is
+    `cmd_ledger_resolve_fixed`: the same checks, refusals and event."""
+    from aramid import evidenced_close
+
+    try:
+        argv = evidenced_close.selected_command(Path(root), selectors)
+    except evidenced_close.Refused as exc:
+        print(f"aramid: ledger resolve: {exc}", file=sys.stderr)
+        return 3
+    except gitutil.GitTimeout as exc:
+        print(f"aramid: ledger resolve: engine error: {exc}", file=sys.stderr)
+        return 3
+    return cmd_ledger_resolve_fixed(root, finding_id, commit, argv, reason,
+                                    red_proof=True, via="mcp")
+
+
+def cmd_ledger_resolve_fixed(root, finding_id: str, commit: str, test, reason: str,
                              *, red_proof: bool = False, via: str = "cli") -> int:
     """`aramid ledger resolve <id> --fixed <commit> --test "<command>"
     --reason R [--red-proof]`: close an OPEN llm-review finding that is
@@ -710,7 +733,9 @@ def cmd_ledger_resolve_fixed(root, finding_id: str, commit: str, test: str, reas
         print("aramid: ledger resolve: --reason is required", file=sys.stderr)
         return 3
     try:
-        argv = evidenced_close.split_command(test)
+        # A string is `--test`, to be split. A list is an argv aramid built
+        # itself (`cmd_ledger_resolve_selected`) and is run as it stands.
+        argv = list(test) if isinstance(test, list) else evidenced_close.split_command(test)
     except evidenced_close.Refused as exc:
         print(f"aramid: ledger resolve: {exc}", file=sys.stderr)
         return 3

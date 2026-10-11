@@ -78,6 +78,32 @@ def test_armed_repo_denies_bypass_full_object(tmp_path, checkout_env):
     }}
 
 
+def test_armed_repo_denies_a_close_without_red_proof(tmp_path, checkout_env):
+    """The close rule through the real launch (FN-36): the hook reads the
+    command an agent is about to run, and the same close with `--red-proof`
+    is let through in silence."""
+    r = _armed_repo(tmp_path)
+    close = ('aramid ledger resolve llm1 --fixed abc123 --test "python -m pytest tests/t.py"'
+             ' --reason r')
+
+    out = _run(r, checkout_env, "agent-hook", "pre-tool-use", input_bytes=_hook_payload(close))
+    with_proof = _run(r, checkout_env, "agent-hook", "pre-tool-use",
+                      input_bytes=_hook_payload(close + " --red-proof"))
+
+    assert out.returncode == 0
+    lines = out.stdout.decode("utf-8").splitlines()
+    assert len(lines) == 1, out.stdout
+    assert json.loads(lines[0]) == {"hookSpecificOutput": {
+        "hookEventName": "PreToolUse",
+        "permissionDecision": "deny",
+        "permissionDecisionReason": (
+            "aramid: `aramid ledger resolve --fixed` without `--red-proof` is REJECTED "
+            "in this repo (agent surface armed). An agent's close has to show the test "
+            "failing without the fix: re-run it with `--red-proof` added."),
+    }}
+    assert (with_proof.returncode, with_proof.stdout) == (0, b"")
+
+
 def test_non_matching_command_is_silent(tmp_path, checkout_env):
     r = _armed_repo(tmp_path)
     out = _run(r, checkout_env, "agent-hook", "pre-tool-use",

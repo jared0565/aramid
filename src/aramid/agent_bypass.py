@@ -1,6 +1,9 @@
-"""agent_bypass -- token-level detection of git hook-bypass invocations.
+"""agent_bypass -- token-level detection of git hook-bypass invocations,
+and of an evidenced close an agent makes without red proof.
 
-Spec: docs/superpowers/specs/2026-08-31-aramid-agent-enforcement-design.md §6.
+Spec: docs/superpowers/specs/2026-08-31-aramid-agent-enforcement-design.md §6;
+the close rule is docs/superpowers/specs/2026-10-09-aramid-evidenced-llm-close-design.md
+section 9.3.
 
 Pure stdlib, imported by the pre-tool-use agent hook on EVERY Bash /
 PowerShell tool call: no aramid imports, no I/O. Matching is on parsed
@@ -25,6 +28,27 @@ structurally hard:
 Known residuals, all false-negative direction: bundled short flags, `git
 config alias.*` indirection, commands built by shell variables or eval,
 and PowerShell-only syntax shlex cannot lex (which fails open).
+
+THE CLOSE RULE (FN-36). `aramid ledger resolve --fixed` closes an LLM
+finding on a passing test. `--red-proof` is optional at the command line; an
+agent's close has to carry it (operator decision, 2026-10-11), and this is
+where that is read. Three choices, each the opposite of a git rule's for a
+reason:
+
+- the launch is read by SHAPE, not from a list of launchers: any token
+  named `aramid` (with or without `.exe`, `.cmd`, `.bat`, `.ps1`, under any
+  directory) starts an invocation, which covers `python -m aramid`,
+  `py -m aramid`, `uv run aramid` and an absolute path alike;
+- the flags are read as ARGPARSE reads them: `--fix` and `--red` are the
+  flags they abbreviate, `--fixed=abc` carries its value, and a value that
+  follows `--fixed`, `--test` or `--reason` is never a flag;
+- nothing makes the scan give up. A token it does not know is stepped over
+  and the scan goes on, because every early exit would be a way to hide a
+  close from it. The cost is that a command argparse would reject anyway is
+  answered too; the advice it gets is the same.
+
+Residuals of the close rule, false-negative direction: an unquoted Windows
+path (shlex eats the backslashes), and a close built inside `python -c`.
 """
 from __future__ import annotations
 
@@ -45,10 +69,21 @@ _ARG_FLAGS = {
 }
 
 
+# Every long option of `aramid ledger resolve`, and whether a SEPARATE value
+# token follows it. tests/unit/test_agent_bypass_resolve.py holds this equal
+# to the real parser's table, so a flag added there cannot go unread here.
+_RESOLVE_FLAGS = {"--help": False, "--out-of-scope": False, "--fixed": True,
+                  "--test": True, "--red-proof": False, "--reason": True}
+
+# What a token that launches aramid is called, under any directory.
+_ARAMID_NAMES = ("aramid", "aramid.exe", "aramid.cmd", "aramid.bat", "aramid.ps1",
+                 "aramid.__main__")
+
+
 @dataclass(frozen=True)
 class Bypass:
-    kind: str        # "no-verify" | "hooks-path"
-    subcommand: str  # "commit" | "push"
+    kind: str        # "no-verify" | "hooks-path" | "no-red-proof"
+    subcommand: str  # "commit" | "push" | "ledger resolve"
     token: str       # the exact matched token / -c value, for messages
 
 
@@ -137,13 +172,65 @@ def _scan_one_git(seg: list[str], start: int) -> Bypass | None:
     return None
 
 
+def _is_aramid(token: str) -> bool:
+    """A token that launches aramid: the program under any directory, or the
+    module name `python -m` is given (attached, as `-maramid`, included)."""
+    name = token.replace("\\", "/").rsplit("/", 1)[-1].lower()
+    return name.removeprefix("-m") in _ARAMID_NAMES
+
+
+def _resolve_flag(token: str) -> str | None:
+    """The `ledger resolve` option `token` is, by argparse's rules: its name
+    is what stands before a `=`, an exact name wins, and otherwise a prefix
+    that fits exactly one option is that option. None for anything else: a
+    positional or an unknown option fits none, and `--re` fits two. So does
+    `-`, or no name at all, which every option starts with."""
+    name = token.partition("=")[0]
+    if name in _RESOLVE_FLAGS:
+        return name
+    fits = [flag for flag in _RESOLVE_FLAGS if flag.startswith(name)]
+    return fits[0] if len(fits) == 1 else None
+
+
+def _scan_one_aramid(seg: list[str], start: int) -> Bypass | None:
+    """Scan the aramid invocation whose program token is seg[start]: a
+    `ledger resolve` that carries `--fixed` and no `--red-proof`."""
+    if not 0 <= start < len(seg):
+        return None
+    i = start + 1
+    # Global options (`--version`): none takes a value.
+    while i < len(seg) and seg[i].startswith("-"):
+        i += 1
+    if seg[i:i + 2] != ["ledger", "resolve"]:
+        return None
+    seen = set()
+    j = i + 2
+    while j < len(seg):
+        tok = seg[j]
+        if tok == "--":
+            break       # argparse reads no option after it
+        flag = _resolve_flag(tok)
+        if flag is not None:
+            seen.add(flag)
+            if _RESOLVE_FLAGS[flag] and "=" not in tok:
+                j += 1  # its value, whatever it says
+        j += 1
+    if "--fixed" in seen and "--red-proof" not in seen:
+        return Bypass("no-red-proof", "ledger resolve", "--fixed")
+    return None
+
+
 def find_bypass(command) -> Bypass | None:
-    """The first git hook-bypass invocation in `command`, or None.
+    """The first git hook-bypass invocation in `command`, or the first
+    evidenced close without red proof, or None.
 
     Compound commands (&&, ;, |, ||) are scanned in full, not just the
     head (spec §6). One match is enough to decide the tool call.
     """
-    if not isinstance(command, str) or "git" not in command.lower():
+    if not isinstance(command, str):
+        return None
+    low = command.lower()
+    if "git" not in low and "aramid" not in low:
         return None
     tokens = _tokens(command)
     if tokens is None:
@@ -152,6 +239,10 @@ def find_bypass(command) -> Bypass | None:
         for i, tok in enumerate(seg):
             if _is_git(tok):
                 found = _scan_one_git(seg, i)
-                if found is not None:
-                    return found
+            elif _is_aramid(tok):
+                found = _scan_one_aramid(seg, i)
+            else:
+                continue
+            if found is not None:
+                return found
     return None

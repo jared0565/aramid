@@ -98,6 +98,7 @@ KNOWN = {
     "test_command": "command",
     "tests": "table",
     "tests.command": "command",
+    "tests.select_command": "command",
     "tests.enabled": "boolean",
     "tests.timeout_s": "number",
     "timeouts": "table",

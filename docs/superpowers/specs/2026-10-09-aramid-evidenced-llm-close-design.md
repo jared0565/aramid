@@ -614,9 +614,10 @@ each worktree gets and loses its own `node_modules` link, and that a
 confirmed critical closes on this proof. Every limb was perturbed in a
 scratch copy of the tree and seen to fail its test.
 
-### 9.2 The MCP tool: `aramid_ledger_resolve` (decided, not built yet)
+### 9.2 The MCP tool: `aramid_ledger_resolve` (built 2026-10-11)
 
-Arguments: `id`, `commit`, `tests` (one or more selectors), `reason`.
+Arguments: `id`, `commit`, `tests` (one or more selectors), `reason`. All
+four are required.
 
 - The command is `[tests].select_command` from the `aramid.toml` that HEAD
   holds (read with `git show HEAD:aramid.toml`, so neither the user-level
@@ -634,7 +635,44 @@ Arguments: `id`, `commit`, `tests` (one or more selectors), `reason`.
 - Everything else is the command-line close: same checks, same refusals,
   same event.
 
-### 9.3 The agent hook rule (decided, not built yet)
+As built (`evidenced_close.selected_command`, `ledger_cmd.
+cmd_ledger_resolve_selected`, `mcp_tools._ledger_resolve`):
+
+- **The key is new: `[tests].select_command`**, a string (split
+  POSIX-style) or a list of strings. It is in `config_keys.OPTIONAL`, so
+  the config check knows it, and nothing but this tool reads it. The gate
+  runs `[tests].command`, which names its own paths and could not take
+  selectors.
+- **A selector must also be a test file by aramid's rules**: under `tests/`
+  or `__tests__/`, or named `test_*.py`, `*_test.py`, `*.test.*`,
+  `*.spec.*`. This was added during the build. pytest imports any file it
+  is handed, so "a file HEAD holds" alone would let a committed script be
+  run by calling it a test.
+- **The characters**: letters and digits, and `_ . / [ ] : @ + -`. No space,
+  no parentheses, none of `= , ; & | < > ^ % " ' ! $` or a backtick. A
+  backslash is let in for the path only and rewritten to `/`. A test on
+  Windows starts a real `.cmd` shim and shows that
+  `tests/[id]/+page@x-y_z.test.js` arrives as one argument.
+- **What that costs**: a vitest name filter (`-t 'routes CN'`) cannot be
+  passed, and a parametrized pytest id with characters outside the set
+  cannot be named. Both are refused with "close this one at the command
+  line with --test". The file can always be selected whole.
+- **`::` is read only for pytest** (`runners.tests._is_pytest_argv` on the
+  declared command). For any other runner the whole selector is the path, so
+  `a.test.js::x` names no file HEAD holds and is refused.
+- **Order of the checks**: the list of selectors is well-formed; HEAD names
+  a commit; the committed `aramid.toml` declares a command; each selector.
+  Then the command-line close runs with the argv as built, `red_proof=True`
+  and `via="mcp"`. A refusal comes back as an MCP result with `isError`
+  true and the same sentence the command line prints.
+- **The handler reads four arguments and no others.** A `test`, a `command`
+  or a `red_proof` that a caller adds is not looked at.
+- Tests: `tests/unit/test_ledger_resolve_selected.py` (70),
+  `tests/unit/test_mcp_tools.py` (the tool's schema, its argument checks,
+  and one refusal end to end), `tests/integration/test_mcp_server.py` (the
+  tool list a client is served).
+
+### 9.3 The agent hook rule (built 2026-10-11)
 
 The pre-tool-use hook also reads an `aramid ledger resolve` command line:
 `--fixed` without `--red-proof` is an advisory while the agent surface
@@ -643,5 +681,35 @@ the git rules: the values of `--test`, `--reason` and `--fixed` are skipped,
 so text inside them cannot match, and the abbreviations argparse accepts
 (`--fix`, `--red`) are read as the flags they stand for. The table of flags
 is checked by a test against the real parser, so a flag added to `ledger
-resolve` later cannot go unread. Launch forms: `aramid`, `aramid.exe`,
-`aramid.cmd` and `python [-P] -m aramid`.
+resolve` later cannot go unread.
+
+As built (`agent_bypass._scan_one_aramid`, `agent_hook._said`):
+
+- **aramid is recognised by shape, not from a list of launchers.** Any word
+  of the command whose file name, lower-cased, is `aramid`, `aramid.exe`,
+  `.cmd`, `.bat`, `.ps1` or `aramid.__main__` starts a scan, and so does
+  `-maramid`. That covers a path to the executable, `python -m aramid`,
+  `py -3.14 -m aramid`, `uv run aramid` and an environment prefix without
+  naming any of them. The sketch above listed four launch forms; a list
+  would have missed the next one.
+- **Read as argparse reads it**, each point measured on the real parser:
+  an unambiguous prefix is the flag; `--flag=value` carries its value; a
+  value flag takes the next token; nothing after a bare `--` is an option.
+  Options before the subcommand are stepped over one token each, and a
+  test pins that no global option takes a value.
+- **No early exit.** A token the table does not know is stepped over, and
+  the scan goes on to the end of the command segment, so a flag is found
+  wherever it stands.
+- **The message** names the rule and what to do: re-run with `--red-proof`
+  added. Armed, the call is denied; baking, the same sentence is advice.
+- **Not seen, each pinned by a test as a known gap**: aramid started by an
+  unquoted Windows path (the command is split as a POSIX shell splits it,
+  so the backslashes go; the git rules have the same gap), and a close made
+  inside another program (`python -c`). A close the parser would reject
+  anyway gets the same advice.
+- **What the rule is not**: the guard on a confirmed critical. The command
+  refuses that close without red proof for everyone. The rule adds that an
+  agent shows red for every close.
+- Tests: `tests/unit/test_agent_bypass_resolve.py`, four in
+  `tests/unit/test_agent_hook_dispatch.py`, and one through the real hook
+  process in `tests/integration/test_agent_hook_cli.py`.

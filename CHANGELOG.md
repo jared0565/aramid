@@ -69,7 +69,46 @@ to publish a tag that disagrees with it.
   Three refusal messages changed with it. `ledger resolve` without either
   mode now names both. `resolve --out-of-scope` and `mark-unreachable` on a
   producer finding no longer say "never by hand", and both point an
-  `llm-review` finding at `--fixed`. There is no MCP tool for the close yet.
+  `llm-review` finding at `--fixed`.
+
+- **The close through MCP: `aramid_ledger_resolve` (FN-36).** An eleventh
+  MCP tool, with `id`, `commit`, `tests` and `reason`, all required. It
+  takes test selectors and never a command: a `--test` argument through MCP
+  would have aramid's server run whatever its caller names. The command is
+  the new `[tests].select_command`, read from the `aramid.toml` that HEAD
+  holds and from nowhere else (not an uncommitted edit, not
+  `~/.aramid/config.toml`), with the selectors appended:
+
+  ```toml
+  [tests]
+  select_command = "python -m pytest -q"   # or "npx vitest run"
+  ```
+
+  A selector is a test file HEAD holds (under `tests/` or `__tests__/`, or
+  named `test_*.py`, `*_test.py`, `*.test.*`, `*.spec.*`); when the declared
+  command is pytest it may go on with `::` and a test in that file. It is
+  made of letters, digits and `_ . / [ ] : @ + -`, and does not start with
+  `-`: on Windows `npx` starts through cmd.exe, which reads `&`, `|`, `%`
+  and quotes in an argument as syntax. Red proof always runs, and the event
+  records `"via": "mcp"`. A repo that has committed no `select_command` is
+  refused, and the refusal names the key. Nothing else reads the key: the
+  gate still runs `[tests].command`.
+
+- **The agent hook asks for red proof on an agent's close (FN-36).** The
+  `pre-tool-use` hook now also reads an `aramid ledger resolve` command
+  line. `--fixed` without `--red-proof` gets a warning while the agent
+  surface bakes and is rejected once `aramid arm --agent` is set, like a
+  hook bypass. Flags are read as the command's parser reads them
+  (`--fix`, `--fixed=<commit>`, `--red`), and the values of `--fixed`,
+  `--test` and `--reason` are skipped, so text inside them is not a flag.
+  aramid is recognised by the name of the file that is started, whatever
+  the path or launcher. Two things it does not see: a close made inside
+  another program (`python -c`), and aramid started by an unquoted Windows
+  path. A person at a terminal is not touched.
+
+  `ARAMID.md` gains a section, "Closing an LLM finding you fixed", and the
+  tool in its MCP list. A repo's copy changes when `aramid init` is run
+  again after upgrading.
 
 ## [0.20.7] — 2026-10-10
 

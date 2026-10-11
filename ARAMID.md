@@ -225,17 +225,43 @@ territory. Don't mistake a clean `aramid check` for full security coverage.
 
 ## Commands
 
-MCP-capable agents reach the same loop as tools, via the `.mcp.json` entry `aramid init` registers (`python -P -m aramid.mcp`): `aramid_check`, `aramid_status`, `aramid_ledger_filter`, `aramid_resolvers`, `aramid_override`, `aramid_mark_not_a_secret`, `aramid_mark_rotated`, `aramid_handover_show`, `aramid_handover_write`, and `aramid_handover_done`.
+MCP-capable agents reach the same loop as tools, via the `.mcp.json` entry `aramid init` registers (`python -P -m aramid.mcp`): `aramid_check`, `aramid_status`, `aramid_ledger_filter`, `aramid_resolvers`, `aramid_override`, `aramid_mark_not_a_secret`, `aramid_mark_rotated`, `aramid_ledger_resolve`, `aramid_handover_show`, `aramid_handover_write`, and `aramid_handover_done`.
 
 - `aramid check [--gate pre-commit|pre-push] [--staged|--range|--all]` -- run the gate manually.
 - `aramid status` -- open findings, new-since-baseline, unrotated historical secrets, unreachable candidates (see `ledger mark-rotated` / `mark-not-a-secret` / `mark-unreachable` below).
 - `aramid doctor [--fix]` -- verify/repair the toolchain and the installed hook's interpreter.
 - `aramid override <id> --reason "..."` -- suppress a WARN finding (ledger-logged).
+- `aramid ledger resolve <id> --fixed <commit> --test "<command>" --reason "..." --red-proof` -- close an `llm-review` finding that is fixed although the line it quotes never changed (see "Closing an LLM finding you fixed" below).
 - `aramid ledger mark-unreachable <id> --reason "..."` -- retire a finding whose tool no longer runs in this repo (de-selected, disabled, or removed) -- see `aramid status`'s "unreachable candidates" section for which ids qualify.
 - `aramid arm` -- end the semgrep WARN-only bake.
 - `aramid arm --llm` -- end the LLM bake: confirmed-critical LLM findings block at pre-push.
 - `aramid handover write [--file F|-] [--author A] [--replace]` | `show` | `done` -- record where you are before a restart, read the pending one, mark it consumed (see "Session handover" below).
 - `aramid uninstall` -- remove aramid's hooks/ARAMID.md/gitignore entries (ledger kept).
+
+## Closing an LLM finding you fixed
+
+An `llm-review` finding closes by itself when the line it quotes leaves the
+file. A fix made somewhere else (a guard before that line, a change in a
+caller) leaves the quote in place, and the finding stays open. Do not
+override it: an override records an accepted risk. Close it with the commit
+that fixed it and a test that shows the fix:
+
+```
+aramid ledger resolve <id> --fixed <commit> --test "<command>" --reason "..." --red-proof
+```
+
+The test must pass at `HEAD`. With `--red-proof` it must also fail with the
+commit backed out. **As an agent, always pass `--red-proof`.** The agent
+hook warns about `aramid ledger resolve --fixed` without it, and rejects
+the call once `aramid arm --agent` is set.
+
+Through MCP the tool is `aramid_ledger_resolve`, with `id`, `commit`,
+`tests` and `reason`. It takes no command. `tests` is a list of committed
+test files (for pytest, `file::test` as well), which aramid appends to the
+`[tests].select_command` that this repo has committed in `aramid.toml`, for
+example `select_command = "python -m pytest -q"`. Red proof always runs.
+If the repo has committed no `select_command`, the tool refuses and names
+the key: ask the operator to add it, or close at the command line.
 
 ## Session handover
 

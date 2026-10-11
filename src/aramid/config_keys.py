@@ -21,6 +21,9 @@ OPTIONAL: dict[tuple[str, ...], str] = {
     ("test_command",): "command",         # legacy alias, blessed for 1.x (DEC-3)
     ("bake_started",): "string",
     ("tests", "command"): "command",
+    # The runner an MCP close appends test selectors to. Read from the
+    # repo's COMMITTED aramid.toml alone (evidenced_close._declared).
+    ("tests", "select_command"): "command",
     ("mutation", "test_command"): "command",
     ("mutation", "baseline_timeout_s"): "number",
     ("js_mutation", "baseline_timeout_s"): "number",

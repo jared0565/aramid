@@ -27,6 +27,10 @@ FLAG = {"session_id": "t", "cwd": ".", "hook_event_name": "PreToolUse",
         "tool_name": "Bash", "tool_input": {"command": "git commit --no-verify -m x"}}
 HOOKS_PATH = {**FLAG, "tool_input": {"command": "git -c core.hooksPath=/tmp/x commit -m y"}}
 CLEAN = {**FLAG, "tool_input": {"command": "pytest -q tests/unit"}}
+_CLOSE = ('aramid ledger resolve llm1 --fixed abc123 --test "python -m pytest tests/t.py"'
+          ' --reason "guarded in the caller"')
+CLOSE = {**FLAG, "tool_input": {"command": _CLOSE}}
+CLOSE_WITH_PROOF = {**FLAG, "tool_input": {"command": _CLOSE + " --red-proof"}}
 
 DENY_FLAG = {"hookSpecificOutput": {
     "hookEventName": "PreToolUse",
@@ -43,6 +47,20 @@ ADVISE_FLAG = {"hookSpecificOutput": {
         " bypass is ledger-visible, and the armed version of this hook rejects the call"
         " outright -- re-run without it; suppress a specific finding with `aramid"
         " override <id> --reason \"...\"` instead.")}}
+DENY_CLOSE = {"hookSpecificOutput": {
+    "hookEventName": "PreToolUse",
+    "permissionDecision": "deny",
+    "permissionDecisionReason": (
+        "aramid: `aramid ledger resolve --fixed` without `--red-proof` is REJECTED in"
+        " this repo (agent surface armed). An agent's close has to show the test failing"
+        " without the fix: re-run it with `--red-proof` added.")}}
+ADVISE_CLOSE = {"hookSpecificOutput": {
+    "hookEventName": "PreToolUse",
+    "additionalContext": (
+        "aramid: `aramid ledger resolve --fixed` without `--red-proof` closes a finding"
+        " on a passing test alone. An agent's close has to show the test failing without"
+        " the fix, and the armed version of this hook rejects the call outright -- re-run"
+        " it with `--red-proof` added.")}}
 
 
 def _git(root, *a):
@@ -176,6 +194,39 @@ def test_a_hooks_path_wrapper_is_described_as_such(tmp_path, monkeypatch, capsys
     assert body["permissionDecision"] == "deny"
     assert body["permissionDecisionReason"].startswith(
         "aramid: `git commit` under `-c core.hooksPath=/tmp/x` bypasses the gate")
+
+
+def test_a_close_without_red_proof_is_denied_when_armed(tmp_path, monkeypatch, capsys):
+    r = _repo(tmp_path, armed=True)
+    _stdin(monkeypatch, CLOSE)
+
+    assert ah._pre_tool_use(r) == 0
+    out = capsys.readouterr().out
+    assert json.loads(out) == DENY_CLOSE
+    assert out == json.dumps(DENY_CLOSE) + "\n"
+
+
+def test_a_close_without_red_proof_is_an_advisory_while_baking(tmp_path, monkeypatch, capsys):
+    r = _repo(tmp_path, armed=False)
+    _stdin(monkeypatch, CLOSE)
+
+    assert ah._pre_tool_use(r) == 0
+    assert json.loads(capsys.readouterr().out) == ADVISE_CLOSE
+
+
+def test_a_close_with_red_proof_is_silent(tmp_path, monkeypatch, capsys):
+    r = _repo(tmp_path, armed=True)
+    _stdin(monkeypatch, CLOSE_WITH_PROOF)
+
+    assert ah._pre_tool_use(r) == 0
+    assert capsys.readouterr() == ("", "")
+
+
+def test_a_close_is_described_by_what_it_lacks(tmp_path):
+    from aramid.agent_bypass import find_bypass
+
+    assert ah._describe(find_bypass(_CLOSE)) == \
+        "`aramid ledger resolve --fixed` without `--red-proof`"
 
 
 def test_describe_names_the_flag_or_the_hooks_path_value(tmp_path):

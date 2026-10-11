@@ -111,7 +111,7 @@ def test_tools_list_names(client):
     assert [t["name"] for t in out["result"]["tools"]] == [
         "aramid_check", "aramid_status", "aramid_ledger_filter",
         "aramid_resolvers", "aramid_override", "aramid_mark_not_a_secret",
-        "aramid_mark_rotated",
+        "aramid_mark_rotated", "aramid_ledger_resolve",
         "aramid_handover_show", "aramid_handover_write", "aramid_handover_done"]
 
 

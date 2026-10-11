@@ -22,7 +22,9 @@ no text this module prints can make the print itself raise -- that once
 turned the fail-open catch into a silent hook on Windows (final review C1).
 
 pre-tool-use screens each Bash/PowerShell tool call's command string for
-git hook-bypass invocations (aramid.agent_bypass, token-level). While
+git hook-bypass invocations, and for an `aramid ledger resolve --fixed`
+that carries no `--red-proof` (FN-36: an agent's close has to show red
+proof; both are aramid.agent_bypass, token-level). While
 baking it allows and surfaces an advisory through
 hookSpecificOutput.additionalContext; armed (agent_block_armed = true) it
 denies via permissionDecision: "deny". Contract pinned against Claude Code
@@ -140,32 +142,47 @@ def _pre_tool_use(root: Path | None) -> int:
 def _describe(bypass) -> str:
     if bypass.kind == "hooks-path":
         return f"`git {bypass.subcommand}` under `-c {bypass.token}`"
+    if bypass.kind == "no-red-proof":
+        return f"`aramid {bypass.subcommand} {bypass.token}` without `--red-proof`"
     return f"`git {bypass.subcommand}` carrying `{bypass.token}`"
+
+
+def _said(bypass) -> tuple[str, str]:
+    """What the hook says about one match: (the denial, the advisory)."""
+    what = _describe(bypass)
+    if bypass.kind == "no-red-proof":
+        return (f"aramid: {what} is REJECTED in this repo (agent surface armed). An"
+                f" agent's close has to show the test failing without the fix: re-run"
+                f" it with `--red-proof` added.",
+                f"aramid: {what} closes a finding on a passing test alone. An agent's"
+                f" close has to show the test failing without the fix, and the armed"
+                f" version of this hook rejects the call outright -- re-run it with"
+                f" `--red-proof` added.")
+    return (f"aramid: {what} bypasses the gate and is REJECTED in this"
+            f" repo (agent surface armed). Re-run without the bypass;"
+            f" to suppress a specific blocking finding use `aramid"
+            f" override <id> --reason \"...\"` after `aramid ledger"
+            f" filter --status open`.",
+            f"aramid: {what} bypasses this repo's gate. The bypass is"
+            f" ledger-visible, and the armed version of this hook"
+            f" rejects the call outright -- re-run without it; suppress"
+            f" a specific finding with `aramid override <id> --reason"
+            f" \"...\"` instead.")
 
 
 def _decision_json(bypass, *, armed: bool) -> str:
     import json
-    what = _describe(bypass)
+    denial, advisory = _said(bypass)
     if armed:
         body = {
             "hookEventName": "PreToolUse",
             "permissionDecision": "deny",
-            "permissionDecisionReason": (
-                f"aramid: {what} bypasses the gate and is REJECTED in this"
-                f" repo (agent surface armed). Re-run without the bypass;"
-                f" to suppress a specific blocking finding use `aramid"
-                f" override <id> --reason \"...\"` after `aramid ledger"
-                f" filter --status open`."),
+            "permissionDecisionReason": denial,
         }
     else:
         body = {
             "hookEventName": "PreToolUse",
-            "additionalContext": (
-                f"aramid: {what} bypasses this repo's gate. The bypass is"
-                f" ledger-visible, and the armed version of this hook"
-                f" rejects the call outright -- re-run without it; suppress"
-                f" a specific finding with `aramid override <id> --reason"
-                f" \"...\"` instead."),
+            "additionalContext": advisory,
         }
     return json.dumps({"hookSpecificOutput": body})
 
