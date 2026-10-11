@@ -13,6 +13,7 @@ once per module (two commits: the bug, then the fix with a check and an
 or its twin that declares pytest; a test that commits or closes gets a
 private copy. `evidenced_close.run_subprocess` is replaced where the point
 is the argv."""
+import os
 import shutil
 import subprocess
 import sys
@@ -821,6 +822,210 @@ def test_a_file_that_is_started_from_outside_the_repo_is_none_of_heads(tmp_path)
     root = (tmp_path / "repo").resolve()
     outside = str(tmp_path.resolve() / "tools" / "run")
     assert evidenced_close._name_at_head(root, "../tools/run", outside, {"tools/run"}) is None
+
+
+def _link(link, target):
+    """A directory that is a link to another, made as a writer of the
+    working tree could make one: a junction on Windows, which needs no
+    privilege, and a symlink elsewhere."""
+    link.parent.mkdir(parents=True, exist_ok=True)
+    if sys.platform == "win32":
+        subprocess.run(["cmd", "/c", "mklink", "/J", str(link), str(target)],
+                       check=True, capture_output=True)
+    else:
+        os.symlink(target, link, target_is_directory=True)
+
+
+def _never_started(monkeypatch):
+    def never(*a, **k):
+        raise AssertionError("no file of the working tree may be started")
+    monkeypatch.setattr(evidenced_close, "run_subprocess", never)
+
+
+def _refusal(spelled, name):
+    return (f"the command starts `{spelled}`, which HEAD holds as {name}, and the checkout "
+            f"this run is in does not hold it under the name the command uses -- through "
+            f"MCP a committed program is run from a checkout, never from the working tree. "
+            f"Write it in [tests].select_command as HEAD holds it, or close at the command "
+            f"line with --test")
+
+
+def test_within_is_asked_of_the_file_system_and_not_of_the_spelling(tmp_path):
+    """Whether a file lies under a directory. A second name for the same
+    directory is still that directory; a file that does not exist yet has
+    a place all the same; the directory is not under itself."""
+    base = tmp_path / "repo"
+    _write(base, "tools/run", "")
+    _link(tmp_path / "way", base)
+
+    within = evidenced_close._within
+    assert within(base, base / "tools" / "run") == Path("tools/run")
+    assert within(base, base / "tools" / "none" / "x") == Path("tools/none/x")
+    assert within(base, tmp_path / "way" / "tools" / "run") == Path("tools/run")
+    assert within(base, tmp_path / "other" / "run") is None
+    assert within(base, base) is None
+    assert within(tmp_path / "no-such-directory", base / "tools" / "run") is None
+
+
+def test_through_mcp_a_whole_path_into_the_repo_is_read_as_written_not_where_a_link_leads(
+        tmp_path, monkeypatch):
+    """The review of 536ae03. The working tree's `tools` is a link somebody
+    made to a directory elsewhere. Followed, `<repo>/tools/run` reads as a
+    path that leaves the repo, and was started as written: the file
+    elsewhere. As written it is `tools/run` of the repo, and the checkout
+    holds that."""
+    root, wt = tmp_path / "repo", tmp_path / "wt"
+    _write(tmp_path / "elsewhere", "tools/run", "")
+    _write(wt, "tools/run", "")
+    root.mkdir()
+    _link(root / "tools", tmp_path / "elsewhere" / "tools")
+
+    assert _started(monkeypatch, root, wt, {"tools/run"}, [str(root / "tools" / "run")]) == [
+        str((wt / "tools/run").resolve())]
+
+
+def test_through_mcp_a_path_that_only_a_link_brings_into_the_repo_is_read_by_where_it_leads(
+        tmp_path, monkeypatch):
+    """The other reading, kept: nothing in `<tmp>/way/run` says "the repo",
+    and the file it opens is the repo's `tools/run`."""
+    root, wt = _a_repo_and_a_checkout(tmp_path)
+    _link(tmp_path / "way", root / "tools")
+
+    assert _started(monkeypatch, root, wt, {"tools/run"}, [str(tmp_path / "way" / "run")]) == [
+        str((wt / "tools/run").resolve())]
+
+
+def test_through_mcp_a_name_with_no_drive_and_no_root_is_never_read_from_where_aramid_runs(
+        tmp_path, monkeypatch):
+    """Only a whole path is read as one. aramid's process runs in the repo's
+    `tools` here: a bare `run` is still for PATH to find, and `tools/run`
+    is still the checkout's."""
+    root, wt = _a_repo_and_a_checkout(tmp_path)
+    monkeypatch.chdir(root / "tools")
+
+    assert _started(monkeypatch, root, wt, {"tools/run"}, ["run", "tools/run"]) == [
+        "run", str((wt / "tools/run").resolve())]
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="a path with a root and no drive")
+def test_on_windows_a_path_with_a_root_and_no_drive_is_a_whole_path_too(tmp_path, monkeypatch):
+    """`\\dir\\repo\\tools\\run` is not absolute to pathlib, and joined to a
+    checkout on the same drive it names the working tree's file, which so
+    came back as the checkout's own (the review of 536ae03, measured: the
+    working tree's launcher ran)."""
+    root, wt = _a_repo_and_a_checkout(tmp_path)
+    monkeypatch.chdir(tmp_path)         # the drive such a path is read on
+    rooted = (root / "tools" / "run").as_posix().split(":", 1)[1]
+    assert rooted.startswith("/") and not Path(rooted).is_absolute()
+
+    assert _started(monkeypatch, root, wt, {"tools/run"}, [rooted]) == [
+        str((wt / "tools/run").resolve())]
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="the `\\\\?\\` prefix is Windows'")
+def test_on_windows_a_path_with_the_long_path_prefix_is_a_whole_path_too(tmp_path, monkeypatch):
+    root, wt = _a_repo_and_a_checkout(tmp_path)
+    long = "\\\\?\\" + str((root / "tools" / "run").resolve())
+
+    assert _started(monkeypatch, root, wt, {"tools/run"}, [long]) == [
+        str((wt / "tools/run").resolve())]
+
+
+def test_through_mcp_a_link_out_of_the_checkout_is_not_the_checkouts_own(tmp_path, monkeypatch):
+    """The checkout's `tools` leads into the working tree, as a link HEAD
+    holds may and as `node_modules` does. The file found through it is the
+    working tree's. HEAD holds it, so it is refused; what HEAD does not hold
+    is the repo's own, as it was."""
+    root, wt = tmp_path / "repo", tmp_path / "wt"
+    _write(root, "tools/run", "")
+    _link(wt / "tools", root / "tools")
+
+    assert _started(monkeypatch, root, wt, {"calc.py"}, ["tools/run"]) == [
+        str((root / "tools/run").resolve())]
+    _never_started(monkeypatch)
+    with pytest.raises(Refused) as exc:
+        evidenced_close._run(["tools/run", "x"], root, wt, 5, held={"calc.py", "tools/run"})
+    assert str(exc.value) == _refusal("tools/run", "tools/run")
+
+
+def test_an_untracked_file_under_an_earlier_extension_does_not_stand_in_for_heads(
+        tmp_path, monkeypatch):
+    """The review of 536ae03, measured on Windows: HEAD holds `tools/run.cmd`,
+    the checkout at the fix commit lacks it, and the working tree has an
+    untracked `tools/run.bat` beside it. PATHEXT tries `.BAT` first, so that
+    was the file found, HEAD holds no file of that name, and it ran."""
+    monkeypatch.setattr(sys, "platform", "win32")
+    monkeypatch.setenv("PATHEXT", ".BAT;.CMD")
+    root, wt = tmp_path / "repo", tmp_path / "wt"
+    _write(root, "tools/run.cmd", "")
+    _write(root, "tools/run.bat", "")
+    wt.mkdir()
+    _never_started(monkeypatch)
+
+    with pytest.raises(Refused) as exc:
+        evidenced_close._run(["tools/run", "x"], root, wt, 5, held={"calc.py", "tools/run.cmd"})
+
+    assert str(exc.value) == _refusal("tools/run", "tools/run.cmd")
+
+
+def test_a_program_head_holds_is_refused_wherever_a_link_in_the_working_tree_leads(
+        tmp_path, monkeypatch):
+    """The working tree's `tools` is a link to a directory elsewhere, and the
+    checkout lacks the launcher. The file found is outside the repo, so its
+    own name says nothing; the names the spelling can start do."""
+    root, wt = tmp_path / "repo", tmp_path / "wt"
+    _write(tmp_path / "elsewhere", "tools/run.cmd", "")
+    root.mkdir()
+    wt.mkdir()
+    _link(root / "tools", tmp_path / "elsewhere" / "tools")
+    monkeypatch.setattr(sys, "platform", "win32")       # after the link: `_link` reads it
+    monkeypatch.setenv("PATHEXT", ".CMD")
+    _never_started(monkeypatch)
+
+    with pytest.raises(Refused) as exc:
+        evidenced_close._run(["tools/run", "x"], root, wt, 5, held={"tools/run.cmd"})
+
+    assert str(exc.value) == _refusal("tools/run", "tools/run.cmd")
+
+
+@pytest.mark.parametrize("spelled, started, name", [
+    # An earlier extension in the working tree, beside the file HEAD holds.
+    ("tools/go", "tools/go.bat", "tools/go.cmd"),
+    ("Tools/GO", "tools/go.bat", "tools/go.cmd"),
+    ("tools/../tools/go", "../elsewhere/go.bat", "tools/go.cmd"),
+    # The spelling itself comes first, and is asked with no extension too.
+    ("tools/run", "tools/run.bat", "tools/run"),
+    ("tools/none", "tools/none.bat", None),
+    (".venv/python", ".venv/python.exe", None),
+])
+def test_on_windows_the_file_head_holds_is_asked_under_every_extension_the_name_can_take(
+        tmp_path, monkeypatch, spelled, started, name):
+    monkeypatch.setattr(sys, "platform", "win32")
+    monkeypatch.setenv("PATHEXT", ".BAT;.CMD")
+    root = tmp_path.resolve()
+    held = {"calc.py", "tools/run", "tools/go.cmd"}
+    assert evidenced_close._name_at_head(root, spelled, str(root / started), held) == name
+
+
+def test_the_file_that_would_start_is_asked_where_its_links_lead(tmp_path):
+    """`_run` hands over a file with its links followed. Handed one with a
+    link still in it, the answer is the same: the file HEAD holds."""
+    root = (tmp_path / "repo").resolve()
+    _write(root, "tools/run", "")
+    _link(root / "link", root / "tools")
+
+    assert evidenced_close._name_at_head(
+        root, "x/run", str(root / "link" / "run"), {"tools/run"}) == "tools/run"
+
+
+def test_off_windows_the_spelling_is_asked_as_it_is(tmp_path, monkeypatch):
+    """No other system adds an extension to a program's name, so `tools/go`
+    is not HEAD's `tools/go.cmd` there."""
+    monkeypatch.setattr(sys, "platform", "linux")
+    monkeypatch.setenv("PATHEXT", ".BAT;.CMD")
+    root = tmp_path.resolve()
+    assert evidenced_close._name_at_head(
+        root, "tools/go", str(root / "tools" / "go.bat"), {"tools/go.cmd"}) is None
 
 
 def test_a_launcher_named_another_way_is_refused_at_the_fix_commit(repo, tmp_path, capsys):

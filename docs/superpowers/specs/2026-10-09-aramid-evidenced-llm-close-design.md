@@ -984,3 +984,80 @@ knowledge base, the changelog and the docstring of `selected_command` now
 say what is not bounded, in those words, and the guide says who the MCP
 tools are for: an agent that would be let run the repository's tests
 anyway.
+
+### 9.6 The security review of `536ae03` (2026-10-11)
+
+The review of the fix in 9.5 reported two findings, by title only, both in
+`evidenced_close.py`: a parser differential, and a symlink bypass, each
+ending in a program other than the committed one being run. They were
+rebuilt from the code and measured against `536ae03` (Windows 11, Python
+3.14.5): `_run` as a close through MCP calls it, every launcher printing
+one word, so that each arm shows which file ran. The controls read the same
+before and after.
+
+| the declared program, and the state | what ran at `536ae03` | as fixed |
+|-------------------------------------|-----------------------|----------|
+| a path with a root and no drive into the repo (`\dir\repo\tools\run`); the checkout holds the launcher | the working tree's file | the checkout's |
+| a whole path into the repo; the working tree's `tools` is a link to a directory elsewhere | the file elsewhere | the checkout's |
+| `tools/run`; HEAD holds `tools/run.cmd`, the checkout lacks it, the working tree has an untracked `tools/run.bat` | the untracked file | refused |
+| `tools/run`; the checkout's `tools` is a link into the working tree, HEAD holds the launcher | the working tree's file | refused |
+| `tools/run`; the checkout lacks it, the working tree's `tools` is a link elsewhere, HEAD holds `tools/run.cmd` | the file elsewhere | refused |
+| a `\\?\` path into the repo | the working tree's file, by that name (cmd.exe then failed on the path, exit 1) | the checkout's |
+
+So two sentences of 9.5 were false as written: "an absolute path into the
+repo is read through MCP as the path from its root", and "it is never
+filled in from the working tree".
+
+Who can bring each about. The third row needs one untracked file and a
+launcher that was committed after the fix, which is the ordinary case of
+the proof at the fix commit: it is inside the caller this design is about,
+one who writes files and runs nothing. The first and the last depend on how
+HEAD itself spells the command. The second, fourth and fifth need a link,
+in the working tree or among what HEAD holds, and writing a file does not
+make one.
+
+What the rows share. Each time, something about names stood in for the
+question "which file would start":
+
+- `own[0] != argv[0]` stood for "the checkout has it". Joined to the
+  checkout, a path with a root names a file on the checkout's drive and not
+  in it, and a link in the checkout leads out of it.
+- `.resolve()` and then `relative_to` stood for "into the repo". Following
+  the link first made the path read as one that leaves it.
+- `_name_at_head` asked about the spelling and about the one file found.
+  HEAD's `run.cmd` stood behind a file that PATHEXT tries earlier.
+
+As fixed, the question is asked of the file system:
+
+- `_within(base, file)` says whether a file lies under a directory by
+  asking each directory above it whether it IS that directory
+  (`os.path.samefile`). Case, a short name, a `\\?\` prefix and a link
+  above the directory make no difference to it.
+- The checkout's answer counts only when the file found lies inside the
+  checkout.
+- A whole path, which is every path with a drive or a root, is read as it
+  is written, and only then by where its links lead.
+- A program taken from the repo is refused when HEAD holds the file that
+  would start, or any name the spelling can start: the spelling, and on
+  Windows the spelling with each extension of PATHEXT.
+
+Unchanged, and each pinned by a test: an untracked program of the repo is
+still run from the repo (the case 9.5 leaves open, with FN-44); a path that
+leaves the repo is started as written; a bare name is for PATH to find,
+also when aramid's own process runs in the repo's `tools`; the command line
+does none of this.
+
+Not measured: a drive-relative path (`F:tools\run`) with the checkout on
+another drive, for want of a second drive to write on. pathlib joins it to
+the checkout as `F:tools\run`, which Windows reads from the directory
+aramid runs in on that drive; `_within` reads it by the same rule as the
+rows above.
+
+17 new perturbations of this fix and 11 rewritten ones on the lines it changed, each failing a test (164 over the whole MCP close).
+
+For the operator's question on finding `02d70457`: 9.4, 9.5 and 9.6 are
+three reviews, and every bypass of 9.5 and 9.6 is in one branch, the one
+that starts a program named by a path. A declared command that may only
+begin with a bare name would delete that branch. It would also end the MCP
+close for a repo whose runner is a committed launcher (`./gradlew`,
+`bin/rails`) or an interpreter named by its path.

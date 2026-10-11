@@ -105,9 +105,14 @@ to publish a tag that disagrees with it.
   passing at HEAD. The test runs twice, or three times at the fix commit.
   Uncommitted changes do not stop the close and are not tested. A program
   the declared command names by a path is started from the checkout when
-  HEAD holds it, so it runs as committed, however the path is written
-  (without the extension Windows adds to it, or absolute). The event
-  records `"via": "mcp"`.
+  HEAD holds it, so it runs as committed, however the path is written:
+  without the extension Windows adds to it, as a whole path into the
+  repository, or through a directory that is a link. Where the checkout
+  has no file of its own for a program HEAD holds, the close is refused.
+  Nothing of the working tree is run in its place: not its copy of that
+  file, and not another file there that the same name would start (an
+  untracked `tools/run.bat` beside a committed `tools/run.cmd`). The
+  event records `"via": "mcp"`.
 
   The tool is not a sandbox. What is installed is used as it stands and is
   not checked, and part of it lies in the repository's own directory:

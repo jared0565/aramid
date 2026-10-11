@@ -90,6 +90,7 @@ Replayed on this repo's own month-old case: refused at HEAD 2026-10-10,
 closed at the fix commit 2026-10-11 (spec section 9).
 """
 import contextlib
+import os
 import posixpath
 import shlex
 import shutil
@@ -176,27 +177,60 @@ def _git(cwd: Path, no_hooks: Path, *args):
     return gitutil._run(cwd, "-c", f"core.hooksPath={no_hooks}", *args)
 
 
+def _within(base: Path, file: Path) -> Path | None:
+    """`file` as a path from `base` when it lies under that directory, None
+    when it does not. Asked of the file system, not of the two spellings:
+    each directory above the file is asked whether it IS `base`
+    (`samefile`). Case, a short name, a `\\\\?\\` prefix or a link above
+    `base` then make no difference, and no link below `base` is followed
+    that `file` does not already name."""
+    for parent in file.parents:
+        with contextlib.suppress(OSError):
+            if os.path.samefile(parent, base):
+                return file.relative_to(parent)
+    return None
+
+
 def _name_at_head(root: Path, spelled: str, started: str, held: set[str]) -> str | None:
-    """The file of `held` that a program in the repo is, by either of its
-    names: the one the command spells (`tools/../tools/run` is `tools/run`,
-    and so is `Tools/Run`, because Windows and macOS open that file under
-    either), or the one of the file that would be started (`tools/run.cmd`
-    for `tools/run` on Windows). None when HEAD holds neither."""
-    names = {posixpath.normpath(spelled.replace("\\", "/")).casefold()}
-    with contextlib.suppress(ValueError):
-        names.add(Path(started).relative_to(root.resolve()).as_posix().casefold())
+    """The file of `held` that a program taken from the repo stands for, or
+    None when HEAD holds none. Asked by every name the command's spelling
+    can start: the spelling itself (`tools/../tools/run` is `tools/run`, and
+    so is `Tools/Run`, because Windows and macOS open that file under
+    either) and, on Windows, the spelling with each extension of PATHEXT.
+    All of them, not only the one that was found: with HEAD's `tools/run.cmd`
+    missing from a checkout, an untracked `tools/run.bat` in the working
+    tree is the file found, and it is found before `.cmd` (the review of
+    536ae03). And asked by the file that would be started, wherever a link
+    in the working tree leads to it."""
+    written = posixpath.normpath(spelled.replace("\\", "/"))
+    names = {(written + ext).casefold()
+             for ext in ("", *tests_runner._program_extensions())}
+    inside = _within(root, Path(started).resolve())
+    if inside is not None:
+        names.add(inside.as_posix().casefold())
     return next((name for name in sorted(held) if name.casefold() in names), None)
 
 
 def _from_the_root(argv: list[str], root: Path) -> list[str]:
-    """`argv` with a program that is named by an absolute path INTO the repo
+    """`argv` with a program that is named by a whole path INTO the repo
     named from its root instead (`./tools/run`), so that it is anchored like
-    any other program of the repo. Any other argv is returned as it is."""
-    with contextlib.suppress(ValueError):
-        if Path(argv[0]).is_absolute():
-            inside = Path(argv[0]).resolve().relative_to(root.resolve())
-            return ["./" + inside.as_posix(), *argv[1:]]
-    return argv
+    any other program of the repo. Any other argv is returned as it is.
+
+    The path is read as it is written, before any link in it is followed.
+    A directory of the working tree may be a link somebody made there, and
+    followed, the path reads as one that leaves the repo and is started as
+    written (the review of 536ae03). Every path with a drive or a root is
+    read this way, not only what pathlib calls absolute: on Windows
+    `\\dir\\repo\\tools\\run` has no drive and is not absolute, and joined to
+    a checkout on the same drive it names the working tree's file. A path
+    that only a link brings into the repo is read by where it leads."""
+    written = Path(argv[0])
+    if not written.anchor:
+        return argv
+    inside = _within(root, written) or _within(root, written.resolve())
+    if inside is None:
+        return argv
+    return ["./" + inside.as_posix(), *argv[1:]]
 
 
 def _run(argv: list[str], root: Path, cwd: Path, timeout_s: float, env=None,
@@ -212,19 +246,22 @@ def _run(argv: list[str], root: Path, cwd: Path, timeout_s: float, env=None,
     not ask for a clean tree, so at the repo root a tracked `tools/test.sh`
     may hold an edit nobody committed, and anchored there it would run as
     its caller left it (the review of 3697181). With `held` the checkout is
-    asked first, and the repo root only for a file HEAD does not hold. A
-    file HEAD holds that the checkout lacks is refused, never filled in from
-    the working tree. An absolute path into the repo is the same file named
-    another way, and is read as the path from the root. At the command line
-    the tree is clean, so the program at the repo root is the one HEAD
-    holds."""
+    asked first, and its answer counts only when the file found lies inside
+    the checkout: a link out of it, or a path that joined to the checkout
+    names a file elsewhere, is not the checkout's own. The repo root is
+    asked only for a file HEAD does not hold. A file HEAD holds that the
+    checkout lacks is refused, never filled in from the working tree
+    (`_name_at_head`). A whole path into the repo is the same file named
+    another way, and is read as the path from the root (`_from_the_root`).
+    At the command line the tree is clean, so the program at the repo root
+    is the one HEAD holds."""
     try:
         if held is not None:
             argv = _from_the_root(argv, root)
         program = tests_runner._argv(argv, root)
         if held is not None:
             own = tests_runner._argv(argv, cwd)
-            if own[0] != argv[0]:
+            if own[0] != argv[0] and _within(cwd, Path(own[0])) is not None:
                 program = own
             elif program[0] != argv[0]:
                 name = _name_at_head(root, argv[0], program[0], held)
