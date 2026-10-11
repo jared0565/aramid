@@ -290,7 +290,8 @@ def test_show_prints_what_an_evidenced_close_rests_on(tmp_path, capsys):
     _seed(tmp_path, _f("f1", tool="llm-review", rule="llm/logic"))
     _append(tmp_path, _evidenced_close(
         "f1", via="mcp",
-        red_proof={"base": "b" * 40, "control_rc": 0, "pre_fix_rc": 1, "backed_out": 3}))
+        red_proof={"at": "head", "base": "b" * 40, "control_rc": 0, "pre_fix_rc": 1,
+                   "backed_out": 3}))
 
     assert cmd_ledger_show(tmp_path, "f1") == 0
     out = capsys.readouterr().out
@@ -320,6 +321,21 @@ def test_show_says_so_when_a_close_carried_no_red_proof(tmp_path, capsys):
         f"      closed as fixed in {'c' * 40} (cli): guard added in route()",
         f"      test: npx vitest run src/orders.test.ts -t 'routes CN' -- exit 0 at {'d' * 40}",
         "      red proof: not run"]
+
+
+def test_show_says_when_the_red_proof_was_shown_at_the_fix_commit(tmp_path, capsys):
+    """A different claim from a proof at HEAD: the test caught the bug as the
+    code stood when it was fixed. The line says so, and why."""
+    _seed(tmp_path, _f("f1", tool="llm-review", rule="llm/logic"))
+    _append(tmp_path, _evidenced_close("f1", red_proof={
+        "at": "commit", "base": "b" * 40, "control_rc": 0, "pre_fix_rc": 1,
+        "backed_out": 2, "head_conflicts": 4, "brought": 1}))
+
+    assert cmd_ledger_show(tmp_path, "f1") == 0
+    assert capsys.readouterr().out.splitlines()[-1] == (
+        f"      red proof at the fix commit (it can no longer be backed out of HEAD: 4 "
+        f"file(s) in conflict): exit 1 with it backed out against {'b' * 40} -- 2 of its "
+        f"path(s); 1 test file(s) brought in from HEAD")
 
 
 def test_show_adds_nothing_under_a_resolution_aramid_made_by_itself(tmp_path, capsys):

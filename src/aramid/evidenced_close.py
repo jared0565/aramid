@@ -26,9 +26,10 @@ number them differently). So the same worktree is used twice:
 The only difference between the two runs is what that one commit changed,
 so a failure in the second is a failure for want of the fix. Commits after
 the fix stay. If one of them changed the fix's own lines again, git cannot
-back the fix out of that file, and red proof is refused rather than guessed
--- unless the file is one that stays at HEAD anyway (next section), where
-the conflict is undone with everything else the back-out did to it.
+back the fix out of that file. In a file that stays at HEAD anyway (next
+section) that is no obstacle: the conflict is undone with everything else
+the back-out did to it. Anywhere else it leaves no tree to run the test
+on, and the proof moves to the fix commit (last section).
 
 WHAT STAYS AT HEAD WHEN THE FIX IS BACKED OUT, and why each:
 
@@ -44,10 +45,10 @@ WHAT STAYS AT HEAD WHEN THE FIX IS BACKED OUT, and why each:
 HOOKS. `git worktree add` runs the repo's `post-checkout` hook, as it does
 for every worktree aramid builds, and it runs before the control, so both
 runs see whatever it did. Putting the kept paths back is a `git checkout`
-too and would run the hook a second time, BETWEEN the two runs; that call
-is made with hooks off, so nothing but the back-out separates them.
-`git revert --no-commit` makes no commit and runs no hook (measured
-2026-10-10).
+too and would run the hook a second time, BETWEEN the two runs; every
+checkout of paths here is made with hooks off (`_checkout`), so nothing
+but the back-out separates them. `git revert --no-commit` makes no commit
+and runs no hook (measured 2026-10-10).
 
 WHAT IT STILL CANNOT TELL, two things:
 
@@ -60,12 +61,30 @@ WHAT IT STILL CANNOT TELL, two things:
     shows the test needs the commit, which is less than showing it detects
     the bug.
 
-AND WHAT IT CANNOT DO: back out a commit whose lines were changed again
-afterwards. `git revert` takes the whole commit, so one later change that
-overlaps it in any backed-out file refuses the proof, and a CHANGELOG or a
-guide counts there like source. The refusal names the file. Replayed on
-this repo's own month-old case, 2026-10-10: refused (spec section 8.2).
+WHEN THE FIX CAN NO LONGER BE BACKED OUT OF HEAD. `git revert` takes the
+whole commit, so one later change that overlaps it in any backed-out file
+stops the back-out, and a CHANGELOG or a guide counts there like source.
+Red proof is then shown where the fix was made, in a second worktree:
+
+  1. checked out at the fix commit, with the files the command names
+     brought in as HEAD has them -- the test on offer is the one at HEAD,
+     and it may have been written after the fix. The command must exit 0:
+     the control;
+  2. the paths that would have been backed out are put back as the
+     commit's parent has them (`git checkout <parent> -- <paths>`: no
+     merge, so nothing can conflict), and the command must exit non-zero.
+
+That is a different claim, and the event says which one was shown
+(`red_proof.at`, "head" or "commit"): the test caught the bug in the code
+as it stood when the fix was made. It says nothing of the commits since;
+that the test passes at HEAD is the other half, checked first either way.
+A test that does not run against the older code -- it uses something a
+later commit brought -- fails the control, and the close is refused with
+the file in conflict named. The first limit above holds here as well.
+Replayed on this repo's own month-old case: refused at HEAD 2026-10-10,
+closed at the fix commit 2026-10-11 (spec section 9).
 """
+import contextlib
 import shlex
 import shutil
 import sys
@@ -206,6 +225,33 @@ def _conflicts(wt: Path) -> set[str]:
     return {f for f in cp.stdout.split("\0") if f}
 
 
+class _Stuck(Exception):
+    """`commit` cannot be backed out of HEAD: `paths`, which have to be
+    backed out, are in conflict with later changes. Not a refusal yet: red
+    proof is then tried at the fix commit itself (`_at_the_fix_commit`)."""
+
+    def __init__(self, paths: list[str]):
+        super().__init__(paths)
+        self.paths = paths
+
+
+def _checkout(wt: Path, rev: str, paths: list[str], no_hooks: Path):
+    """`git checkout <rev> -- <paths>` in `wt`. Returns git's reply for the
+    call that failed, or None when every call worked.
+
+    The pathspecs are literal: `app/[id]/page.test.ts` is a character class
+    to git, and unmarked it also checks out `app/i/` and `app/d/` (measured
+    2026-10-10). `no_hooks` is an empty directory: with it as the hooks path
+    the checkout cannot run the repo's `post-checkout` (see HOOKS in the
+    module docstring)."""
+    for i in range(0, len(paths), _CHECKOUT_CHUNK):
+        cp = gitutil._run(wt, "-c", f"core.hooksPath={no_hooks}", "checkout", rev, "--",
+                          *(f":(literal){rel}" for rel in paths[i:i + _CHECKOUT_CHUNK]))
+        if cp.returncode != 0:
+            return cp
+    return None
+
+
 def _keep_at_head(wt: Path, head: str, kept: list[str], held: set[str],
                   no_hooks: Path) -> None:
     """Put the paths that stay back as `head` has them, whatever the back-out
@@ -215,55 +261,27 @@ def _keep_at_head(wt: Path, head: str, kept: list[str], held: set[str],
     `head` decides, and not what the commit did to the path. A later commit
     may have deleted a file the fix added, and `git checkout` refuses a path
     its tree does not hold; or brought back a test the fix deleted, and
-    removing that one would fail the command for a missing file.
-
-    The pathspecs are literal: `app/[id]/page.test.ts` is a character class
-    to git, and unmarked it also checks out `app/i/` and `app/d/` (all three
-    measured 2026-10-10). `no_hooks` is an empty directory: with it as the
-    hooks path the checkout cannot run the repo's `post-checkout` (see HOOKS
-    in the module docstring)."""
-    restore = []
+    removing that one would fail the command for a missing file (both
+    measured 2026-10-10)."""
     for rel in kept:
-        if rel in held:
-            restore.append(f":(literal){rel}")
-        else:
+        if rel not in held:
             (wt / rel).unlink(missing_ok=True)
-    for i in range(0, len(restore), _CHECKOUT_CHUNK):
-        cp = gitutil._run(wt, "-c", f"core.hooksPath={no_hooks}", "checkout", head, "--",
-                          *restore[i:i + _CHECKOUT_CHUNK])
-        if cp.returncode != 0:
-            raise Refused(f"red proof could not be run: git could not put the test "
-                          f"files back after backing the fix out ({_said(cp)})")
+    failed = _checkout(wt, head, [rel for rel in kept if rel in held], no_hooks)
+    if failed is not None:
+        raise Refused(f"red proof could not be run: git could not put the test "
+                      f"files back after backing the fix out ({_said(failed)})")
 
 
-def red_proof(root: Path, commit: str, head: str, argv: list[str],
-              timeout_s: float) -> dict:
-    """Show that the command FAILS once `commit` is backed out of `head`,
-    with the control described in the module docstring. Both are full shas,
-    `head` the one the caller records on the event. Returns what the event
-    records; raises `Refused` when red cannot be shown."""
-    base = gitutil.first_parent(root, commit)
-    if base is None:
-        raise Refused(f"red proof backs the fix out, and {commit[:12]} has no parent "
-                      f"commit to go back to")
-    changed = _changed(root, base, commit)
-    named = _named_paths(argv)
-    kept = [rel for status, rel in changed
-            if status == "A" or _is_test_path(rel) or rel in named]
-    backed_out = len(changed) - len(kept)
-    if not backed_out:
-        raise Refused(f"{commit[:12]} changes no existing source file -- only tests, or "
-                      f"only new files. Red proof backs the commit out and reruns the "
-                      f"test, so there is nothing it could take away")
-    held = _held(root, head)
-
-    tmp = Path(tempfile.mkdtemp(prefix="aramid-close-"))
-    wt = tmp / "wt"
-    no_hooks = tmp / "no-hooks"
-    no_hooks.mkdir()
+@contextlib.contextmanager
+def _worktree(root: Path, wt: Path, rev: str, leaks: list[Path]):
+    """A detached worktree of `rev` at `wt`, the repo's `node_modules` linked
+    in when it has one, the way the js_mutation consumer does it. Yields the
+    environment for a run there. The worktree is removed on the way out,
+    whatever happened; one that could not be removed is named and put in
+    `leaks`, and the caller then leaves its directory alone."""
     linked = False
     try:
-        cp = gitutil._run(root, "worktree", "add", "--detach", str(wt), head)
+        cp = gitutil._run(root, "worktree", "add", "--detach", str(wt), rev)
         if cp.returncode != 0:
             raise Refused(f"red proof could not be run: git worktree add failed "
                           f"({_said(cp)})")
@@ -272,17 +290,50 @@ def red_proof(root: Path, commit: str, head: str, argv: list[str],
         except OSError as exc:
             raise Refused(f"red proof could not be run: node_modules could not be "
                           f"linked into the worktree ({exc})") from None
-        env = worktree_import_env(wt)
+        yield worktree_import_env(wt)
+    finally:
+        try:
+            if linked:
+                # BEFORE the directory goes: removing through the link would
+                # reach the repo's real node_modules (js_mutation invariant).
+                js_mutation._unlink_node_modules(wt)
+            gitutil._run(root, "worktree", "remove", "--force", str(wt))
+            gitutil._run(root, "worktree", "prune")
+        except Exception:
+            leaks.append(wt)
+            print(f"aramid: ledger resolve: worktree cleanup leaked at {wt}",
+                  file=sys.stderr)
 
+
+def _how(res, timeout_s: float) -> str:
+    """What a control run did instead of passing."""
+    if res.state is ToolState.OK:
+        return f"exits {res.returncode}"
+    return f"did not run ({_unfinished(res, timeout_s)})"
+
+
+def _named(stuck: list[str]) -> str:
+    """The paths in conflict, as a refusal names them: the first, and how
+    many more."""
+    more = f" and {len(stuck) - 1} more file(s)" if len(stuck) > 1 else ""
+    return f"{stuck[0]}{more}"
+
+
+def _at_head(root: Path, wt: Path, commit: str, head: str, argv: list[str],
+             timeout_s: float, kept: list[str], held: set[str], no_hooks: Path,
+             leaks: list[Path]) -> int:
+    """The proof the module docstring describes first: a worktree of `head`,
+    the control, `commit` backed out, the kept paths put back. Returns the
+    exit code of the run without the fix; raises `_Stuck` when the back-out
+    conflicts in a path that has to be backed out."""
+    with _worktree(root, wt, head, leaks) as env:
         control = _run(argv, root, wt, timeout_s, env)
         if control.state is not ToolState.OK or control.returncode != 0:
-            how = (f"exits {control.returncode}" if control.state is ToolState.OK
-                   else f"did not run ({_unfinished(control, timeout_s)})")
             raise Refused(f"red proof could not be run: the test passes in the repo but "
-                          f"{how} in a clean checkout of HEAD -- it depends on "
-                          f"something that is not committed (an untracked file, a "
-                          f"build step, an install), so a failure without the fix "
-                          f"would prove nothing")
+                          f"{_how(control, timeout_s)} in a clean checkout of HEAD -- it "
+                          f"depends on something that is not committed (an untracked "
+                          f"file, a build step, an install), so a failure without the "
+                          f"fix would prove nothing")
 
         # A merge commit is backed out against its first parent: the branch
         # the fix was merged INTO.
@@ -299,10 +350,7 @@ def red_proof(root: Path, commit: str, head: str, argv: list[str],
                               f"{commit[:12]} out of HEAD ({_said(cp)})")
             stuck = sorted(conflicts - set(kept))
             if stuck:
-                more = f" and {len(stuck) - 1} more file(s)" if len(stuck) > 1 else ""
-                raise Refused(f"red proof could not be run: {commit[:12]} can no longer be "
-                              f"backed out of HEAD -- it conflicts with later changes to "
-                              f"{stuck[0]}{more}")
+                raise _Stuck(stuck)
         _keep_at_head(wt, head, kept, held, no_hooks)
 
         before = _run(argv, root, wt, timeout_s, env)
@@ -314,17 +362,91 @@ def red_proof(root: Path, commit: str, head: str, argv: list[str],
             raise Refused(f"the test also passes with {commit[:12]} backed out -- it does "
                           f"not detect what that commit fixed, so it is not evidence "
                           f"that the finding is fixed")
-        return {"base": base, "control_rc": 0, "pre_fix_rc": before.returncode,
-                "backed_out": backed_out}
-    finally:
+        return before.returncode
+
+
+def _at_the_fix_commit(root: Path, wt: Path, commit: str, head: str, base: str,
+                       argv: list[str], timeout_s: float, backed: list[str],
+                       brought: list[str], stuck: list[str], no_hooks: Path,
+                       leaks: list[Path]) -> int:
+    """The proof for a fix that can no longer be backed out of HEAD (see the
+    module docstring): a worktree of `commit`, the files the command names
+    brought in from `head`, the control, then the paths that have to be
+    backed out (`backed`) put back to `base`. Returns the exit code of the
+    run without the fix."""
+    c = commit[:12]
+    with _worktree(root, wt, commit, leaks) as env:
+        failed = _checkout(wt, head, brought, no_hooks)
+        if failed is not None:
+            raise Refused(f"red proof could not be run: git could not bring the test in "
+                          f"from HEAD ({_said(failed)})")
+        control = _run(argv, root, wt, timeout_s, env)
+        if control.state is not ToolState.OK or control.returncode != 0:
+            raise Refused(f"red proof could not be run: {c} can no longer be backed out "
+                          f"of HEAD -- it conflicts with later changes to {_named(stuck)} "
+                          f"-- and at {c} itself the test {_how(control, timeout_s)}: as "
+                          f"it is at HEAD it does not run against the code as it stood "
+                          f"when the fix was made")
+        # No merge here, and so no `git revert`: every path in `backed` was
+        # modified or deleted by the commit, so its parent holds it. A revert
+        # would refuse once the test from HEAD is in the tree and the commit
+        # touched that file too (measured 2026-10-11).
+        failed = _checkout(wt, base, backed, no_hooks)
+        if failed is not None:
+            raise Refused(f"red proof could not be run: git could not put {c}'s files "
+                          f"back to its parent ({_said(failed)})")
+        before = _run(argv, root, wt, timeout_s, env)
+        if before.state is not ToolState.OK:
+            raise Refused(f"red proof could not be shown: at {c}, with that commit backed "
+                          f"out, the test did not finish ({_unfinished(before, timeout_s)}) "
+                          f"-- that is not a failing test")
+        if before.returncode == 0:
+            raise Refused(f"the test also passes at {c} with that commit backed out -- it "
+                          f"does not detect what that commit fixed, so it is not evidence "
+                          f"that the finding is fixed")
+        return before.returncode
+
+
+def red_proof(root: Path, commit: str, head: str, argv: list[str],
+              timeout_s: float) -> dict:
+    """Show that the command FAILS without `commit`: backed out of `head`,
+    or, when later commits make that impossible, at `commit` itself. Both
+    are full shas, `head` the one the caller records on the event. Returns
+    what the event records, `at` saying which of the two was shown; raises
+    `Refused` when red cannot be shown."""
+    base = gitutil.first_parent(root, commit)
+    if base is None:
+        raise Refused(f"red proof backs the fix out, and {commit[:12]} has no parent "
+                      f"commit to go back to")
+    changed = _changed(root, base, commit)
+    named = _named_paths(argv)
+    kept = [rel for status, rel in changed
+            if status == "A" or _is_test_path(rel) or rel in named]
+    staying = set(kept)
+    backed = [rel for _status, rel in changed if rel not in staying]
+    if not backed:
+        raise Refused(f"{commit[:12]} changes no existing source file -- only tests, or "
+                      f"only new files. Red proof backs the commit out and reruns the "
+                      f"test, so there is nothing it could take away")
+    held = _held(root, head)
+
+    tmp = Path(tempfile.mkdtemp(prefix="aramid-close-"))
+    no_hooks = tmp / "no-hooks"
+    no_hooks.mkdir()
+    leaks: list[Path] = []
+    try:
+        proof = {"base": base, "control_rc": 0, "backed_out": len(backed)}
         try:
-            if linked:
-                # BEFORE the directory goes: removing through the link would
-                # reach the repo's real node_modules (js_mutation invariant).
-                js_mutation._unlink_node_modules(wt)
-            gitutil._run(root, "worktree", "remove", "--force", str(wt))
-            gitutil._run(root, "worktree", "prune")
+            rc = _at_head(root, tmp / "wt", commit, head, argv, timeout_s, kept, held,
+                          no_hooks, leaks)
+            return {"at": "head", **proof, "pre_fix_rc": rc}
+        except _Stuck as stuck:
+            brought = sorted(named & held)
+            rc = _at_the_fix_commit(root, tmp / "wt-fix", commit, head, base, argv,
+                                    timeout_s, backed, brought, stuck.paths, no_hooks,
+                                    leaks)
+            return {"at": "commit", **proof, "pre_fix_rc": rc,
+                    "head_conflicts": len(stuck.paths), "brought": len(brought)}
+    finally:
+        if not leaks:
             shutil.rmtree(tmp, ignore_errors=True)
-        except Exception:
-            print(f"aramid: ledger resolve: worktree cleanup leaked at {wt}",
-                  file=sys.stderr)

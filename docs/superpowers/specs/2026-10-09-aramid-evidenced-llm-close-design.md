@@ -356,7 +356,8 @@ not "at HEAD". The source in both runs is a state that was committed
 (`<commit>` and its parent), so the second limit above does not apply to
 it; its own limit is a test that no longer runs against the old code, which
 the control would refuse. It is a question for
-the operator (8.6).
+the operator (8.6). (Decided 2026-10-11 and built, with two changes to this
+sketch: section 9.1.)
 
 **Second pass, the same evening: four defects in the committed back-out,
 fixed before any push.** The replay's six conflicts included two test files,
@@ -390,8 +391,8 @@ acting on a fresh scratch clone of `c6a1589` and a fresh copy of the ledger
 file): still **refused**, now as "`5eba4d3d1e8f` can no longer be backed out
 of HEAD -- it conflicts with later changes to CHANGELOG.md and 3 more
 file(s)". The four are `CHANGELOG.md`, the user guide and the two source
-files; the two test files no longer count. So the limit stands as written,
-and the question for the operator with it.
+files; the two test files no longer count. So the limit stood as written,
+and the question for the operator with it. Section 9.1 is the answer.
 
 ### 8.3 The event
 
@@ -403,9 +404,11 @@ and the question for the operator with it.
 ```
 
 With red proof, `red_proof` is
-`{"base": "<sha of the commit's first parent>", "control_rc": 0, "pre_fix_rc": N, "backed_out": K}`,
-where K is the number of the commit's paths that were backed out. `via` is
-`cli`; `mcp` is reserved for 8.6.
+`{"at": "head", "base": "<sha of the commit's first parent>", "control_rc": 0, "pre_fix_rc": N, "backed_out": K}`,
+where K is the number of the commit's paths that were backed out. `at` was
+added with the second build; a proof shown at the fix commit records
+`"at": "commit"` and two more keys (9.1). `via` is `cli`; `mcp` is reserved
+for 8.6.
 
 ### 8.4 `ledger show` and `ledger filter --json`
 
@@ -432,7 +435,8 @@ by no longer reporting it, since that route names no resolver.
 - The finding's status is read again after the test ran. A test can run for
   minutes, and a gate or an override may have changed the row meanwhile.
 - Each run is bounded by `[tests].timeout_s`: one at HEAD, and two more with
-  red proof. A value the config loader has already called wrong (text, a
+  red proof, or three more when the proof moves to the fix commit (9.1: the
+  control at HEAD has run by then, and the fix commit needs its own). A value the config loader has already called wrong (text, a
   boolean, zero or less, or a `tests` that is not a table) is read as the
   default, 300 s.
 - `--test` is split POSIX-style, like a string `[tests].command`. On Windows
@@ -444,6 +448,9 @@ by no longer reporting it, since that route names no resolver.
   refusal.
 
 ### 8.6 The MCP tool is not built: three questions for the operator
+
+(All three were answered on 2026-10-11. Section 9 has the answers and what
+was built from each.)
 
 Section 5, question 3 was decided: expose `aramid_ledger_resolve`, and always
 require red proof through it. Found while planning the build: `--test` is a
@@ -491,12 +498,150 @@ scope, because the drain confirms a mutant against the unit suite alone.
   worktree gets a private copy.
 - Five tests build a real worktree and really run the checks, because what
   they pin is the tree git leaves: what is backed out, what stays, what a
-  later rewrite of the fix does, what later changes to the kept paths do,
-  that a kept path with brackets in its name brings back only itself, and
-  that no hook runs between the two runs.
+  later rewrite of the fix does (since 9.1: the proof at the fix commit,
+  with a check written after the fix brought in from HEAD), what later
+  changes to the kept paths do, that a kept path with brackets in its name
+  brings back only itself, and that no hook runs between the two runs.
 - The rest decide nothing about the tree, so `git worktree`, `git revert`
   and `git checkout` answer without acting and the runs are scripted.
 
 The safety net of section 6 is in `tests/unit/test_llm_consumer.py`: a
 finding closed on evidence that a review raises again is `open` again, and
 an overridden one is not raised and stays `overridden`.
+
+## 9. Second build: the operator's decisions of 2026-10-11
+
+The three questions of 8.6, and one from the plan, were asked one at a time.
+Each answer was the recommended option.
+
+| # | Question | Decision |
+|---|----------|----------|
+| 1 | Shape of the MCP tool (8.6) | Test selectors only, appended to a command the repo declares in tracked config. |
+| 2 | Red proof when the fix cannot be backed out of HEAD (8.2) | Show it at the fix commit instead; the event says which proof it was. |
+| 3 | An agent's command-line close without `--red-proof` (8.6) | The agent hook refuses it. |
+| 4 | FN-41, the `claude -p` reviewer | Restrict it and prove the restriction with one or two real calls. Plan item FN-41, not this spec. |
+
+### 9.1 Red proof at the fix commit (built 2026-10-11)
+
+When the back-out of HEAD conflicts in a path that has to be backed out, the
+proof is no longer refused. HEAD's worktree is removed and a second one is
+checked out at `<commit>`:
+
+1. The files the command names that HEAD holds are brought in as HEAD has
+   them (`git checkout <head> -- <paths>`, literal pathspecs, hooks off).
+   The test on offer is the one at HEAD. It may have been written after the
+   fix, and then `<commit>` does not have it.
+2. The command must exit 0 there. That is the control. If it does not, the
+   close is refused: "`<commit>` can no longer be backed out of HEAD -- it
+   conflicts with later changes to `<file>` [and N more file(s)] -- and at
+   `<commit>` itself the test exits N: as it is at HEAD it does not run
+   against the code as it stood when the fix was made".
+3. The paths that would have been backed out at HEAD are put back as the
+   commit's first parent has them (`git checkout <parent> -- <paths>`).
+   Each of them was modified or deleted by the commit, so the parent holds
+   it. The commit's tests, the files it added and the files the command
+   names stay, by the rule of 8.2.
+4. The command must exit non-zero.
+
+Two things in the sketch of 8.2 and in the first draft of this section were
+dropped before the build:
+
+- "Run the commit's own copy of the test first, and bring HEAD's in only if
+  that fails." That is two controls, and which of them passed would decide
+  which test the proof is about. One rule instead: the test on offer is
+  HEAD's, always.
+- "Back the commit out with `git revert`; always clean, because it is the
+  tip." It is not clean once HEAD's copy of a test is in the tree and the
+  commit touched that file too: git refuses to revert over the local change
+  [V, 2026-10-11, throwaway repository]. A checkout of the parent's copy of
+  each path needs no merge.
+
+What it proves: the test, as it is at HEAD, passes with the fix and fails
+without it, in the code as it stood when the fix was made. With the first
+check of every close (the command exits 0 at HEAD) that is the evidence
+offered. It does not prove "fails without the fix at HEAD", and the event
+says which was shown:
+
+    "red_proof": {"at": "commit", "base": "<parent sha>", "control_rc": 0,
+                  "pre_fix_rc": N, "backed_out": K,
+                  "head_conflicts": M, "brought": B}
+
+M is the number of paths in conflict at HEAD among those that had to be
+backed out, B the number of files brought in from HEAD. The ordinary proof
+records `"at": "head"` and the four keys of 8.3. The line the command prints
+ends "failed (exit N) without the fix as the code stood at `<commit>`", and
+`ledger show` prints "red proof at the fix commit (it can no longer be backed
+out of HEAD: M file(s) in conflict): exit N with it backed out against
+`<parent>` -- K of its path(s); B test file(s) brought in from HEAD".
+
+Not moved to the fix commit: a commit with nothing to back out, a control
+that fails at HEAD, a test that passes without the fix at HEAD, and a
+back-out that git refuses without leaving a conflict it can list. Those say
+something about the test, the commit or git, not about later edits.
+
+A confirmed critical closes on either proof. The question was asked because
+such a finding had lost its exit (8.2), and a proof at the fix commit gives
+it back.
+
+Limits:
+
+- The first of 8.2 holds here too: test support the commit modified goes
+  back with the fix.
+- The second does not arise in the form 8.2 gives it, because no later
+  commit is in this tree. The tree without the fix is still one nobody
+  committed: the parent's source, with the commit's own tests and added
+  files, and HEAD's copy of the named test.
+- A new one. Nothing here shows that `<commit>` is what makes the test pass
+  at HEAD. A later commit may have replaced the fix with another; the test
+  passing at HEAD then shows the bug gone, but not by the commit named. The
+  proof at HEAD does not have that gap.
+
+**Replay 3 (2026-10-11 07:37Z).** The case of 8.2 again: the working tree's
+code, acting on a fresh scratch clone at `7a016ca` and a fresh copy of the
+ledger file. **Closed.** `5eba4d3` changed eight paths. Three are tests and
+stay. Five are backed out, and four of those conflict at HEAD, 231 commits
+later: the two source files with later edits, `CHANGELOG.md` and the user
+guide. The named test is in `tests/unit/test_mutation_gate.py`, a file that
+commit itself wrote to. HEAD's copy of it was brought in, the test passed at
+`5eba4d3`, and it failed (exit 1) with the five paths put back to `5e445c6`.
+The real ledger file's hash was the same before and after.
+
+Tests: the real-worktree test of a later rewrite now ends in a close at the
+fix commit, with a check that only HEAD holds. Twelve scripted tests pin the
+order of git's calls there, what is brought in, both refusals of the
+control, both refusals of the run without the fix, each git failure, that
+each worktree gets and loses its own `node_modules` link, and that a
+confirmed critical closes on this proof. Every limb was perturbed in a
+scratch copy of the tree and seen to fail its test.
+
+### 9.2 The MCP tool: `aramid_ledger_resolve` (decided, not built yet)
+
+Arguments: `id`, `commit`, `tests` (one or more selectors), `reason`.
+
+- The command is `[tests].select_command` from the `aramid.toml` that HEAD
+  holds (read with `git show HEAD:aramid.toml`, so neither the user-level
+  config nor an uncommitted edit can supply it), with the selectors appended.
+  A repo that declares none is refused, naming the key.
+- A selector is `<path>`, or `<path>::<rest>` when the declared command is
+  pytest. `<path>` must be a file HEAD holds, and a selector may not start
+  with `-`. So a selector is only ever a positional argument that names
+  committed test code: never an option, never a file outside the repository.
+- A selector is also held to a set of plain characters. On Windows a
+  declared command such as `npx vitest run` starts a `.cmd` shim, and
+  cmd.exe reads `&`, `|`, `<`, `>`, `^`, `%` and a double quote in an
+  argument as syntax.
+- Red proof is always run. The event records `"via": "mcp"`.
+- Everything else is the command-line close: same checks, same refusals,
+  same event.
+
+### 9.3 The agent hook rule (decided, not built yet)
+
+The pre-tool-use hook also reads an `aramid ledger resolve` command line:
+`--fixed` without `--red-proof` is an advisory while the agent surface
+bakes and a denial once it is armed, like a hook bypass. Token-level, like
+the git rules: the values of `--test`, `--reason` and `--fixed` are skipped,
+so text inside them cannot match, and the abbreviations argparse accepts
+(`--fix`, `--red`) are read as the flags they stand for. The table of flags
+is checked by a test against the real parser, so a flag added to `ledger
+resolve` later cannot go unread. Launch forms: `aramid`, `aramid.exe`,
+`aramid.cmd` and `python [-P] -m aramid`.

@@ -184,7 +184,15 @@ def _close_evidence(event) -> list[str]:
             or payload.get("auto_resolved") != EVIDENCED_CLOSE:
         return []
     proof = payload.get("red_proof")
-    if isinstance(proof, dict):
+    if isinstance(proof, dict) and proof.get("at") == "commit":
+        # A different claim from a proof at HEAD, so a line of its own: the
+        # test caught the bug as the code stood when the fix was made.
+        red = (f"red proof at the fix commit (it can no longer be backed out of HEAD: "
+               f"{proof.get('head_conflicts')} file(s) in conflict): exit "
+               f"{proof.get('pre_fix_rc')} with it backed out against {proof.get('base')} "
+               f"-- {proof.get('backed_out')} of its path(s); {proof.get('brought')} test "
+               f"file(s) brought in from HEAD")
+    elif isinstance(proof, dict):
         red = (f"red proof: exit {proof.get('pre_fix_rc')} with that commit backed out "
                f"against {proof.get('base')} -- {proof.get('backed_out')} of its path(s); "
                f"its tests, the files it added and the files the command names stayed")
@@ -686,8 +694,10 @@ def cmd_ledger_resolve_fixed(root, finding_id: str, commit: str, test: str, reas
 
     The evidence, all of it on the event: the commit, the test command as
     split, the HEAD it passed at, and -- with `red_proof` -- that it failed
-    once the commit was backed out (`evidenced_close.red_proof`). A
-    confirmed-critical finding closes only with red proof; `override`
+    once the commit was backed out (`evidenced_close.red_proof`): out of
+    HEAD, or at the commit itself when later changes to its lines make that
+    impossible. The event's `red_proof.at` says which. A confirmed-critical
+    finding closes only with red proof, and either one counts; `override`
     refuses those outright, so before this they had no exit that said
     "fixed".
 
@@ -779,8 +789,13 @@ def cmd_ledger_resolve_fixed(root, finding_id: str, commit: str, test: str, reas
                             payload={"auto_resolved": EVIDENCED_CLOSE, "commit": sha,
                                      "test_argv": argv, "test_rc": 0, "reason": reason,
                                      "head": head, "red_proof": proof, "via": via}))
-        shown = (f"failed (exit {proof['pre_fix_rc']}) without the fix" if proof
-                 else "red proof not run")
+        if not proof:
+            shown = "red proof not run"
+        elif proof["at"] == "commit":
+            shown = (f"failed (exit {proof['pre_fix_rc']}) without the fix as the code "
+                     f"stood at {sha[:12]}")
+        else:
+            shown = f"failed (exit {proof['pre_fix_rc']}) without the fix"
         print(f"aramid: ledger: {finding_id} closed as fixed in {sha[:12]} -- the test "
               f"passes at HEAD, {shown} ({reason})")
         return 0

@@ -38,16 +38,24 @@ to publish a tag that disagrees with it.
   --no-commit`; later commits stay), which must fail. The commit's test
   files, the files it added and any file the command names are kept as at
   HEAD. It is refused when the commit changes no existing source file, when
-  a later commit changed the same lines of a file that has to be backed out
-  (the refusal names the file), when the control fails, and when the test
-  passes or does not finish without the fix. **A confirmed critical closes
-  only with `--red-proof`.**
+  the control fails, and when the test passes or does not finish without the
+  fix. **A confirmed critical closes only with `--red-proof`.**
 
-  Red proof has a limit that shows on old fixes: git backs out the whole
+  An old fix often cannot be backed out of HEAD: git backs out the whole
   commit, so a later change that overlaps it anywhere outside the kept
-  files, a `CHANGELOG` included, ends the proof. Tried on this repo's own
-  month-old case, it was refused; the close without `--red-proof` worked.
-  The user guide lists this and the two things red proof cannot tell.
+  files, a `CHANGELOG` included, stops the back-out. Red is then shown where
+  the fix was made, in a second worktree checked out at the commit: the
+  files the command names are brought in as HEAD has them and the command
+  must pass (the control); the files that would have been backed out are put
+  back as the commit's parent has them and it must fail. That is a different
+  claim, "the test caught the bug as the code stood when the fix was made",
+  and the event, the printed line and `ledger show` each say which one was
+  shown. Either one closes a confirmed critical. If the test at HEAD does
+  not run against the older code, the close is refused and the file in
+  conflict is named. The test then runs four times in all, not three, each
+  bounded by `[tests].timeout_s`. Tried on this repo's own month-old case,
+  231 commits behind HEAD with four files in conflict: it closed. The user
+  guide lists the three things red proof cannot tell.
 
   The close writes `fixed`, with the commit, the command, the HEAD it passed
   at, the reason and the red proof on the event, so a later review that
