@@ -154,6 +154,31 @@ to publish a tag that disagrees with it.
 
 ### Security
 
+- **aramid never takes a program from the repository it is judging (FN-46,
+  FN-47).** A program named by a bare word is found by the system, and
+  Windows looks in the current directory before `PATH`. aramid's current
+  directory is the repo. So a `gitleaks.bat`, a `ruff.cmd` or a
+  `python.cmd` in a repo's root was run in place of the tool, and a
+  `git.exe`, a `taskkill.exe`, a `cmd.exe` or a `schtasks.exe` there in
+  place of the system's own (measured). Committed, such a file stands
+  in for the secret scanner, or for git itself, on the machine of everyone
+  who runs the gate in that repo. On other systems an empty `PATH` entry did
+  the same, and on every system a bare name was taken as a file of the
+  current directory when one of that name lay there. Now:
+  - a tool is looked for on `PATH`, in pip's script directories and in
+    `~/.aramid/tools`, and nowhere else. The current directory counts only
+    where `PATH` names it;
+  - git and the system's programs are started by the absolute path they
+    have: in System32 and then along `PATH` on Windows, along `PATH`
+    elsewhere;
+  - **what changes for you:** a `[tests].command` that names a file of the
+    repo's root by a bare word (`command = ["runtests"]`) no longer finds
+    it. Write `./runtests`. `aramid doctor` reports such a command and says
+    so. A repo that has `.` on `PATH` keeps what it had.
+
+  What a program aramid starts does when it starts programs of its own
+  (git and its hooks, npm, your test suite) is that program's lookup, not
+  aramid's.
 - **The `claude-cli` reviewer is started with no tools, no MCP servers and
   none of your Claude Code setup (FN-41).** The reviewer reads a packet
   built from a diff, so part of its prompt is written by whoever wrote the

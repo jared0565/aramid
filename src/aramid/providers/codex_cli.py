@@ -5,9 +5,9 @@ which the LAST agent_message item is the reply. The parser is deliberately
 lenient (skip unparseable lines) because the event vocabulary evolves
 between CLI versions -- only "no agent_message at all" is malformed."""
 import json
-import shutil
 import sys
 
+from aramid import toolpath
 from aramid.providers import base, spend
 from aramid.providers.base import ProviderResponse
 
@@ -16,7 +16,7 @@ _QUOTA_MARKERS = ("usage limit", "rate limit", "quota")
 
 
 def installed() -> bool:
-    return shutil.which("codex") is not None
+    return toolpath.which("codex") is not None
 
 
 def available(cfg) -> bool:
@@ -24,7 +24,7 @@ def available(cfg) -> bool:
 
 
 def review(prompt: str, model: str, timeout_s: float, *, effort: str = "") -> ProviderResponse:
-    exe = shutil.which("codex")
+    exe = toolpath.which("codex")
     if exe is None:
         return ProviderResponse(text="", error=base.ERR_UNAVAILABLE)
     argv = [exe, "exec", "--json", "--sandbox", "read-only", "--skip-git-repo-check"]

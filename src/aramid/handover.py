@@ -24,6 +24,8 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 
+from aramid import toolpath
+
 PATH = Path(".aramid") / "handover.json"
 ARCHIVE = Path(".aramid") / "handovers"
 SCHEMA = 1
@@ -162,8 +164,9 @@ class UnsafePath(RuntimeError):
 
 def _head(root: Path) -> str | None:
     try:
-        run = subprocess.run(["git", "rev-parse", "--verify", "-q", "HEAD"],  # noqa: S603,S607
-                             cwd=root, capture_output=True, text=True, timeout=10)
+        run = subprocess.run(  # noqa: S603
+            toolpath.launchable(["git", "rev-parse", "--verify", "-q", "HEAD"]),
+            cwd=root, capture_output=True, text=True, timeout=10)
     except (OSError, subprocess.SubprocessError):
         return None
     # the same answer as `sha if rc == 0 and sha else None` for every input,

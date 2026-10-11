@@ -208,18 +208,28 @@ def _no_reachable_providers(tmp_path, monkeypatch):
     inherits; the `which` filter and the spend redirect are in-process only
     (no test spawns a consumer-running drain: the one `drain` child is
     `--help`). A later monkeypatch in a test body still wins, which is how the
-    provider unit tests stub a binary or a key of their own."""
+    provider unit tests stub a binary or a key of their own.
+
+    `toolpath.which` asks `shutil.which` first, so it is covered by the same
+    filter. Its second look, `toolpath._on_path`, walks PATH by itself and is
+    hidden from the two names as well (FN-46)."""
     monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
     monkeypatch.delenv("OLLAMA_API_KEY", raising=False)
-    real_which = shutil.which
+    real_which, real_on_path = shutil.which, toolpath._on_path
+
+    def provider(cmd) -> bool:
+        return os.path.splitext(os.path.basename(os.fspath(cmd)))[0].lower() in _PROVIDER_CLIS
 
     def which(cmd, *args, **kwargs):
-        stem = os.path.splitext(os.path.basename(os.fspath(cmd)))[0].lower()
-        if stem in _PROVIDER_CLIS:
+        if provider(cmd):
             return None
         return real_which(cmd, *args, **kwargs)
 
+    def on_path(name):
+        return None if provider(name) else real_on_path(name)
+
     monkeypatch.setattr(shutil, "which", which)
+    monkeypatch.setattr(toolpath, "_on_path", on_path)
     monkeypatch.setattr(spend, "spend_path", lambda: tmp_path / "llm_spend.jsonl")
 
 

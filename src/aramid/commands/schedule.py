@@ -20,7 +20,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 
 from aramid import config as config_mod
-from aramid import drain_limits
+from aramid import drain_limits, toolpath
 
 TASK_NAME = "aramid-drain"
 
@@ -93,8 +93,8 @@ def _installed_task_xml() -> str | None:
     try:
         # S603 justification: argv comes from _query_xml_argv(), a fixed
         # literal list -- no external input reaches it.
-        cp = subprocess.run(_query_xml_argv(), capture_output=True, text=True,  # noqa: S603
-                            errors="replace", timeout=30)
+        cp = subprocess.run(toolpath.launchable(_query_xml_argv()),  # noqa: S603
+                            capture_output=True, text=True, errors="replace", timeout=30)
     except (OSError, subprocess.SubprocessError):
         return None
     return cp.stdout if cp.returncode == 0 else None
@@ -143,8 +143,8 @@ def installed_task_limit_minutes() -> int | None:
     try:
         # S603 justification: argv comes from _query_xml_argv(), a fixed
         # literal list -- no external input reaches it.
-        cp = subprocess.run(_query_xml_argv(), capture_output=True, text=True,  # noqa: S603
-                            errors="replace", timeout=30)
+        cp = subprocess.run(toolpath.launchable(_query_xml_argv()),  # noqa: S603
+                            capture_output=True, text=True, errors="replace", timeout=30)
     except (OSError, subprocess.SubprocessError):
         return None
     if cp.returncode != 0:
@@ -279,12 +279,13 @@ def _read_crontab() -> str:
     aramid's single line. An aborted install is a message the user can act on;
     a destroyed crontab is not recoverable. When in doubt, refuse.
     """
-    # S607 justification: `crontab` is resolved from PATH deliberately. Its
-    # location differs across distributions and macOS (/usr/bin vs /bin), so an
-    # absolute path would be wrong more often than it was right. argv is fixed
-    # here -- no external input reaches it.
-    cp = subprocess.run(["crontab", "-l"], capture_output=True, text=True,  # noqa: S607
-                        errors="replace")
+    # S603 justification: `crontab` is found on PATH (`toolpath.program`) and
+    # started by the absolute path it has there. Its location differs across
+    # distributions and macOS (/usr/bin vs /bin), so a fixed one would be
+    # wrong more often than it was right. argv is fixed here -- no external
+    # input reaches it.
+    cp = subprocess.run(toolpath.launchable(["crontab", "-l"]),  # noqa: S603
+                        capture_output=True, text=True, errors="replace")
     if cp.returncode == 0:
         return cp.stdout
     err = (cp.stderr or "").strip()
@@ -299,9 +300,10 @@ def _read_crontab() -> str:
 
 def _write_crontab(text: str) -> None:
     body = text.strip("\n")
-    # S607 justification: as in _read_crontab -- fixed argv, PATH-resolved by
-    # design. The crontab BODY arrives on stdin, never as an argument.
-    cp = subprocess.run(["crontab", "-"], input=(body + "\n") if body else "",  # noqa: S607
+    # S603 justification: as in _read_crontab -- fixed argv, the program
+    # found on PATH. The crontab BODY arrives on stdin, never as an argument.
+    cp = subprocess.run(toolpath.launchable(["crontab", "-"]),  # noqa: S603
+                        input=(body + "\n") if body else "",
                         capture_output=True, text=True, errors="replace")
     if cp.returncode != 0:
         raise RuntimeError(f"crontab write failed: {cp.stderr.strip()}")
@@ -361,17 +363,19 @@ def cmd_schedule(root, action: str) -> int:
                 # each argv comes from a module-local `_*_argv()` builder made
                 # of fixed flags plus TASK_NAME (a constant) and a
                 # tempfile-generated path aramid created itself. No shell, and
-                # nothing external reaches argv.
-                cp = subprocess.run(_create_argv(xml_path), capture_output=True, text=True,  # noqa: S603
-                                    errors="replace")
+                # nothing external reaches argv. schtasks is started by its
+                # absolute path (`toolpath.program`), as every program aramid
+                # names by a bare word is (FN-47).
+                cp = subprocess.run(toolpath.launchable(_create_argv(xml_path)),  # noqa: S603
+                                    capture_output=True, text=True, errors="replace")
             finally:
                 xml_path.unlink(missing_ok=True)
         elif action == "remove":
-            cp = subprocess.run(_delete_argv(), capture_output=True, text=True,  # noqa: S603
-                                errors="replace")
+            cp = subprocess.run(toolpath.launchable(_delete_argv()),  # noqa: S603
+                                capture_output=True, text=True, errors="replace")
         else:   # "status": cmd_schedule refused every other action above
-            cp = subprocess.run(_query_argv(), capture_output=True, text=True,  # noqa: S603
-                                errors="replace")
+            cp = subprocess.run(toolpath.launchable(_query_argv()),  # noqa: S603
+                                capture_output=True, text=True, errors="replace")
             print(cp.stdout.strip() or "aramid-drain: not installed")
             return 0 if cp.returncode == 0 else 3
         if cp.returncode != 0:

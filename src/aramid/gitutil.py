@@ -2,6 +2,7 @@ import re
 import subprocess
 from pathlib import Path
 
+from aramid import toolpath
 from aramid.runners import base as runners_base
 
 class NotARepo(Exception): ...
@@ -25,12 +26,13 @@ def _run(root: Path, *args: str) -> subprocess.CompletedProcess:
     what = " ".join(["git", *args[:1]])
     if runners_base.closed():
         raise GitTimeout(f"{what} not started: the drain's hard deadline has passed")
-    # S603/S607 justification: aramid's single git wrapper -- "git" is a
-    # fixed literal (_GIT, never derived from *args; only tests replace it)
-    # and every call site passes fixed subcommands (rev-parse, show,
-    # rev-list, diff, ls-files, log, merge-base, worktree); relying on PATH
-    # to resolve "git" is standard and matches how git itself is invoked by
-    # every other tool on the host.
+    # S603 justification: aramid's single git wrapper -- "git" is a fixed
+    # literal (_GIT, never derived from *args; only tests replace it) and
+    # every call site passes fixed subcommands (rev-parse, show, rev-list,
+    # diff, ls-files, log, merge-base, worktree). It is started by the
+    # absolute path `toolpath.program` finds for it, never by the bare name:
+    # Windows looks for a bare name in the current directory before PATH,
+    # and that directory is the repo being judged (FN-47).
     # encoding="utf-8": git emits UTF-8 by default regardless of host locale.
     # Without this, text=True decodes with the locale-preferred codec, which
     # mojibakes (or raises UnicodeDecodeError on undefined bytes) on cp1252
@@ -38,7 +40,8 @@ def _run(root: Path, *args: str) -> subprocess.CompletedProcess:
     # errors="replace": never let a decode hiccup crash triage's per-commit
     # diff scan; a best-effort mangled character is acceptable, a raised
     # exception is not.
-    proc = subprocess.Popen([*_GIT, *args], cwd=str(root),  # noqa: S603,S607
+    proc = subprocess.Popen(toolpath.launchable([*_GIT, *args]),  # noqa: S603
+                            cwd=str(root),
                             stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                             text=True, encoding="utf-8", errors="replace",
                             **runners_base.own_group())

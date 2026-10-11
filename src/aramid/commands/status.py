@@ -14,6 +14,7 @@ from pathlib import Path
 from aramid import config as config_mod
 from aramid import health
 from aramid import review
+from aramid import toolpath
 from aramid import toolset
 from aramid.ledger import Ledger
 from aramid.models import EventType
@@ -401,8 +402,9 @@ def _scheduled_drain_line() -> str:
         if sys.platform == "win32":
             # S603 justification: argv comes from schedule._query_xml_argv(),
             # a fixed literal list -- no external input reaches it.
-            cp = subprocess.run(schedule_mod._query_xml_argv(), capture_output=True,  # noqa: S603
-                                text=True, errors="replace")
+            cp = subprocess.run(  # noqa: S603
+                toolpath.launchable(schedule_mod._query_xml_argv()),
+                capture_output=True, text=True, errors="replace")
             installed = cp.returncode == 0
             if installed:
                 # FN-14: a task installed before the time-limit fix is killed

@@ -5,7 +5,7 @@ from datetime import datetime, timezone
 
 import pytest
 
-from aramid import fleet, notices
+from aramid import fleet, notices, toolpath
 from aramid.commands import schedule as schedule_mod
 from aramid.commands.status import cmd_status
 
@@ -44,7 +44,7 @@ def _no_real_schtasks(monkeypatch):
     real_run = subprocess.run
 
     def fake_run(argv, *a, **k):
-        if argv and argv[0] == "schtasks":
+        if argv and argv[0] == toolpath.program("schtasks"):
             class _R:
                 returncode = 1
                 stdout = ""

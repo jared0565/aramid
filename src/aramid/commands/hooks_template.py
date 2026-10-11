@@ -22,7 +22,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-from aramid import hooks
+from aramid import hooks, toolpath
 
 CONFIG_KEY = "init.templateDir"
 _ACTIONS = ("install", "remove", "status")
@@ -34,13 +34,16 @@ def _git_config_get(key: str) -> str | None:
     # S603/S607 justification, and it covers _git_config_set/_unset below too:
     # argv is fixed, and `key` reaches git as a single ARGUMENT of an argv
     # list -- there is no shell, so no metacharacter can be interpreted. `git`
-    # is resolved from PATH deliberately: its location differs across
-    # platforms and installers (/usr/bin, /usr/local/bin, Program Files), so
-    # an absolute path would be wrong far more often than right. Every caller
-    # passes CONFIG_KEY, a module constant, not external input.
+    # is found on PATH by `toolpath.program` and started by the absolute path
+    # it has there: its location differs across platforms and installers
+    # (/usr/bin, /usr/local/bin, Program Files), so a fixed one would be
+    # wrong far more often than right, and the bare name is looked for in
+    # the current directory first on Windows (FN-47). Every caller passes
+    # CONFIG_KEY, a module constant, not external input.
     try:
-        cp = subprocess.run(["git", "config", "--global", "--get", key],  # noqa: S603,S607
-                            capture_output=True, text=True, check=False)
+        cp = subprocess.run(  # noqa: S603
+            toolpath.launchable(["git", "config", "--global", "--get", key]),
+            capture_output=True, text=True, check=False)
     except OSError:
         return None
     value = cp.stdout.strip()
@@ -48,13 +51,15 @@ def _git_config_get(key: str) -> str | None:
 
 
 def _git_config_set(key: str, value: str) -> None:
-    subprocess.run(["git", "config", "--global", key, value],  # noqa: S603,S607
-                   capture_output=True, text=True, check=False)
+    subprocess.run(  # noqa: S603
+        toolpath.launchable(["git", "config", "--global", key, value]),
+        capture_output=True, text=True, check=False)
 
 
 def _git_config_unset(key: str) -> None:
-    subprocess.run(["git", "config", "--global", "--unset", key],  # noqa: S603,S607
-                   capture_output=True, text=True, check=False)
+    subprocess.run(  # noqa: S603
+        toolpath.launchable(["git", "config", "--global", "--unset", key]),
+        capture_output=True, text=True, check=False)
 
 
 def _same_path(a: str | None, b: Path) -> bool:

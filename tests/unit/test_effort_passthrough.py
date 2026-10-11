@@ -1,5 +1,6 @@
 import io
 import json
+import shutil
 
 import pytest
 
@@ -27,7 +28,7 @@ def _capture_argv(monkeypatch, module):
         return (0, out, "")
     monkeypatch.setattr(base, "run_provider_subprocess", fake_run)
     # ensure the exe resolves
-    monkeypatch.setattr(module.shutil, "which", lambda name: f"/usr/bin/{name}")
+    monkeypatch.setattr(shutil, "which", lambda name: f"/usr/bin/{name}")
     return seen
 
 

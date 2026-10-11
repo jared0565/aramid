@@ -17,7 +17,7 @@ import shutil
 import sys
 from pathlib import Path
 
-from aramid import config
+from aramid import config, toolpath
 from aramid.providers import base, spend
 from aramid.providers import claude_cli, codex_cli, ollama_cloud, openrouter  # noqa: F401  (register)
 
@@ -52,6 +52,14 @@ def test_a_provider_cli_on_path_is_not_found(tmp_path, monkeypatch):
     assert shutil.which("codex.cmd") is None
     assert shutil.which(Path("claude")) is None
     assert shutil.which(str(tmp_path / "planted-bin" / "codex")) is None
+    # The lookup the providers ask, and the walk of PATH that stands behind
+    # it when `shutil.which` answers from the current directory (FN-46).
+    assert toolpath.which("notcodex") is not None
+    assert toolpath.which("codex") is None
+    assert toolpath.which("claude") is None
+    assert toolpath._on_path("notcodex") is not None
+    assert toolpath._on_path("codex") is None
+    assert toolpath._on_path("claude") is None
     assert not codex_cli.installed()
     assert not claude_cli.installed()
 

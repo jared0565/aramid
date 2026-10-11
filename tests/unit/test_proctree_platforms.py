@@ -22,7 +22,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from aramid import proctree
+from aramid import proctree, toolpath
 
 # ---------------------------------------------------------------- ps (macOS)
 
@@ -47,8 +47,8 @@ def _fake_run(monkeypatch, returncode):
 def test_ps_sampler_reads_the_tree_from_one_ps_listing(monkeypatch):
     calls = _fake_run(monkeypatch, 0)
     assert proctree._sample_ps(10) == {10: (0, 150), 11: (0, 25), 12: (0, 6000)}
-    assert calls == [(_PS_ARGV, {"capture_output": True, "text": True,
-                                 "timeout": proctree._PS_TIMEOUT_S})]
+    assert calls == [(toolpath.launchable(_PS_ARGV), {"capture_output": True, "text": True,
+                                                      "timeout": proctree._PS_TIMEOUT_S})]
 
 
 @pytest.mark.parametrize("returncode", [1, 2, -9])

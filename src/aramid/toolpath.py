@@ -15,10 +15,17 @@ paths cannot hold that invariant, so there is exactly one, here.
 
 Search order is deliberate:
   1. PATH            -- the operator's own toolchain always wins. aramid's
-                        managed copy is a fallback, never an override.
+                        managed copy is a fallback, never an override. PATH,
+                        and not the current directory, which is the repo
+                        being judged: see `which`.
   2. console scripts -- pip installs (ruff/semgrep/pip-audit) can land in a
                         user-scheme scripts dir that is not on PATH.
   3. ~/.aramid/tools -- binaries aramid downloaded itself (gitleaks).
+
+A second way to a program asks none of that: `subprocess.run(["git", ...])`
+leaves the search to the system, which on Windows starts with the current
+directory. `program` and `launchable` below find the file first, so that
+no launch in aramid names its program by a bare word.
 """
 import os
 import shutil
@@ -178,6 +185,134 @@ def divergences() -> list[Divergence]:
     return [d for d in found if d is not None]
 
 
+def _spellings(name: str) -> list[str]:
+    """The file names a program called `name` may have in a directory. On
+    Windows: the name with each of PATHEXT's extensions in turn, and before
+    them the name itself when it already ends in one, as cmd.exe and
+    `shutil.which` read it. Anywhere else: the name."""
+    if sys.platform != "win32":
+        return [name]
+    exts = [ext for ext in (os.environ.get("PATHEXT") or ".COM;.EXE;.BAT;.CMD").split(";")
+            if ext]
+    spelled = [name + ext for ext in exts]
+    if any(name.upper().endswith(ext.upper()) for ext in exts):
+        spelled.insert(0, name)
+    return spelled
+
+
+def _default_dirs() -> list[str]:
+    """Python's default search path (`os.defpath`), less the `.` that leads
+    it on Windows."""
+    return [entry for entry in os.defpath.split(os.pathsep) if entry and entry != os.curdir]
+
+
+def _path_dirs() -> list[str]:
+    """The directories PATH names, in its order. An empty entry names none:
+    the system reads it as the current directory, and nothing here does.
+    With no PATH at all the list is the default one (`_default_dirs`)."""
+    path = os.environ.get("PATH")
+    if path is None:
+        return _default_dirs()
+    return [entry for entry in path.split(os.pathsep) if entry]
+
+
+def _on_path(name: str) -> str | None:
+    """The bare `name` as the directories PATH names hold it, first hit, and
+    nowhere else (`_path_dirs`)."""
+    for entry in _path_dirs():
+        for spelled in _spellings(name):
+            candidate = os.path.join(entry, spelled)
+            if os.path.isfile(candidate) and os.access(candidate, os.X_OK):
+                return candidate
+    return None
+
+
+def which(name: str) -> str | None:
+    """`shutil.which(name)`, except that a bare name is not answered from the
+    current directory unless PATH names it. Every lookup aramid makes of a
+    program goes through here, and `shutil.which` is called nowhere else. (A
+    launch that asks no lookup, `subprocess.run(["git", ...])`, has the same
+    hazard from the system's side: see `program`.)
+
+    Windows looks in the current directory BEFORE PATH (unless
+    NoDefaultCurrentDirectoryInExePath is set), and `shutil.which` does as
+    Windows does. aramid's current directory is the repo it is judging. So a
+    `gitleaks.bat`, a `ruff.cmd` or a `python.cmd` in a repo's root was
+    started in place of the tool (measured 2026-10-11, FN-46). Committed, it
+    replaces the secret scanner with a file of the repo's own. Not
+    committed, it runs a program for whoever can write a file there. An
+    empty PATH entry does the same on other systems.
+
+    The answer `shutil.which` gives is kept whenever it is not such a hit,
+    so its order and its reading of PATHEXT are the platform's own. A hit
+    that is a file of the current directory is asked again of PATH alone
+    (`_on_path`): found there when PATH names that directory, as `.` or in
+    full, and otherwise wherever else PATH has the program."""
+    hit = shutil.which(name)
+    if hit is None or os.path.dirname(name):
+        return hit
+    if os.path.dirname(hit) in ("", os.curdir) and os.path.exists(hit):
+        return _on_path(name)
+    return hit
+
+
+def _launch_dirs() -> list[str]:
+    """Where the system looks for a program that is started by a bare name,
+    with the current directory left out. Windows: System32 and then PATH,
+    the order CreateProcess has them in. Anywhere else: PATH, and the
+    default one when PATH names no directory."""
+    path = _path_dirs()
+    if sys.platform == "win32":
+        system = os.path.join(os.environ.get("SystemRoot") or r"C:\Windows", "System32")
+        return [system, *path]
+    return path or _default_dirs()
+
+
+def program(name: str) -> str:
+    """The absolute path of the program that a launch of the bare `name` is
+    to start. Every launch in aramid that names its program by a bare word
+    (`git`, `taskkill`, `schtasks`, `cmd`, `crontab`, `ps`) asks here first,
+    so that the system does no search of its own.
+
+    Handed a bare `git`, Windows looks in the directory the Python
+    interpreter was started from, then in the CURRENT DIRECTORY, then in
+    System32, and only then on PATH. aramid's current directory is the repo
+    it is judging. Measured 2026-10-11 (FN-47): with a `git.exe`, a
+    `taskkill.exe`, a `tasklist.exe`, a `cmd.exe` or a `schtasks.exe` in
+    that directory, each was started in place of the real one, System32's
+    included. It is the directory of aramid's own process that counts, not
+    the `cwd=` the child is given. An empty PATH entry does the same on
+    other systems.
+
+    The program is looked for where the launch would have found it, less
+    that directory: `name.exe` in System32 and then along PATH on Windows
+    (CreateProcess adds `.exe` and nothing else, so a `git.cmd` was never
+    what ran), and `name` along PATH anywhere else. The interpreter's own
+    directory is not searched: nothing aramid starts by a bare name lives
+    there. A name that has a directory is a path already and is returned as
+    it is.
+
+    The bare name is never handed back. When no directory holds the program,
+    the answer is the place it was looked for first: a launch of that fails
+    as a missing program does, and cannot go on to a search that includes
+    the current directory."""
+    if os.path.dirname(name):
+        return name
+    dirs = _launch_dirs()
+    file = exe_name(name)
+    for directory in dirs:
+        candidate = os.path.join(directory, file)
+        if os.path.isfile(candidate) and os.access(candidate, os.X_OK):
+            return os.path.abspath(candidate)
+    return os.path.abspath(os.path.join(dirs[0], file))
+
+
+def launchable(argv: list[str]) -> list[str]:
+    """`argv` with its program as `program` finds it: what to hand to
+    `subprocess` in place of an argv that starts with a bare name."""
+    return [program(argv[0]), *argv[1:]]
+
+
 def resolve(name: str) -> Path | None:
     """Absolute path to `name`, or None if it is genuinely unavailable.
 
@@ -189,15 +324,17 @@ def resolve(name: str) -> Path | None:
         # then launched it with a DIFFERENT cwd (the mutation worktree),
         # where it no longer resolved -- despite the comment there promising
         # an absolute launch (interop round 174).
-        exe = shutil.which(name)
+        exe = which(name)
         if exe:
             p = Path(exe)
             return p if p.is_absolute() else p.resolve()
 
-        # An absolute/relative path handed straight through (not a bare name).
-        direct = Path(name)
-        if direct.exists() and direct.is_file():
-            return direct.resolve()
+        # A path handed straight through. Never a bare name: `Path("ruff")`
+        # is a file of the current directory (FN-46).
+        if os.path.dirname(name):
+            direct = Path(name)
+            if direct.exists() and direct.is_file():
+                return direct.resolve()
 
         for d in (*scripts_dirs(), tools_dir()):
             candidate = d / exe_name(name)

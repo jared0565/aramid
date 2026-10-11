@@ -211,13 +211,14 @@ def test_scheduled_drain_line_probes_schtasks_on_windows_and_the_crontab_elsewhe
     import sys
     from types import SimpleNamespace
 
+    from aramid import toolpath
     from aramid.commands import schedule as schedule_mod
     calls = []
     monkeypatch.setattr(sys, "platform", "win32")
     monkeypatch.setattr(subprocess, "run",
                         lambda argv, **kw: calls.append(argv) or SimpleNamespace(returncode=0))
     assert status._scheduled_drain_line() == "scheduled drain: installed"
-    assert calls == [schedule_mod._query_xml_argv()]
+    assert calls == [toolpath.launchable(schedule_mod._query_xml_argv())]
     monkeypatch.setattr(subprocess, "run", lambda argv, **kw: SimpleNamespace(returncode=1))
     assert status._scheduled_drain_line() == "scheduled drain: not installed"
 

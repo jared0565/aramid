@@ -29,7 +29,7 @@ from aramid import autolearn
 from aramid import config as config_mod
 from aramid import drain_limits
 from aramid import fleet, health
-from aramid import gitutil, leftovers, policy, queue, redact, registry, triage
+from aramid import gitutil, leftovers, policy, queue, redact, registry, toolpath, triage
 from aramid import ledger as ledger_mod
 from aramid.commands import schedule as schedule_mod
 from aramid.consumers import base as consumers_base
@@ -68,14 +68,17 @@ def _lock_path() -> Path:
 
 def _pid_alive(pid: int) -> bool:
     if sys.platform == "win32":
-        # S603/S607 justification: fixed argv querying our own recorded
-        # PID via the standard Windows tasklist binary.
+        # S603 justification: fixed argv querying our own recorded PID via
+        # the standard Windows tasklist binary, started by its absolute path
+        # (`toolpath.program`): the bare name is looked for in the current
+        # directory before System32 (FN-47).
         # errors="replace" only -- tasklist emits the console/ANSI codepage,
         # NOT UTF-8; the str(pid) containment check below is pure ASCII, which
         # decodes identically under any locale codec. Forcing UTF-8 here would
         # trade one mojibake for another; "replace" removes only the crash mode.
-        out = subprocess.run(["tasklist", "/FI", f"PID eq {pid}", "/NH"],  # noqa: S603,S607
-                             capture_output=True, text=True, errors="replace")
+        out = subprocess.run(  # noqa: S603
+            toolpath.launchable(["tasklist", "/FI", f"PID eq {pid}", "/NH"]),
+            capture_output=True, text=True, errors="replace")
         return str(pid) in out.stdout
     try:
         os.kill(pid, 0)

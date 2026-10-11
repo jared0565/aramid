@@ -3,6 +3,7 @@ Own-entry-by-marker merge: foreign hook entries are preserved structurally
 intact, aramid's own entry is rewritten to the current template, and a file
 that cannot be parsed is never written."""
 import json
+import shutil
 
 import pytest
 
@@ -190,7 +191,7 @@ def test_agent_interpreter_lines_no_python_on_path(monkeypatch):
     # and nothing else would say why. Marked real_interpreter_probe: this
     # calls agent_interpreter_lines() directly and must bypass the
     # suite-wide autouse stub (tests/conftest.py) to exercise it for real.
-    monkeypatch.setattr(doctor_cmd.shutil, "which", lambda name: None)
+    monkeypatch.setattr(shutil, "which", lambda name: None)
 
     assert doctor_cmd.agent_interpreter_lines() == [
         "  WARN interpreter no `python` on PATH -- the generated"
@@ -384,7 +385,7 @@ def test_agent_interpreter_lines_cannot_import_aramid(monkeypatch):
     # boundary `agent_hook.cmd_agent_hook` itself provides. Marked
     # real_interpreter_probe: see test_agent_interpreter_lines_no_python_on_path.
     exe = r"C:\fake\python.exe"
-    monkeypatch.setattr(doctor_cmd.shutil, "which", lambda name: exe)
+    monkeypatch.setattr(shutil, "which", lambda name: exe)
 
     class _Stub:
         returncode = 1

@@ -28,6 +28,7 @@ import subprocess
 import sys
 from pathlib import Path
 
+from aramid import toolpath
 from aramid.models import Gate
 
 MARKER_START = "# >>> aramid managed >>>"
@@ -59,13 +60,14 @@ def win_sh_path(p: Path) -> str:
 
 def _git_config(root: Path, key: str) -> str | None:
     try:
-        # S603/S607 justification: "git" is a fixed literal and `key`
-        # is always a hardcoded config key passed by this module's own
-        # callers (currently only "core.hooksPath") -- never external input.
-        # Relying on PATH to resolve "git" matches every other git invoker.
-        cp = subprocess.run(["git", "config", key], cwd=str(root),  # noqa: S603,S607
-                             capture_output=True, text=True,
-                             encoding="utf-8", errors="replace")
+        # S603 justification: "git" is a fixed literal and `key` is always
+        # a hardcoded config key passed by this module's own callers
+        # (currently only "core.hooksPath") -- never external input. git is
+        # started by the absolute path it has on PATH (`toolpath.program`),
+        # never by the bare name (FN-47).
+        cp = subprocess.run(toolpath.launchable(["git", "config", key]),  # noqa: S603
+                            cwd=str(root), capture_output=True, text=True,
+                            encoding="utf-8", errors="replace")
     except OSError:
         # git not on PATH (or otherwise unspawnable) -- treat as "unset"
         # rather than propagating a raw exception up through hooks_dir /

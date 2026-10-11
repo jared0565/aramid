@@ -626,6 +626,28 @@ def test_a_launcher_declared_without_its_extension_is_run_as_committed_too(
     assert _closes(repo.root)[0].payload["red_proof"]["at"] == "head"
 
 
+@pytest.mark.skipif(sys.platform != "win32",
+                    reason="Windows looks for a program in the current directory first")
+def test_a_bare_name_does_not_start_a_file_of_that_name_in_the_repo(
+        repo, tmp_path, capsys, monkeypatch):
+    """`python` is to be found on PATH. Windows looks in the current directory
+    before PATH unless NoDefaultCurrentDirectoryInExePath is set, and for an
+    MCP server the current directory is the repo: a `python.cmd` that nobody
+    committed would be what the close starts."""
+    _write(repo.root, "aramid.toml", _toml('["python"]'))
+    _commit(repo.root, "c3: python, by its bare name")
+    marker = tmp_path / "planted.marker"
+    (repo.root / "python.cmd").write_text(
+        f'@echo off\r\necho ran> "{marker}"\r\n"{PY}" %*\r\n', encoding="utf-8", newline="")
+    monkeypatch.chdir(repo.root)
+    monkeypatch.delenv("NoDefaultCurrentDirectoryInExePath", raising=False)
+
+    rc = cmd_ledger_resolve_selected(repo.root, FID, repo.c2, ["tests/check_cn.py"], "guarded")
+
+    assert not marker.exists()
+    assert (rc, capsys.readouterr().err) == (0, "")
+
+
 def test_a_committed_program_is_the_repos_own_and_runs(repo, tmp_path, capsys):
     """The other half, and what shows the marker above can fire."""
     marker = tmp_path / "launcher.marker"
@@ -953,9 +975,12 @@ def test_an_untracked_file_under_an_earlier_extension_does_not_stand_in_for_head
     """The review of 536ae03, measured on Windows: HEAD holds `tools/run.cmd`,
     the checkout at the fix commit lacks it, and the working tree has an
     untracked `tools/run.bat` beside it. PATHEXT tries `.BAT` first, so that
-    was the file found, HEAD holds no file of that name, and it ran."""
+    was the file found, HEAD holds no file of that name, and it ran.
+
+    PATHEXT is written in the case the files have. The leg this runs on may
+    tell `run.BAT` from `run.bat`, whatever `sys.platform` is said to be."""
     monkeypatch.setattr(sys, "platform", "win32")
-    monkeypatch.setenv("PATHEXT", ".BAT;.CMD")
+    monkeypatch.setenv("PATHEXT", ".bat;.cmd")
     root, wt = tmp_path / "repo", tmp_path / "wt"
     _write(root, "tools/run.cmd", "")
     _write(root, "tools/run.bat", "")
@@ -979,7 +1004,7 @@ def test_a_program_head_holds_is_refused_wherever_a_link_in_the_working_tree_lea
     wt.mkdir()
     _link(root / "tools", tmp_path / "elsewhere" / "tools")
     monkeypatch.setattr(sys, "platform", "win32")       # after the link: `_link` reads it
-    monkeypatch.setenv("PATHEXT", ".CMD")
+    monkeypatch.setenv("PATHEXT", ".cmd")               # in the case the file has
     _never_started(monkeypatch)
 
     with pytest.raises(Refused) as exc:

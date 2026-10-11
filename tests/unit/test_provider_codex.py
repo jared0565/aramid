@@ -1,4 +1,5 @@
 import json
+import shutil
 
 import pytest
 
@@ -26,9 +27,9 @@ def test_registers_in_providers():
 
 
 def test_installed_iff_on_path(monkeypatch):
-    monkeypatch.setattr(codex_cli.shutil, "which", lambda n: r"C:\bin\codex.cmd")
+    monkeypatch.setattr(shutil, "which", lambda n: r"C:\bin\codex.cmd")
     assert codex_cli.installed() is True
-    monkeypatch.setattr(codex_cli.shutil, "which", lambda n: None)
+    monkeypatch.setattr(shutil, "which", lambda n: None)
     assert codex_cli.installed() is False
 
 
@@ -38,7 +39,7 @@ def test_review_parses_jsonl(monkeypatch):
     def fake_run(argv, prompt, timeout_s):
         seen["argv"] = argv
         return 0, JSONL, ""
-    monkeypatch.setattr(codex_cli.shutil, "which", lambda n: r"C:\bin\codex.cmd")
+    monkeypatch.setattr(shutil, "which", lambda n: r"C:\bin\codex.cmd")
     monkeypatch.setattr(codex_cli.base, "run_provider_subprocess", fake_run)
     resp = codex_cli.review("PACKET", "", 240.0)
     assert resp.text == '{"findings": []}'
@@ -55,21 +56,21 @@ def test_review_model_flag_when_set(monkeypatch):
     def fake_run(argv, prompt, timeout_s):
         seen["argv"] = argv
         return 0, JSONL, ""
-    monkeypatch.setattr(codex_cli.shutil, "which", lambda n: r"C:\bin\codex.cmd")
+    monkeypatch.setattr(shutil, "which", lambda n: r"C:\bin\codex.cmd")
     monkeypatch.setattr(codex_cli.base, "run_provider_subprocess", fake_run)
     codex_cli.review("PACKET", "o4-mini", 240.0)
     assert "-m" in seen["argv"] and "o4-mini" in seen["argv"]
 
 
 def test_review_no_agent_message_is_malformed(monkeypatch):
-    monkeypatch.setattr(codex_cli.shutil, "which", lambda n: r"C:\bin\codex.cmd")
+    monkeypatch.setattr(shutil, "which", lambda n: r"C:\bin\codex.cmd")
     monkeypatch.setattr(codex_cli.base, "run_provider_subprocess",
                         lambda *a, **k: (0, json.dumps({"type": "noise"}), ""))
     assert codex_cli.review("P", "", 240.0).error == base.ERR_MALFORMED
 
 
 def test_review_quota_and_timeout(monkeypatch):
-    monkeypatch.setattr(codex_cli.shutil, "which", lambda n: r"C:\bin\codex.cmd")
+    monkeypatch.setattr(shutil, "which", lambda n: r"C:\bin\codex.cmd")
     monkeypatch.setattr(codex_cli.base, "run_provider_subprocess",
                         lambda *a, **k: (1, "", "You've hit your usage limit"))
     assert codex_cli.review("P", "", 240.0).error == base.ERR_QUOTA
@@ -78,14 +79,14 @@ def test_review_quota_and_timeout(monkeypatch):
 
 
 def test_review_nonzero_exit_is_error(monkeypatch):
-    monkeypatch.setattr(codex_cli.shutil, "which", lambda n: r"C:\bin\codex.cmd")
+    monkeypatch.setattr(shutil, "which", lambda n: r"C:\bin\codex.cmd")
     monkeypatch.setattr(codex_cli.base, "run_provider_subprocess",
                         lambda *a, **k: (1, "", "boom"))
     assert codex_cli.review("P", "", 240.0).error == base.ERR_ERROR
 
 
 def test_review_unavailable_when_not_on_path(monkeypatch):
-    monkeypatch.setattr(codex_cli.shutil, "which", lambda n: None)
+    monkeypatch.setattr(shutil, "which", lambda n: None)
     assert codex_cli.review("P", "", 240.0).error == base.ERR_UNAVAILABLE
 
 
@@ -99,7 +100,7 @@ def test_review_bare_scalar_in_jsonl_is_skipped(monkeypatch):
         json.dumps({"type": "turn.completed",
                     "usage": {"input_tokens": 100, "output_tokens": 20}}),
     ])
-    monkeypatch.setattr(codex_cli.shutil, "which", lambda n: r"C:\bin\codex.cmd")
+    monkeypatch.setattr(shutil, "which", lambda n: r"C:\bin\codex.cmd")
     monkeypatch.setattr(codex_cli.base, "run_provider_subprocess",
                         lambda *a, **k: (0, jsonl, ""))
     resp = codex_cli.review("P", "", 240.0)
@@ -117,7 +118,7 @@ def test_review_item_not_dict_is_skipped(monkeypatch):
         json.dumps({"type": "turn.completed",
                     "usage": {"input_tokens": 100, "output_tokens": 20}}),
     ])
-    monkeypatch.setattr(codex_cli.shutil, "which", lambda n: r"C:\bin\codex.cmd")
+    monkeypatch.setattr(shutil, "which", lambda n: r"C:\bin\codex.cmd")
     monkeypatch.setattr(codex_cli.base, "run_provider_subprocess",
                         lambda *a, **k: (0, jsonl, ""))
     resp = codex_cli.review("P", "", 240.0)
@@ -134,7 +135,7 @@ def test_review_wrong_token_types_zero_out(monkeypatch):
         json.dumps({"type": "turn.completed",
                     "usage": {"input_tokens": "bad", "output_tokens": None}}),
     ])
-    monkeypatch.setattr(codex_cli.shutil, "which", lambda n: r"C:\bin\codex.cmd")
+    monkeypatch.setattr(shutil, "which", lambda n: r"C:\bin\codex.cmd")
     monkeypatch.setattr(codex_cli.base, "run_provider_subprocess",
                         lambda *a, **k: (0, jsonl, ""))
     resp = codex_cli.review("P", "", 240.0)

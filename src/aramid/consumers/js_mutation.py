@@ -18,7 +18,7 @@ import time
 from pathlib import Path
 
 from aramid import config as config_mod
-from aramid import detectors, gitutil, jsmutate
+from aramid import detectors, gitutil, jsmutate, toolpath
 from aramid.consumers import base, mutation
 from aramid.consumers.base import ConsumerResult, DrainContext
 from aramid.fingerprint import compute_fingerprint
@@ -95,9 +95,9 @@ def _mutant_fp(rel: str, op: str, line: int, lines: list[str]) -> str:
 
 def _pm_test_argv(pm: str) -> list[str] | None:
     """Resolve `<pm> test` to a runnable argv, or None if the pm binary is not
-    on PATH. shutil.which finds the `.cmd` shim on Windows (npm.cmd/pnpm.cmd/
+    on PATH. The lookup finds the `.cmd` shim on Windows (npm.cmd/pnpm.cmd/
     yarn.cmd) -- mirrors eslint/typecheck's Windows-aware binary resolution."""
-    binp = shutil.which(pm)
+    binp = toolpath.which(pm)
     if binp is None:
         return None
     return [binp, "test"]
@@ -115,18 +115,20 @@ def _link_node_modules(src_root: Path, wt: Path) -> bool:
         return False
     dst_nm = wt / "node_modules"
     if sys.platform == "win32":
-        # S603/S607 justification: `mklink` is a cmd.exe BUILTIN, so there is
-        # no executable to name by absolute path -- `cmd /c` is the only way
-        # to invoke it, and cmd.exe is resolved from PATH on every Windows
-        # host. argv is a fixed list; both paths are ones aramid constructed
+        # S603 justification: `mklink` is a cmd.exe BUILTIN, so there is no
+        # executable of that name -- `cmd /c` is the only way to invoke it,
+        # and cmd.exe is started by its absolute path (`toolpath.program`):
+        # the bare name is looked for in the current directory before
+        # System32 (FN-47). argv is a fixed list; both paths are ones aramid constructed
         # itself (the worktree it just created and the source node_modules),
         # passed as separate argv entries rather than a shell string.
         # Bounded, not registered with runners.base (FN-17): a junction is
         # made in milliseconds, and a hung one reads as the link failure the
         # caller already handles.
         try:
-            cp = subprocess.run(["cmd", "/c", "mklink", "/J", str(dst_nm), str(src_nm)],  # noqa: S603,S607
-                                capture_output=True, text=True, timeout=_MKLINK_TIMEOUT_S)
+            cp = subprocess.run(  # noqa: S603
+                toolpath.launchable(["cmd", "/c", "mklink", "/J", str(dst_nm), str(src_nm)]),
+                capture_output=True, text=True, timeout=_MKLINK_TIMEOUT_S)
         except subprocess.TimeoutExpired:
             raise OSError(f"mklink /J timed out after {_MKLINK_TIMEOUT_S:g} s") from None
         if cp.returncode != 0:

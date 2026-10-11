@@ -22,6 +22,8 @@ import sys
 from pathlib import Path
 from typing import Callable
 
+from aramid import toolpath
+
 Sample = dict[int, tuple[int, int]]
 _PROC = Path("/proc")          # test seam
 _PS_TIMEOUT_S = 5.0
@@ -125,8 +127,9 @@ def _sample_proc(root_pid: int) -> Sample | None:
 
 
 def _sample_ps(root_pid: int) -> Sample | None:
-    done = subprocess.run(["ps", "-A", "-o", "pid=,ppid=,time="],  # noqa: S603,S607
-                          capture_output=True, text=True, timeout=_PS_TIMEOUT_S)
+    done = subprocess.run(  # noqa: S603
+        toolpath.launchable(["ps", "-A", "-o", "pid=,ppid=,time="]),
+        capture_output=True, text=True, timeout=_PS_TIMEOUT_S)
     if done.returncode != 0:
         return None
     return _from_table(root_pid, parse_ps(done.stdout))

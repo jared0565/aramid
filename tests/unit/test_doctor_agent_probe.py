@@ -1,6 +1,7 @@
 """agent_interpreter_lines' probe arms, exercised hermetically (the
 autouse conftest stub is bypassed via the real_interpreter_probe marker;
 inside these tests the subprocess itself is monkeypatched)."""
+import shutil
 import subprocess
 
 import pytest
@@ -12,14 +13,14 @@ pytestmark = pytest.mark.real_interpreter_probe
 
 
 def test_no_python_on_path(monkeypatch):
-    monkeypatch.setattr(doctor.shutil, "which", lambda name: None)
+    monkeypatch.setattr(shutil, "which", lambda name: None)
     assert doctor.agent_interpreter_lines() == [
         "  WARN interpreter no `python` on PATH -- the generated"
         " agent-hook command cannot run; install one or adjust PATH"]
 
 
 def test_probe_failure_names_a_remedy(monkeypatch):
-    monkeypatch.setattr(doctor.shutil, "which", lambda name: "/x/python")
+    monkeypatch.setattr(shutil, "which", lambda name: "/x/python")
     def _boom(*a, **k):
         raise subprocess.TimeoutExpired(cmd="python", timeout=15)
     monkeypatch.setattr(doctor.subprocess, "run", _boom)
@@ -31,7 +32,7 @@ def test_probe_failure_names_a_remedy(monkeypatch):
 
 
 def test_import_failure_line(monkeypatch):
-    monkeypatch.setattr(doctor.shutil, "which", lambda name: "/x/python")
+    monkeypatch.setattr(shutil, "which", lambda name: "/x/python")
     class _P:
         returncode = 1
     monkeypatch.setattr(doctor.subprocess, "run", lambda *a, **k: _P())
@@ -43,7 +44,7 @@ def test_import_failure_line(monkeypatch):
 
 
 def test_healthy_probe_is_silent(monkeypatch):
-    monkeypatch.setattr(doctor.shutil, "which", lambda name: "/x/python")
+    monkeypatch.setattr(shutil, "which", lambda name: "/x/python")
     class _P:
         returncode = 0
     monkeypatch.setattr(doctor.subprocess, "run", lambda *a, **k: _P())

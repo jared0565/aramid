@@ -32,10 +32,10 @@ def test_registers_in_providers():
 
 
 def test_available_and_installed_iff_on_path(monkeypatch):
-    monkeypatch.setattr(claude_cli.shutil, "which", lambda n: r"C:\bin\claude.exe")
+    monkeypatch.setattr(shutil, "which", lambda n: r"C:\bin\claude.exe")
     assert claude_cli.available(None) is True
     assert claude_cli.installed() is True
-    monkeypatch.setattr(claude_cli.shutil, "which", lambda n: None)
+    monkeypatch.setattr(shutil, "which", lambda n: None)
     assert claude_cli.available(None) is False
     assert claude_cli.installed() is False
 
@@ -46,7 +46,7 @@ def test_review_parses_envelope_and_logs_zero_cost(monkeypatch, tmp_path):
     def fake_run(argv, prompt, timeout_s, *, cwd=None):
         seen["argv"], seen["prompt"] = argv, prompt
         return 0, ENVELOPE, ""
-    monkeypatch.setattr(claude_cli.shutil, "which", lambda n: r"C:\bin\claude.exe")
+    monkeypatch.setattr(shutil, "which", lambda n: r"C:\bin\claude.exe")
     monkeypatch.setattr(claude_cli.base, "run_provider_subprocess", fake_run)
     resp = claude_cli.review("PACKET", "sonnet", 240.0)
     assert resp.text == '{"findings": []}'
@@ -61,28 +61,28 @@ def test_review_parses_envelope_and_logs_zero_cost(monkeypatch, tmp_path):
 
 
 def test_review_timeout(monkeypatch):
-    monkeypatch.setattr(claude_cli.shutil, "which", lambda n: r"C:\bin\claude.exe")
+    monkeypatch.setattr(shutil, "which", lambda n: r"C:\bin\claude.exe")
     monkeypatch.setattr(claude_cli.base, "run_provider_subprocess",
                         lambda *a, **k: None)
     assert claude_cli.review("P", "sonnet", 1.0).error == base.ERR_TIMEOUT
 
 
 def test_review_quota_error(monkeypatch):
-    monkeypatch.setattr(claude_cli.shutil, "which", lambda n: r"C:\bin\claude.exe")
+    monkeypatch.setattr(shutil, "which", lambda n: r"C:\bin\claude.exe")
     monkeypatch.setattr(claude_cli.base, "run_provider_subprocess",
                         lambda *a, **k: (1, "", "Claude usage limit reached|resets 3pm"))
     assert claude_cli.review("P", "sonnet", 240.0).error == base.ERR_QUOTA
 
 
 def test_review_nonzero_exit_is_error(monkeypatch):
-    monkeypatch.setattr(claude_cli.shutil, "which", lambda n: r"C:\bin\claude.exe")
+    monkeypatch.setattr(shutil, "which", lambda n: r"C:\bin\claude.exe")
     monkeypatch.setattr(claude_cli.base, "run_provider_subprocess",
                         lambda *a, **k: (1, "", "boom"))
     assert claude_cli.review("P", "sonnet", 240.0).error == base.ERR_ERROR
 
 
 def test_review_unparseable_envelope_is_malformed(monkeypatch):
-    monkeypatch.setattr(claude_cli.shutil, "which", lambda n: r"C:\bin\claude.exe")
+    monkeypatch.setattr(shutil, "which", lambda n: r"C:\bin\claude.exe")
     monkeypatch.setattr(claude_cli.base, "run_provider_subprocess",
                         lambda *a, **k: (0, "garbage not json", ""))
     assert claude_cli.review("P", "sonnet", 240.0).error == base.ERR_MALFORMED
@@ -90,7 +90,7 @@ def test_review_unparseable_envelope_is_malformed(monkeypatch):
 
 def test_review_null_usage_keeps_text_zeroes_tokens(monkeypatch):
     envelope = json.dumps({"result": "ok text", "usage": None})
-    monkeypatch.setattr(claude_cli.shutil, "which", lambda n: r"C:\bin\claude.exe")
+    monkeypatch.setattr(shutil, "which", lambda n: r"C:\bin\claude.exe")
     monkeypatch.setattr(claude_cli.base, "run_provider_subprocess",
                         lambda *a, **k: (0, envelope, ""))
     resp = claude_cli.review("P", "sonnet", 240.0)
@@ -100,14 +100,14 @@ def test_review_null_usage_keeps_text_zeroes_tokens(monkeypatch):
 
 
 def test_review_non_dict_envelope_is_malformed(monkeypatch):
-    monkeypatch.setattr(claude_cli.shutil, "which", lambda n: r"C:\bin\claude.exe")
+    monkeypatch.setattr(shutil, "which", lambda n: r"C:\bin\claude.exe")
     monkeypatch.setattr(claude_cli.base, "run_provider_subprocess",
                         lambda *a, **k: (0, "[1, 2]", ""))
     assert claude_cli.review("P", "sonnet", 240.0).error == base.ERR_MALFORMED
 
 
 def test_review_unavailable_when_not_on_path(monkeypatch):
-    monkeypatch.setattr(claude_cli.shutil, "which", lambda n: None)
+    monkeypatch.setattr(shutil, "which", lambda n: None)
     assert claude_cli.review("P", "sonnet", 240.0).error == base.ERR_UNAVAILABLE
 
 
@@ -124,7 +124,7 @@ def _recorded_run(monkeypatch, result=(0, ENVELOPE, "")):
                       "is_dir": there is not None and there.is_dir(),
                       "holds": sorted(os.listdir(cwd)) if cwd is not None else None})
         return result
-    monkeypatch.setattr(claude_cli.shutil, "which", lambda n: r"C:\bin\claude.exe")
+    monkeypatch.setattr(shutil, "which", lambda n: r"C:\bin\claude.exe")
     monkeypatch.setattr(claude_cli.base, "run_provider_subprocess", fake_run)
     return calls
 
@@ -238,7 +238,7 @@ def test_a_directory_that_will_not_go_does_not_fail_the_review(monkeypatch):
     def fake_run(argv, prompt, timeout_s, *, cwd=None):
         held.append(open(Path(cwd) / "held", "w", encoding="utf-8"))  # noqa: SIM115
         return 0, ENVELOPE, ""
-    monkeypatch.setattr(claude_cli.shutil, "which", lambda n: r"C:\bin\claude.exe")
+    monkeypatch.setattr(shutil, "which", lambda n: r"C:\bin\claude.exe")
     monkeypatch.setattr(claude_cli.base, "run_provider_subprocess", fake_run)
 
     try:

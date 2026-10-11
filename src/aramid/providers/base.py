@@ -5,7 +5,7 @@ Mirrors consumers/: modules self-register into PROVIDERS at import time;
 `chain(cfg)` orders them by [llm].provider_order and drops unavailable ones.
 
 `run_provider_subprocess` is the shared CLI transport: fixed argv (callers
-resolve the absolute exe path via shutil.which), prompt on STDIN (packets
+resolve the exe's path via `toolpath.which`), prompt on STDIN (packets
 exceed Windows argv limits), utf-8 with errors="replace" (the Phase 2a
 cp1252 lesson), and a Windows process-TREE kill on timeout -- node-based
 CLIs spawn children that subprocess.run's own kill would orphan.
@@ -14,7 +14,7 @@ import subprocess
 import sys
 from dataclasses import dataclass
 
-from aramid import diagnostics
+from aramid import diagnostics, toolpath
 from aramid.runners import base as runners_base
 
 ERR_UNAVAILABLE = "unavailable"
@@ -66,13 +66,15 @@ def chain(cfg) -> list[object]:
 
 def _tree_kill(pid: int) -> None:
     if sys.platform == "win32":
-        # S603/S607 justification: fixed argv killing a process tree aramid
+        # S603 justification: fixed argv killing a process tree aramid
         # itself spawned -- `pid` is our own child's, not external input, and
-        # `taskkill` resolves via PATH on every Windows host. Mirrors
-        # runners.base._kill_tree, which makes the identical call.
-        subprocess.run(["taskkill", "/PID", str(pid), "/T", "/F"],  # noqa: S603,S607
-                       capture_output=True, text=True, encoding="utf-8",
-                       errors="replace", timeout=30)
+        # `taskkill` is started by its absolute path (`toolpath.program`):
+        # the bare name is looked for in the current directory before
+        # System32 (FN-47). Mirrors runners.base._kill_tree, which makes the
+        # same call.
+        subprocess.run(  # noqa: S603
+            toolpath.launchable(["taskkill", "/PID", str(pid), "/T", "/F"]),
+            capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=30)
 
 
 def run_provider_subprocess(argv: list[str], prompt: str, timeout_s: float,

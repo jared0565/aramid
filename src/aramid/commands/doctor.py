@@ -32,7 +32,6 @@ import json
 import os
 import platform
 import re
-import shutil
 import subprocess
 import sys
 import urllib.request
@@ -165,8 +164,8 @@ def probe_tool(name: str) -> ToolStatus:
     try:
         # S603 justification: `exe` is not attacker-controlled -- it
         # is the Path this function itself just resolved via
-        # `_locate_gitleaks`/`_locate_owned_tool` (shutil.which or a fixed,
-        # known scripts dir), and `name` comes from the hardcoded ALL_TOOLS
+        # `_locate_gitleaks`/`_locate_owned_tool` (`toolpath`'s lookup or a
+        # fixed, known scripts dir), and `name` comes from the hardcoded ALL_TOOLS
         # tuple above, never external input. Probing "<tool> --version" is
         # doctor's whole job.
         cp = subprocess.run([str(exe), "--version"], capture_output=True, text=True,  # noqa: S603
@@ -586,6 +585,19 @@ def _configured_argv0(command, root: Path | None = None) -> tuple[str | None, st
     return argv[0], None
 
 
+def _in_the_repo_root(root: Path, argv0: str) -> str | None:
+    """The file in the repo root that the bare `argv0` would name there
+    (`runtests` is `runtests.cmd` on Windows), or None. For a hint only:
+    nothing here is started or resolved."""
+    if os.path.dirname(argv0):
+        return None
+    from aramid.runners.tests import _under
+    found = _under(Path(root), argv0)
+    # resolve(): the name as the file has it, not in the case PATHEXT spells
+    # its extension (`runtests.cmd`, not `runtests.CMD`).
+    return found.resolve().name if found is not None else None
+
+
 def probe_tests(root: Path, cfg) -> list[ToolStatus]:
     """Probe the repo's TEST toolchain -- the BLOCK-tier `tests` runner
     (pipeline.BLOCK_TIER_KEYS) that BLOCK_TIER/ALL_TOOLS above have never
@@ -639,11 +651,17 @@ def probe_tests(root: Path, cfg) -> list[ToolStatus]:
             return [ToolStatus("tests", False, detail=reason)]
         located = toolpath.resolve(argv0)
         if located is None:
-            return [ToolStatus(
-                "tests", False,
-                detail=(f"[tests].command is configured (argv[0] '{argv0}') "
-                        f"but '{argv0}' was not found on PATH or in "
-                        f"aramid's managed locations"))]
+            detail = (f"[tests].command is configured (argv[0] '{argv0}') "
+                      f"but '{argv0}' was not found on PATH or in "
+                      f"aramid's managed locations")
+            beside = _in_the_repo_root(root, argv0)
+            if beside:
+                # FN-46: a bare name used to find this file, on Windows and
+                # through `resolve`'s path fallback. Say what to write now.
+                detail += (f". The repo root holds `{beside}`: a bare name is looked "
+                           f"for on PATH only, so name the file by its path "
+                           f"(`./{argv0}`)")
+            return [ToolStatus("tests", False, detail=detail)]
         return [ToolStatus(
             "tests", True, str(located),
             detail=(f"custom [tests].command configured -- argv[0] "
@@ -773,13 +791,13 @@ def agent_interpreter_lines() -> list[str]:
     python cannot import aramid, the session-start entry errors OUTSIDE
     aramid's fail-open boundary (interpreter-level, at every session start)
     and nothing else would say why. Reports; never changes the exit code."""
-    exe = shutil.which("python")
+    exe = toolpath.which("python")
     if exe is None:
         return ["  WARN interpreter no `python` on PATH -- the generated"
                 " agent-hook command cannot run; install one or adjust PATH"]
     try:
         # S603 justification: `exe` is resolved a few lines above via
-        # `shutil.which("python")` (a PATH lookup, never external input),
+        # `toolpath.which("python")` (a PATH lookup, never external input),
         # and the `-c` payload is the fixed literal "import aramid" --
         # never attacker-controlled. Probing whether PATH's python can
         # import aramid is this function's whole job.
@@ -939,7 +957,7 @@ def probe_providers() -> list[str]:
     from aramid.providers import spend as spend_mod
     lines = []
     for name, exe in (("claude-cli", "claude"), ("codex-cli", "codex")):
-        found = shutil.which(exe)
+        found = toolpath.which(exe)
         lines.append(f"  OK       {name:<12} {found}" if found
                      else f"  MISSING  {name:<12} not found on PATH")
     if not os.environ.get("OPENROUTER_API_KEY"):

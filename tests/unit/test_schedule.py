@@ -3,6 +3,7 @@ from pathlib import Path
 
 import pytest
 
+from aramid import toolpath
 from aramid.commands import schedule
 
 
@@ -53,7 +54,8 @@ def test_install_invokes_schtasks(monkeypatch, tmp_path):
 
     monkeypatch.setattr(schedule.subprocess, "run", fake_run)
     assert schedule.cmd_schedule(tmp_path, "install") == 0
-    assert calls["argv"][:4] == ["schtasks", "/Create", "/TN", "aramid-drain"]
+    assert calls["argv"][:4] == toolpath.launchable(
+        ["schtasks", "/Create", "/TN", "aramid-drain"])
 
 
 @pytest.mark.skipif(sys.platform == "win32", reason="the off-Windows install path")
@@ -398,7 +400,7 @@ def test_schedule_on_windows_removes_and_reports_the_task(monkeypatch, tmp_path,
     calls = _windows(monkeypatch, lambda argv: _CP())
     assert schedule.cmd_schedule(tmp_path, "remove") == 0
     assert capsys.readouterr() == ("aramid schedule: remove ok (aramid-drain)\n", "")
-    assert calls == [schedule._delete_argv()]
+    assert calls == [toolpath.launchable(schedule._delete_argv())]
 
 
 def test_schedule_on_windows_status_prints_schtasks_or_not_installed(monkeypatch, tmp_path,
@@ -406,7 +408,7 @@ def test_schedule_on_windows_status_prints_schtasks_or_not_installed(monkeypatch
     calls = _windows(monkeypatch, lambda argv: _CP(0, "Folder: \\\nTaskName: aramid-drain\n"))
     assert schedule.cmd_schedule(tmp_path, "status") == 0
     assert capsys.readouterr() == ("Folder: \\\nTaskName: aramid-drain\n", "")
-    assert calls == [schedule._query_argv()]
+    assert calls == [toolpath.launchable(schedule._query_argv())]
 
     _windows(monkeypatch, lambda argv: _CP(1, "", "ERROR: The system cannot find the file"))
     assert schedule.cmd_schedule(tmp_path, "status") == 3
@@ -444,8 +446,8 @@ def test_write_crontab_feeds_the_body_on_stdin_and_raises_on_a_refusal(monkeypat
     monkeypatch.setattr(schedule.subprocess, "run", run)
     schedule._write_crontab("\n\n# keep\n0 * * * * echo hi\n\n")
     schedule._write_crontab("")
-    assert seen == [(["crontab", "-"], "# keep\n0 * * * * echo hi\n"),
-                    (["crontab", "-"], "")]
+    crontab = toolpath.launchable(["crontab", "-"])
+    assert seen == [(crontab, "# keep\n0 * * * * echo hi\n"), (crontab, "")]
 
     monkeypatch.setattr(schedule.subprocess, "run",
                         lambda argv, **kw: _CP(1, "", "crontab: installing new crontab\nbad\n"))
@@ -465,15 +467,16 @@ def test_schedule_on_windows_installs_from_the_config_interval_and_a_whole_secon
     seen = {}
 
     def reply(argv):
-        if argv[:2] == ["schtasks", "/Create"]:
+        if argv[:2] == toolpath.launchable(["schtasks", "/Create"]):
             seen["xml"] = Path(argv[argv.index("/XML") + 1]).read_text(encoding="utf-16")
         return _CP()
     calls = _windows(monkeypatch, reply)
 
     assert schedule.cmd_schedule(tmp_path, "install") == 0
     # FN-18: the installed task is read first, for its StartBoundary.
-    [create] = [c for c in calls if c[:2] == ["schtasks", "/Create"]]
-    assert create[:4] == ["schtasks", "/Create", "/TN", "aramid-drain"]
+    [create] = [c for c in calls if c[:2] == toolpath.launchable(["schtasks", "/Create"])]
+    assert create[:4] == toolpath.launchable(
+        ["schtasks", "/Create", "/TN", "aramid-drain"])
     assert "<Interval>PT4H</Interval>" in seen["xml"]
     start = re.search(r"<StartBoundary>([^<]*)</StartBoundary>", seen["xml"]).group(1)
     assert re.fullmatch(r"\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d", start), start
@@ -499,7 +502,7 @@ def _limit_xml(limit):
 def test_the_installed_task_limit_is_read_in_minutes(monkeypatch):
     calls = _windows(monkeypatch, lambda argv: _CP(stdout=_limit_xml("PT1H")))
     assert schedule.installed_task_limit_minutes() == 60
-    assert calls == [schedule._query_xml_argv()]
+    assert calls == [toolpath.launchable(schedule._query_xml_argv())]
     _windows(monkeypatch, lambda argv: _CP(stdout=_limit_xml("PT3H55M")))
     assert schedule.installed_task_limit_minutes() == 235
     _windows(monkeypatch, lambda argv: _CP(stdout=_limit_xml("P1D")))

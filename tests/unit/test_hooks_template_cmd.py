@@ -5,6 +5,7 @@ filesystem refuses to resolve, textual -- the generator mutants on both
 that tests/integration reached and the unit suite never did."""
 from pathlib import Path
 
+from aramid import toolpath
 from aramid.commands import hooks_template as ht
 
 
@@ -21,7 +22,8 @@ def test_git_config_get_reads_a_value_and_treats_unset_or_empty_as_none(monkeypa
         return _CP(0, "  ~/.aramid/git-template\n")
     monkeypatch.setattr(ht.subprocess, "run", run)
     assert ht._git_config_get("init.templateDir") == "~/.aramid/git-template"
-    assert seen == [["git", "config", "--global", "--get", "init.templateDir"]]
+    assert seen == [toolpath.launchable(
+        ["git", "config", "--global", "--get", "init.templateDir"])]
 
     monkeypatch.setattr(ht.subprocess, "run", lambda argv, **kw: _CP(1, ""))
     assert ht._git_config_get("init.templateDir") is None, "git exits 1 for an unset key"

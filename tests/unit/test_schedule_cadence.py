@@ -15,6 +15,7 @@ from types import SimpleNamespace
 
 import pytest
 
+from aramid import toolpath
 from aramid.commands import schedule
 
 _INSTALLED = ("<?xml version=\"1.0\" encoding=\"UTF-16\"?>\n<Task><Triggers><TimeTrigger>"
@@ -60,9 +61,9 @@ def test_install_registers_the_installed_boundary(monkeypatch, tmp_path):
             returncode = 0
             stdout = ""
             stderr = ""
-        if argv[:2] == ["schtasks", "/Query"]:
+        if argv[:2] == toolpath.launchable(["schtasks", "/Query"]):
             R.stdout = _INSTALLED
-        elif argv[:2] == ["schtasks", "/Create"]:
+        elif argv[:2] == toolpath.launchable(["schtasks", "/Create"]):
             created["xml"] = Path(argv[5]).read_text(encoding="utf-16")
         return R()
 
@@ -82,7 +83,9 @@ def test_the_installed_task_is_read_with_schtasks_query_xml(monkeypatch):
     monkeypatch.setattr(schedule.subprocess, "run", fake_run)
 
     assert schedule._installed_task_xml() == _INSTALLED
-    assert seen == {"argv": ["schtasks", "/Query", "/TN", "aramid-drain", "/XML"], "timeout": 30}
+    assert seen == {
+        "argv": toolpath.launchable(["schtasks", "/Query", "/TN", "aramid-drain", "/XML"]),
+        "timeout": 30}
 
 
 @pytest.mark.parametrize("outcome", ["no task", "no schtasks", "hung"])

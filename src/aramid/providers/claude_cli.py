@@ -16,10 +16,10 @@ Code setup around it (`_RESTRICT`), in an empty directory of its own. A
 `claude` too old to take those options is not used at all: the launch is
 never repeated without them."""
 import json
-import shutil
 import sys
 import tempfile
 
+from aramid import toolpath
 from aramid.providers import base, spend
 from aramid.providers.base import ProviderResponse
 
@@ -49,7 +49,7 @@ _REFUSED = ("error: unknown option", "error: option ")
 
 
 def installed() -> bool:
-    return shutil.which("claude") is not None
+    return toolpath.which("claude") is not None
 
 
 def available(cfg) -> bool:
@@ -57,7 +57,7 @@ def available(cfg) -> bool:
 
 
 def review(prompt: str, model: str, timeout_s: float, *, effort: str = "") -> ProviderResponse:
-    exe = shutil.which("claude")
+    exe = toolpath.which("claude")
     if exe is None:
         return ProviderResponse(text="", error=base.ERR_UNAVAILABLE)
     argv = [exe, "-p", "--model", model, "--output-format", "json", *_RESTRICT]

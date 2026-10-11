@@ -21,6 +21,7 @@ import pytest
 
 from aramid import health
 from aramid import jsmutate
+from aramid import toolpath
 from aramid.consumers import js_mutation as jsc
 from aramid.consumers import mutation as pymut
 from aramid.consumers.base import DrainContext
@@ -675,8 +676,8 @@ def test_link_node_modules_on_windows_makes_a_junction_and_reports_its_failure(t
     calls = []
     monkeypatch.setattr(jsc.subprocess, "run", lambda argv, **kw: calls.append(argv) or _CP(0))
     assert jsc._link_node_modules(src, wt) is True
-    assert calls == [["cmd", "/c", "mklink", "/J", str(wt / "node_modules"),
-                      str(src / "node_modules")]]
+    assert calls == [toolpath.launchable(["cmd", "/c", "mklink", "/J", str(wt / "node_modules"),
+                                          str(src / "node_modules")])]
 
     monkeypatch.setattr(jsc.subprocess, "run",
                         lambda argv, **kw: _CP(1, "  Access is denied.\n" + "x" * 300))

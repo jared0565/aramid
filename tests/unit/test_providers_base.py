@@ -2,6 +2,7 @@ import os
 import sys
 from types import SimpleNamespace
 
+from aramid import toolpath
 from aramid.providers import base
 
 
@@ -71,7 +72,7 @@ def test_tree_kill_uses_taskkill_on_windows_with_a_30s_timeout_and_nothing_elsew
     monkeypatch.setattr(base.subprocess, "run",
                         lambda argv, **kw: calls.append((argv, kw.get("timeout"))))
     base._tree_kill(4242)
-    assert calls == [(["taskkill", "/PID", "4242", "/T", "/F"], 30)]
+    assert calls == [(toolpath.launchable(["taskkill", "/PID", "4242", "/T", "/F"]), 30)]
     monkeypatch.setattr(base.sys, "platform", "linux")
     base._tree_kill(4242)
     assert len(calls) == 1

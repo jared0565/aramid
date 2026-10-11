@@ -327,12 +327,14 @@ def own_group() -> dict:
 def _kill_tree(proc: subprocess.Popen):
     try:
         if _WIN:
-            # S603/S607 justification: fixed argv killing a process
-            # tree aramid itself spawned via subprocess.Popen above -- proc.pid
-            # is our own child's PID, not attacker-controlled, and "taskkill"
-            # resolving via PATH is standard on every Windows host.
-            subprocess.run(["taskkill", "/T", "/F", "/PID", str(proc.pid)],  # noqa: S603,S607
-                           capture_output=True)
+            # S603 justification: fixed argv killing a process tree aramid
+            # itself spawned via subprocess.Popen above -- proc.pid is our
+            # own child's PID, not attacker-controlled. "taskkill" is started
+            # by its absolute path (`toolpath.program`): the bare name is
+            # looked for in the current directory before System32 (FN-47).
+            subprocess.run(  # noqa: S603
+                toolpath.launchable(["taskkill", "/T", "/F", "/PID", str(proc.pid)]),
+                capture_output=True)
         else:
             os.killpg(os.getpgid(proc.pid), 9)
     except Exception:

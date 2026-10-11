@@ -166,6 +166,8 @@ timeout_s = 300                            # capped by [timeouts].pre_push
 
 A string (`command = "pytest -q tests/unit"`) works too and is split POSIX-style; prefer the argv form on Windows, where POSIX splitting eats backslashes. The command is never run through a shell, and setting one also makes the gate work in repos whose layout `detect_tests` doesn't recognize (a `make test` wrapper, a suite under a subpath).
 
+A program of your own repo is named by its path: `command = ["./run-tests", "-q"]` or `["tools/run", "-q"]`, read from the repo root. On Windows the extension may be left out (`tools/run` finds `tools/run.cmd`). A bare word (`pytest`, `python`, `npm`) is looked for on `PATH`, in pip's script directories and in `~/.aramid/tools`, and never in the repository, even when a file of that name lies in its root. `aramid doctor` tells you when a bare word names such a file, and what to write instead.
+
 `timeout_s` cannot exceed the gate's wall-clock budget — the gate abandons the runner at `[timeouts].pre_push` regardless — so raise both if you need a longer run. aramid warns when they're set incoherently.
 
 `enabled = false` removes the gate entirely (it then never counts as degraded either). aramid prints a notice on every run where that suppresses a real suite: a silently disabled block-tier check is worse than no check at all. Note that subsetting the push gate narrows what it covers — keep the full suite running in CI.
@@ -514,6 +516,8 @@ aramid override <id> --reason "false positive, confirmed by security team"
 ### `DRIFT` in `aramid doctor` — you are running a different analyzer than aramid shipped
 
 aramid declares `ruff`, `semgrep` and `pip-audit` as dependencies, so `pip install aramid` puts specific versions of them next to it. But tool resolution is **PATH-first, by design** — your own toolchain wins, and aramid's copy is a fallback, never an override.
+
+`PATH` here means `PATH`. The repository aramid is judging is no part of it: a `ruff.cmd`, a `gitleaks.bat` or a `git.exe` in the repo's root is never what aramid runs, although Windows would look in the current directory first for a program named by a bare word. The current directory counts only if your `PATH` names it.
 
 That means an older copy earlier on your `PATH` is what actually runs. It is not an error, and nothing is broken. What matters is that it changes what gets reported:
 
