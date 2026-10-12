@@ -12,6 +12,8 @@ to publish a tag that disagrees with it.
 
 ## [Unreleased]
 
+## [0.20.9] — 2026-10-12
+
 ### Fixed
 
 - **A recorded mutation survivor gets a re-test it can count on (FN-43).**
@@ -6126,7 +6128,8 @@ Stated plainly because each one changes how you should deploy this:
 - **PyPI publishing is not set up.** Install from a GitHub Release artifact or
   from git; `pip install aramid` does not work.
 
-[Unreleased]: https://github.com/jared0565/aramid/compare/v0.20.8...HEAD
+[Unreleased]: https://github.com/jared0565/aramid/compare/v0.20.9...HEAD
+[0.20.9]: https://github.com/jared0565/aramid/releases/tag/v0.20.9
 [0.20.8]: https://github.com/jared0565/aramid/releases/tag/v0.20.8
 [0.20.7]: https://github.com/jared0565/aramid/releases/tag/v0.20.7
 [0.20.6]: https://github.com/jared0565/aramid/releases/tag/v0.20.6
