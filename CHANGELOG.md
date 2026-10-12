@@ -17,10 +17,11 @@ to publish a tag that disagrees with it.
 - **A recorded mutation survivor gets a re-test it can count on (FN-43).**
   Two ways a survivor whose killing test already existed was never closed,
   both reproduced in a scratch repo before the fix:
-  - *The clock.* A survivor id names every line with the same content, and a
-    claim needs every occurrence killed, each kill confirmed by a full-suite
-    run. `wall_budget_s` covers the whole item from before the baseline, so a
-    survivor with three occurrences could fit the item's slots and not its
+  - *The clock.* A survivor id is its mutation's kind and its line's
+    content, so it names every such mutant on that line and on every line
+    like it, and a claim needs every occurrence killed, each kill confirmed
+    by a full-suite run. `wall_budget_s` covers the whole item from before
+    the baseline, so a survivor with three occurrences could fit the item's slots and not its
     clock: every drain killed two, stopped before the third, threw both kills
     away and claimed nothing (this repo's 4307f4ee, about 47 minutes a drain
     at 2500 s). The kills a cut re-test gets are now kept on the consumer
