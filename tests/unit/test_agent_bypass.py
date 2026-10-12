@@ -352,6 +352,42 @@ def test_an_operator_character_inside_quotes_or_escaped_is_text():
         "hooks-path", "commit", "core.hooksPath=/a;b")
 
 
+def test_an_escaped_quote_is_handed_on_as_the_quote_alone():
+    # git is given the quote, without the backslash that escaped it
+    assert find_bypass('git -c "core.hooksPath=\\"C:/h\\"" commit') == Bypass(
+        "hooks-path", "commit", 'core.hooksPath="C:/h"')
+    assert find_bypass('git -c core.hooksPath=\\"C:/h\\" commit') == Bypass(
+        "hooks-path", "commit", 'core.hooksPath="C:/h"')
+
+
+def test_only_a_quote_after_a_backtick_gets_the_stand_in_for_an_escaped_quote():
+    """Inside double quotes PowerShell's backtick escapes the next character.
+    The reader hands the lexer a stand-in for a quote escaped that way, so
+    that it does not end the string, and every other escaped character as it
+    was written.
+
+    The words are asserted, not a decision. With the two cases mixed up
+    (ledger 58c1b282, `and` read as `or`) each word below comes out with a
+    wrong character in it, and no rule compares a word that holds one. A
+    decision changes only for a string with a backtick in front of a
+    backslash, which this reading gets wrong as it is: PowerShell 7 hands
+    `--fixed t` to the program after `--reason "a`\\"`, and the reader stops at
+    that quote (FN-45)."""
+    from aramid.agent_bypass import _segments, _tokens
+
+    def words(command, backtick):
+        return _segments(_tokens(command, backtick)[0])
+
+    # a quote after a backtick does not end the string
+    assert words('x "a`"b" y', True) == [["x", 'a`"b', "y"]]
+    # any other character after one is that character
+    assert words('x "a`;b" y', True) == [["x", "a`;b", "y"]]
+    assert words('x "a`$b" y', True) == [["x", "a`$b", "y"]]
+    # and a quote after a backslash is the quote, in both readings
+    assert words('x "a\\"b" y', False) == [["x", 'a"b', "y"]]
+    assert words('x "a\\"b" y', True) == [["x", 'a"b', "y"]]
+
+
 def test_a_comment_is_not_scanned():
     assert find_bypass("git commit -m x # --no-verify") is None
     assert find_bypass("git commit -m x #--no-verify") is None
@@ -393,6 +429,10 @@ def test_a_continued_line_is_one_command():
     assert find_bypass("git \\\n commit \\\n -n") == Bypass("no-verify", "commit", "-n")
     # the next line starts where it starts: nothing of it is taken with the join
     assert find_bypass("git commit -m x \\\n--no-verify") == NO_VERIFY
+    # a line that ends in CR LF is joined the same way, and no further
+    # (ledger 4307f4ee: one step more took the first character of the flag)
+    assert find_bypass("git commit -m x \\\r\n--no-verify") == NO_VERIFY
+    assert find_bypass("git commit -m x `\r\n--no-verify") == NO_VERIFY
     # inside double quotes a line is continued too, inside single quotes not
     assert find_bypass('git commit "--no-\\\nverify"') == NO_VERIFY
     assert find_bypass("git commit '--no-\\\nverify'") is None
