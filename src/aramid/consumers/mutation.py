@@ -509,7 +509,12 @@ def _kept_kills(partial, head: str, suite: str, of: int) -> set[int]:
     on: the head fixes the source and the tests, and the drain reads the
     suite from the working tree's aramid.toml, which can change while the
     head stands still. An index means something only against the same
-    regeneration, hence the count."""
+    regeneration, hence the count.
+
+    A set that names EVERY occurrence is none either. The consumer never
+    keeps one -- a re-test that kills them all claims -- so such a row is
+    forged or corrupt, and taken it would claim with no run in this process
+    (llm-review 961336fe): the survivor is re-tested from scratch."""
     if not isinstance(partial, dict):
         return set()
     if (partial.get("head"), partial.get("suite"), partial.get("of")) != (head, suite, of):
@@ -517,7 +522,8 @@ def _kept_kills(partial, head: str, suite: str, of: int) -> set[int]:
     killed = partial.get("killed")
     if not isinstance(killed, list):
         return set()
-    return {k for k in killed if isinstance(k, int) and not isinstance(k, bool) and 0 <= k < of}
+    kept = {k for k in killed if isinstance(k, int) and not isinstance(k, bool) and 0 <= k < of}
+    return set() if len(kept) == of else kept
 
 
 def _owed_ids(ledger) -> frozenset[str]:

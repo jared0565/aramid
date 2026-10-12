@@ -380,6 +380,31 @@ def test_a_kept_index_that_names_no_occurrence_counts_for_nothing(tmp_path, monk
     assert res.repaired is not None and res.repaired.ids == (TRIPLE,)
 
 
+def test_kept_kills_that_cover_every_occurrence_are_no_kills_at_all(tmp_path, monkeypatch):
+    # The consumer never keeps a full set: a re-test that killed every
+    # occurrence claims instead. So a row that lists them all is forged or
+    # corrupt, and taking it would claim with no run in this process --
+    # `mutant_killed` on a survivor nothing re-tested (llm-review 961336fe).
+    # It counts for nothing, and the survivor is re-tested from scratch.
+    r, _base, head = _repo(tmp_path)
+    _record(r, ["f1"], pending=["f1"])
+    led = Ledger(r / ".aramid" / "ledger.db")
+    try:
+        led.append(Event(EventType.CONSUMER_RUN_FINISHED, "old", "2026-09-01T12:00:00+00:00",
+                         payload={"consumer": "mutation", "item_id": "x", "state": "ok",
+                                  "retested_ids": [TRIPLE],
+                                  "retest_partial": {TRIPLE: {"head": head, "suite": _suite(r),
+                                                              "of": 3, "killed": [0, 1, 2]}}}))
+    finally:
+        led.close()
+
+    _clock(monkeypatch, 0.0)
+    res, calls = _drain(r, _empty_queue_item(head), monkeypatch)
+
+    assert calls == ["BASE", "f1", "f1", "f1_b", "f1_b", "f1_c", "f1_c"]
+    assert res.repaired is not None and res.repaired.ids == (TRIPLE,)
+
+
 def test_only_the_mutation_consumers_own_rows_are_its_memory(tmp_path, monkeypatch):
     # Another consumer's row that happens to carry the same keys says
     # nothing about this consumer's re-tests: it neither wipes kept kills nor
