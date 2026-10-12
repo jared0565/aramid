@@ -662,8 +662,8 @@ def test_a_two_occurrence_survivor_that_does_not_fit_is_skipped_unspent(tmp_path
     assert res.repaired is not None and res.repaired.ids == () and res.repaired.examined == (fid,)
     assert res.note == ("0 confirmed survivor(s) of 0 mutant(s) tested; re-tested 0 of 1 open"
                         " survivor(s), 0 killed; 0 of 1 survivor(s) named by a changed test"
-                        " re-tested first; 1 survivor(s) not re-tested: occurrences exceed"
-                        " the remaining re-test budget")
+                        " re-tested first; 1 survivor(s) not re-tested: more occurrences than"
+                        " the re-test slots left")
 
 
 # ------------------------------------------------- FN-23: certified nothing --

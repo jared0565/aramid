@@ -475,8 +475,66 @@ def _fits_retest_budget(need: int, budget: dict) -> bool:
     one slot left in the claimed pass, the first occurrence's stage-1 run
     and full-suite confirm spent (five minutes) and the row left pending.
     Zero occurrences always fit: nothing to run, and the caller must still
-    see the empty regeneration (`gap_addressed` / `file_departed` own it)."""
+    see the empty regeneration (`gap_addressed` / `file_departed` own it).
+
+    `need` is what is still owed a kill (FN-43): occurrences an earlier
+    re-test already killed under the same head and suite are kept
+    (`_kept_kills`) and are not run again, so they cost no slot."""
     return need <= _retest_room(budget)
+
+
+def _partial_kills(ledger) -> dict[str, dict | None]:
+    """id -> the kills the NEWEST mutation row that re-tested it kept
+    (`retest_partial`), or None when that row kept none -- it claimed the id,
+    re-reported it, or predates the key. A row that never reached the id (it
+    is not in that row's `retested_ids`) says nothing about it, so a skipped
+    run does not wipe an earlier run's kills. Never raises."""
+    kept: dict[str, dict | None] = {}
+    try:
+        for e in ledger.events():
+            if (e.type is EventType.CONSUMER_RUN_FINISHED
+                    and e.payload.get("consumer") == NAME):
+                partial = e.payload.get("retest_partial") or {}
+                for fid in e.payload.get("retested_ids") or ():
+                    kept[str(fid)] = partial.get(fid) if isinstance(partial, dict) else None
+    except Exception:
+        return {}
+    return kept
+
+
+def _kept_kills(partial, head: str, suite: str, of: int) -> set[int]:
+    """The occurrence indexes `partial` says are already killed, when it was
+    made against this `head`, under this `suite` and for this many
+    occurrences; else none. Each half of the key is something a claim rests
+    on: the head fixes the source and the tests, and the drain reads the
+    suite from the working tree's aramid.toml, which can change while the
+    head stands still. An index means something only against the same
+    regeneration, hence the count."""
+    if not isinstance(partial, dict):
+        return set()
+    if (partial.get("head"), partial.get("suite"), partial.get("of")) != (head, suite, of):
+        return set()
+    killed = partial.get("killed")
+    if not isinstance(killed, list):
+        return set()
+    return {k for k in killed if isinstance(k, int) and not isinstance(k, bool) and 0 <= k < of}
+
+
+def _owed_ids(ledger) -> frozenset[str]:
+    """The re-tests an item that changed a test owed and did not settle: the
+    `retest_owed` of the NEWEST mutation row that carries the key. Only a
+    run that re-tested writes it, so a plain item, an early return or a
+    give-up leaves the debt where it was. Never raises."""
+    owed: frozenset[str] = frozenset()
+    try:
+        for e in ledger.events():
+            if (e.type is EventType.CONSUMER_RUN_FINISHED
+                    and e.payload.get("consumer") == NAME
+                    and "retest_owed" in e.payload):
+                owed = frozenset(str(fid) for fid in e.payload.get("retest_owed") or ())
+    except Exception:
+        return frozenset()
+    return owed
 
 
 def _retest_room(budget: dict) -> int:
@@ -529,16 +587,18 @@ def _occurrences_beyond_room(root: Path, fid: str, rel: str, op: str | None,
 
 
 def unretestable_survivors(ledger, root: Path, cfg, statuses: tuple[str, ...] = RETEST_STATUSES,
+                           include: frozenset[str] | tuple = (),
                            ) -> list[tuple[str, str, int, str]]:
-    """(id, file, occurrences at HEAD, status) of each survivor in `statuses`,
-    under the re-test's own eligibility (`_retest_candidates`: unsuppressed,
-    a file and line to regenerate from), that no drain item can re-test. The
-    claim is atomic, so the consumer skips such a survivor unspent, every
-    drain. Never raises."""
+    """(id, file, occurrences at HEAD, status) of each survivor in `statuses`
+    (and each open or pending id in `include`), under the re-test's own
+    eligibility (`_retest_candidates`: unsuppressed, a file and line to
+    regenerate from), that no drain item can re-test. The claim is atomic,
+    so the consumer skips such a survivor unspent, every drain. Never
+    raises."""
     try:
         room = empty_queue_retest_room(cfg)
         state = ledger.open_findings()
-        candidates = _retest_candidates(ledger, root, statuses=statuses)
+        candidates = _retest_candidates(ledger, root, statuses=statuses, include=include)
     except Exception:
         return []
     out: list[tuple[str, str, int, str]] = []
@@ -550,10 +610,12 @@ def unretestable_survivors(ledger, root: Path, cfg, statuses: tuple[str, ...] = 
 
 
 def unfittable_pending(ledger, root: Path, cfg) -> list[tuple[str, str, int]]:
-    """(id, file, occurrences at HEAD) of the `pending_retest` survivors no
+    """(id, file, occurrences at HEAD) of the empty-queue item's survivors
+    (`pending_retests`: the `pending_retest` rows and the owed ones) that no
     empty-queue item can re-test -- the drain cuts no item for them."""
     return [(fid, rel, need) for fid, rel, need, _status
-            in unretestable_survivors(ledger, root, cfg, statuses=PENDING_ONLY)]
+            in unretestable_survivors(ledger, root, cfg, statuses=PENDING_ONLY,
+                                      include=_owed_ids(ledger))]
 
 
 def unretestable_check(root: Path, cfg):
@@ -578,11 +640,14 @@ def unretestable_check(root: Path, cfg):
 
 def _retest_candidates(ledger, root: Path,
                        statuses: tuple[str, ...] = RETEST_STATUSES,
+                       include: frozenset[str] | tuple = (),
                        ) -> list[tuple[str, str, int, str | None]]:
     """(id, file, line) of every mutation survivor worth re-testing -- open,
     or `pending_retest` (the gate's optimistic resolve, waiting for exactly
     this proof); `statuses` narrows that to the pending rows alone for the
-    drain's empty-queue item (`_retest_statuses`) -- oldest first.
+    drain's empty-queue item (`_retest_statuses`) -- oldest first. An id in
+    `include` qualifies in either status whatever `statuses` says: the
+    empty-queue item's owed rows (`pending_retests`).
 
     WHY RE-TEST AT ALL. `consume` mutates the python SOURCE in an item's
     range, so a survivor recorded at head N is re-tested only when its own
@@ -621,7 +686,10 @@ def _retest_candidates(ledger, root: Path,
     last_retested = _last_retested(ledger)
     out: list[tuple[str, str, int, str | None]] = []
     for fid, rec in state.items():
-        if rec.get("tool") != "mutation" or rec.get("status") not in statuses:
+        if rec.get("tool") != "mutation":
+            continue
+        status = rec.get("status")
+        if status not in statuses and not (fid in include and status in RETEST_STATUSES):
             continue
         if fid in suppressed or not rec.get("file") or not rec.get("line"):
             continue
@@ -690,11 +758,14 @@ def _source_files(changed) -> list[str]:
 
 
 def pending_retests(ledger, root: Path) -> list[tuple[str, str, int, str | None]]:
-    """The `pending_retest` survivors alone, under the same eligibility as
-    every re-test (unsuppressed, a file and line to regenerate from). The
-    drain asks this before synthesizing an empty-queue item, so an item is
-    never cut for rows the consumer would then skip."""
-    return _retest_candidates(ledger, root, statuses=PENDING_ONLY)
+    """The empty-queue item's survivors: the `pending_retest` rows, and the
+    rows an item that changed a test OWED a re-test and did not settle
+    (`_owed_ids`, FN-43) -- open ones included -- under the same eligibility
+    as every re-test (unsuppressed, a file and line to regenerate from).
+    The drain asks this before synthesizing an empty-queue item and the
+    consumer re-tests exactly this on it, so an item is never cut for rows
+    the consumer would then skip."""
+    return _retest_candidates(ledger, root, statuses=PENDING_ONLY, include=_owed_ids(ledger))
 
 
 def retests_enabled(cfg) -> bool:
@@ -715,11 +786,14 @@ def _retest_statuses(knobs, changed, item) -> tuple[str, ...]:
     """WHICH recorded survivors this item re-tests. A changed test: every
     open or pending survivor, as before (the changed test may kill any of
     them). The drain's empty-queue item (`queue.is_pending_retest_item`):
-    the `pending_retest` rows ONLY -- they exist to be verified and nothing
-    else would ever verify them, while an open survivor is a finding
-    awaiting a fix, and re-testing it four times a day on an idle repo
-    costs a full-suite run each and proves nothing new. Anything else:
-    nothing. Empty means no worktree is cut for re-tests."""
+    the `pending_retest` rows -- they exist to be verified and nothing else
+    would ever verify them -- and the rows an earlier item owed
+    (`pending_retests`), never other open survivors: an open survivor is a
+    finding awaiting a fix, and re-testing it four times a day on an idle
+    repo costs a full-suite run each and proves nothing new. An OWED one is
+    different: a changed test was the event that could have killed it, and
+    the item that changed it ran out of budget first (FN-43). Anything
+    else: nothing. Empty means no worktree is cut for re-tests."""
     if not knobs["retest_open_survivors"]:
         return ()
     if _retest_wanted(knobs, changed):
@@ -804,11 +878,14 @@ def consume(item, ctx: DrainContext) -> ConsumerResult:
     # one whose changed TEST may kill a recorded survivor (the survivors it
     # names run FIRST, ahead of the range's own mutants, on their own
     # budget -- `_claimed`; the rest wait for the hygiene pass, last), and
-    # the drain's empty-queue item, which re-tests the pending rows alone
-    # in that hygiene pass (`_retest_statuses`).
+    # the drain's empty-queue item, which re-tests the pending and owed rows
+    # in that hygiene pass (`_retest_statuses`, `pending_retests`).
     retest_cap = knobs["retest_cap"]
     statuses = _retest_statuses(knobs, changed, item)
-    retests = _retest_candidates(ctx.ledger, ctx.root, statuses=statuses) if statuses else []
+    if statuses == PENDING_ONLY:
+        retests = pending_retests(ctx.ledger, ctx.root)
+    else:
+        retests = _retest_candidates(ctx.ledger, ctx.root, statuses=statuses) if statuses else []
     claimed = _claimed(retests, changed)
     if _nothing_to_run(files, retests):
         return ConsumerResult(consumer=NAME, state="ok",
@@ -955,7 +1032,20 @@ def consume(item, ctx: DrainContext) -> ConsumerResult:
         # slots it had left (`_fits_retest_budget`); a later pass with room
         # (the hygiene pass runs on the range's budget) removes them again
         # when it runs them, so what remains at the end was never tested.
-        skipped_fps: set[str] = set()
+        # The value says why, for the note: "spent" when the pass had no
+        # slot left at all (a one-occurrence survivor behind a range that
+        # used every one reads that way, not as too big), "short" when it
+        # had some, but fewer than the occurrences still owed a kill.
+        skipped_fps: dict[str, str] = {}
+        # FN-43, kept kills. What earlier runs killed (`_partial_kills`), and
+        # what this run keeps for the next (`retest_partial` on its row):
+        # id -> {head, suite, of, killed}. Read only when there is a re-test.
+        partials = _partial_kills(ctx.ledger) if retests else {}
+        kept: dict[str, dict] = {}
+        # Survivors whose id regenerates nothing at this head: a re-test can
+        # neither kill nor re-report them (the gate's `line_departed` closes
+        # them), so they are settled for the owed list, not owed for ever.
+        unregenerable: set[str] = set()
         # Two budgets, not one. The RANGE budget is the item's, as it always
         # was: `max_mutants` stage-1 runs and `confirm_cap` full-suite runs,
         # shared by the range's fresh mutants and the hygiene pass after
@@ -1000,6 +1090,7 @@ def consume(item, ctx: DrainContext) -> ConsumerResult:
             if survivor is None:
                 muts = mutation.generate_mutants(original, target_lines)
                 stats["generated"] += len(muts)
+                work = list(enumerate(muts))
 
                 def t_of(func):
                     return _tgt(scores, rel, func)
@@ -1007,11 +1098,18 @@ def consume(item, ctx: DrainContext) -> ConsumerResult:
                     t_of(m.func)["generated"] += 1
             else:
                 muts = _survivor_mutants(rel, survivor, original, survivor_op)
-                kills_here, counted = 0, False
+                if not muts:
+                    unregenerable.add(survivor)
+                counted, survived = False, False
+                # Indexes into `muts`: those an earlier re-test under this
+                # head and suite killed, and those this one kills.
+                prior = _kept_kills(partials.get(survivor), item.head, suite, len(muts))
+                killed: set[int] = set()
+                work = [(k, m) for k, m in enumerate(muts) if k not in prior]
 
                 def t_of(func):
                     return _new_target()      # a throwaway: scores untouched
-                if not _fits_retest_budget(len(muts), budget):
+                if not _fits_retest_budget(len(work), budget):
                     # Whole or nothing: the claim below needs every
                     # occurrence, so a survivor this pass cannot finish is
                     # not started -- no stage-1 run, no confirm, no count.
@@ -1020,13 +1118,21 @@ def consume(item, ctx: DrainContext) -> ConsumerResult:
                     # this one may fit, and the hygiene pass (the range's
                     # budget) may fit this one.
                     stats["retest_truncated"] = True
-                    skipped_fps.add(survivor)
+                    skipped_fps[survivor] = "spent" if _retest_room(budget) == 0 else "short"
                     return True
             more = True
-            for m in muts:
+            for k, m in work:
                 if time.monotonic() - started > wall_budget:
-                    # Everyone's clock: the run is over.
+                    # Everyone's clock: the run is over. A re-test cut here
+                    # fell short as surely as one cut by its cap below, and
+                    # says so: before FN-43 only the next candidate's turn
+                    # set `retest_truncated`, and the hygiene pass leaves
+                    # before that turn, so a survivor cut between its
+                    # occurrences read as a finished re-test that killed
+                    # nothing.
                     stats["truncated"] = True
+                    if survivor is not None:
+                        stats["retest_truncated"] = True
                     done = True
                     more = False
                     break
@@ -1052,7 +1158,7 @@ def consume(item, ctx: DrainContext) -> ConsumerResult:
                     counted = True
                     stats["retested"] += 1
                     stats["retested_ids"].append(survivor)
-                    skipped_fps.discard(survivor)
+                    skipped_fps.pop(survivor, None)
                 tested_fps.add(_mutant_fp(rel, m.op, m.line, lines))
                 try:
                     src_path.write_text(m.source, encoding="utf-8")
@@ -1107,7 +1213,7 @@ def consume(item, ctx: DrainContext) -> ConsumerResult:
                                 if survivor is None:
                                     repaired_ids.add(fp)
                                 else:
-                                    kills_here += 1
+                                    killed.add(k)
                             else:
                                 # Timeout, pass, or a non-verdict outcome: the
                                 # narrow selection produced that exit code,
@@ -1170,6 +1276,8 @@ def consume(item, ctx: DrainContext) -> ConsumerResult:
                                 file=rel, line=m.line,
                                 message=(f"mutant survived: {m.description}"
                                          f" (unkilled by: {_suite_label(full_argv)})")))
+                        if survivor is not None:
+                            survived = True
                     elif s2.state is ToolState.OK and s2.returncode in (1, 2):
                         stats["killed_s2"] += 1
                         t["survived_s1"] -= 1
@@ -1181,7 +1289,7 @@ def consume(item, ctx: DrainContext) -> ConsumerResult:
                         if survivor is None:
                             repaired_ids.add(fp)
                         else:
-                            kills_here += 1
+                            killed.add(k)
                     else:
                         # Non-verdict full-suite outcome (internal/usage error,
                         # crash): the putative survivor is NOT reported -- a
@@ -1206,10 +1314,28 @@ def consume(item, ctx: DrainContext) -> ConsumerResult:
                 # re-reports the id and blocks the claim by itself, but a
                 # run cut short between occurrences (budget, cap) would
                 # not, and half-tested is untested.
-                if muts and kills_here == len(muts):
+                #
+                # Atomic per TREE AND SUITE, not per process (FN-43): each
+                # occurrence is already its own full-suite run against the
+                # tree at `item.head`, so a kill an earlier drain confirmed
+                # under the same head and suite is the same evidence this one
+                # would buy. Before, a survivor whose confirms outran the
+                # wall clock (4307f4ee: three occurrences, ~956 s each, a
+                # 2500 s budget whose clock starts before a ~909 s baseline)
+                # was cut after two kills every drain, both thrown away, and
+                # never claimed. A kept kill is dropped by a new head, a new
+                # suite, or a surviving occurrence.
+                got = prior | killed
+                if muts and len(got) == len(muts):
                     repaired_ids.add(survivor)
+                    kept.pop(survivor, None)
                 else:
                     repaired_ids.discard(survivor)
+                    if counted and got and not survived:
+                        kept[survivor] = {"head": item.head, "suite": suite, "of": len(muts),
+                                          "killed": sorted(got)}
+                    else:
+                        kept.pop(survivor, None)
             return more
 
         # The CLAIMED re-tests run FIRST. Running every re-test last so the
@@ -1300,6 +1426,11 @@ def consume(item, ctx: DrainContext) -> ConsumerResult:
         # signal that `retest_cap` or the budget cut the hygiene pass short.
         note += (f"; re-tested {stats['retested']} of {len(retests)} open "
                  f"survivor(s), {stats['retest_killed']} killed")
+    if kept:
+        # Not "0 killed" and nothing more: some occurrences died and were
+        # confirmed, and they count towards the claim at this head.
+        note += (f"; {len(kept)} survivor(s) part-killed, kills kept for a "
+                 f"re-test at this head")
     if stats["claimed"]:
         # The survivors a changed test in this range NAMES, and how many of
         # them ran ahead of the range's own mutants. A shortfall here is
@@ -1328,10 +1459,31 @@ def consume(item, ctx: DrainContext) -> ConsumerResult:
         # nothing re-reports it. A quieter item may give it room, but only up
         # to min(max_mutants, confirm_cap) (`empty_queue_retest_room`); a row
         # with more occurrences than that never fits, and the drain no longer
-        # cuts an empty-queue item for it (`unfittable_pending`).
-        note += (f"; {stats['retest_skipped']} survivor(s) not re-tested: "
-                 f"occurrences exceed the remaining re-test budget")
+        # cuts an empty-queue item for it (`unfittable_pending`). Two causes,
+        # named apart: "occurrences exceed the remaining budget" said of a
+        # one-occurrence survivor behind a range that spent every slot sent
+        # the reader to the survivor instead of the range.
+        spent = sum(1 for why in skipped_fps.values() if why == "spent")
+        if spent:
+            note += f"; {spent} survivor(s) not re-tested: no re-test slot was left for them"
+        if stats["retest_skipped"] - spent:
+            note += (f"; {stats['retest_skipped'] - spent} survivor(s) not re-tested: "
+                     f"more occurrences than the re-test slots left")
     extra = dict(stats)
+    # FN-43. What this run killed of a survivor it could not finish, for the
+    # next re-test under the same head and suite (`_partial_kills`).
+    extra["retest_partial"] = kept
+    if statuses:
+        # What this item was meant to re-test and did not settle -- no
+        # claim, no re-report -- owed to the drain's empty-queue item
+        # (`_owed_ids`, `pending_retests`). Written only by an item that
+        # re-tests, so one that does not leaves the debt where it was. A
+        # confirmed survivor of a recorded id is in `reported_fps` (one id
+        # names every occurrence), and a claim is in `repaired_ids`. One that
+        # regenerates nothing is settled too: left owed, every drain would
+        # cut an item and pay a baseline to test nothing.
+        settled = repaired_ids | reported_fps | unregenerable
+        extra["retest_owed"] = sorted(fid for fid, *_ in retests if fid not in settled)
     extra["mutation_scores"] = _finalize_scores(scores)
     # How long the configured suite actually took, measured. Recorded so an
     # operator sizing `baseline_timeout_s` has a real number to size it

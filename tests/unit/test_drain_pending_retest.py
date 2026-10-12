@@ -10,6 +10,7 @@ The drain now synthesizes one item per such repo -- base == head == HEAD,
 one reason carrying the `pending-retest:` marker -- and the mutation
 consumer re-tests exactly the pending rows on it. Hand-built ledgers; git
 only for a HEAD sha."""
+import dataclasses
 import subprocess
 from types import SimpleNamespace
 
@@ -115,6 +116,22 @@ def test_candidates_can_be_narrowed_to_pending_rows(tmp_path):
         led.close()
     assert sorted(both) == [A, B]
     assert pending == [A]
+
+
+def test_a_candidate_carries_the_op_its_survivor_was_recorded_with(tmp_path):
+    # The op is the hint `_survivor_mutants` hashes with to find the lines
+    # that could match. Lose it and every re-test regenerates the whole
+    # file: the same answer, slower, so nothing else in this suite notices.
+    # Only a record with no op at all goes without one.
+    r = _repo(tmp_path)
+    led = Ledger(r / ".aramid" / "ledger.db")
+    try:
+        led.record_run("r1", "2026-09-01T00:00:00+00:00", "drain", {"mutation"}, {"calc.py"},
+                       [_survivor(A, 2), dataclasses.replace(_survivor(B, 3), rule="")])
+        ops = {c[0]: c[3] for c in mut_consumer._retest_candidates(led, r)}
+    finally:
+        led.close()
+    assert ops == {A: "int-bound", B: None}
 
 
 # ------------------------------------------------ the drain's decision --
@@ -275,6 +292,91 @@ def test_status_is_silent_when_every_pending_row_fits(tmp_path):
     led = _ledger(r, pending=(FOUR,))
     try:
         assert status_mod._unfittable_retest_lines(r, _cfg(confirm_cap=4), led) == []
+    finally:
+        led.close()
+
+
+#
+# FN-43: an OPEN row is the empty-queue item's too once an item that changed a
+# test OWED it a re-test and did not settle it -- the hygiene pass ran out of
+# budget first (59bcbe17 and dee97bcb on this repo, 2026-10-10). The debt is
+# the newest mutation row that carries `retest_owed`; rows without the key
+# re-tested nothing and leave it where it was.
+
+def _row(led, at, **extra):
+    led.append(Event(EventType.CONSUMER_RUN_FINISHED, "d", at,
+                     payload={"consumer": "mutation", "item_id": "q", "state": "ok", **extra}))
+
+
+def test_an_open_row_a_test_changing_item_owed_triggers_an_item(tmp_path):
+    r = _repo(tmp_path)
+    led = _ledger(r, open_=(A, B))
+    _row(led, "2026-09-01T02:00:00+00:00", retest_owed=[A])
+    try:
+        item = drain_mod._pending_retest_item(r, _cfg(), led, "t")
+    finally:
+        led.close()
+    assert item is not None and item.reasons == (queue.pending_retest_reason(1),), \
+        "A is owed; B, open and never owed, is not the item's"
+
+
+def test_owed_and_pending_rows_are_counted_on_one_item(tmp_path):
+    r = _repo(tmp_path)
+    led = _ledger(r, pending=(A,), open_=(B, C))
+    _row(led, "2026-09-01T02:00:00+00:00", retest_owed=[B])
+    try:
+        item = drain_mod._pending_retest_item(r, _cfg(), led, "t")
+    finally:
+        led.close()
+    assert item is not None and item.reasons == (queue.pending_retest_reason(2),)
+
+
+def test_a_debt_the_newest_owing_row_paid_triggers_no_item(tmp_path):
+    r = _repo(tmp_path)
+    led = _ledger(r, open_=(A,))
+    _row(led, "2026-09-01T02:00:00+00:00", retest_owed=[A])
+    _row(led, "2026-09-01T06:00:00+00:00", retest_owed=[])
+    try:
+        assert drain_mod._pending_retest_item(r, _cfg(), led, "t") is None
+    finally:
+        led.close()
+
+
+def test_a_row_without_the_owed_key_leaves_the_debt(tmp_path):
+    r = _repo(tmp_path)
+    led = _ledger(r, open_=(A,))
+    _row(led, "2026-09-01T02:00:00+00:00", retest_owed=[A])
+    _row(led, "2026-09-01T06:00:00+00:00", note="no python files in range")
+    try:
+        item = drain_mod._pending_retest_item(r, _cfg(), led, "t")
+    finally:
+        led.close()
+    assert item is not None and item.reasons == (queue.pending_retest_reason(1),)
+
+
+def test_an_owed_row_that_is_suppressed_triggers_no_item(tmp_path):
+    r = _repo(tmp_path)
+    (r / ".aramid-suppressions.toml").write_text(
+        '[[suppress]]\nid = "' + A + '"\ntool = "mutation"\nrule = "int-bound"\n'
+        'path = "calc.py"\nreason = "equivalent mutant"\n', encoding="utf-8")
+    led = _ledger(r, open_=(A,))
+    _row(led, "2026-09-01T02:00:00+00:00", retest_owed=[A])
+    try:
+        assert drain_mod._pending_retest_item(r, _cfg(), led, "t") is None
+    finally:
+        led.close()
+
+
+def test_an_owed_row_whose_occurrences_outnumber_the_room_triggers_no_item(tmp_path):
+    # The same fit rule as a pending row's: an item for it would pay for a
+    # baseline and then skip it unspent.
+    r = _repo(tmp_path)
+    _commit(r, "calc.py", FOUR_IDENTICAL)
+    led = _ledger(r, open_=(FOUR,))
+    _row(led, "2026-09-01T02:00:00+00:00", retest_owed=[FOUR])
+    try:
+        assert drain_mod._pending_retest_item(r, _cfg(), led, "t") is None
+        assert drain_mod._pending_retest_item(r, _cfg(confirm_cap=4), led, "t") is not None
     finally:
         led.close()
 

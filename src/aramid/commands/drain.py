@@ -454,7 +454,11 @@ def _pending_retest_item(root: Path, cfg, ledger, at: str) -> queue.QueueItem | 
     the gate had flipped to `pending_retest` on a push: the gate said "a
     push addressed this gap" and, with no further commit, nothing ever
     verified it (2026-09-10: three rows sat pending after a drain and
-    closed only by a hand-run `triage HEAD` + `drain --repo .`).
+    closed only by a hand-run `triage HEAD` + `drain --repo .`). The OPEN
+    rows an item that changed a test owed a re-test and did not settle are
+    the item's too (FN-43; `_mutation.pending_retests` is the one
+    population, here and in the consumer): the hygiene pass had run out of
+    budget, and nothing else re-tests an open row nobody names.
 
     Called only when the queue is empty. Enqueues one item -- base == head
     == HEAD, so every consumer sees an empty range and only the mutation
@@ -471,8 +475,10 @@ def _pending_retest_item(root: Path, cfg, ledger, at: str) -> queue.QueueItem | 
     -- 13 minutes per drain on this repo for ad415f34, eleven identical
     lines against a room of 3 (2026-10-05). `aramid status` names those
     rows. Rows a re-test kills go `fixed`; rows that survive are re-reported
-    open and stop triggering; rows a timeout or the cap left pending get the
-    next drain. Never raises past the caller's per-repo isolation."""
+    open and stop triggering; rows a timeout or the cap left pending (or
+    owed) get the next drain, and a survivor cut between its occurrences
+    keeps the kills it got for that drain if HEAD has not moved. Never
+    raises past the caller's per-repo isolation."""
     if not _mutation.retests_enabled(cfg):
         return None
     pending = _mutation.pending_retests(ledger, root)

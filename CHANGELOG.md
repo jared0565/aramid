@@ -12,6 +12,40 @@ to publish a tag that disagrees with it.
 
 ## [Unreleased]
 
+### Fixed
+
+- **A recorded mutation survivor gets a re-test it can count on (FN-43).**
+  Two ways a survivor whose killing test already existed was never closed,
+  both reproduced in a scratch repo before the fix:
+  - *The clock.* A survivor id names every line with the same content, and a
+    claim needs every occurrence killed, each kill confirmed by a full-suite
+    run. `wall_budget_s` covers the whole item from before the baseline, so a
+    survivor with three occurrences could fit the item's slots and not its
+    clock: every drain killed two, stopped before the third, threw both kills
+    away and claimed nothing (this repo's 4307f4ee, about 47 minutes a drain
+    at 2500 s). The kills a cut re-test gets are now kept on the consumer
+    row (`retest_partial`), keyed on the head and the configured suite, and
+    the next re-test under the same key runs only what is left and claims
+    when every occurrence has a kill.
+  - *The open survivor nobody names.* An item that changed a test re-tests
+    every recorded survivor in its last pass, on what its own mutants left,
+    and the drain's empty-queue item re-tested `pending_retest` rows only. A
+    push that changes source and tests together could spend the budget first,
+    and the open row then waited for a quieter push. What such an item does
+    not settle is now owed (`retest_owed` on its row), and the empty-queue
+    item re-tests the owed rows too, open ones included, until each has a
+    verdict.
+- **A re-test the wall clock cut between occurrences says so.** It set only
+  `truncated`, and in the last pass `retest_truncated` stayed false, so the
+  note read "re-tested 1 of 1 open survivor(s), 0 killed" -- a finished
+  re-test that killed nothing -- when two of three had died and the third
+  never ran. It now sets `retest_truncated`, and the note names what was kept.
+- **A survivor skipped for want of slots is told apart from one too big for
+  them.** "occurrences exceed the remaining re-test budget" was said of a
+  one-occurrence survivor behind a range that had used every slot. The note
+  now reads `no re-test slot was left for them` or `more occurrences than the
+  re-test slots left`.
+
 ## [0.20.8] — 2026-10-11
 
 ### Added

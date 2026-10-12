@@ -1671,7 +1671,7 @@ def test_a_survivor_that_does_not_fit_the_budget_is_skipped_unspent(tmp_path, mo
     assert res.extra["retested"] == 0 and res.extra["retested_ids"] == []
     assert res.extra["retest_truncated"] is True
     assert res.extra["retest_skipped"] == 1
-    assert "; 1 survivor(s) not re-tested: occurrences exceed the remaining re-test budget" in res.note
+    assert "; 1 survivor(s) not re-tested: more occurrences than the re-test slots left" in res.note
     assert fid not in _ids_of(r, res.findings), "nothing ran, so nothing re-reports"
     assert _no_worktrees(r)
 
