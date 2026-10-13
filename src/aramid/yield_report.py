@@ -150,6 +150,7 @@ _SPECS = (
     _Spec("mutant_killed", "js-mutation", _by_tool("js-mutation")),
     _Spec("crash_not_reproduced", "fuzz", _by_tool("fuzz")),
     _Spec("endpoint_reprobed", "dast", _by_tool("dast")),
+    _Spec("reasonless_entry_gone", "aramid", _by_tool("aramid")),
 )
 
 EXPECTED = tuple((s.resolver, s.tool) for s in _SPECS)

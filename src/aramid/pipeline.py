@@ -1190,6 +1190,9 @@ def run_gate(root: Path, gate: Gate, mode: str, cfg: config_mod.Config, ledger: 
         ledger, run_id, at, {f.id for f in findings},
         suite_completed=(_tests_result is not None
                          and _tests_result.state is ToolState.OK))
+    # Nor a finding for a suppression entry with no reason: its tool,
+    # `aramid`, is no runner's label (FN-39).
+    config_mod.resolve_reasonless(ledger, run_id, at, {f.id for f in suppress_warnings})
 
     # Bound for EVERY path, not only the pre-push one: pre-commit never
     # ratchets, and a name defined only inside the branch below would raise on

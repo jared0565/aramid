@@ -14,7 +14,8 @@ import tomli_w
 
 from aramid import config_keys
 from aramid.fingerprint import compute_fingerprint, normalize_path
-from aramid.models import Finding, Gate, Severity, Source, Verdict
+from aramid.ledger import note_yield
+from aramid.models import Event, EventType, Finding, Gate, Severity, Source, Verdict
 from aramid.policy import _SEVERITY_ORDER, OverrideRecord, _map_severity, load_block_rules
 
 CURRENT_SCHEMA_VERSION = 1
@@ -358,6 +359,39 @@ def load_suppressions(root: Path) -> tuple[list[OverrideRecord], list[Finding]]:
             path=normalize_path(raw_path) if raw_path else raw_path, reason=reason))
 
     return records, warnings
+
+
+def resolve_reasonless(ledger, run_id: str, at: str, present_ids) -> list[str]:
+    """Resolve each open finding for a suppression entry with no reason that
+    this run did not report again (FN-39), `auto_resolved:
+    reasonless_entry_gone`.
+
+    `load_suppressions` stamps them `tool = "aramid"`, and `ledger.record_run`
+    resolves only findings whose tool is the label of a runner that ran. No
+    runner is `aramid`, so before this one stayed open for good after its
+    entry gained a reason or was removed (measured 2026-10-13 through
+    `run_gate`, under either gate). It needs no scope: `load_suppressions`
+    reads the whole file on every gate run or raises, and a missing file is
+    no entries. So an open one missing from `present_ids`, the ids
+    `load_suppressions` returned this run, has a reason now or is gone.
+
+    `considered` counts every open one it walked, one still reported
+    included. Counting only the ones it cleared would grade a standing entry
+    BLIND (`yield_report._grade`), a resolver defect in `aramid status`."""
+    considered, resolved = 0, []
+    for fid, rec in ledger.open_findings().items():
+        if (rec.get("status") != "open" or rec.get("tool") != "aramid"
+                or rec.get("rule") != "suppression-without-reason"):
+            continue
+        considered += 1
+        if fid in present_ids:
+            continue
+        ledger.append(Event(EventType.FINDING_RESOLVED, run_id, at, finding_id=fid,
+                            payload={"auto_resolved": "reasonless_entry_gone"}))
+        resolved.append(fid)
+    note_yield(ledger, run_id, at, resolver="reasonless_entry_gone", tool="aramid",
+               considered=considered, resolved=len(resolved))
+    return resolved
 
 
 def render_repo_stub(stack, pkg_mgr, *, today: str | None = None,

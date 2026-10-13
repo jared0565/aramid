@@ -86,6 +86,15 @@ to publish a tag that disagrees with it.
   with `--literal-pathspecs` passes `GIT_LITERAL_PATHSPECS` to the hooks it
   starts, and with it set a marked path names nothing, so aramid leaves that
   variable out of its own git calls.
+- **A finding for a suppression entry with no reason clears once the entry
+  has one, or is removed (FN-39).** aramid reports such an entry in
+  `.aramid-suppressions.toml` as a finding of its own (`tool = "aramid"`,
+  rule `suppression-without-reason`). Nothing ever resolved it: a finding
+  clears through the runner that reported it, and no runner is `aramid`.
+  Measured through the gate: still open after the entry gained a reason, and
+  after the file was deleted. Each gate run now resolves it
+  (`reasonless_entry_gone`) once the file no longer reports it, and `aramid
+  resolvers` grades the new resolver.
 
 ## [0.20.9] — 2026-10-12
 

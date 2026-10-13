@@ -402,8 +402,9 @@ def test_the_render_names_the_defect_and_the_numbers_behind_it(led):
     # `file_departed`, `line_departed` and `mutant_killed` -- so seeding one
     # producer flags exactly four resolvers. (Two of eleven until the python
     # `mutant_killed` pair was registered, three of twelve until
-    # `line_departed` was; that count moving is the fix, not a regression.)
-    assert "4 of 13 resolvers flagged" in out
+    # `line_departed` was, four of thirteen until `reasonless_entry_gone`
+    # (FN-39) was; that count moving is the fix, not a regression.)
+    assert "4 of 14 resolvers flagged" in out
 
 
 def test_a_clean_report_says_so_rather_than_printing_nothing(led):
