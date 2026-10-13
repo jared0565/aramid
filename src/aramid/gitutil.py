@@ -110,8 +110,14 @@ def armed_root(start: Path | None = None) -> Path | None:
     return repo
 
 def read_blob(root: Path, ref: str, rel_path: str) -> str:
+    """The file's text at `ref` (`:` for the index), or "" when git has
+    none. The `--` after the spec makes git read it as a revision and nothing
+    else (FN-42): with no `--`, a spec that names no object and holds a
+    wildcard, as an untracked `lib/[ab]/u.ts` does, is read as a pathspec,
+    and `git show` answers rc 0 with HEAD's commit or with nothing (measured
+    2026-10-13 on git 2.53, and on 2.55 in CI)."""
     spec = f"{ref}:{rel_path}" if ref != ":" else f":{rel_path}"
-    cp = _run(root, "show", spec)
+    cp = _run(root, "show", spec, "--")
     return cp.stdout if cp.returncode == 0 else ""
 
 
@@ -120,9 +126,9 @@ def blob_at(root: Path, ref: str, rel_path: str) -> str | None:
     path is not tracked at that revision, escapes the tree, or git itself
     failed. Unlike `read_blob`, an EMPTY file and a missing one differ: a
     resolver that treats "" as "no lines" must not be handed "" for "git
-    could not say"."""
+    could not say". The `--` is `read_blob`'s (FN-42)."""
     try:
-        cp = _run(root, "show", f"{ref}:{rel_path}")
+        cp = _run(root, "show", f"{ref}:{rel_path}", "--")
     except (OSError, ValueError):
         return None
     return cp.stdout if cp.returncode == 0 else None

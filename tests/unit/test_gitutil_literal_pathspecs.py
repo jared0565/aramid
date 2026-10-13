@@ -118,3 +118,24 @@ def test_a_caller_that_set_git_literal_pathspecs_does_not_blind_the_mark(tmp_pat
     assert gitutil.is_tracked(r, BRACKETED) is True
     text = gitutil.diff_text(r, base, head, paths=[BRACKETED])
     assert f"b/{BRACKETED}" in text and SIBLING not in text
+
+
+def test_a_blob_read_of_an_untracked_bracketed_path_finds_no_blob(tmp_path):
+    """`<rev>:<path>` names a blob, but with no `--` after it git reads an
+    argument that names no object and holds a wildcard as a pathspec, and
+    `git show` answers rc 0 with HEAD's commit or with nothing (measured
+    2026-10-13 on git 2.53, and on 2.55 in CI)."""
+    r = _repo(tmp_path)
+    _commit(r, {"lib/a/u.ts": "tracked\n", BRACKETED: "a\n"}, "a")
+    untracked = "lib/[ab]/u.ts"
+    (r / "lib" / "[ab]").mkdir()
+    (r / untracked).write_text("working\n", encoding="utf-8")
+    controls = [_git(r, "show", spec).returncode for spec in (f"HEAD:{untracked}", f":{untracked}")]
+    assert 0 in controls, "control: with no --, git reads one form or the other as a pathspec"
+
+    for ref in ("HEAD", ":"):
+        assert gitutil.read_blob(r, ref, untracked) == ""
+        assert gitutil.read_blob(r, ref, BRACKETED) == "a\n"
+        assert gitutil.read_for_fingerprint(r, ref, untracked) == "working\n"
+    assert gitutil.blob_at(r, "HEAD", untracked) is None, "no blob, not an empty one"
+    assert gitutil.blob_at(r, "HEAD", BRACKETED) == "a\n"

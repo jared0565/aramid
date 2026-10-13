@@ -102,7 +102,11 @@ to publish a tag that disagrees with it.
   named `-x.py` is no longer read as `git ls-files`' `-x` option. A git run
   with `--literal-pathspecs` passes `GIT_LITERAL_PATHSPECS` to the hooks it
   starts, and with it set a marked path names nothing, so aramid leaves that
-  variable out of its own git calls.
+  variable out of its own git calls. A read of a file at a revision
+  (`git show <rev>:<path>`) now ends with `--` as well: for an untracked
+  `lib/[ab]/u.ts`, git read the whole spec as a pattern and answered with a
+  commit's text in place of the file's, or read a missing file as an empty
+  one (git 2.53 here, and 2.55 in CI).
 - **A finding for a suppression entry with no reason clears once the entry
   has one, or is removed (FN-39).** aramid reports such an entry in
   `.aramid-suppressions.toml` as a finding of its own (`tool = "aramid"`,
