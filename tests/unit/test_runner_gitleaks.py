@@ -545,3 +545,16 @@ def test_only_the_all_scan_builds_the_tracked_copy(tmp_path, monkeypatch):
         assert gitleaks.run(ctx).state is ToolState.OK
         copies.append(len(built) - before)
     assert copies == [0, 0, 1]
+
+
+def test_a_range_scan_keeps_a_leak_in_a_file_the_net_diff_no_longer_changes(tmp_path):
+    """A push's commits can add a secret and later delete it: the file is not
+    among the range's net changed files (`ctx.files`), but the secret is in
+    the history being pushed. Only `--all` narrows the report to `ctx.files`."""
+    item = {"RuleID": "github-pat", "File": "gone.py", "StartLine": 3, "Commit": "abc123",
+            "Secret": "placeholder", "Description": "d"}
+    result = RunnerResult(tool="gitleaks", state=ToolState.OK, raw=json.dumps([item]),
+                          stderr="", duration_s=0.01, returncode=1)
+    ctx = RunContext(root=tmp_path, rng="base..head", files=["kept.py"])
+    assert [(f.file, f.line, f.commit) for f in gitleaks.parse(result, ctx)] == [
+        ("gone.py", 3, "abc123")]

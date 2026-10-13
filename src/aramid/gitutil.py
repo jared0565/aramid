@@ -79,6 +79,16 @@ def repo_root(path: Path) -> Path:
     return Path(cp.stdout.strip()).resolve()
 
 
+def git_dir(root: Path) -> Path:
+    """The repository's own git directory, absolute: `root/.git` in a plain
+    checkout, the worktree's directory under the main `.git` in a linked one
+    (where `.git` is a file)."""
+    cp = _run(root, "rev-parse", "--absolute-git-dir")
+    if cp.returncode != 0:
+        raise NotARepo(str(root))
+    return Path(cp.stdout.strip())
+
+
 def armed_root(start: Path | None = None) -> Path | None:
     """The git root of `start` (the cwd when None), and only when it holds
     an `aramid.toml` FILE -- a repo where `aramid init` ran. None outside

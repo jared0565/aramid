@@ -79,6 +79,15 @@ to publish a tag that disagrees with it.
   starts gitleaks without both; a repo's own `.gitleaks.toml` still applies.
   **If you set either variable to give gitleaks rules of your own, put them
   in the repo's `.gitleaks.toml` instead.**
+- **A secret the repo's `.gitleaksignore` or `.gitleaks.toml` hides is
+  reported (FN-40).** gitleaks honours both files on its own, untracked as
+  well as tracked. Measured on 0.20.9, either one hid a secret from the
+  commit and push scans with nothing reported, and a `.gitleaks.toml`
+  without `useDefault` replaced every rule. When the repo root holds either
+  file, gitleaks now runs once more, with only its own rules, from a
+  directory that holds neither, and each hit only that run finds is a `WARN`
+  `gitleaks-inline` finding naming the file, as for a `gitleaks:allow`
+  comment. Nothing new blocks, and both files keep working.
 
 ### Fixed
 
