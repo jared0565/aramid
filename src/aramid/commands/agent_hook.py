@@ -24,7 +24,11 @@ turned the fail-open catch into a silent hook on Windows (final review C1).
 pre-tool-use screens each Bash/PowerShell tool call's command string for
 git hook-bypass invocations, and for an `aramid ledger resolve --fixed`
 that carries no `--red-proof` (FN-36: an agent's close has to show red
-proof; both are aramid.agent_bypass, token-level). While
+proof; both are aramid.agent_bypass, token-level). The command is cut
+up by the rules of the shell that will run it, which the payload's
+`tool_name` says (FN-45): PowerShell's own for a PowerShell call, the POSIX
+rules for a Bash call, and for a name this version does not know, or none,
+the way every call was read before the hook was told. While
 baking it allows and surfaces an advisory through
 hookSpecificOutput.additionalContext; armed (agent_block_armed = true) it
 denies via permissionDecision: "deny". Contract pinned against Claude Code
@@ -114,6 +118,12 @@ def _session_start(root: Path | None) -> int:
     return 0
 
 
+# The harness's tool names and the shell each one runs (FN-45). The values are
+# agent_bypass.POSIX and agent_bypass.POWERSHELL, written out so that this
+# module does not import the reader before a call needs it.
+_SHELLS = {"Bash": "posix", "PowerShell": "powershell"}
+
+
 def _pre_tool_use(root: Path | None) -> int:
     import json
     import sys
@@ -125,8 +135,12 @@ def _pre_tool_use(root: Path | None) -> int:
     command = tool_input.get("command") if isinstance(tool_input, dict) else None
     if not isinstance(command, str):
         return 0
-    from aramid.agent_bypass import find_bypass
-    bypass = find_bypass(command)
+    from aramid import agent_bypass
+    # FN-45: the harness names the tool, and the tool is the shell. A name this
+    # version does not know, or none, is read as before the hook was told.
+    tool = payload.get("tool_name")
+    shell = _SHELLS.get(tool) if isinstance(tool, str) else None
+    bypass = agent_bypass.find_bypass(command, shell)
     if bypass is None:
         return 0
     from aramid import gitutil

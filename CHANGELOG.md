@@ -12,6 +12,29 @@ to publish a tag that disagrees with it.
 
 ## [Unreleased]
 
+### Security
+
+- **The agent hook reads a PowerShell command by PowerShell's rules
+  (FN-45).** It read every command as a POSIX shell cuts it up. In
+  PowerShell that let a `--no-verify` through after a string that ends in a
+  backslash (`-m "C:\src\"`), after an escaped quote, behind a `<# #>`
+  comment, inside a here-string, after a value in front of the subcommand
+  (`git $u.y commit -n`), and up to a NUL (``--no-verify`0``). It also
+  warned about proper closes such as
+  ``--reason "see `"issue #12`" now" --red-proof``. Claude Code names the
+  tool that makes a call. A PowerShell call is now cut into the words
+  PowerShell hands the program, and a Bash call is read by POSIX rules
+  alone. A call from a tool the hook does not know is still read as before.
+- **A program name written with a quote or a backslash in it is seen
+  (FN-50).** `g"i"t commit --no-verify` runs git in bash and was not
+  answered: a cheap test in front of the reader looked for the letters `git`
+  in the text as written. The test now takes the quotes, the backslash and a
+  line end out first, so the name is found however it is spelled. This also
+  covers a call from a tool the hook does not name.
+- **A word that starts with `$` in front of git's subcommand is stepped
+  over.** `git $(true) commit -n` commits, and in a Bash or PowerShell call
+  it is now refused (finding 4ce6a085).
+
 ## [0.20.9] — 2026-10-12
 
 ### Fixed

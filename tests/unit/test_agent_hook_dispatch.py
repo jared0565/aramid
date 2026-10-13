@@ -238,6 +238,80 @@ def test_describe_names_the_flag_or_the_hooks_path_value(tmp_path):
         "`git commit` under `-c core.hooksPath=/tmp/x`"
 
 
+# ------------------------------------------------- the shell (FN-45) --
+
+# A bypass by PowerShell's rules alone: the string ends at its quote there,
+# and by the POSIX rule the quote is escaped and the string never ends.
+_POWERSHELL_ONLY = 'git commit -m "C:\\src\\" --no-verify'
+# And one by bash's alone: it takes the backslash out of the name, and to
+# PowerShell `g\it` is no program it knows.
+_BASH_ONLY = "g\\it commit --no-verify"
+_ABSENT = object()
+
+
+def test_the_tool_the_payload_names_chooses_the_reading(tmp_path, monkeypatch, capsys):
+    r = _repo(tmp_path, armed=True)
+
+    def denied(tool, command):
+        payload = {"hook_event_name": "PreToolUse", "tool_input": {"command": command}}
+        if tool is not _ABSENT:
+            payload["tool_name"] = tool
+        _stdin(monkeypatch, payload)
+        assert ah._pre_tool_use(r) == 0
+        out = capsys.readouterr().out
+        assert out == "" or json.loads(out)["hookSpecificOutput"]["permissionDecision"] == "deny"
+        return out != ""
+
+    assert denied("PowerShell", _POWERSHELL_ONLY) and not denied("Bash", _POWERSHELL_ONLY)
+    assert denied("Bash", _BASH_ONLY) and not denied("PowerShell", _BASH_ONLY)
+    # No name, or one this version does not know: the call is read by POSIX
+    # rules, as every call was up to 0.20.8. A name that is no string must not
+    # cost the answer -- an error here fails open, and the plain bypass would
+    # go unanswered.
+    for tool in (_ABSENT, None, 7, True, ["Bash"], {"Bash": 1}, "", "bash", "POWERSHELL",
+                 "Shell", "mcp__x__run"):
+        assert not denied(tool, _POWERSHELL_ONLY), tool
+        assert denied(tool, _BASH_ONLY), tool
+        assert denied(tool, "git commit --no-verify -m x"), tool
+    for tool in ("Bash", "PowerShell"):
+        assert denied(tool, "git commit --no-verify -m x")
+        assert denied(tool, _CLOSE) and not denied(tool, _CLOSE + " --red-proof")
+
+
+def test_a_powershell_call_is_answered_in_the_same_words(tmp_path, monkeypatch, capsys):
+    r = _repo(tmp_path, armed=True)
+    _stdin(monkeypatch, {**FLAG, "tool_name": "PowerShell"})
+
+    assert ah._pre_tool_use(r) == 0
+    out = capsys.readouterr().out
+    assert out == json.dumps(DENY_FLAG) + "\n"
+
+
+def test_the_hooks_shells_are_the_readers_own():
+    from aramid import agent_bypass
+
+    assert ah._SHELLS == {"Bash": agent_bypass.POSIX, "PowerShell": agent_bypass.POWERSHELL}
+
+
+def test_the_hook_hands_the_reader_the_shell_it_was_told(tmp_path, monkeypatch, capsys):
+    from aramid import agent_bypass
+
+    seen = []
+
+    def find(command, shell=None):
+        seen.append((command, shell))
+
+    monkeypatch.setattr(agent_bypass, "find_bypass", find)
+    for tool in ("Bash", "PowerShell", "Other", None):
+        _stdin(monkeypatch, {"tool_name": tool, "tool_input": {"command": "git status"}})
+        assert ah._pre_tool_use(tmp_path) == 0
+    _stdin(monkeypatch, {"tool_input": {"command": "git status"}})
+    assert ah._pre_tool_use(tmp_path) == 0
+    assert seen == [("git status", "posix"), ("git status", "powershell"), ("git status", None),
+                    ("git status", None), ("git status", None)]
+    assert capsys.readouterr() == ("", "")
+
+
 def test_a_clean_command_is_silent_before_the_repo_is_looked_at(tmp_path, monkeypatch, capsys):
     _stdin(monkeypatch, CLEAN)
 

@@ -1,0 +1,485 @@
+"""agent_bypass_powershell -- a command read by PowerShell's rules (FN-45).
+
+Spec: docs/superpowers/specs/2026-10-12-aramid-powershell-reading-design.md.
+
+`agent_bypass` reads a command the way a POSIX shell cuts it up. PowerShell
+cuts it up differently, and each difference was a way to get a flag past the
+hook or to be answered for a proper command: a backslash escapes nothing
+there, the backtick does, a quote is doubled, `<# #>` is a comment, a word
+that starts with a quote ends with it. So a PowerShell tool call gets a
+reading of its own. `commands` hands back the simple commands in the text,
+each as the words PowerShell would hand to the program, and `agent_bypass`
+judges them with the same flag rules as ever.
+
+Every rule here was read off PowerShell 7 with a program that records its
+arguments, not written from memory; the spec has the table and the counts.
+
+Pure stdlib, no aramid imports, no I/O, and it cannot raise: it runs inside
+the agent hook, which fails open, so a raise here would let a command
+through unread. A Bash tool call never imports this module.
+
+WHAT IS NOT KNOWN HERE. A variable, a `$( )`, a `( )` or a `{ }` stands for
+a value only the run will show. As a whole word it stays one word, written
+`$`, which the flag rules step over or take as a value. Inside a longer
+word it is taken to be empty, because it may be: `--no-verify$u` is read as
+the flag. The cost is an answer for `--no-verify$x` when `$x` is set, a
+word nobody has a use for. At the start of a word a value takes its members
+with it (`$u.y`, `$x[0]`, `(a).Length`), and what follows them is a word of
+its own: `git $u.y commit -n` commits.
+
+A NUL ENDS THE LINE. A program is started with one line of text, and the
+line stops at a NUL. So ``--no-verify`0`` is the flag, and a `--red-proof`
+that stands after a NUL is not handed to aramid. `commands` hands back the
+words as far as the NUL.
+
+A READING THAT IS CUT OFF. An open quote, comment or group makes PowerShell
+run none of the text. The commands read up to there are handed back all the
+same, with the word it stopped in left out: this reader may be the one that
+is wrong about where the quote closes, and what it lets through is caught
+by nothing else.
+
+A bypass buried deeper than _DEPTH groups is cut off the same way, and here
+the reading stops BEFORE the command, so it is missed. The cap is low on
+purpose -- going as deep as PowerShell (it runs the wrapped command thousands
+of groups in) could raise, and this reader must not. A flag standing outside
+the nest is still read, so this hides only one an agent chose to bury, and a
+single `$( )` buries one just as well.
+"""
+from __future__ import annotations
+
+_SINGLE = "'\u2018\u2019\u201a\u201b"
+_DOUBLE = "\"\u201c\u201d\u201e"
+_NEWLINE = "\r\n"
+# What a backtick makes of the letter after it. Any other character after a
+# backtick is that character.
+_ESCAPES = {"0": "\0", "a": "\a", "b": "\b", "e": "\x1b", "f": "\f", "n": "\n",
+            "r": "\r", "t": "\t", "v": "\v"}
+_HEX = "0123456789abcdefABCDEF"
+# The streams a redirection can name in front of its `>`.
+_STREAMS = ("1", "2", "3", "4", "5", "6", "*")
+# The stop-parsing token: after it the rest of the line is handed over as written.
+_STOP = "--%"
+# How deep `( )`, `{ }` and `$( )` may nest before the reading is cut off.
+_DEPTH = 40
+# Stands in a word for a value that is not known here (module docstring).
+_VALUE = "\ue011"
+
+
+class _CutOff(Exception):
+    """The text ends inside a quote, a comment or a group."""
+
+
+def commands(text: str) -> tuple[list[list[str]], bool]:
+    """The simple commands in `text`, each a list of words, and whether the
+    reading got to the end of the text."""
+    done: list[list[str]] = []
+    try:
+        _commands(text, 0, "", done, 0)
+    except _CutOff:
+        return done, False
+    return done, True
+
+
+def _blank(ch: str) -> bool:
+    """A character that separates words and does not end the line."""
+    return ch.isspace() and ch not in "\r\n\x1c\x1d\x1e\x1f"
+
+
+def _commands(text: str, i: int, closer: str, done: list, depth: int) -> int:
+    """Read commands from text[i:] up to `closer`, or to the end of the text
+    when there is none. Each finished command is appended to `done`. Returns
+    the index after the closer."""
+    if depth > _DEPTH:
+        raise _CutOff
+    n = len(text)
+    words: list[str] = []
+    word: list[str] | None = None   # the word being read, None between words
+    plain = True        # the word has no quote, escape or value in it
+    named = False       # the word is `-name`: it ends at a `.` or a `[`
+    target = False      # the next word is where a redirection goes
+    comma = False       # a comma was the last thing read: the line goes on
+
+    def end_word() -> bool:
+        """Close the word being read. True when it was the stop-parsing token,
+        written plainly: the caller reads the rest of the line as it stands."""
+        nonlocal word, plain, named, target
+        stop = False
+        if word is not None:
+            read = "".join(word)
+            known = read.replace(_VALUE, "")
+            if target:
+                target = False
+            elif known == _STOP:
+                stop = plain    # quoted or escaped it is left out all the same
+            else:
+                words.append(known if known or _VALUE not in read else "$")
+        word, plain, named = None, True, False
+        return stop
+
+    def end_command() -> None:
+        nonlocal words, target, comma
+        end_word()
+        if words:
+            done.append(_handed(words))
+        words, target, comma = [], False, False
+
+    try:
+        # A turn for each character left, and every turn reads one at least:
+        # the length of the text bounds the walk, whatever the text holds.
+        for _ in range(i, n):
+            if i >= n:
+                break
+            ch = text[i]
+            if ch in _NEWLINE:
+                if comma:
+                    # after a comma the list goes on over the line end, and
+                    # the line end is handed over as part of a word
+                    if word is None:
+                        word = []
+                    word.append("\n")
+                else:
+                    end_command()
+                i += 1
+            elif _blank(ch):
+                i = _verbatim(text, i, words) if end_word() else i + 1
+            elif ch == "`" and not named:
+                nxt = text[i + 1:i + 2]
+                if not nxt:
+                    raise _CutOff
+                made, i = _escape(text, i)
+                if word is None and (nxt in _NEWLINE or _blank(nxt)):
+                    continue    # between words: a continued line, or a blank
+                if word is None:
+                    word = []
+                word.append(made)
+                plain, comma = False, False
+            elif ch in _SINGLE or ch in _DOUBLE:
+                began = word is None
+                if began:
+                    word = []
+                plain, named, comma = False, False, False
+                if ch in _SINGLE:
+                    i = _single(text, i + 1, word)
+                else:
+                    i = _double(text, i + 1, word, done, depth)
+                if began:
+                    end_word()  # a word that starts with a quote ends with it
+            elif ch == "@" and word is None and _here_string_starts(text, i):
+                word = []
+                plain = False
+                i = _here_string(text, i, word, done, depth)
+                end_word()
+            elif ch == "$" and not named and _value_starts(text, i):
+                comma = False
+                if text[i + 1:i + 2] == "(":
+                    began = word is None
+                    if began:
+                        word = []
+                    word.append(_VALUE)
+                    plain = False
+                    i = _commands(text, i + 2, ")", done, depth + 1)
+                    if began:
+                        i = _members(text, i, done, depth)
+                        end_word()      # `$(a)b` is two words, `a$(b)c` one
+                    continue
+                i, null = _variable(text, i)
+                if word is None:
+                    after = _members(text, i, done, depth)
+                    if after != i:
+                        # `$x.y`, `$x[0]`: an expression, and a word by itself
+                        # (`$u.y-n` hands over `-n`); even of `$null` the
+                        # value is not known
+                        i = after
+                        word, plain = [_VALUE], False
+                        end_word()
+                        continue
+                # `$null` is nothing wherever it stands, but for a
+                # redirection it is where the output goes (`2>$null`)
+                if not null or (target and word is None):
+                    if word is None:
+                        word = []
+                    word.append(_VALUE)
+                    plain = False
+            elif ch in "({" or (ch == "@" and word is None
+                                and text[i + 1:i + 2] in ("(", "{")):
+                if ch == "@":
+                    i += 1
+                    ch = text[i]
+                if end_word():
+                    i = _verbatim(text, i, words)
+                    continue
+                if target:
+                    target = False
+                elif words:
+                    words.append("$")   # a group among the arguments: a value
+                comma = False
+                i = _commands(text, i + 1, ")" if ch == "(" else "}", done, depth + 1)
+                i = _members(text, i, done, depth)      # `(a).Length` is one value
+            elif ch in ")}" or (ch == "]" and closer == "]"):
+                end_command()
+                if ch == closer:
+                    return i + 1
+                i += 1                  # one that closes nothing
+            elif ch in ";|&":
+                # `&&` and `||` are two of these in a row: the second ends a
+                # command that is empty, which hands nothing over
+                end_command()
+                i += 1
+            elif word is None and ch == "#":
+                while i < n and text[i] not in _NEWLINE:
+                    i += 1
+            elif word is None and ch == "<" and text[i + 1:i + 2] == "#":
+                end = text.find("#>", i + 2)
+                if end == -1:
+                    raise _CutOff
+                i = end + 2
+            elif ch in "<>" and (word is None or (ch == ">" and plain and len(word) == 1
+                                                  and word[0] in _STREAMS)):
+                word = None             # the stream in front of it, if any
+                i, target = _redirection(text, i)
+                comma = False
+            else:
+                if word is None:
+                    word = []
+                    nxt = text[i + 1:i + 2]
+                    named = ch == "-" and (nxt.isalpha() or nxt in ("_", "?"))
+                elif named and ch in ".[":
+                    end_word()          # `-n.x` is `-n` and `.x`
+                    word = []
+                elif named and ch == ":":
+                    named = False       # `-n:.x` is one word
+                word.append(ch)
+                comma = ch == ","
+                i += 1
+        if closer or i < n:
+            raise _CutOff       # a group left open, or a turn that read nothing
+        end_command()
+        return n
+    except _CutOff:
+        if words:
+            done.append(_handed(words))
+        raise
+
+
+def _handed(words: list[str]) -> list[str]:
+    """The words a program is handed. It is started with one line of text and
+    a NUL ends that line: the word is cut there and the words after it are
+    lost. ``--no-verify`0`` is the flag, and a `--red-proof` after a NUL is
+    not handed over."""
+    for k, word in enumerate(words):
+        at = word.find("\0")
+        if at >= 0:
+            return words[:k] + ([word[:at]] if at else [])
+    return words
+
+
+def _escape(text: str, i: int) -> tuple[str, int]:
+    """What the backtick at text[i] makes of what follows it, and the index
+    after that."""
+    nxt = text[i + 1:i + 2]
+    if nxt == "u":
+        # `u{`, one to six hex digits, `}`: a code point. Written any other
+        # way PowerShell runs none of the text.
+        if text[i + 2:i + 3] != "{":
+            raise _CutOff
+        end = i + 3
+        while end < len(text) and text[end] in _HEX:
+            end += 1
+        digits = text[i + 3:end]
+        if text[end:end + 1] != "}" or not digits or len(digits) > 6:
+            raise _CutOff
+        point = int(digits, 16)
+        if point > 0x10FFFF:
+            raise _CutOff
+        # half of a surrogate pair is handed over as the replacement character
+        return chr(0xFFFD if 0xD800 <= point <= 0xDFFF else point), end + 1
+    if nxt and nxt in _NEWLINE:
+        return "\n", i + (3 if text.startswith("\r\n", i + 1) else 2)
+    return _ESCAPES.get(nxt, nxt), i + 2
+
+
+def _single(text: str, i: int, word: list) -> int:
+    """A single-quoted string from text[i] on: nothing is special in it but
+    the quote, and two of them are one. The index after the closing quote."""
+    n = len(text)
+    while i < n:
+        ch = text[i]
+        if ch not in _SINGLE:
+            word.append(ch)
+            i += 1
+        elif i + 1 < n and text[i + 1] in _SINGLE:
+            word.append("'")
+            i += 2
+        else:
+            return i + 1
+    raise _CutOff
+
+
+def _double(text: str, i: int, word: list, done: list, depth: int) -> int:
+    """A double-quoted string from text[i] on: the backtick escapes, two
+    quotes are one, a variable is a value, and `$( )` holds commands that
+    run. The index after the closing quote."""
+    n = len(text)
+    while i < n:
+        ch = text[i]
+        if ch == "`":
+            # a backtick that is the last character escapes nothing: the
+            # index goes past the end and the string is left open
+            made, i = _escape(text, i)
+            word.append(made)
+        elif ch in _DOUBLE:
+            if not (i + 1 < n and text[i + 1] in _DOUBLE):
+                return i + 1
+            word.append('"')
+            i += 2
+        elif ch == "$" and text[i + 1:i + 2] == "(":
+            word.append(_VALUE)
+            i = _commands(text, i + 2, ")", done, depth + 1)
+        elif ch == "$" and _value_starts(text, i):
+            i, null = _variable(text, i)
+            if not null:
+                word.append(_VALUE)
+        else:
+            word.append(ch)
+            i += 1
+    raise _CutOff
+
+
+def _name_char(ch: str) -> bool:
+    return ch.isalnum() or ch in ("_", "?")
+
+
+def _value_starts(text: str, i: int) -> bool:
+    """Whether the `$` at text[i] starts a variable or a `$( )`, and is not a
+    dollar sign that stands for itself."""
+    nxt = text[i + 1:i + 2]
+    return bool(nxt) and (nxt in "({$^" or _name_char(nxt))
+
+
+def _variable(text: str, i: int) -> tuple[int, bool]:
+    """The variable at text[i], a `$` that `_value_starts` accepted and that
+    opens no `$( )`: the index after its name, and whether it is `$null`."""
+    n = len(text)
+    nxt = text[i + 1]
+    if nxt == "{":
+        # `${name}`: anything up to the brace. `${}` names nothing, and then
+        # PowerShell runs none of the text.
+        end = text.find("}", i + 2)
+        if end <= i + 2:
+            raise _CutOff
+        return end + 1, text[i + 2:end].lower() == "null"
+    if nxt in "$^":
+        return i + 2, False
+    end = i + 2         # past the `$` and the first letter: `_value_starts` saw it
+    while end < n and _name_char(text[end]):
+        end += 1
+    null = text[i + 1:end].lower() == "null"
+    # a scope or a drive in front of the name: `$env:PATH`, `$global:x`
+    if text[end:end + 1] == ":" and _name_char(text[end + 1:end + 2] or " "):
+        end += 2        # past the `:` and the letter the test above saw
+        while end < n and _name_char(text[end]):
+            end += 1
+        null = False
+    return end, null
+
+
+def _members(text: str, i: int, done: list, depth: int) -> int:
+    """What follows a value at the start of a word and is part of it: `.name`,
+    `::name`, `[index]`, and the `( )` of arguments after a name. What stands
+    in the brackets is run, so it is read. The index after the last of them,
+    which is `i` when there is none."""
+    n = len(text)
+    while True:
+        if text[i:i + 1] == "[":
+            i = _commands(text, i + 1, "]", done, depth + 1)
+            continue
+        if text.startswith("::", i):
+            k = i + 2
+        elif text[i:i + 1] == ".":
+            k = i + 1
+        else:
+            return i
+        if not _name_char(text[k:k + 1] or " "):
+            return i
+        while k < n and _name_char(text[k]):
+            k += 1
+        if text[k:k + 1] == "(":
+            k = _commands(text, k + 1, ")", done, depth + 1)
+        i = k
+
+
+def _here_string_starts(text: str, i: int) -> bool:
+    """Whether the `@` at text[i] opens a here-string: a quote after it, and
+    nothing but blanks up to the end of the line."""
+    # (an `@` that is the last character has no quote after it, and the line
+    # end test below then says no)
+    if text[i + 1:i + 2] not in _SINGLE + _DOUBLE:
+        return False
+    k = i + 2
+    while k < len(text) and _blank(text[k]):
+        k += 1
+    return k < len(text) and text[k] in _NEWLINE
+
+
+def _here_string(text: str, i: int, word: list, done: list, depth: int) -> int:
+    """The here-string that opens at text[i]: it runs to a line that starts
+    with its quote and an `@`. In the double-quoted kind `$( )` holds commands
+    that run. The index after the closing `@`."""
+    n = len(text)
+    double = text[i + 1] in _DOUBLE
+    quotes = _DOUBLE if double else _SINGLE
+    i += 2
+    while text[i] not in _NEWLINE:
+        i += 1
+    i += 2 if text.startswith("\r\n", i) else 1
+    line_start = True
+    ends = 0        # how many characters at the end of `word` are a line end
+    while i < n:
+        ch = text[i]
+        if line_start and ch in quotes and text[i + 1:i + 2] == "@":
+            # the line end in front of the closing line is not part of the
+            # text: `@'`, a line holding `-n`, `'@` hands over `-n`
+            del word[len(word) - ends:]
+            return i + 2
+        line_start = ch in _NEWLINE
+        if double and ch == "`":
+            # an escaped `$(` holds no command; a backtick that is the last
+            # character goes past the end, and the here-string is left open
+            made, i = _escape(text, i)
+            word.append(made)
+            ends = 0    # what an escape makes is text: `` `r `` is kept
+        elif double and ch == "$" and text[i + 1:i + 2] == "(":
+            # (no `ends` to set: the word now ends in a value, and the next
+            # character is no closing line, since it does not start one)
+            word.append(_VALUE)
+            i = _commands(text, i + 2, ")", done, depth + 1)
+        else:
+            ends = 2 if ch == "\n" and ends == 1 and word[-1] == "\r" else int(line_start)
+            word.append(ch)
+            i += 1
+    raise _CutOff
+
+
+def _redirection(text: str, i: int) -> tuple[int, bool]:
+    """The `>`, `>>` or `<` at text[i]: the index after it, and whether the
+    next word is where it goes. `>&1` sends one stream into another and takes
+    no word."""
+    i += 2 if text.startswith(">>", i) else 1
+    if text[i:i + 1] != "&":
+        return i, True
+    i += 1
+    # the stream is ONE digit: `2>&12` hands over `2` [V, probe11]
+    if text[i:i + 1].isdigit():
+        i += 1
+    return i, False
+
+
+def _verbatim(text: str, i: int, words: list) -> int:
+    """After the stop-parsing token: the rest of the line is cut at blanks
+    and handed over as it stands, with its quotes, `#`, `;` and `>`. A line
+    end, a `|` or a `&` ends it. The index of what ended it."""
+    start = i
+    while i < len(text) and text[i] not in "\r\n|&":
+        i += 1
+    words.extend(text[start:i].split())
+    return i

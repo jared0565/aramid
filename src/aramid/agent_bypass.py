@@ -27,7 +27,18 @@ structurally hard:
 
 Known residuals, all false-negative direction: bundled short flags, `git
 config alias.*` indirection, commands built by shell variables or eval,
-and PowerShell-only syntax, which is read by the POSIX rule.
+and PowerShell-only syntax in a call the hook was not told is PowerShell's.
+
+WHICH SHELL (FN-45). `find_bypass` takes the shell the hook was told runs
+the command. A PowerShell call is cut up by `agent_bypass_powershell`, by
+PowerShell's own rules, and what is said below about quotes, comments and
+where a command ends is not about it; the flag rules are the same for every
+shell. A Bash call is read the POSIX way, once. With no shell named a command
+is read as every command was up to 0.20.8: the POSIX way, and a second time
+with PowerShell's backtick for the close rule. For a known shell the git
+rules also step over a word that starts with `$` in front of the subcommand,
+as the close rule always has: the shell may make nothing of it, and `git
+$(true) commit -n` commits.
 
 THE CLOSE RULE (FN-36). `aramid ledger resolve --fixed` closes an LLM
 finding on a passing test. `--red-proof` is optional at the command line; an
@@ -48,7 +59,8 @@ reason:
   answered too; the advice it gets is the same.
 
 Residuals of the close rule, false-negative direction: an unquoted Windows
-path (shlex eats the backslashes), and a close built inside `python -c`.
+path (shlex eats the backslashes; in a call known to be PowerShell's the
+path is whole), and a close built inside `python -c`.
 
 WHERE A COMMAND STARTS AND ENDS (`_shell_text`, `_segments`). The close rule
 is the one rule here that looks for a flag that is ABSENT, so for it text
@@ -77,7 +89,8 @@ For the git rules the same reading removes misses (`git commit -m fix#12
 (`git commit -m x` with `git push -n` on the next line, which read as one
 line was a refused commit).
 
-TWO READINGS OF A BACKTICK, for the close rule. Inside double quotes
+TWO READINGS OF A BACKTICK, for the close rule, when no shell is named.
+Inside double quotes
 PowerShell's backtick escapes the next character, so a quote written with
 one in front does not end the string; to a POSIX shell that quote does end
 it. Whichever way the reader takes it, the other shell has a command whose
@@ -109,8 +122,9 @@ would never close, and a proper close would be answered.
 
 What this leaves, for every rule. The quoting is POSIX quoting: where
 PowerShell differs otherwise (a backslash escapes nothing there, a quote is
-doubled inside single quotes, `<# #>` is a comment) the command is read by
-the POSIX rule. bash's `$'...'` is not followed either, nor a heredoc body:
+doubled inside single quotes, `<# #>` is a comment) a command whose shell
+was not named is read by the POSIX rule. bash's `$'...'` is not followed
+either, nor a heredoc body:
 its lines are read as commands. And a command that is built when it runs
 (backticks, a variable, `eval`, the output of `$( )`) is read as written,
 not as built.
@@ -161,6 +175,15 @@ _RESOLVE_FLAGS = {"--help": False, "--out-of-scope": False, "--fixed": True,
 # What a token that launches aramid is called, under any directory.
 _ARAMID_NAMES = ("aramid", "aramid.exe", "aramid.cmd", "aramid.bat", "aramid.ps1",
                  "aramid.__main__")
+
+
+# The shells `find_bypass` can be told a command is for.
+POSIX = "posix"
+POWERSHELL = "powershell"
+# What the POSIX reading takes out of a word on its way to being a program's
+# name: the quotes, the backslash, and a line end (a backslash in front of one
+# joins two lines). For `_may_name_a_program`.
+_MARKS = {ord(ch): None for ch in "'\"\\\r\n"}
 
 
 @dataclass(frozen=True)
@@ -302,8 +325,13 @@ def _is_git(token: str) -> bool:
     return name in ("git", "git.exe")
 
 
-def _scan_one_git(seg: list[str], start: int) -> Bypass | None:
+def _scan_one_git(seg: list[str], start: int, values: bool = False) -> Bypass | None:
     """Scan the git invocation whose `git` token is seg[start].
+
+    `values` is for a reading by a known shell's rules: a word that starts
+    with `$` in front of the subcommand is then stepped over, as the close
+    rule steps over one, because the shell may make nothing of it
+    (`git $(true) commit -n` runs the commit).
 
     `start` must index into `seg` -- find_bypass only passes enumerate()
     indices, so this holds for every real caller. Guarded anyway (fuzz
@@ -319,7 +347,9 @@ def _scan_one_git(seg: list[str], start: int) -> Bypass | None:
     while i < len(seg):
         tok = seg[i]
         if tok in ("-c", "-C"):
-            if tok == "-c" and i + 1 < len(seg):
+            # `-c` and a value after it (`!=` not `<`: with i inside seg the
+            # two agree, and a `-c` that is the last word must not index past)
+            if tok == "-c" and i + 1 != len(seg):
                 configs.append(seg[i + 1])
             i += 2
             continue
@@ -333,7 +363,7 @@ def _scan_one_git(seg: list[str], start: int) -> Bypass | None:
                                     "--exec-path", "--namespace"):
             i += 1 if "=" in tok else 2
             continue
-        if tok.startswith("-"):
+        if tok.startswith("-") or (values and tok.startswith("$")):
             i += 1  # unknown global option; assume no separate argument
             continue
         subcommand = tok
@@ -417,36 +447,71 @@ def _scan_one_aramid(seg: list[str], start: int) -> Bypass | None:
     return None
 
 
-def find_bypass(command) -> Bypass | None:
+def _first(segments: list[list[str]], git_rules: bool, values: bool) -> Bypass | None:
+    """The first match in `segments`: every word that launches aramid or git
+    starts a scan of its own."""
+    for seg in segments:
+        for i, tok in enumerate(seg):
+            if _is_aramid(tok):
+                found = _scan_one_aramid(seg, i)
+            elif git_rules and _is_git(tok):
+                found = _scan_one_git(seg, i, values)
+            else:
+                continue
+            if found is not None:
+                return found
+    return None
+
+
+def _may_name_a_program(command: str) -> bool:
+    """Whether `command` can hold a git or an aramid invocation at all, read
+    the POSIX way (the second reading, with the backtick, takes nothing more
+    out of a word): the cheap answer that keeps every other tool call from
+    being tokenized. A wrong yes costs one reading and no answer. A wrong no
+    is a bypass not seen, so the characters that reading takes out of a word
+    are taken out first: `g"i"t`, `g\\it`
+    and a `git` broken over a continued line are git in bash, and none of them
+    holds the letters in a row. (Up to 0.20.8 the text was searched as
+    written, and none of them was answered.)
+
+    A PowerShell call is not asked here: it is always read. PowerShell makes
+    a name out of more than a cheap test can follow (`` `u{67}it ``,
+    `g$()it`)."""
+    low = command.lower().translate(_MARKS)
+    return "git" in low or "aramid" in low
+
+
+def find_bypass(command, shell: str | None = None) -> Bypass | None:
     """The first git hook-bypass invocation in `command`, or the first
     evidenced close without red proof, or None.
 
     Compound commands (&&, ;, |, ||) are scanned in full, not just the
-    head (spec §6). One match is enough to decide the tool call. The
-    command is read twice, the second time with PowerShell's backtick; only
-    the close rule is asked on that second reading, and a second reading
-    that stops at an open quote is left out when the first got to the end
-    (module docstring).
+    head (spec §6). One match is enough to decide the tool call.
+
+    `shell` is the shell the caller knows will run the command: POSIX for a
+    Bash tool call, POWERSHELL for a PowerShell one. Each gets one reading,
+    by that shell's own rules, for every rule. With no shell named the
+    command is read as every command was up to 0.20.8: the POSIX way, and a second
+    time with PowerShell's backtick; only the close rule is asked on that
+    second reading, and a second reading that stops at an open quote is left
+    out when the first got to the end (module docstring).
     """
     if not isinstance(command, str):
         return None
-    low = command.lower()
-    if "git" not in low and "aramid" not in low:
+    if shell == POWERSHELL:
+        from aramid import agent_bypass_powershell
+        return _first(agent_bypass_powershell.commands(command)[0], True, True)
+    if not _may_name_a_program(command):
         return None
     posix, posix_whole = _tokens(command, False)
+    if shell == POSIX:
+        return _first(_segments(posix), True, True)
     powershell, powershell_whole = _tokens(command, True)
     readings = [(False, posix)]
     if powershell_whole or not posix_whole:
         readings.append((True, powershell))
     for backtick, tokens in readings:
-        for seg in _segments(tokens):
-            for i, tok in enumerate(seg):
-                if _is_aramid(tok):
-                    found = _scan_one_aramid(seg, i)
-                elif _is_git(tok) and not backtick:
-                    found = _scan_one_git(seg, i)
-                else:
-                    continue
-                if found is not None:
-                    return found
+        found = _first(_segments(tokens), not backtick, False)
+        if found is not None:
+            return found
     return None
