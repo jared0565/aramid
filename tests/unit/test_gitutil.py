@@ -111,6 +111,17 @@ def test_diff_text_contains_added_lines_and_truncates(tmp_path):
     assert truncated != full  # naive char-slice would return the FULL text here
 
 
+def test_diff_text_cuts_at_400_000_bytes_by_default(monkeypatch):
+    # The default cap at its edge, on git's answer as given: one byte over
+    # is cut to the cap, and a text at the cap comes back whole.
+    def answer(text):
+        return lambda root, *args: subprocess.CompletedProcess(args, 0, text, "")
+    monkeypatch.setattr(gitutil, "_run", answer("x" * 400_001))
+    assert gitutil.diff_text(Path("."), "a", "b") == "x" * 400_000
+    monkeypatch.setattr(gitutil, "_run", answer("x" * 400_000))
+    assert gitutil.diff_text(Path("."), "a", "b") == "x" * 400_000
+
+
 def test_diff_text_decodes_utf8_not_locale_codec(tmp_path):
     # FIX 3 regression: _run's subprocess.run(..., text=True) used to decode
     # with the locale-preferred codec (no encoding= kwarg). On this dev box

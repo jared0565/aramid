@@ -1,3 +1,4 @@
+import os
 import re
 import subprocess
 from pathlib import Path
@@ -13,6 +14,17 @@ class GitTimeout(Exception):
 
 GIT_TIMEOUT_S = 600.0
 _GIT: tuple[str, ...] = ("git",)   # test seam: the argv head
+
+def _git_env() -> dict[str, str]:
+    """This process's environment for git, without GIT_LITERAL_PATHSPECS
+    (FN-42). Every path aramid hands git is marked `:(literal)`
+    (`literal_pathspec`), and with that variable set git does not read the
+    mark: `:(literal)a.py` is then a name no file has, and finds nothing. A
+    caller sets it without meaning to: `git --literal-pathspecs commit`
+    exports it to the hooks that commit runs (measured 2026-10-12)."""
+    env = dict(os.environ)
+    env.pop("GIT_LITERAL_PATHSPECS", None)
+    return env
 
 def _run(root: Path, *args: str) -> subprocess.CompletedProcess:
     """git's answer: its exit code and output, whatever the code. A git that
@@ -41,7 +53,7 @@ def _run(root: Path, *args: str) -> subprocess.CompletedProcess:
     # diff scan; a best-effort mangled character is acceptable, a raised
     # exception is not.
     proc = subprocess.Popen(toolpath.launchable([*_GIT, *args]),  # noqa: S603
-                            cwd=str(root),
+                            cwd=str(root), env=_git_env(),
                             stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                             text=True, encoding="utf-8", errors="replace",
                             **runners_base.own_group())
@@ -149,13 +161,25 @@ def changed_files(root: Path, rng):
     cp = _run(root, "diff", "--name-only", "--diff-filter=ACMR", spec)
     return [line for line in cp.stdout.splitlines() if line]
 
+def literal_pathspec(paths) -> list[str]:
+    """`--` and each repo path marked `:(literal)`: the ONE spelling of a
+    path aramid hands git (FN-42). Unmarked, git reads a path as a pattern,
+    so `app/[id]/page.ts` is a character class and names `app/i/page.ts` too
+    (measured 2026-10-12: `log` named the sibling's commit, `diff` and `show`
+    listed both files, `ls-files --error-unmatch` called an untracked file
+    tracked); and before any `--`, a path that starts with `-` is an option.
+    `_run` keeps GIT_LITERAL_PATHSPECS out of git's environment, since with
+    it set git does not read the mark (`_git_env`)."""
+    return ["--", *(f":(literal){p}" for p in paths)]
+
 def newest_commit_touching(root: Path, rng, rel_path):
     spec = rng if rng else "HEAD"
-    cp = _run(root, "log", "-1", "--format=%H", spec, "--", rel_path)
+    cp = _run(root, "log", "-1", "--format=%H", spec, *literal_pathspec([rel_path]))
     return cp.stdout.strip() or "HEAD"
 
 def is_tracked(root: Path, rel_path: str) -> bool:
-    return _run(root, "ls-files", "--error-unmatch", rel_path).returncode == 0
+    return _run(root, "ls-files", "--error-unmatch",
+                *literal_pathspec([rel_path])).returncode == 0
 
 def read_for_fingerprint(root: Path, ref: str, rel_path: str) -> str:
     blob = read_blob(root, ref, rel_path)
@@ -199,14 +223,17 @@ def diff_text(root: Path, base: str | None, head: str, max_bytes: int = 400_000,
     # already-filter_paths()-filtered file list -- spec 8b: graphite
     # artifacts must never leak into an outbound packet via an unscoped
     # base..head diff even when they were excluded from the file list.
-    pathspec = ["--", *paths] if paths else []
+    # Literal (`literal_pathspec`): a bracketed path is a pattern otherwise,
+    # and lets a sibling the filter dropped into the packet (FN-42).
+    pathspec = literal_pathspec(paths) if paths else []
     if base is None:
         cp = _run(root, "show", "--format=", head, *pathspec)
     else:
         cp = _run(root, "diff", f"{base}..{head}", *pathspec)
     text = cp.stdout if cp.returncode == 0 else ""
-    if len(text.encode("utf-8", "replace")) <= max_bytes:
-        return text
+    # At most max_bytes of UTF-8, never cut inside a character. A text under
+    # the cap comes back whole: `_run` decodes with errors="replace", so the
+    # text holds no lone surrogate and the round trip changes nothing.
     return text.encode("utf-8", "replace")[:max_bytes].decode("utf-8", "ignore")
 
 

@@ -72,6 +72,21 @@ to publish a tag that disagrees with it.
   is left alone. `aramid doctor` prints a `WARN PATH` row for each relative
   entry, and its exit code does not change.
 
+### Fixed
+
+- **A path with brackets in its name, such as `app/[id]/page.test.ts`, names
+  that file alone (FN-42).** aramid handed git repo paths unmarked, and git
+  read `[id]` as a pattern that also matches `app/i/page.test.ts`. Measured
+  with git 2.53: the newest commit to touch a file could be a sibling's, a
+  review packet scoped to the files the filter kept could carry a sibling it
+  had dropped, and an untracked file could read as tracked, so aramid took
+  its text as empty. Every path aramid hands git is now marked literal. The
+  tracked-file check also ends its options with `--`, so an untracked file
+  named `-x.py` is no longer read as `git ls-files`' `-x` option. A git run
+  with `--literal-pathspecs` passes `GIT_LITERAL_PATHSPECS` to the hooks it
+  starts, and with it set a marked path names nothing, so aramid leaves that
+  variable out of its own git calls.
+
 ## [0.20.9] — 2026-10-12
 
 ### Fixed

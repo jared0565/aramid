@@ -481,14 +481,14 @@ def _checkout(wt: Path, rev: str, paths: list[str], no_hooks: Path):
     """`git checkout <rev> -- <paths>` in `wt`. Returns git's reply for the
     call that failed, or None when every call worked.
 
-    The pathspecs are literal: `app/[id]/page.test.ts` is a character class
-    to git, and unmarked it also checks out `app/i/` and `app/d/` (measured
-    2026-10-10). `no_hooks` is an empty directory: with it as the hooks path
+    The pathspecs are literal (`gitutil.literal_pathspec`): `app/[id]/page.test.ts`
+    is a character class to git, and unmarked it also checks out `app/i/` and
+    `app/d/` (measured 2026-10-10). `no_hooks` is an empty directory: with it as the hooks path
     the checkout cannot run the repo's `post-checkout` (see HOOKS in the
     module docstring)."""
     for i in range(0, len(paths), _CHECKOUT_CHUNK):
-        cp = _git(wt, no_hooks, "checkout", rev, "--",
-                  *(f":(literal){rel}" for rel in paths[i:i + _CHECKOUT_CHUNK]))
+        cp = _git(wt, no_hooks, "checkout", rev,
+                  *gitutil.literal_pathspec(paths[i:i + _CHECKOUT_CHUNK]))
         if cp.returncode != 0:
             return cp
     return None
