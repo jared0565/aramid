@@ -656,9 +656,22 @@ def _watched_communicate(proc: subprocess.Popen, timeout_s: float, on_stdout_lin
     return "".join(chunks["out"]), "".join(chunks["err"]), held
 
 
+def _child_env(env) -> dict[str, str]:
+    """This process' environment with `env` merged over it, where a None value
+    takes that variable OUT (FN-53: the gitleaks runner clears the two
+    variables that replace gitleaks' rules). Removal ignores case: Windows
+    names are case-insensitive, and on POSIX a name that differs only in case
+    is one the tool never reads, so dropping it too costs nothing."""
+    gone = {k.upper() for k, v in (env or {}).items() if v is None}
+    merged = {**os.environ, **{k: v for k, v in (env or {}).items() if v is not None}}
+    return {k: v for k, v in merged.items() if k.upper() not in gone}
+
+
 def run_subprocess(argv, cwd: Path, timeout_s: float, env=None, *,
                    on_stdout_line=None) -> RunnerResult:
-    """Launch `argv` and capture it. `on_stdout_line`, when given, is called
+    """Launch `argv` and capture it. `env` is merged over this process'
+    environment; a None value removes that variable (`_child_env`).
+    `on_stdout_line`, when given, is called
     with every stdout line AS IT ARRIVES (the gate's test suite ran ~19 min
     with nothing on screen because output was only read at exit). Both pipes
     are ALWAYS drained on threads, tap or not, and the wait is watched: past
@@ -709,7 +722,7 @@ def run_subprocess(argv, cwd: Path, timeout_s: float, env=None, *,
     # decodes them itself, to exactly what text=True/utf-8/replace gave.
     proc = subprocess.Popen(argv, cwd=str(cwd), stdout=subprocess.PIPE,  # noqa: S603
                             stderr=subprocess.PIPE,
-                            env={**os.environ, **(env or {})}, **kwargs)
+                            env=_child_env(env), **kwargs)
     try:
         with live_process(lambda: _kill_tree(proc)):
             out, err, held = _watched_communicate(proc, timeout_s, on_stdout_line)

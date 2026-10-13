@@ -71,6 +71,14 @@ to publish a tag that disagrees with it.
   before, and an absolute entry inside the repo, such as an activated venv,
   is left alone. `aramid doctor` prints a `WARN PATH` row for each relative
   entry, and its exit code does not change.
+- **`GITLEAKS_CONFIG` and `GITLEAKS_CONFIG_TOML` no longer reach gitleaks
+  (FN-53).** gitleaks reads its config from either one before the repo's own
+  file. Measured on 0.20.9: either, naming a config with rules of its own,
+  hid a secret from every scan mode while the gate reported a clean scan,
+  and the agent hook let `GITLEAKS_CONFIG=... git commit` through. aramid now
+  starts gitleaks without both; a repo's own `.gitleaks.toml` still applies.
+  **If you set either variable to give gitleaks rules of your own, put them
+  in the repo's `.gitleaks.toml` instead.**
 
 ### Fixed
 

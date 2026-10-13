@@ -520,3 +520,28 @@ def test_a_second_pass_whose_kill_hangs_never_costs_gitleaks_its_own_result(
     assert own.state is ToolState.OK
     assert (second.tool, second.state) == (inline.GITLEAKS, ToolState.TIMEOUT)
     assert [f.tool for f in gitleaks.parse(result, RunContext(root=tmp_path))] == ["gitleaks"]
+
+
+def test_only_the_all_scan_builds_the_tracked_copy(tmp_path, monkeypatch):
+    """The staging copy of the tracked tree exists for `--all` alone (module
+    docstring). A staged or range scan reads git itself, and a copy there
+    would spend the pre-commit budget on files gitleaks never looks at. The
+    `--all` run is the control that the spy can see a copy at all."""
+    built = []
+    real = gitleaks._stage_tracked
+    monkeypatch.setattr(gitleaks, "_stage_tracked",
+                        lambda ctx, staging: built.append(ctx) or real(ctx, staging))
+
+    def fake(argv, cwd, timeout_s, env=None):
+        Path(argv[argv.index("--report-path") + 1]).write_text("[]")
+        return RunnerResult(tool="gitleaks", state=ToolState.OK, raw="", stderr="",
+                            duration_s=0.01, returncode=0)
+
+    monkeypatch.setattr(gitleaks, "run_subprocess", fake)
+    copies = []
+    for ctx in (RunContext(root=tmp_path), RunContext(root=tmp_path, rng="HEAD~1..HEAD"),
+                RunContext(root=tmp_path, files=[], full_tree=True)):
+        before = len(built)
+        assert gitleaks.run(ctx).state is ToolState.OK
+        copies.append(len(built) - before)
+    assert copies == [0, 0, 1]

@@ -47,6 +47,14 @@ TIMEOUT_S = 120.0
 # 1 = ran clean, leaks found. Anything else is an error, not a verdict.
 _OK_RETURNCODES = frozenset({0, 1})
 
+# FN-53: gitleaks takes its config from either variable before the repo's own
+# file. Set in the environment of whoever commits -- `VAR=... git commit` gets
+# past the agent hook -- one replaced every rule in every scan mode, and the
+# gate reported a clean scan. The committer's environment is not the gate's
+# configuration, so every gitleaks this runner starts runs without them
+# (a None value removes a variable: `base._child_env`).
+_CLEARED_ENV = {"GITLEAKS_CONFIG": None, "GITLEAKS_CONFIG_TOML": None}
+
 # gitleaks doesn't emit a per-finding severity in its report; a discovered
 # secret is treated as high severity by default (documented assumption --
 # the real severity/verdict split for secrets is a policy.classify decision,
@@ -144,7 +152,7 @@ def run(ctx) -> RunnerResult:
         if ctx.rng is None and getattr(ctx, "full_tree", False):
             scan_root = _stage_tracked(ctx, Path(td) / "tree")
         argv = _build_argv(ctx, report_path, scan_root)
-        result = run_subprocess(argv, ctx.root, TIMEOUT_S)
+        result = run_subprocess(argv, ctx.root, TIMEOUT_S, env=dict(_CLEARED_ENV))
         if result.state in (ToolState.MISSING, ToolState.TIMEOUT):
             return result
 
@@ -188,7 +196,7 @@ def _run_inline(ctx, td: Path, own_items: list, scan_root: Path | None) -> Runne
         return inline.skipped(inline.GITLEAKS)
     report_path = td / "gitleaks-inline-report.json"
     argv = [*_build_argv(ctx, report_path, scan_root), "--ignore-gitleaks-allow"]
-    result = run_subprocess(argv, ctx.root, timeout)
+    result = run_subprocess(argv, ctx.root, timeout, env=dict(_CLEARED_ENV))
     if result.state in (ToolState.MISSING, ToolState.TIMEOUT):
         return replace(result, tool=inline.GITLEAKS, raw="")
     failed = RunnerResult(inline.GITLEAKS, ToolState.CRASHED, stderr=result.stderr,
