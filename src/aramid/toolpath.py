@@ -216,15 +216,52 @@ def _path_dirs() -> list[str]:
     return [entry for entry in path.split(os.pathsep) if entry]
 
 
-def _on_path(name: str) -> str | None:
+def _on_path(name: str, *, absolute_only: bool = False) -> str | None:
     """The bare `name` as the directories PATH names hold it, first hit, and
-    nowhere else (`_path_dirs`)."""
+    nowhere else (`_path_dirs`). With `absolute_only`, an entry that is not an
+    absolute path is passed over (`_aramids_own`)."""
     for entry in _path_dirs():
+        if absolute_only and not os.path.isabs(entry):
+            continue
         for spelled in _spellings(name):
             candidate = os.path.join(entry, spelled)
             if os.path.isfile(candidate) and os.access(candidate, os.X_OK):
                 return candidate
     return None
+
+
+def relative_path_entries() -> list[str]:
+    """The entries PATH names that are not absolute paths, in PATH's order,
+    once each. aramid's current directory is the repo it is judging, so each
+    of them names a directory of that repo (FN-48). An empty entry is not
+    one: it names no directory to aramid's lookups (`_path_dirs`)."""
+    out: list[str] = []
+    for entry in _path_dirs():
+        if not os.path.isabs(entry) and entry not in out:
+            out.append(entry)
+    return out
+
+
+def _copy_in(directory: Path, name: str) -> Path | None:
+    """`name` as a directory of aramid's own holds it, else None: the ONE
+    test of that, for `resolve`'s fallback and for `_aramids_own` alike."""
+    candidate = directory / exe_name(name)
+    return candidate if candidate.exists() else None
+
+
+def _aramids_own(name: str) -> bool:
+    """Whether `name` is one of aramid's own tools here: a program in its
+    tools directory (gitleaks, which `doctor --fix` downloads), or a declared
+    dependency (`DEPENDENCY_TOOLS`) that a scripts directory holds. A
+    relative PATH entry never supplies one (FN-48, the operator's decision of
+    2026-10-12): measured on 0.20.9, a relative `bin` anywhere on PATH, last
+    included, answered `gitleaks` with the repo's own file, because PATH is
+    asked before the tools directory. The scripts directories hold more than
+    aramid's (pytest, python, pip): those are not guarded."""
+    if _copy_in(tools_dir(), name) is not None:
+        return True
+    return name in DEPENDENCY_TOOLS and any(_copy_in(d, name) is not None
+                                            for d in scripts_dirs())
 
 
 def which(name: str) -> str | None:
@@ -247,12 +284,20 @@ def which(name: str) -> str | None:
     so its order and its reading of PATHEXT are the platform's own. A hit
     that is a file of the current directory is asked again of PATH alone
     (`_on_path`): found there when PATH names that directory, as `.` or in
-    full, and otherwise wherever else PATH has the program."""
+    full, and otherwise wherever else PATH has the program.
+
+    For aramid's own tools (`_aramids_own`) a relative PATH entry, `.`
+    included, names a directory of that repo too, so a hit through one is
+    asked again of PATH's absolute entries alone (FN-48). An absolute entry
+    after it still wins, as PATH's order says; with none, `resolve` goes on
+    to aramid's own directories."""
     hit = shutil.which(name)
     if hit is None or os.path.dirname(name):
         return hit
     if os.path.dirname(hit) in ("", os.curdir) and os.path.exists(hit):
-        return _on_path(name)
+        return _on_path(name, absolute_only=_aramids_own(name))
+    if not os.path.isabs(hit) and _aramids_own(name):
+        return _on_path(name, absolute_only=True)
     return hit
 
 
@@ -337,8 +382,8 @@ def resolve(name: str) -> Path | None:
                 return direct.resolve()
 
         for d in (*scripts_dirs(), tools_dir()):
-            candidate = d / exe_name(name)
-            if candidate.exists():
+            candidate = _copy_in(d, name)
+            if candidate is not None:
                 return candidate
     except OSError:
         return None

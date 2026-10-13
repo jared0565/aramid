@@ -519,6 +519,8 @@ aramid declares `ruff`, `semgrep` and `pip-audit` as dependencies, so `pip insta
 
 `PATH` here means `PATH`. The repository aramid is judging is no part of it: a `ruff.cmd`, a `gitleaks.bat` or a `git.exe` in the repo's root is never what aramid runs, although Windows would look in the current directory first for a program named by a bare word. The current directory counts only if your `PATH` names it.
 
+A relative `PATH` entry (`bin`, `./bin`, `node_modules/.bin`, `.`) names a directory of whatever directory aramid runs in, and that is the repo it is judging. aramid's own tools are never taken from one: a tool in `~/.aramid/tools` (gitleaks), and ruff, semgrep and pip-audit where your Python's scripts directory holds them, are looked for on the absolute entries of `PATH` only, and then in those directories. Any other program can still come from a relative entry, so `aramid doctor` prints a `WARN PATH` row naming each one; make it absolute or remove it. An absolute entry inside the repo, such as an activated venv's, is your own statement and is not reported.
+
 That means an older copy earlier on your `PATH` is what actually runs. It is not an error, and nothing is broken. What matters is that it changes what gets reported:
 
 ```

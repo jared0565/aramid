@@ -225,8 +225,8 @@ def _no_reachable_providers(tmp_path, monkeypatch):
             return None
         return real_which(cmd, *args, **kwargs)
 
-    def on_path(name):
-        return None if provider(name) else real_on_path(name)
+    def on_path(name, **kwargs):
+        return None if provider(name) else real_on_path(name, **kwargs)
 
     monkeypatch.setattr(shutil, "which", which)
     monkeypatch.setattr(toolpath, "_on_path", on_path)

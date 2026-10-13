@@ -57,6 +57,20 @@ to publish a tag that disagrees with it.
   does not take the command line is not run without it: one line on stderr,
   counted as unavailable, and the ladder moves on. **If your codex is too
   old for these options, `codex-cli` reviews stop until you upgrade it.**
+- **A relative `PATH` entry never supplies one of aramid's own tools, and
+  `aramid doctor` names every relative entry (FN-48).** aramid runs in the
+  repo it is judging, so an entry such as `bin`, `./bin` or `.` names a
+  directory of that repo. Measured on 0.20.9: with a relative `bin` first on
+  `PATH` every lookup took the repo's file, and with it last `gitleaks` still
+  did, because aramid keeps gitleaks in its own tools directory and asks
+  `PATH` first. Now a tool in `~/.aramid/tools`, and ruff, semgrep and
+  pip-audit where the scripts directory holds them, are looked for on the
+  absolute entries of `PATH` only, then in aramid's own directories. For
+  these tools this narrows 0.20.8's rule that `.` on `PATH` is your own
+  choice. Other programs (python, pytest, git, a provider CLI) are found as
+  before, and an absolute entry inside the repo, such as an activated venv,
+  is left alone. `aramid doctor` prints a `WARN PATH` row for each relative
+  entry, and its exit code does not change.
 
 ## [0.20.9] — 2026-10-12
 

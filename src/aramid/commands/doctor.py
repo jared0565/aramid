@@ -402,6 +402,18 @@ def divergence_lines() -> list[str]:
     return lines
 
 
+def relative_path_lines() -> list[str]:
+    """One WARN row for each relative PATH entry (FN-48). aramid runs in the
+    repo it is judging, so such an entry names a directory of that repo, and
+    a file there can stand in for any program aramid looks up but its own
+    tools, which a relative entry never supplies (`toolpath._aramids_own`).
+    An absolute entry inside the repo, an activated venv's, is the user's own
+    statement and is not reported. Advice, never a failure."""
+    return [f"  WARN     PATH         relative entry `{entry}`: it names a directory of the"
+            " repo aramid is judging, which can supply any program but aramid's own tools"
+            " -- make it absolute or remove it" for entry in toolpath.relative_path_entries()]
+
+
 def _sh_path_to_win(interp_sh: str) -> Path | None:
     """Reverse of `hooks.win_sh_path`: `/c/x/y` -> `C:/x/y`."""
     if len(interp_sh) >= 3 and interp_sh[0] == "/" and interp_sh[2] == "/":
@@ -1175,6 +1187,8 @@ def cmd_doctor(root: Path, fix: bool = False, during_init: bool = False) -> int:
     for line in install_mode_lines(direct_url):
         print(line)
     for line in divergence_lines():
+        print(line)
+    for line in relative_path_lines():
         print(line)
 
     print("llm providers:")

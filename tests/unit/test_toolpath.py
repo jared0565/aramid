@@ -284,6 +284,17 @@ def test_a_file_named_exactly_as_the_tool_is_not_handed_through_as_a_path(
     assert toolpath.resolve(f"./{_PROBE}") == (tmp_path / _PROBE).resolve()
 
 
+def test_a_path_that_names_a_directory_is_not_handed_through(tmp_path, monkeypatch):
+    """A name with a directory is handed through only when it names a file:
+    a directory of that name is no program, and nothing else holds one."""
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(toolpath, "tools_dir", lambda: tmp_path / "no-tools")
+    monkeypatch.setattr(toolpath, "scripts_dirs", lambda: [])
+    (tmp_path / _PROBE).mkdir()
+
+    assert toolpath.resolve(f"./{_PROBE}") is None
+
+
 def test_the_current_directory_is_looked_in_where_path_names_it(looked_in, monkeypatch):
     """`.` on PATH is the operator's own choice, as any PATH entry is."""
     here, _on_path = looked_in
