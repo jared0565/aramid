@@ -178,13 +178,21 @@ _ROOT_GATED_STACKS: dict[str, tuple[str, tuple[str, ...]]] = {
 # anyway. There is no equivalent for JS -- nobody should add a root
 # package.json merely to satisfy a linter -- so that side only offers the
 # remedy that is actually reasonable.
+#
+# The js remedy used to read "onboard it as its own repo with `aramid init
+# <dir>`", and that cannot be followed: `init` resolves a subdirectory to the
+# repository root and re-runs the root's init -- exit 0, "done", nothing
+# changed (FN-52, channel round 320, bytes-web on 0.20.8). The gate run from
+# the subdirectory does run the js gates, and the hooks, which run from the
+# root, never do; so the advice says exactly that.
 _ROOT_GATED_HELP = {
     "rust": ("clippy, cargo-audit",
              "Add a root Cargo.toml declaring a [workspace] over these "
              "crates, or run aramid from that subdirectory."),
     "js": ("eslint, npm/pnpm/yarn",
-           "Run aramid from that subdirectory (onboard it as its own repo "
-           "with `aramid init <dir>`)."),
+           "The commit and push hooks run from the root too, so they never "
+           "check that subdirectory: run `aramid check --gate pre-push --all` "
+           "from it by hand."),
 }
 
 _MAX_DIRS_SHOWN = 3

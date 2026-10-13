@@ -54,7 +54,9 @@ def build_parser() -> argparse.ArgumentParser:
 
     p_init = sub.add_parser("init", help="onboard a repo (write config, install hooks, baseline)")
     p_init.add_argument("path", nargs="?", default=".")
-    p_init.add_argument("--discover", action="store_true")
+    p_init.add_argument("--discover", action="store_true",
+                        help="onboard each git repository found up to 3 levels below path "
+                             "(a directory that holds .git), each as its own repo")
 
     p_check = sub.add_parser("check", help="run the gate pipeline")
     # "all" runs every runner of both tiers (interop round 126 s4b, when ruff

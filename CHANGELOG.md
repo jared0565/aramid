@@ -95,6 +95,14 @@ to publish a tag that disagrees with it.
   after the file was deleted. Each gate run now resolves it
   (`reasonless_entry_gone`) once the file no longer reports it, and `aramid
   resolvers` grades the new resolver.
+- **The notice for a js project below the repository root gives advice that
+  works (FN-52).** It said to onboard the folder with `aramid init <dir>`,
+  and `init` run on a folder inside a repo re-runs the root's init: it
+  reported done and changed nothing. It now says that the commit and push
+  hooks, which run from the root, never check that folder, and to run
+  `aramid check --gate pre-push --all` from it by hand. Running the js gates
+  in such folders from the hooks is not part of this change. `aramid init
+  --help` now describes `--discover`. Reported by a consumer on 0.20.8.
 
 ## [0.20.9] — 2026-10-12
 
