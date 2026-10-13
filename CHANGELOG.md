@@ -34,6 +34,29 @@ to publish a tag that disagrees with it.
 - **A word that starts with `$` in front of git's subcommand is stepped
   over.** `git $(true) commit -n` commits, and in a Bash or PowerShell call
   it is now refused (finding 4ce6a085).
+- **The `codex-cli` reviewer is started with no tools, none of your codex
+  setup and no web search, and a reply that came after a tool ran is thrown
+  away (FN-49).** It reads the same packet as `claude-cli`, and the ladder
+  moves to it whenever `claude-cli` is unavailable. Measured with one real
+  call on codex 0.162.0: under `--sandbox read-only` it read a file outside
+  its directory through its shell (the sandbox stops writes, not reads), it
+  had a web tool, and it carried your codex skills and instructions. It is
+  now started with `--ignore-user-config`, `--ignore-rules`, `--ephemeral`,
+  one `--disable` for each feature that hands it a tool (the shell, image
+  viewing, apps and plugins, image generation, the browsers, computer use,
+  sub-agents, hooks, the offers to install tools) and
+  `-c web_search=disabled`, in an empty temporary directory of its own.
+  Measured again with a second real call: one item in its stream, the
+  reply; the file not read; 16,224 tokens in where the first call took
+  51,126.
+
+  codex accepts `--disable unified_exec` and leaves it on, so a switch can
+  be taken and not applied. The provider therefore also reads codex's event
+  stream: any item but a reply, reasoning, a plan or an error means a tool
+  ran, and the reply is thrown away with one line on stderr. A `codex` that
+  does not take the command line is not run without it: one line on stderr,
+  counted as unavailable, and the ladder moves on. **If your codex is too
+  old for these options, `codex-cli` reviews stop until you upgrade it.**
 
 ## [0.20.9] — 2026-10-12
 
