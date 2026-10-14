@@ -553,7 +553,7 @@ def test_spelled_reads_text_as_powershell_builds_a_word(text, word):
 
 
 def test_spelled_never_raises():
-    rng = random.Random(14)
+    rng = random.Random(14)  # noqa: S311  -- seeded, reproducible, not crypto
     alphabet = "`$(){}u0123456789abcdefgiz '\"’\r\n:?^"
     for _ in range(3000):
         text = "".join(rng.choice(alphabet) for _ in range(rng.randrange(0, 24)))
