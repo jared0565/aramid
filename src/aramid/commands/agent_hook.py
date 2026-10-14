@@ -163,6 +163,14 @@ def _describe(bypass) -> str:
 
 def _said(bypass) -> tuple[str, str]:
     """What the hook says about one match: (the denial, the advisory)."""
+    if bypass.kind == "too-deep":
+        what = (f"this call nests a command more than {bypass.token} groups deep, deeper"
+                f" than this hook reads, and it names git or aramid")
+        return (f"aramid: {what}, so it is REJECTED in this repo (agent surface armed)."
+                f" Take the command out of the nesting and re-run it.",
+                f"aramid: {what}, so a bypass in it could not be seen. The armed version"
+                f" of this hook rejects the call outright -- take the command out of the"
+                f" nesting.")
     what = _describe(bypass)
     if bypass.kind == "no-red-proof":
         return (f"aramid: {what} is REJECTED in this repo (agent surface armed). An"

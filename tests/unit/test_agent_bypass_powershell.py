@@ -1,5 +1,5 @@
-"""A PowerShell tool call read by PowerShell's rules (FN-45; spec
-docs/superpowers/specs/2026-10-12-aramid-powershell-reading-design.md).
+"""A PowerShell tool call read by PowerShell's rules (FN-45 in
+docs/superpowers/plans/2026-09-21-aramid-1.0-blockers.md).
 
 What is right here is not this reader's opinion and not mine: it is what
 PowerShell 7 handed a program. tests/fixtures/powershell-argv.json is the
@@ -33,7 +33,7 @@ import pytest
 
 from aramid import agent_bypass as ab
 from aramid.agent_bypass import POWERSHELL, Bypass, find_bypass
-from aramid.agent_bypass_powershell import _DEPTH, commands
+from aramid.agent_bypass_powershell import _DEPTH, commands, reading
 
 FIXTURE = Path(__file__).parent.parent / "fixtures" / "powershell-argv.json"
 RECORD = {case["command"]: (case["status"], case["argv"])
@@ -498,24 +498,68 @@ def test_a_flag_inside_another_commands_group_is_not_the_commits():
     clear("git commit -m $(zq --no-verify)")
 
 
+TOO_DEEP = Bypass("too-deep", "", str(_DEPTH))
+
+
+def _nest(inner, depth=_DEPTH + 1):
+    return "(" * depth + inner + ")" * depth
+
+
 def test_nesting_deeper_than_the_limit_is_cut_off_and_not_an_error():
     # The boundary is exact: _DEPTH groups are read, one more is cut off. The cap
-    # is a fail-open residual, NOT a match to PowerShell -- PowerShell 7 runs the
-    # wrapped command thousands of groups deep (probe10, 2026-10-12), so depth 41
-    # up to its own parser limit is a window where it runs and the reader misses.
-    # The cap is kept low because deeper recursion could raise, and this reader
-    # must never raise (see the module's residual note / spec section 4).
-    at = "(" * _DEPTH + "git commit -n" + ")" * _DEPTH
+    # is NOT a match to PowerShell -- PowerShell 7 runs the wrapped command
+    # thousands of groups deep (probe10, 2026-10-12) -- so a reading cut off
+    # there is refused when the call names git or aramid (the tests below). The
+    # cap is kept low because deeper recursion could raise, and this reader must
+    # never raise (the module's note, "A READING THAT GOES TOO DEEP").
+    at = _nest("git commit -n", _DEPTH)
     assert commands(at) == ([["git", "commit", "-n"]], True)
+    assert reading(at) == ([["git", "commit", "-n"]], "end")
     assert find_bypass(at, POWERSHELL) == DASH_N
-    over = "(" * (_DEPTH + 1) + "git commit -n" + ")" * (_DEPTH + 1)
+    over = _nest("git commit -n")
     assert commands(over) == ([], False)
-    assert find_bypass(over, POWERSHELL) is None
-    deep = "(" * (_DEPTH + 5000) + "git commit -n" + ")" * (_DEPTH + 5000)
-    assert find_bypass(deep, POWERSHELL) is None   # never a RecursionError
-    # what was read before the deep part still counts: burying a flag hides only
-    # that flag, not a sibling command standing outside the nest
+    assert reading(over) == ([], "deep")
+    deep = _nest("git commit -n", _DEPTH + 5000)
+    assert reading(deep) == ([], "deep")   # never a RecursionError
+    # what was read before the deep part still counts, and answers first
     assert find_bypass("git commit -n; " + over, POWERSHELL) == DASH_N
+
+
+@pytest.mark.parametrize("inner", [
+    "git commit -n", "git status", "aramid ledger resolve id1 --fixed abc", "& git commit",
+    "g`it commit -n", 'g"i"t commit -n', "GIT commit -n"])
+def test_a_reading_cut_off_by_the_depth_limit_is_refused_when_the_call_names_git_or_aramid(inner):
+    # The operator's decision (2026-10-13, "Refuse at the cap"): PowerShell runs
+    # what lies past the cap, so the cut-off is not like an open quote, which it
+    # does not run. No real command nests that deep, so the call is refused,
+    # whatever it was going to do, once its text names git or aramid -- spelled
+    # with the quotes and backticks PowerShell takes out of a word.
+    assert find_bypass(_nest(inner), POWERSHELL) == TOO_DEEP
+    assert find_bypass(_nest(inner, _DEPTH + 5000), POWERSHELL) == TOO_DEEP
+
+
+def test_a_reading_cut_off_by_the_depth_limit_is_let_through_when_the_call_names_neither():
+    assert find_bypass(_nest("Write-Output hi"), POWERSHELL) is None
+
+
+def test_a_name_outside_the_nest_counts_too():
+    # The text is what is asked, not what was read: the reader stopped before
+    # the nest, so a name in it is never in what was read.
+    assert find_bypass("git status; " + _nest("Write-Output hi"), POWERSHELL) == TOO_DEEP
+
+
+@pytest.mark.parametrize("text", ['git commit -m "x', "git commit <# x", _nest('git commit -m "x', 10)])
+def test_a_reading_cut_off_by_an_open_quote_or_comment_is_not_refused(text):
+    # PowerShell runs none of such a text: what was read is judged as before.
+    assert reading(text)[1] == "cut"
+    assert find_bypass(text, POWERSHELL) is None
+
+
+def test_the_cap_is_asked_of_a_powershell_call_alone():
+    # A Bash call, and a call from a tool the hook does not name, are read by
+    # rules that have no such cap.
+    assert find_bypass(_nest("git status"), "posix") is None
+    assert find_bypass(_nest("git status")) is None
 
 
 # ---- a value only the run shows ----

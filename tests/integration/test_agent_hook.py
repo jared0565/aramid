@@ -198,6 +198,47 @@ def test_pre_tool_use_armed_denies_hookspath_wrapper(tmp_path, monkeypatch, caps
         "`aramid ledger filter --status open`.")
 
 
+# A PowerShell call nesting a git command one group deeper than the reader reads
+# (agent_bypass_powershell._DEPTH is 40).
+_TOO_DEEP = "(" * 41 + "git commit -n" + ")" * 41
+
+
+def _powershell_payload(command: str) -> dict:
+    return {**_hook_payload(command), "tool_name": "PowerShell"}
+
+
+def test_pre_tool_use_armed_denies_a_call_nested_too_deep_to_read(tmp_path, monkeypatch, capsys):
+    r = _onboarded(tmp_path, monkeypatch)
+    _arm_agent(r)
+    capsys.readouterr()
+    _feed_stdin(monkeypatch, _powershell_payload(_TOO_DEEP))
+    assert agent_hook.cmd_agent_hook("pre-tool-use", r) == 0
+    assert json.loads(capsys.readouterr().out) == {"hookSpecificOutput": {
+        "hookEventName": "PreToolUse",
+        "permissionDecision": "deny",
+        "permissionDecisionReason": (
+            "aramid: this call nests a command more than 40 groups deep, deeper "
+            "than this hook reads, and it names git or aramid, so it is REJECTED "
+            "in this repo (agent surface armed). Take the command out of the "
+            "nesting and re-run it."),
+    }}
+
+
+def test_pre_tool_use_advises_on_a_call_nested_too_deep_to_read(tmp_path, monkeypatch, capsys):
+    r = _onboarded(tmp_path, monkeypatch)
+    capsys.readouterr()
+    _feed_stdin(monkeypatch, _powershell_payload(_TOO_DEEP))
+    assert agent_hook.cmd_agent_hook("pre-tool-use", r) == 0
+    assert json.loads(capsys.readouterr().out) == {"hookSpecificOutput": {
+        "hookEventName": "PreToolUse",
+        "additionalContext": (
+            "aramid: this call nests a command more than 40 groups deep, deeper "
+            "than this hook reads, and it names git or aramid, so a bypass in it "
+            "could not be seen. The armed version of this hook rejects the call "
+            "outright -- take the command out of the nesting."),
+    }}
+
+
 def test_pre_tool_use_dry_run_push_allowed_even_armed(tmp_path, monkeypatch, capsys):
     r = _onboarded(tmp_path, monkeypatch)
     _arm_agent(r)

@@ -1,6 +1,9 @@
 """agent_bypass_powershell -- a command read by PowerShell's rules (FN-45).
 
-Spec: docs/superpowers/specs/2026-10-12-aramid-powershell-reading-design.md.
+The measurements: FN-45 in docs/superpowers/plans/2026-09-21-aramid-1.0-blockers.md,
+and the record tests/fixtures/powershell-argv.json. (A spec,
+`docs/superpowers/specs/2026-10-12-aramid-powershell-reading-design.md`, was
+cited here and never committed.)
 
 `agent_bypass` reads a command the way a POSIX shell cuts it up. PowerShell
 cuts it up differently, and each difference was a way to get a flag past the
@@ -12,7 +15,8 @@ each as the words PowerShell would hand to the program, and `agent_bypass`
 judges them with the same flag rules as ever.
 
 Every rule here was read off PowerShell 7 with a program that records its
-arguments, not written from memory; the spec has the table and the counts.
+arguments, not written from memory; the record holds every command and what
+PowerShell handed over.
 
 Pure stdlib, no aramid imports, no I/O, and it cannot raise: it runs inside
 the agent hook, which fails open, so a raise here would let a command
@@ -38,12 +42,13 @@ same, with the word it stopped in left out: this reader may be the one that
 is wrong about where the quote closes, and what it lets through is caught
 by nothing else.
 
-A bypass buried deeper than _DEPTH groups is cut off the same way, and here
-the reading stops BEFORE the command, so it is missed. The cap is low on
-purpose -- going as deep as PowerShell (it runs the wrapped command thousands
-of groups in) could raise, and this reader must not. A flag standing outside
-the nest is still read, so this hides only one an agent chose to bury, and a
-single `$( )` buries one just as well.
+A READING THAT GOES TOO DEEP. Past _DEPTH groups the reading stops as well,
+BEFORE the command it was reaching, and `reading` says so ("deep"). The cap
+is low on purpose -- going as deep as PowerShell (it runs the wrapped command
+thousands of groups in) could raise, and this reader must not. Unlike an open
+quote, PowerShell does run such a text, so `agent_bypass` refuses the call
+when its text names git or aramid (the operator's decision, 2026-10-13). No
+real command nests that deep.
 """
 from __future__ import annotations
 
@@ -69,15 +74,30 @@ class _CutOff(Exception):
     """The text ends inside a quote, a comment or a group."""
 
 
-def commands(text: str) -> tuple[list[list[str]], bool]:
-    """The simple commands in `text`, each a list of words, and whether the
-    reading got to the end of the text."""
+class _TooDeep(_CutOff):
+    """The groups nest deeper than _DEPTH: the reading stops, PowerShell does not."""
+
+
+def reading(text: str) -> tuple[list[list[str]], str]:
+    """The simple commands in `text`, each a list of words, and how the
+    reading ended: "end" (it got to the end of the text), "cut" (an open
+    quote, comment or group, which PowerShell runs none of) or "deep" (more
+    than _DEPTH groups, which PowerShell runs)."""
     done: list[list[str]] = []
     try:
         _commands(text, 0, "", done, 0)
+    except _TooDeep:
+        return done, "deep"
     except _CutOff:
-        return done, False
-    return done, True
+        return done, "cut"
+    return done, "end"
+
+
+def commands(text: str) -> tuple[list[list[str]], bool]:
+    """The simple commands in `text`, each a list of words, and whether the
+    reading got to the end of the text."""
+    done, end = reading(text)
+    return done, end == "end"
 
 
 def _blank(ch: str) -> bool:
@@ -90,7 +110,7 @@ def _commands(text: str, i: int, closer: str, done: list, depth: int) -> int:
     when there is none. Each finished command is appended to `done`. Returns
     the index after the closer."""
     if depth > _DEPTH:
-        raise _CutOff
+        raise _TooDeep
     n = len(text)
     words: list[str] = []
     word: list[str] | None = None   # the word being read, None between words

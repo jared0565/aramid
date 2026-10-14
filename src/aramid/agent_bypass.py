@@ -188,7 +188,7 @@ _MARKS = {ord(ch): None for ch in "'\"\\\r\n"}
 
 @dataclass(frozen=True)
 class Bypass:
-    kind: str        # "no-verify" | "hooks-path" | "no-red-proof"
+    kind: str        # "no-verify" | "hooks-path" | "no-red-proof" | "too-deep"
     subcommand: str  # "commit" | "push" | "ledger resolve"
     token: str       # the exact matched token / -c value, for messages
 
@@ -474,9 +474,11 @@ def _may_name_a_program(command: str) -> bool:
     holds the letters in a row. (Up to 0.20.8 the text was searched as
     written, and none of them was answered.)
 
-    A PowerShell call is not asked here: it is always read. PowerShell makes
-    a name out of more than a cheap test can follow (`` `u{67}it ``,
-    `g$()it`)."""
+    A PowerShell call is not asked here before it is read: it is always read.
+    PowerShell makes a name out of more than a cheap test can follow
+    (`` `u{67}it ``, `g$()it`). Only a reading cut off by the depth cap asks
+    it of one, with the backticks taken out first (`find_bypass`), and those
+    two spellings are not seen there."""
     low = command.lower().translate(_MARKS)
     return "git" in low or "aramid" in low
 
@@ -495,12 +497,22 @@ def find_bypass(command, shell: str | None = None) -> Bypass | None:
     time with PowerShell's backtick; only the close rule is asked on that
     second reading, and a second reading that stops at an open quote is left
     out when the first got to the end (module docstring).
+
+    A PowerShell call nested deeper than its reader reads is refused as
+    "too-deep" when its text names git or aramid, spelled with the quotes
+    and backticks PowerShell takes out of a word: PowerShell runs what lies
+    past the cap, and no real command nests that deep (the operator's
+    decision, 2026-10-13). A bypass the reader did reach answers first.
     """
     if not isinstance(command, str):
         return None
     if shell == POWERSHELL:
         from aramid import agent_bypass_powershell
-        return _first(agent_bypass_powershell.commands(command)[0], True, True)
+        done, end = agent_bypass_powershell.reading(command)
+        found = _first(done, True, True)
+        if found is None and end == "deep" and _may_name_a_program(command.replace("`", "")):
+            return Bypass("too-deep", "", str(agent_bypass_powershell._DEPTH))
+        return found
     if not _may_name_a_program(command):
         return None
     posix, posix_whole = _tokens(command, False)
