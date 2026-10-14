@@ -102,15 +102,16 @@ to publish a tag that disagrees with it.
   `.aramid/logs/`), which refuses a push; a commit still goes through, as
   for any degraded tool. **If you set `GIT_TRACE` to debug git, unset it
   before you push.**
-- **A PowerShell call nested too deep for the agent hook to read is refused
-  when it names git or aramid.** The hook's PowerShell reader stops at forty
+- **A PowerShell call nested too deep for the agent hook to read is
+  refused.** The hook's PowerShell reader stops at forty
   groups one within another, and the call went through unread, while
   PowerShell runs the command thousands of groups deep: `git commit
   --no-verify` wrapped 41 deep was let through, 39 deep refused. Such a call
   is now refused, or answered with an advisory while the agent surface is
-  not armed. One that nests that deep and names neither is let through, and
-  an open quote or comment, which PowerShell runs none of, is read as
-  before.
+  not armed, whatever it names: no real command nests that deep, and a
+  name built when the call runs (`& ("g" + "it")` is git) is out of any
+  reading's reach. An open quote or comment, which PowerShell runs none
+  of, is read as before.
 
 ### Fixed
 

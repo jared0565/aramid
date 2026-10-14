@@ -33,7 +33,7 @@ import pytest
 
 from aramid import agent_bypass as ab
 from aramid.agent_bypass import POWERSHELL, Bypass, find_bypass
-from aramid.agent_bypass_powershell import _DEPTH, commands, reading, spelled
+from aramid.agent_bypass_powershell import _DEPTH, commands, reading
 
 FIXTURE = Path(__file__).parent.parent / "fixtures" / "powershell-argv.json"
 RECORD = {case["command"]: (case["status"], case["argv"])
@@ -509,7 +509,7 @@ def test_nesting_deeper_than_the_limit_is_cut_off_and_not_an_error():
     # The boundary is exact: _DEPTH groups are read, one more is cut off. The cap
     # is NOT a match to PowerShell -- PowerShell 7 runs the wrapped command
     # thousands of groups deep (probe10, 2026-10-12) -- so a reading cut off
-    # there is refused when the call names git or aramid (the tests below). The
+    # there is refused (the tests below). The
     # cap is kept low because deeper recursion could raise, and this reader must
     # never raise (the module's note, "A READING THAT GOES TOO DEEP").
     at = _nest("git commit -n", _DEPTH)
@@ -528,62 +528,34 @@ def test_nesting_deeper_than_the_limit_is_cut_off_and_not_an_error():
 @pytest.mark.parametrize("inner", [
     "git commit -n", "git status", "aramid ledger resolve id1 --fixed abc", "& git commit",
     "g`it commit -n", 'g"i"t commit -n', "GIT commit -n",
-    # names PowerShell builds (the record: `u{67}it commit -n ran git)
-    "`u{67}it commit -n", '& "`u{67}it" commit -n', "g$()it commit -n", "g${u}it commit -n",
-    "gi${null}t commit -n", "`u{61}ramid ledger resolve id1 --fixed abc"])
-def test_a_reading_cut_off_by_the_depth_limit_is_refused_when_the_call_names_git_or_aramid(inner):
-    # The operator's decision (2026-10-13, "Refuse at the cap"): PowerShell runs
+    # names PowerShell builds, each run in pwsh 7 with `--version` (2026-10-14): a
+    # bare `g$()it` is looked up as written, the same word after `&` is git
+    "`u{67}it commit -n", '& "`u{67}it" commit -n', "& g$()it commit -n",
+    "& g${u}it commit -n", "& gi${null}t commit -n", "`u{61}ramid ledger resolve id1 --fixed abc",
+    "& g$('i')t commit -n", "& \"$('g')it\" commit -n", '& g$("i")t commit -n',
+    ". \"$('g')it\" commit -n", "& \"a$('r')amid\" ledger resolve id1 --fixed abc",
+    # names built when the call runs (`& ("g" + "it")` is git, measured), which no
+    # reading of the text can see, and calls that name neither
+    '& ("g" + "it") commit -n', "& g$(Write-Output i)t commit -n",
+    "Write-Output hi", "Write-Output `u{68}i", "Write-Output g$x"])
+def test_a_reading_cut_off_by_the_depth_limit_is_refused(inner):
+    # The operator's decisions: "Refuse at the cap" (2026-10-13), PowerShell runs
     # what lies past the cap, so the cut-off is not like an open quote, which it
-    # does not run. No real command nests that deep, so the call is refused,
-    # whatever it was going to do, once its text names git or aramid -- spelled
-    # with the quotes and backticks PowerShell takes out of a word.
+    # does not run; then "Refuse every deep call" (2026-10-14), once three reviews
+    # in a row had each found a spelling of git that a test of the text missed.
+    # No real command nests that deep, so the call is refused whatever it names.
     assert find_bypass(_nest(inner), POWERSHELL) == TOO_DEEP
     assert find_bypass(_nest(inner, _DEPTH + 5000), POWERSHELL) == TOO_DEEP
 
 
-@pytest.mark.parametrize("text,word", [
-    ("`u{67}it", "git"), ("g`u{69}t", "git"), ("`u{1F600}", "\U0001F600"),
-    ("`u{zz}x", "u{zz}x"), ("`ux", "ux"), ("x`", "x"), ("g`tit", "g\tit"), ("g``it", "g`it"),
-    ("g$()it", "git"), ("g$(a (b) c)it", "git"), ("g$(open", "g"), ("g${a b}it", "git"),
-    ("g$xit", "g"), ("g$env:PATH", "g"), ("$?", ""), ("a $ b", "a $ b"), ("a$", "a$"),
-    ("a$x-b", "a-b"), ("a$xy-b", "a-b"),   # a name ends where its characters do
-    ("'g'it", "git"), ('"g"i’t', "git"), ("plain words", "plain words")])
-def test_spelled_reads_text_as_powershell_builds_a_word(text, word):
-    assert spelled(text) == word
-
-
-@pytest.mark.parametrize("text,code", [
-    ("$(`u{67}it)", "(git)"), ("g$()it", "g()it"), ('"$(g`u{69}t)"', "(git)"),
-    ("g${a}it", "git"), ("g$xit", "g"), ("a$(b$(c))d", "a(b(c))d")])
-def test_spelled_as_code_reads_what_a_subexpression_runs(text, code):
-    # PowerShell runs the commands in `$( )`; only its output is a value.
-    assert spelled(text, code=True) == code
-
-
 @pytest.mark.parametrize("outside", ["$({})", '"$({})"', "Write-Output $({})", "& $({})"])
-def test_a_name_inside_a_subexpression_past_the_cap_is_refused(outside):
-    # A background review of e45e42f said "parser-differential"; measured: the
-    # word view takes `$( )` as an empty value, and PowerShell runs what is in it.
-    assert find_bypass(outside.format(_nest("`u{67}it commit -n")), POWERSHELL) == TOO_DEEP
+def test_a_nest_inside_a_subexpression_past_the_cap_is_refused(outside):
+    # PowerShell runs what is in `$( )`, in a string or out of one.
+    assert find_bypass(outside.format(_nest("Write-Output hi")), POWERSHELL) == TOO_DEEP
 
 
-def test_spelled_never_raises():
-    rng = random.Random(14)  # noqa: S311  -- seeded, reproducible, not crypto
-    alphabet = "`$(){}u0123456789abcdefgiz '\"’\r\n:?^"
-    for _ in range(3000):
-        text = "".join(rng.choice(alphabet) for _ in range(rng.randrange(0, 24)))
-        assert isinstance(spelled(text), str) and isinstance(spelled(text, code=True), str)
-
-
-@pytest.mark.parametrize("inner", ["Write-Output hi", "Write-Output `u{68}i", "Write-Output g$x"])
-def test_a_reading_cut_off_by_the_depth_limit_is_let_through_when_the_call_names_neither(inner):
-    # `$x` is a value taken to be empty: `g$x` does not spell git.
-    assert find_bypass(_nest(inner), POWERSHELL) is None
-
-
-def test_a_name_outside_the_nest_counts_too():
-    # The text is what is asked, not what was read: the reader stopped before
-    # the nest, so a name in it is never in what was read.
+def test_a_command_read_before_the_nest_does_not_clear_it():
+    # The reader stopped at the nest, so what it read says nothing of what is in it.
     assert find_bypass("git status; " + _nest("Write-Output hi"), POWERSHELL) == TOO_DEEP
 
 

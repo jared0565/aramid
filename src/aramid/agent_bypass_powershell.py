@@ -46,9 +46,10 @@ A READING THAT GOES TOO DEEP. Past _DEPTH groups the reading stops as well,
 BEFORE the command it was reaching, and `reading` says so ("deep"). The cap
 is low on purpose -- going as deep as PowerShell (it runs the wrapped command
 thousands of groups in) could raise, and this reader must not. Unlike an open
-quote, PowerShell does run such a text, so `agent_bypass` refuses the call
-when its text names git or aramid (the operator's decision, 2026-10-13). No
-real command nests that deep.
+quote, PowerShell does run such a text, so `agent_bypass` refuses the call,
+whatever it names (the operator's decisions, 2026-10-13 and 2026-10-14): no
+real command nests that deep, and a name built when the call runs is out of
+any reading's reach.
 """
 from __future__ import annotations
 
@@ -98,44 +99,6 @@ def commands(text: str) -> tuple[list[list[str]], bool]:
     reading got to the end of the text."""
     done, end = reading(text)
     return done, end == "end"
-
-
-def spelled(text: str, code: bool = False) -> str:
-    """`text` spelled as PowerShell builds a word, for a name test where the
-    reading did not reach (a reading cut off by the depth cap): its escapes
-    read (`` `u{67}it `` is git), its quotes taken out, and a value -- `$( )`,
-    `${ }`, `$name` -- taken to be empty, as the reader takes one inside a
-    word (module docstring). With `code`, what a `$( )` runs is spelled as
-    well, its `$` alone dropped: PowerShell runs the commands in it, and only
-    their output is the value. One walk forward, no recursion: it cannot raise."""
-    out: list[str] = []
-    i, n = 0, len(text)
-    while i < n:
-        ch, nxt = text[i], text[i + 1:i + 2]
-        if ch == "`":
-            try:
-                got, i = _escape(text, i)
-            except _CutOff:
-                got, i = "", i + 1
-            out.append(got)
-        elif ch == "$" and nxt == "(" and code:
-            i += 1
-        elif ch == "$" and nxt in ("(", "{"):
-            opener, closer = nxt, ")" if nxt == "(" else "}"
-            depth, i = 1, i + 2
-            while i < n and depth:
-                depth += (text[i] == opener) - (text[i] == closer)
-                i += 1
-        elif ch == "$" and nxt and (nxt.isalnum() or nxt in "_:?^$"):
-            i += 2
-            while i < n and (text[i].isalnum() or text[i] in "_:"):
-                i += 1
-        elif ch in _SINGLE or ch in _DOUBLE:
-            i += 1
-        else:
-            out.append(ch)
-            i += 1
-    return "".join(out)
 
 
 def _blank(ch: str) -> bool:

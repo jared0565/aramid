@@ -165,7 +165,7 @@ def _said(bypass) -> tuple[str, str]:
     """What the hook says about one match: (the denial, the advisory)."""
     if bypass.kind == "too-deep":
         what = (f"this call nests a command more than {bypass.token} groups deep, deeper"
-                f" than this hook reads, and it names git or aramid")
+                f" than this hook reads")
         return (f"aramid: {what}, so it is REJECTED in this repo (agent surface armed)."
                 f" Take the command out of the nesting and re-run it.",
                 f"aramid: {what}, so a bypass in it could not be seen. The armed version"

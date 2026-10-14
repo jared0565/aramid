@@ -198,9 +198,10 @@ def test_pre_tool_use_armed_denies_hookspath_wrapper(tmp_path, monkeypatch, caps
         "`aramid ledger filter --status open`.")
 
 
-# A PowerShell call nesting a git command one group deeper than the reader reads
-# (agent_bypass_powershell._DEPTH is 40).
-_TOO_DEEP = "(" * 41 + "git commit -n" + ")" * 41
+# A PowerShell call nesting a command one group deeper than the reader reads
+# (agent_bypass_powershell._DEPTH is 40). It names neither git nor aramid: every
+# call that deep is refused (the operator's decision, 2026-10-14).
+_TOO_DEEP = "(" * 41 + "Write-Output hi" + ")" * 41
 
 
 def _powershell_payload(command: str) -> dict:
@@ -218,9 +219,8 @@ def test_pre_tool_use_armed_denies_a_call_nested_too_deep_to_read(tmp_path, monk
         "permissionDecision": "deny",
         "permissionDecisionReason": (
             "aramid: this call nests a command more than 40 groups deep, deeper "
-            "than this hook reads, and it names git or aramid, so it is REJECTED "
-            "in this repo (agent surface armed). Take the command out of the "
-            "nesting and re-run it."),
+            "than this hook reads, so it is REJECTED in this repo (agent surface "
+            "armed). Take the command out of the nesting and re-run it."),
     }}
 
 
@@ -233,9 +233,9 @@ def test_pre_tool_use_advises_on_a_call_nested_too_deep_to_read(tmp_path, monkey
         "hookEventName": "PreToolUse",
         "additionalContext": (
             "aramid: this call nests a command more than 40 groups deep, deeper "
-            "than this hook reads, and it names git or aramid, so a bypass in it "
-            "could not be seen. The armed version of this hook rejects the call "
-            "outright -- take the command out of the nesting."),
+            "than this hook reads, so a bypass in it could not be seen. The armed "
+            "version of this hook rejects the call outright -- take the command "
+            "out of the nesting."),
     }}
 
 
