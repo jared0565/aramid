@@ -100,12 +100,14 @@ def commands(text: str) -> tuple[list[list[str]], bool]:
     return done, end == "end"
 
 
-def spelled(text: str) -> str:
+def spelled(text: str, code: bool = False) -> str:
     """`text` spelled as PowerShell builds a word, for a name test where the
     reading did not reach (a reading cut off by the depth cap): its escapes
     read (`` `u{67}it `` is git), its quotes taken out, and a value -- `$( )`,
     `${ }`, `$name` -- taken to be empty, as the reader takes one inside a
-    word (module docstring). One walk forward, no recursion: it cannot raise."""
+    word (module docstring). With `code`, what a `$( )` runs is spelled as
+    well, its `$` alone dropped: PowerShell runs the commands in it, and only
+    their output is the value. One walk forward, no recursion: it cannot raise."""
     out: list[str] = []
     i, n = 0, len(text)
     while i < n:
@@ -116,6 +118,8 @@ def spelled(text: str) -> str:
             except _CutOff:
                 got, i = "", i + 1
             out.append(got)
+        elif ch == "$" and nxt == "(" and code:
+            i += 1
         elif ch == "$" and nxt in ("(", "{"):
             opener, closer = nxt, ")" if nxt == "(" else "}"
             depth, i = 1, i + 2

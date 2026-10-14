@@ -512,9 +512,11 @@ def find_bypass(command, shell: str | None = None) -> Bypass | None:
         from aramid import agent_bypass_powershell
         done, end = agent_bypass_powershell.reading(command)
         found = _first(done, True, True)
+        spell = agent_bypass_powershell.spelled
         if found is None and end == "deep" and (
                 _may_name_a_program(command.replace("`", ""))
-                or _may_name_a_program(agent_bypass_powershell.spelled(command))):
+                or _may_name_a_program(spell(command))
+                or _may_name_a_program(spell(command, code=True))):
             return Bypass("too-deep", "", str(agent_bypass_powershell._DEPTH))
         return found
     if not _may_name_a_program(command):

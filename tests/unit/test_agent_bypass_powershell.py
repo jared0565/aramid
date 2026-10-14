@@ -552,12 +552,27 @@ def test_spelled_reads_text_as_powershell_builds_a_word(text, word):
     assert spelled(text) == word
 
 
+@pytest.mark.parametrize("text,code", [
+    ("$(`u{67}it)", "(git)"), ("g$()it", "g()it"), ('"$(g`u{69}t)"', "(git)"),
+    ("g${a}it", "git"), ("g$xit", "g"), ("a$(b$(c))d", "a(b(c))d")])
+def test_spelled_as_code_reads_what_a_subexpression_runs(text, code):
+    # PowerShell runs the commands in `$( )`; only its output is a value.
+    assert spelled(text, code=True) == code
+
+
+@pytest.mark.parametrize("outside", ["$({})", '"$({})"', "Write-Output $({})", "& $({})"])
+def test_a_name_inside_a_subexpression_past_the_cap_is_refused(outside):
+    # A background review of e45e42f said "parser-differential"; measured: the
+    # word view takes `$( )` as an empty value, and PowerShell runs what is in it.
+    assert find_bypass(outside.format(_nest("`u{67}it commit -n")), POWERSHELL) == TOO_DEEP
+
+
 def test_spelled_never_raises():
     rng = random.Random(14)  # noqa: S311  -- seeded, reproducible, not crypto
     alphabet = "`$(){}u0123456789abcdefgiz '\"’\r\n:?^"
     for _ in range(3000):
         text = "".join(rng.choice(alphabet) for _ in range(rng.randrange(0, 24)))
-        assert isinstance(spelled(text), str)
+        assert isinstance(spelled(text), str) and isinstance(spelled(text, code=True), str)
 
 
 @pytest.mark.parametrize("inner", ["Write-Output hi", "Write-Output `u{68}i", "Write-Output g$x"])
