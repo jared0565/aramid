@@ -374,6 +374,9 @@ def test_the_inline_pass_reports_only_leaks_the_allow_comment_hid(tmp_path, monk
                          second=[_leak(tmp_path / "cfg.py", 1, "c1"),
                                  _leak(tmp_path / "cfg.py", 2, "c2")])
     monkeypatch.setattr(gitleaks, "run_subprocess", fake)
+    # No repo here to resolve the range in; that check is FN-56's
+    # (test_runner_gitleaks_git_failure.py).
+    monkeypatch.setattr(gitleaks, "_unusable", lambda ctx: None)
     ctx = RunContext(root=tmp_path, rng="@{u}..HEAD", inline_pass=True)
 
     result = gitleaks.run(ctx)
@@ -538,6 +541,9 @@ def test_only_the_all_scan_builds_the_tracked_copy(tmp_path, monkeypatch):
                             duration_s=0.01, returncode=0)
 
     monkeypatch.setattr(gitleaks, "run_subprocess", fake)
+    # No repo here to resolve the range in; that check is FN-56's
+    # (test_runner_gitleaks_git_failure.py).
+    monkeypatch.setattr(gitleaks, "_unusable", lambda ctx: None)
     copies = []
     for ctx in (RunContext(root=tmp_path), RunContext(root=tmp_path, rng="HEAD~1..HEAD"),
                 RunContext(root=tmp_path, files=[], full_tree=True)):

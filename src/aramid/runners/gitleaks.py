@@ -6,13 +6,18 @@ always write to a real temp file and read it back afterwards.
 
 gitleaks exits non-zero when it finds leaks (that is the whole point of the
 tool) -- that is NOT a crash. gitleaks' own documented exit codes are 0 (no
-leaks) and 1 (leaks found); anything else (bad --log-opts range, not-a-git-
-repo, permission error, ...) means gitleaks errored before/instead of
-producing a trustworthy report. An errored run typically leaves the report
-file missing or empty, which parses just as cleanly as a genuinely-clean
-"[]" -- so the returncode is checked explicitly and BEFORE trusting an
-empty/absent report as "no leaks"; without that check a crashed gitleaks
-(a BLOCK-tier secrets gate) would silently read as "scanned clean".
+leaks) and 1 (leaks found); anything else (not-a-git-repo, permission
+error, ...) means gitleaks errored before/instead of producing a trustworthy
+report. A failure of gitleaks' OWN git run does not show there: gitleaks logs
+git's error and exits 0 with nothing found (measured, 8.30.1: a bad
+`--log-opts` range, a blob missing from the object store, and a mere git
+warning, which loses the scan all the same). So `run` first checks that the
+range resolves and that an index git named exists, and reads gitleaks' log
+after every run (FN-56, `_unusable`, `_git_failed`). An errored run typically
+leaves the report file missing or empty, which parses just as cleanly as a
+genuinely-clean "[]" -- so the returncode is checked explicitly and BEFORE
+trusting an empty/absent report as "no leaks"; without that check a crashed
+gitleaks (a BLOCK-tier secrets gate) would silently read as "scanned clean".
 
 `--all` (full_tree) does NOT point `gitleaks dir` at the repo root. `dir`
 takes one path and walks everything under it -- there is no exclude flag,
@@ -30,6 +35,7 @@ push can ship and the only place a reported leak can be fixed.
 """
 import json
 import os
+import re
 import shutil
 import tempfile
 from dataclasses import replace
@@ -156,7 +162,47 @@ def _build_argv(ctx, report_path: Path, scan_root: Path | None = None) -> list[s
     ]
 
 
+def _git_failed(log: str) -> bool:
+    """FN-56: whether gitleaks' log shows its own git run failing: a line from
+    git (`[git] ...`), or gitleaks' `stderr is not empty`. gitleaks logs both
+    at error level, then reports what it read -- for a failed git, nothing --
+    and exits 0 (measured, 8.30.1: a range whose base does not resolve, a blob
+    missing from the object store). Every git stderr line comes out this way,
+    a warning too, but for the few gitleaks scans past, such as the rename
+    limit (measured): those it logs at WRN, without `[git]`. No level is read:
+    a `[git]` line at any other level would fail the scan, never pass it."""
+    log = log or ""
+    return "[git]" in log or "stderr is not empty" in log
+
+
+def _unusable(ctx) -> str | None:
+    """FN-56: why the git scan aramid would hand gitleaks cannot be read, or
+    None. Each end of the range must resolve (the full-history scan walks
+    HEAD), and an index git named must exist: git hands a hook one that does
+    (`.git/index`, or the `next-index-*.lock` of `commit -a`). A value that
+    starts with `-` is git log's own options, not a range (init's history scan
+    hands it `--all`): nothing to resolve, and the log still shows an error."""
+    if ctx.rng is None:
+        if getattr(ctx, "full_tree", False):
+            return None
+        index = os.environ.get("GIT_INDEX_FILE")
+        if index and not (Path(ctx.root) / index).exists():
+            return f"the index git named, {index}, does not exist"
+        return None
+    if ctx.rng.startswith("-"):
+        return None
+    ends =[end for end in re.split(r"\.{2,3}", ctx.rng) if end] if ctx.rng else ["HEAD"]
+    for end in ends:
+        if gitutil.rev_sha(Path(ctx.root), end) is None:
+            return f"{end} in the range {ctx.rng or 'HEAD'} does not resolve"
+    return None
+
+
 def run(ctx) -> RunnerResult:
+    why = _unusable(ctx)
+    if why is not None:
+        return RunnerResult(NAME, ToolState.CRASHED,
+                            stderr=f"aramid: {why}; the secret scan did not run")
     # ignore_cleanup_errors: the directory now holds a copy of the tracked
     # tree, and a gitleaks killed on timeout can still hold a file open on
     # Windows for a moment. A leftover temp directory beats a BLOCK-tier
@@ -170,6 +216,9 @@ def run(ctx) -> RunnerResult:
         result = run_subprocess(argv, ctx.root, TIMEOUT_S, env=dict(_CLEARED_ENV))
         if result.state in (ToolState.MISSING, ToolState.TIMEOUT):
             return result
+        if _git_failed(result.stderr):
+            return RunnerResult(NAME, ToolState.CRASHED, stderr=result.stderr,
+                                duration_s=result.duration_s, returncode=result.returncode)
 
         text = report_path.read_text() if report_path.exists() else ""
 
@@ -240,7 +289,7 @@ def _read_pass(ctx, argv, cwd: Path, timeout: float, env: dict, report_path: Pat
                           duration_s=result.duration_s, returncode=result.returncode)
     # rc 1 is gitleaks' "leaks found OR an error", so with no report file it
     # proves nothing: read as `[]`, it would say no marker hides anything.
-    if result.returncode not in _OK_RETURNCODES or (
+    if result.returncode not in _OK_RETURNCODES or _git_failed(result.stderr) or (
             result.returncode == 1 and not report_path.exists()):
         return failed
     try:

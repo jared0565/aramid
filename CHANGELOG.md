@@ -88,6 +88,20 @@ to publish a tag that disagrees with it.
   directory that holds neither, and each hit only that run finds is a `WARN`
   `gitleaks-inline` finding naming the file, as for a `gitleaks:allow`
   comment. Nothing new blocks, and both files keep working.
+- **A git message during the secret scan fails the scan instead of passing
+  it (FN-56).** gitleaks drops its commit or push scan whenever its git run
+  writes something to stderr that gitleaks does not expect, then reports no
+  leaks and exits 0. Measured with gitleaks 8.30.1 through the runner as it
+  stood before this change: a pushed range whose base did not resolve, a
+  blob missing from the object store, a warning that a ref name is
+  ambiguous, `GIT_TRACE=1` in the environment, and a broken ref under
+  `init`'s history scan each hid a secret while the scan read clean. aramid
+  now checks before the scan that the range resolves and that the index git
+  named exists, and reads gitleaks' log after it. Either failure lists
+  gitleaks as degraded (`crashed (exit 0)`, with the cause in its log under
+  `.aramid/logs/`), which refuses a push; a commit still goes through, as
+  for any degraded tool. **If you set `GIT_TRACE` to debug git, unset it
+  before you push.**
 
 ### Fixed
 

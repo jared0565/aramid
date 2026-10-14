@@ -25,9 +25,13 @@ def _hit(rule="github-pat", file="cfg.py", line=1, commit=""):
 
 
 def _repo(tmp_path):
+    # One commit, as under a real hook: HEAD resolves and `.git/index` exists,
+    # which the runner checks before it scans (FN-56).
     r = tmp_path / "r"
     r.mkdir()
     subprocess.run(["git", "init", "-q", str(r)], check=True, capture_output=True)
+    subprocess.run(["git", "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q",
+                    "--allow-empty", "-m", "base"], cwd=r, check=True, capture_output=True)
     return r
 
 
@@ -109,6 +113,7 @@ def test_an_absolute_index_file_is_kept(tmp_path, monkeypatch):
     r = _repo(tmp_path)
     (r / ".gitleaks.toml").write_text("")
     given = str(tmp_path / "next-index-1.lock")
+    Path(given).write_bytes(b"")   # git hands the hook one it has written
     monkeypatch.setenv("GIT_INDEX_FILE", given)
     fake = _Fake()
     _run(monkeypatch, RunContext(root=r, inline_pass=True), fake)
