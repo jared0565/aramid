@@ -33,7 +33,7 @@ import pytest
 
 from aramid import agent_bypass as ab
 from aramid.agent_bypass import POWERSHELL, Bypass, find_bypass
-from aramid.agent_bypass_powershell import _DEPTH, commands, reading
+from aramid.agent_bypass_powershell import _DEPTH, commands, reading, spelled
 
 FIXTURE = Path(__file__).parent.parent / "fixtures" / "powershell-argv.json"
 RECORD = {case["command"]: (case["status"], case["argv"])
@@ -527,7 +527,10 @@ def test_nesting_deeper_than_the_limit_is_cut_off_and_not_an_error():
 
 @pytest.mark.parametrize("inner", [
     "git commit -n", "git status", "aramid ledger resolve id1 --fixed abc", "& git commit",
-    "g`it commit -n", 'g"i"t commit -n', "GIT commit -n"])
+    "g`it commit -n", 'g"i"t commit -n', "GIT commit -n",
+    # names PowerShell builds (the record: `u{67}it commit -n ran git)
+    "`u{67}it commit -n", '& "`u{67}it" commit -n', "g$()it commit -n", "g${u}it commit -n",
+    "gi${null}t commit -n", "`u{61}ramid ledger resolve id1 --fixed abc"])
 def test_a_reading_cut_off_by_the_depth_limit_is_refused_when_the_call_names_git_or_aramid(inner):
     # The operator's decision (2026-10-13, "Refuse at the cap"): PowerShell runs
     # what lies past the cap, so the cut-off is not like an open quote, which it
@@ -538,8 +541,29 @@ def test_a_reading_cut_off_by_the_depth_limit_is_refused_when_the_call_names_git
     assert find_bypass(_nest(inner, _DEPTH + 5000), POWERSHELL) == TOO_DEEP
 
 
-def test_a_reading_cut_off_by_the_depth_limit_is_let_through_when_the_call_names_neither():
-    assert find_bypass(_nest("Write-Output hi"), POWERSHELL) is None
+@pytest.mark.parametrize("text,word", [
+    ("`u{67}it", "git"), ("g`u{69}t", "git"), ("`u{1F600}", "\U0001F600"),
+    ("`u{zz}x", "u{zz}x"), ("`ux", "ux"), ("x`", "x"), ("g`tit", "g\tit"), ("g``it", "g`it"),
+    ("g$()it", "git"), ("g$(a (b) c)it", "git"), ("g$(open", "g"), ("g${a b}it", "git"),
+    ("g$xit", "g"), ("g$env:PATH", "g"), ("$?", ""), ("a $ b", "a $ b"), ("a$", "a$"),
+    ("a$x-b", "a-b"), ("a$xy-b", "a-b"),   # a name ends where its characters do
+    ("'g'it", "git"), ('"g"i’t', "git"), ("plain words", "plain words")])
+def test_spelled_reads_text_as_powershell_builds_a_word(text, word):
+    assert spelled(text) == word
+
+
+def test_spelled_never_raises():
+    rng = random.Random(14)
+    alphabet = "`$(){}u0123456789abcdefgiz '\"’\r\n:?^"
+    for _ in range(3000):
+        text = "".join(rng.choice(alphabet) for _ in range(rng.randrange(0, 24)))
+        assert isinstance(spelled(text), str)
+
+
+@pytest.mark.parametrize("inner", ["Write-Output hi", "Write-Output `u{68}i", "Write-Output g$x"])
+def test_a_reading_cut_off_by_the_depth_limit_is_let_through_when_the_call_names_neither(inner):
+    # `$x` is a value taken to be empty: `g$x` does not spell git.
+    assert find_bypass(_nest(inner), POWERSHELL) is None
 
 
 def test_a_name_outside_the_nest_counts_too():

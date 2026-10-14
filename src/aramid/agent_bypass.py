@@ -477,8 +477,9 @@ def _may_name_a_program(command: str) -> bool:
     A PowerShell call is not asked here before it is read: it is always read.
     PowerShell makes a name out of more than a cheap test can follow
     (`` `u{67}it ``, `g$()it`). Only a reading cut off by the depth cap asks
-    it of one, with the backticks taken out first (`find_bypass`), and those
-    two spellings are not seen there."""
+    it of one (`find_bypass`): of its text with the backticks taken out, and
+    of its text as PowerShell spells a word (`agent_bypass_powershell.
+    spelled`), which sees those two. A name built at run time is not seen."""
     low = command.lower().translate(_MARKS)
     return "git" in low or "aramid" in low
 
@@ -499,10 +500,11 @@ def find_bypass(command, shell: str | None = None) -> Bypass | None:
     out when the first got to the end (module docstring).
 
     A PowerShell call nested deeper than its reader reads is refused as
-    "too-deep" when its text names git or aramid, spelled with the quotes
-    and backticks PowerShell takes out of a word: PowerShell runs what lies
-    past the cap, and no real command nests that deep (the operator's
-    decision, 2026-10-13). A bypass the reader did reach answers first.
+    "too-deep" when its text names git or aramid -- as written with the
+    backticks taken out, or as PowerShell spells a word of it (`` `u{67}it ``,
+    `g$()it`): PowerShell runs what lies past the cap, and no real command
+    nests that deep (the operator's decision, 2026-10-13). A bypass the
+    reader did reach answers first.
     """
     if not isinstance(command, str):
         return None
@@ -510,7 +512,9 @@ def find_bypass(command, shell: str | None = None) -> Bypass | None:
         from aramid import agent_bypass_powershell
         done, end = agent_bypass_powershell.reading(command)
         found = _first(done, True, True)
-        if found is None and end == "deep" and _may_name_a_program(command.replace("`", "")):
+        if found is None and end == "deep" and (
+                _may_name_a_program(command.replace("`", ""))
+                or _may_name_a_program(agent_bypass_powershell.spelled(command))):
             return Bypass("too-deep", "", str(agent_bypass_powershell._DEPTH))
         return found
     if not _may_name_a_program(command):
