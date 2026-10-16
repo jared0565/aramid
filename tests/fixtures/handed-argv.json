@@ -1859,6 +1859,41 @@
      "-n"
     ]
    ]
+  },
+  {
+   "shell": "posix",
+   "command": "dash -c 'git commit -n'",
+   "status": "ran",
+   "argv": [
+    [
+     "git",
+     "commit",
+     "-n"
+    ]
+   ]
+  },
+  {
+   "shell": "posix",
+   "command": "dash -c 'git status'",
+   "status": "ran",
+   "argv": [
+    [
+     "git",
+     "status"
+    ]
+   ]
+  },
+  {
+   "shell": "posix",
+   "command": "dash -c -- 'git commit -n'",
+   "status": "ran",
+   "argv": [
+    [
+     "git",
+     "commit",
+     "-n"
+    ]
+   ]
   }
  ]
 }

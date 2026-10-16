@@ -34,9 +34,14 @@ bash a string to run, and `pwsh -c` hands PowerShell one. Such a string is
 read by the rules of the shell it is handed to, as a command of its own
 (`_handed`), through as many as _HANDED_DEPTH shells within shells; one
 more is refused. What reached git is in tests/fixtures/handed-argv.json,
-from real shells and real git. Not read: a string handed to `cmd /c`, an
-encoded command (`-EncodedCommand`), and the arguments a string is given
-when it runs (`bash -c 'git commit "$@"' x -n`).
+from real shells and real git. The POSIX sh family (bash, sh, zsh, dash, ksh,
+mksh, ash, yash, posh) and PowerShell (pwsh, powershell) are read; dash is the
+family's measured proof and the rest share its `-c` grammar. Not read: a
+string handed to `cmd /c`, an encoded command (`-EncodedCommand`), one fed on
+standard input (`echo ... | bash`, `bash <<< ...`, `pwsh -`), a `fish -c`
+string (fish's option grammar is its own), a command handed through `su`,
+`script` or `flock -c`, and the arguments a string is given when it runs
+(`bash -c 'git commit "$@"' x -n`).
 
 WHICH SHELL (FN-45). `find_bypass` takes the shell the hook was told runs
 the command. A PowerShell call is cut up by `agent_bypass_powershell`, by
@@ -478,7 +483,15 @@ def _first(segments: list[list[str]], git_rules: bool, values: bool) -> Bypass |
 # The shells a command can hand a string to run (FN-55), by the program's
 # name under any directory, with `.exe` or without and in any case: Windows
 # finds `BASH` as well as `bash`. zsh is read as sh is; it was not measured.
-_POSIX_SHELLS = ("bash", "sh", "zsh")
+# dash, ksh, mksh, ash, yash and posh share bash's `-c` grammar (FN-55
+# 2fe1a4); only dash was measured on the recording machine (it is /bin/sh on
+# most Linux), the rest are the same sh family. `ash` also catches
+# `busybox ash -c` once the decoy scan (_handed) steps past busybox.
+# RESIDUALS, documented, not here: fish has its own option grammar (`fish -c`
+# takes the string but reads switches differently); and su/script/flock `-c`
+# hand a command to a shell by a different route. Read as git's argv is: a
+# string these run is not reached.
+_POSIX_SHELLS = ("bash", "sh", "zsh", "dash", "ksh", "mksh", "ash", "yash", "posh")
 _POWERSHELLS = ("pwsh", "powershell")
 # PowerShell's switches that take the word after them as their value: by
 # their whole names, of which a start of three letters or more is the switch,

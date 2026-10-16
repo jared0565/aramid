@@ -248,6 +248,30 @@ def test_the_handed_readers_never_raise_on_an_out_of_contract_index(seg, start):
     assert ab._powershell_string(seg, start) is None
 
 
+@pytest.mark.parametrize("shell", ["ksh", "mksh", "ash", "yash", "posh"])
+def test_a_posix_sh_family_shell_hands_its_c_string_like_bash(shell):
+    # dash, ksh, mksh, ash, yash and posh share bash's -c grammar (FN-55
+    # 2fe1a4). dash is installed here and carries the authentic handed-argv.json
+    # proof for the family (dash -c 'git commit -n'); the rest are absent on the
+    # recording machine, so they are covered by a direct assertion on the
+    # shared reader rather than a record case.
+    assert find_bypass(f"{shell} -c 'git commit -n'", POSIX) == DASH_N
+
+
+def test_busybox_ash_is_reached_past_the_busybox_word():
+    # busybox is not itself a shell; the decoy scan (FN-55 2fe1a4) steps past it
+    # to the `ash` it launches, which is read like bash.
+    assert find_bypass("busybox ash -c 'git commit -n'", POSIX) == DASH_N
+
+
+def test_fish_c_is_a_documented_residual():
+    # fish -c runs its string, but fish's option grammar is not bash's and fish
+    # is absent on the recording machine, so it is a documented residual (module
+    # docstring / _POSIX_SHELLS comment), not read. If fish is ever added with
+    # its own rules, this assertion is the reminder to retire the residual.
+    assert find_bypass("fish -c 'git commit -n'", POSIX) is None
+
+
 def test_a_name_powershell_builds_in_the_string_is_seen_from_a_bash_call():
     # The Bash call's own text never spells git: the cheap test that keeps a
     # Bash call untokenized must not let it go (it costs one reading).
