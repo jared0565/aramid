@@ -566,10 +566,13 @@ def _powershell_string(seg: list[str], start: int) -> str | None:
     return None
 
 
-def _handed(seg: list[str]) -> tuple[str, str] | None:
-    """The string the first shell launched in `seg` is handed to run, and
-    the shell whose rules read it, or None. The string takes up the rest of
-    the command, or what follows it is arguments, so one is enough."""
+def _handed(seg: list[str]):
+    """Each string a shell launched in `seg` is handed to run, with the shell
+    whose rules read it, in the order they appear. More than one when a
+    program launches several commands in one segment (`find ... -exec sh -c
+    ... \\; -exec bash -c ... \\;`): a decoy shell earlier in the segment must
+    not hide a real one after it (FN-55 2fe1a4). A shell handed no string
+    yields nothing."""
     for i, tok in enumerate(seg):
         name = _program(tok)
         if name in _POSIX_SHELLS:
@@ -579,25 +582,24 @@ def _handed(seg: list[str]) -> tuple[str, str] | None:
         else:
             continue
         if text is not None:
-            return text, shell
-    return None
+            yield text, shell
 
 
 def _from_handed(segments: list[list[str]], depth: int) -> Bypass | None:
     """The first match in a string a command in `segments` hands a shell,
-    read by that shell's rules. `depth` counts the shells handed a string on
-    the way here: past _HANDED_DEPTH the call is refused, as it is past the
-    PowerShell reader's own cap -- no real command hands a string on that
-    often, and a reading without a cap could go deep enough to raise."""
+    read by that shell's rules. Every shell handed a string in a segment is
+    read, not just the first, so a decoy cannot hide a later one (FN-55
+    2fe1a4). `depth` counts the shells handed a string on the way here: past
+    _HANDED_DEPTH the call is refused, as it is past the PowerShell reader's
+    own cap -- no real command hands a string on that often, and a reading
+    without a cap could go deep enough to raise."""
     for seg in segments:
-        handed = _handed(seg)
-        if handed is None:
-            continue
-        if depth >= _HANDED_DEPTH:
-            return Bypass("too-deep", "shells", str(_HANDED_DEPTH))
-        found = find_bypass(handed[0], handed[1], _depth=depth + 1)
-        if found is not None:
-            return found
+        for text, shell in _handed(seg):
+            if depth >= _HANDED_DEPTH:
+                return Bypass("too-deep", "shells", str(_HANDED_DEPTH))
+            found = find_bypass(text, shell, _depth=depth + 1)
+            if found is not None:
+                return found
     return None
 
 

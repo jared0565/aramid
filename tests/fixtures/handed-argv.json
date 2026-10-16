@@ -1847,6 +1847,18 @@
      "-n"
     ]
    ]
+  },
+  {
+   "shell": "posix",
+   "command": "find . -maxdepth 0 -exec sh -c true \\; -exec bash -c 'git commit -n' \\;",
+   "status": "ran",
+   "argv": [
+    [
+     "git",
+     "commit",
+     "-n"
+    ]
+   ]
   }
  ]
 }
