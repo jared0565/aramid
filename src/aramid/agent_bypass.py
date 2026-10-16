@@ -36,11 +36,14 @@ read by the rules of the shell it is handed to, as a command of its own
 more is refused. What reached git is in tests/fixtures/handed-argv.json,
 from real shells and real git. The POSIX sh family (bash, sh, zsh, dash, ksh,
 mksh, ash, yash, posh) and PowerShell (pwsh, powershell) are read; dash is the
-family's measured proof and the rest share its `-c` grammar. Not read: a
-string handed to `cmd /c`, an encoded command (`-EncodedCommand`), one fed on
-standard input (`echo ... | bash`, `bash <<< ...`, `pwsh -`), a `fish -c`
+family's measured proof and the rest share its `-c` grammar. A command fed to
+such a shell on standard input is read too (`_from_stdin`, FN-55 fb16940): a
+here-string (`bash <<< 'git commit -n'`) and the literal echoed or printed
+into a pipe (`echo 'git commit -n' | bash`, `... | pwsh -`). Not read: a
+string handed to `cmd /c`, an encoded command (`-EncodedCommand`), a `fish -c`
 string (fish's option grammar is its own), a command handed through `su`,
-`script` or `flock -c`, and the arguments a string is given when it runs
+`script` or `flock -c`, a here-DOC body or a non-echo/printf pipe upstream
+(`cat f | bash`), and the arguments a string is given when it runs
 (`bash -c 'git commit "$@"' x -n`).
 
 WHICH SHELL (FN-45). `find_bypass` takes the shell the hook was told runs
@@ -628,6 +631,157 @@ def _from_handed(segments: list[list[str]], depth: int) -> Bypass | None:
     return None
 
 
+# A program whose last literal argument is what it writes to standard output,
+# so a shell on the other end of a pipe runs it (FN-55 fb16940). echo's own
+# flags are stripped; a printf with a format and arguments is read whole (the
+# join still holds the literal, read toward detection), its exactness a
+# residual.
+_ECHOERS = ("echo", "printf")
+_ECHO_FLAGS = ("-n", "-e", "-E", "-ne", "-nE", "-en", "-En")
+
+
+def _simple_commands(tokens: list[str]) -> list[dict]:
+    """The simple commands of `tokens`, each `{words, prev_op, here}`: the
+    words (with redirect targets removed as `_segments` removes them), the
+    operator just before the command (`''` for the first), and a here-string
+    (`<<<`) target if one was redirected into it. Unlike `_segments` the here
+    target and the connecting operator are KEPT, because for a shell fed on
+    standard input they are the command. `( )` are read as separators (a stdin
+    handoff nested in a group is a residual)."""
+    out: list[dict] = []
+    words: list[str] = []
+    prev_op, here = "", None
+    target = False      # the next word is a (non-here) redirect target: dropped
+    here_next = False   # the next word is the here-string target
+    for tok in tokens:
+        if not (tok and all(ch in _PUNCT for ch in tok)):
+            if here_next:
+                here, here_next = tok.translate(_PUT_BACK), False
+            elif not target:
+                words.append(tok.translate(_PUT_BACK))
+            target = False
+            continue
+        for op in _operators(tok):
+            if op == "<<<":
+                here_next, target = True, False
+                continue
+            # `<<` is a here-doc: the word after it is the DELIMITER, not the
+            # command (the body is on later lines). Read as a plain redirect --
+            # its delimiter dropped -- and the here-doc body left to `_first`
+            # on the lines it becomes. A here-doc fed command is a residual.
+            if op in _REDIRECTS:
+                target = True
+                continue
+            if op in _SUBSTITUTIONS:
+                target = False
+                continue
+            target = False
+            if op in (";", "|", "&", "(", ")", "\n"):
+                out.append({"words": words, "prev_op": prev_op, "here": here})
+                words, prev_op, here = [], op, None
+    out.append({"words": words, "prev_op": prev_op, "here": here})
+    return [c for c in out if c["words"] or c["here"] is not None]
+
+
+def _shell_launched(words: list[str]) -> tuple[int | None, str | None]:
+    """(index, the shell's rules) of the first shell `words` launches, or
+    (None, None)."""
+    for i, tok in enumerate(words):
+        name = _program(tok)
+        if name in _POSIX_SHELLS:
+            return i, POSIX
+        if name in _POWERSHELLS:
+            return i, POWERSHELL
+    return None, None
+
+
+def _reads_stdin_posix(words: list[str], start: int) -> bool:
+    """The POSIX shell at words[start] reads its COMMANDS from standard input:
+    no `-c` string and no script file (`bash`, `bash -s`, `bash -` do;
+    `bash -c x` and `bash script.sh` do not). The option walk is _posix_string's."""
+    i = start + 1
+    while i < len(words):
+        word = words[i]
+        if word == "-":
+            return True
+        if word == "--":
+            return i + 1 >= len(words)   # a script after `--` is not stdin
+        if word.startswith("--"):
+            i += 2 if word in ("--rcfile", "--init-file") else 1
+            continue
+        if word[:1] in ("-", "+"):
+            if "c" in word[1:]:
+                return False             # -c: a string, read by _handed
+            i += 1 + sum(ch in "oO" for ch in word[1:])
+            continue
+        if word.startswith("$"):
+            i += 1
+            continue
+        return False                     # a non-option word: a script file
+    return True
+
+
+def _reads_stdin_powershell(words: list[str], start: int) -> bool:
+    """pwsh/powershell at words[start] reads its command from standard input:
+    a lone `-` reached before any command switch."""
+    i = start + 1
+    while i < len(words):
+        word = words[i]
+        if word[:1] in ("-", "/"):
+            name = word.lstrip("-/").lower()
+            if name == "":
+                return True              # `-` alone: the command is on stdin
+            if "command".startswith(name):
+                return False             # -Command: a string, read by _handed
+        i += 1
+    return False
+
+
+def _echoed(words: list[str]) -> str | None:
+    """The command an `echo` or `printf` writes to its stdout, for a shell on
+    the far end of a pipe, or None if `words` is not a bare echo/printf of a
+    literal. echo's flags are dropped; the arguments are joined as echo joins
+    them."""
+    if not words or _program(words[0]) not in _ECHOERS:
+        return None
+    args = list(words[1:])
+    if _program(words[0]) == "echo":
+        while args and args[0] in _ECHO_FLAGS:
+            args = args[1:]
+    return " ".join(args) if args else None
+
+
+def _from_stdin(tokens: list[str], depth: int) -> Bypass | None:
+    """A match in a command a shell is fed on standard input (FN-55 fb16940),
+    read by the receiving shell's rules: a here-string target
+    (`bash <<< 'git commit -n'`), or the literal echoed or printed into a pipe
+    (`echo 'git commit -n' | bash`, `... | pwsh -`). `depth` as in
+    `_from_handed`: a command on stdin is one more shell handed a string."""
+    cmds = _simple_commands(tokens)
+    for idx, cmd in enumerate(cmds):
+        start, shell = _shell_launched(cmd["words"])
+        if start is None:
+            continue
+        reads = (_reads_stdin_posix(cmd["words"], start) if shell == POSIX
+                 else _reads_stdin_powershell(cmd["words"], start))
+        if not reads:
+            continue
+        if cmd["here"] is not None:
+            text = cmd["here"]
+        elif cmd["prev_op"] == "|" and idx > 0:
+            text = _echoed(cmds[idx - 1]["words"])
+        else:
+            text = None
+        if text is None:
+            continue
+        if depth >= _HANDED_DEPTH:
+            return Bypass("too-deep", "shells", str(_HANDED_DEPTH))
+        found = find_bypass(text, shell, _depth=depth + 1)
+        if found is not None:
+            return found
+    return None
+
+
 def _may_hand_a_string(command: str) -> bool:
     """Whether `command` can launch a shell that is handed a string, read the
     POSIX way: each of their names holds `sh`. Like `_may_name_a_program`, a
@@ -697,7 +851,8 @@ def find_bypass(command, shell: str | None = None, _depth: int = 0) -> Bypass | 
     posix, posix_whole = _tokens(command, False)
     if shell == POSIX:
         segments = _segments(posix)
-        return _first(segments, True, True) or _from_handed(segments, _depth)
+        return (_first(segments, True, True) or _from_handed(segments, _depth)
+                or _from_stdin(posix, _depth))
     powershell, powershell_whole = _tokens(command, True)
     readings = [(False, posix)]
     if powershell_whole or not posix_whole:
@@ -706,4 +861,4 @@ def find_bypass(command, shell: str | None = None, _depth: int = 0) -> Bypass | 
         found = _first(_segments(tokens), not backtick, False)
         if found is not None:
             return found
-    return _from_handed(_segments(posix), _depth)
+    return _from_handed(_segments(posix), _depth) or _from_stdin(posix, _depth)

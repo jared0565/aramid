@@ -272,6 +272,34 @@ def test_fish_c_is_a_documented_residual():
     assert find_bypass("fish -c 'git commit -n'", POSIX) is None
 
 
+@pytest.mark.parametrize("command,want", [
+    ("echo -n 'git commit -n' | bash", DASH_N),        # echo's own flag is stripped
+    ("echo 'git commit -n' | bash $u", DASH_N),         # a maybe-empty $-word before stdin
+    ("echo 'git commit -n' | bash -c 'git status'", None),  # -c wins; piped stdin ignored
+    ("echo 'git commit -n' | bash script.sh", None),   # bash runs the script, not stdin
+    ("cat f | bash", None),                            # a non-echo/printf upstream: residual
+    ("bash << EOF", None),                             # a here-DOC delimiter is not the command
+])
+def test_the_stdin_fed_reader_edges(command, want):
+    # The main stdin forms (echo|shell, bash <<< ..., ... | pwsh -) are pinned by
+    # the record (test_nothing / test_every); these pin the reader's edges
+    # directly (FN-55 fb16940).
+    assert find_bypass(command, POSIX) == want
+
+
+def _nest_stdin(times, inner="git commit -n"):
+    text = "echo " + shlex.quote(inner) + " | bash"
+    for _ in range(times - 1):
+        text = "echo " + shlex.quote(text) + " | bash"
+    return text
+
+
+def test_a_stdin_handoff_is_read_to_the_cap_and_refused_past_it():
+    # the shell-handoff depth cap counts a command fed on stdin like any other
+    assert find_bypass(_nest_stdin(ab._HANDED_DEPTH), POSIX) == DASH_N
+    assert find_bypass(_nest_stdin(ab._HANDED_DEPTH + 1), POSIX) == TOO_MANY
+
+
 def test_a_name_powershell_builds_in_the_string_is_seen_from_a_bash_call():
     # The Bash call's own text never spells git: the cheap test that keeps a
     # Bash call untokenized must not let it go (it costs one reading).

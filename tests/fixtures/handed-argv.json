@@ -1894,6 +1894,112 @@
      "-n"
     ]
    ]
+  },
+  {
+   "shell": "posix",
+   "command": "echo 'git commit -n' | bash",
+   "status": "ran",
+   "argv": [
+    [
+     "git",
+     "commit",
+     "-n"
+    ]
+   ]
+  },
+  {
+   "shell": "posix",
+   "command": "echo 'git commit -n' | sh",
+   "status": "ran",
+   "argv": [
+    [
+     "git",
+     "commit",
+     "-n"
+    ]
+   ]
+  },
+  {
+   "shell": "posix",
+   "command": "echo 'git commit -n' | pwsh -",
+   "status": "ran",
+   "argv": [
+    [
+     "git",
+     "commit",
+     "-n"
+    ]
+   ]
+  },
+  {
+   "shell": "posix",
+   "command": "printf 'git commit -n' | bash",
+   "status": "ran",
+   "argv": [
+    [
+     "git",
+     "commit",
+     "-n"
+    ]
+   ]
+  },
+  {
+   "shell": "posix",
+   "command": "bash <<< 'git commit -n'",
+   "status": "ran",
+   "argv": [
+    [
+     "git",
+     "commit",
+     "-n"
+    ]
+   ]
+  },
+  {
+   "shell": "posix",
+   "command": "bash -s <<< 'git commit -n'",
+   "status": "ran",
+   "argv": [
+    [
+     "git",
+     "commit",
+     "-n"
+    ]
+   ]
+  },
+  {
+   "shell": "posix",
+   "command": "echo 'git status' | bash",
+   "status": "ran",
+   "argv": [
+    [
+     "git",
+     "status"
+    ]
+   ]
+  },
+  {
+   "shell": "posix",
+   "command": "bash <<< 'git status'",
+   "status": "ran",
+   "argv": [
+    [
+     "git",
+     "status"
+    ]
+   ]
+  },
+  {
+   "shell": "posix",
+   "command": "echo 'git commit --no-verify' | bash",
+   "status": "ran",
+   "argv": [
+    [
+     "git",
+     "commit",
+     "--no-verify"
+    ]
+   ]
   }
  ]
 }
