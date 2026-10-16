@@ -503,7 +503,11 @@ def _posix_string(seg: list[str], start: int) -> str | None:
     word the command; a `+` alone is an option of no letters; `-o`, `-O`
     (with `+` as well), `--rcfile` and `--init-file` take the word after
     them. The words after the string are `$0`, `$1` ...: arguments, not
-    commands. A word that starts with `$` may be nothing and is stepped over."""
+    commands. While the options are still being read a word that starts with
+    `$` may be nothing (an empty `$var`) and is stepped over; but once a `c`
+    has been seen the next word is the command, read even if it starts with
+    `$` -- a quoted `'$(...)'` the shell runs, which shlex cannot tell from an
+    empty `$var` (FN-55 b90d61)."""
     i, command = start + 1, False
     while i < len(seg):
         word = seg[i]
@@ -517,7 +521,7 @@ def _posix_string(seg: list[str], start: int) -> str | None:
             command = command or "c" in word[1:]
             i += 1 + sum(ch in "oO" for ch in word[1:])
             continue
-        if word.startswith("$"):
+        if word.startswith("$") and not command:
             i += 1
             continue
         break
@@ -533,12 +537,15 @@ def _powershell_string(seg: list[str], start: int) -> str | None:
     `-CommandWithArgs` (a shorter start of that name is no switch). A first
     word that is no switch is a script to pwsh and the command to Windows
     PowerShell. `-File` takes a script, and `-EncodedCommand` (`-e`, `-ec`)
-    a command this reading does not decode."""
+    a command this reading does not decode. A word that starts with `$` may be
+    an empty `$var` in front of a pwsh's options and is stepped over; but
+    Windows PowerShell takes its first word as the command, `$` and all, so a
+    `$` word is read there rather than skipped (FN-55 b90d61)."""
     windows = _program(seg[start]) == "powershell"
     i = start + 1
     while i < len(seg):
         word = seg[i]
-        if word.startswith("$"):
+        if word.startswith("$") and not windows:
             i += 1
             continue
         if word[:1] not in ("-", "/"):

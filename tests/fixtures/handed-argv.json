@@ -1799,6 +1799,54 @@
      "-n"
     ]
    ]
+  },
+  {
+   "shell": "posix",
+   "command": "bash -c '$(true); git commit -n'",
+   "status": "ran",
+   "argv": [
+    [
+     "git",
+     "commit",
+     "-n"
+    ]
+   ]
+  },
+  {
+   "shell": "posix",
+   "command": "bash -c '${X:-:}; git commit -n'",
+   "status": "ran",
+   "argv": [
+    [
+     "git",
+     "commit",
+     "-n"
+    ]
+   ]
+  },
+  {
+   "shell": "posix",
+   "command": "powershell '$null; git commit -n'",
+   "status": "ran",
+   "argv": [
+    [
+     "git",
+     "commit",
+     "-n"
+    ]
+   ]
+  },
+  {
+   "shell": "powershell",
+   "command": "powershell '$null; git commit -n'",
+   "status": "ran",
+   "argv": [
+    [
+     "git",
+     "commit",
+     "-n"
+    ]
+   ]
   }
  ]
 }
