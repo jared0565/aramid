@@ -238,6 +238,35 @@ def test_describe_names_the_flag_or_the_hooks_path_value(tmp_path):
         "`git commit` under `-c core.hooksPath=/tmp/x`"
 
 
+def test_said_tells_a_shells_too_deep_from_a_group_too_deep(tmp_path):
+    """The too-deep branch of `_said` reads the two caps apart on
+    `subcommand`: "shells" is the shells-within-shells cap (FN-55), "" the
+    reader's own `$( )`/group nesting cap. FN-55 added that line with no unit
+    test executing it, so CI's latent-mutant ratchet -- which re-runs
+    tests/unit under coverage on its one designated leg (ubuntu / py3.12) and
+    is not part of the pre-push gate -- flagged the `==` on it as latent
+    (baseline 0 -> 1). Pin both arms here: this covers the line in the unit
+    suite and kills the `== -> !=` mutant, which would swap the two wordings."""
+    from aramid.agent_bypass import Bypass
+
+    assert ah._said(Bypass("too-deep", "shells", "8")) == (
+        "aramid: this call hands a command from one shell to another more than 8"
+        " times, deeper than this hook reads, so it is REJECTED in this repo"
+        " (agent surface armed). Take the command out of the nesting and re-run it.",
+        "aramid: this call hands a command from one shell to another more than 8"
+        " times, deeper than this hook reads, so a bypass in it could not be seen."
+        " The armed version of this hook rejects the call outright -- take the"
+        " command out of the nesting.")
+    assert ah._said(Bypass("too-deep", "", "40")) == (
+        "aramid: this call nests a command more than 40 groups deep, deeper than"
+        " this hook reads, so it is REJECTED in this repo (agent surface armed)."
+        " Take the command out of the nesting and re-run it.",
+        "aramid: this call nests a command more than 40 groups deep, deeper than"
+        " this hook reads, so a bypass in it could not be seen. The armed version"
+        " of this hook rejects the call outright -- take the command out of the"
+        " nesting.")
+
+
 # ------------------------------------------------- the shell (FN-45) --
 
 # A bypass by PowerShell's rules alone: the string ends at its quote there,
