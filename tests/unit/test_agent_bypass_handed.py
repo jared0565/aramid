@@ -235,6 +235,19 @@ def test_what_follows_file_is_a_script_and_its_arguments():
         assert ab._powershell_string([name, "-f", "x.ps1", "git commit -n"], 0) is None
 
 
+@pytest.mark.parametrize("seg,start", [
+    ([], -2), ([], 0), ([], 5), (["a"], 1), (["a"], 9999), (["bash"], -5),
+    (["pwsh"], 2)])
+def test_the_handed_readers_never_raise_on_an_out_of_contract_index(seg, start):
+    # find_bypass fails open (agent_hook.cmd_agent_hook catches every exception
+    # and allows the call), so a reader that raises is a silent bypass. The
+    # public path only ever calls these with a valid index into a non-empty
+    # segment, but the drain's fuzzer calls them directly: keep them total
+    # (FN-55 e660af/c7d64c).
+    assert ab._posix_string(seg, start) is None
+    assert ab._powershell_string(seg, start) is None
+
+
 def test_a_name_powershell_builds_in_the_string_is_seen_from_a_bash_call():
     # The Bash call's own text never spells git: the cheap test that keeps a
     # Bash call untokenized must not let it go (it costs one reading).

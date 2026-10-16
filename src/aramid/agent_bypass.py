@@ -507,7 +507,13 @@ def _posix_string(seg: list[str], start: int) -> str | None:
     `$` may be nothing (an empty `$var`) and is stepped over; but once a `c`
     has been seen the next word is the command, read even if it starts with
     `$` -- a quoted `'$(...)'` the shell runs, which shlex cannot tell from an
-    empty `$var` (FN-55 b90d61)."""
+    empty `$var` (FN-55 b90d61).
+
+    `start` is always a valid index into a non-empty `seg` from the public
+    path (`_handed`'s enumerate); guarded all the same because the hook fails
+    open, so a reader that raised would let the call through (FN-55 e660af)."""
+    if not 0 <= start < len(seg):
+        return None
     i, command = start + 1, False
     while i < len(seg):
         word = seg[i]
@@ -540,7 +546,13 @@ def _powershell_string(seg: list[str], start: int) -> str | None:
     a command this reading does not decode. A word that starts with `$` may be
     an empty `$var` in front of a pwsh's options and is stepped over; but
     Windows PowerShell takes its first word as the command, `$` and all, so a
-    `$` word is read there rather than skipped (FN-55 b90d61)."""
+    `$` word is read there rather than skipped (FN-55 b90d61).
+
+    Guarded against an out-of-range `start` like _posix_string, and for the
+    same reason: the public path never passes one, but the hook fails open so
+    a raise here would be a silent bypass (FN-55 c7d64c)."""
+    if not 0 <= start < len(seg):
+        return None
     windows = _program(seg[start]) == "powershell"
     i = start + 1
     while i < len(seg):
