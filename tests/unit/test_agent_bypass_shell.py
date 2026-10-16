@@ -243,6 +243,12 @@ def test_a_bash_call_does_not_load_the_powershell_reader(monkeypatch):
     monkeypatch.delattr(aramid, "agent_bypass_powershell", raising=False)
     assert find_bypass("git commit -n", POSIX) == DASH_N
     assert find_bypass("git commit -n") == DASH_N
+    assert find_bypass("bash -c 'git commit -n'", POSIX) == DASH_N
     assert "aramid.agent_bypass_powershell" not in sys.modules
+    # a string a Bash call hands to PowerShell is read by PowerShell's rules (FN-55)
+    assert find_bypass("pwsh -c 'git commit -n'", POSIX) == DASH_N
+    assert "aramid.agent_bypass_powershell" in sys.modules
+    monkeypatch.delitem(sys.modules, "aramid.agent_bypass_powershell")
+    monkeypatch.delattr(aramid, "agent_bypass_powershell")
     assert find_bypass("git commit -n", POWERSHELL) == DASH_N
     assert "aramid.agent_bypass_powershell" in sys.modules

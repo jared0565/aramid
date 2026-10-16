@@ -20,7 +20,8 @@ PowerShell handed over.
 
 Pure stdlib, no aramid imports, no I/O, and it cannot raise: it runs inside
 the agent hook, which fails open, so a raise here would let a command
-through unread. A Bash tool call never imports this module.
+through unread. A Bash tool call imports it only to read a string it hands
+to PowerShell (`pwsh -c`, FN-55).
 
 WHAT IS NOT KNOWN HERE. A variable, a `$( )`, a `( )` or a `{ }` stands for
 a value only the run will show. As a whole word it stays one word, written

@@ -166,6 +166,9 @@ def _said(bypass) -> tuple[str, str]:
     if bypass.kind == "too-deep":
         what = (f"this call nests a command more than {bypass.token} groups deep, deeper"
                 f" than this hook reads")
+        if bypass.subcommand == "shells":
+            what = (f"this call hands a command from one shell to another more than"
+                    f" {bypass.token} times, deeper than this hook reads")
         return (f"aramid: {what}, so it is REJECTED in this repo (agent surface armed)."
                 f" Take the command out of the nesting and re-run it.",
                 f"aramid: {what}, so a bypass in it could not be seen. The armed version"

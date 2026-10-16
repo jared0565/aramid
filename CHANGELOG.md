@@ -112,6 +112,17 @@ to publish a tag that disagrees with it.
   name built when the call runs (`& ("g" + "it")` is git) is out of any
   reading's reach. An open quote or comment, which PowerShell runs none
   of, is read as before.
+- **A git command handed to another shell as a string is read (FN-55).**
+  `bash -c "git commit --no-verify"`, the same with `sh` or `zsh`, and
+  `pwsh -c "..."` or `powershell -Command "..."` went through unread,
+  from a Bash call and from a PowerShell call. The string is now read by
+  the rules of the shell it is handed to, as a command of its own: bash's
+  options in front of `-c` (`-lc`, `-o pipefail`), any start of
+  PowerShell's `-Command`, and the words after it joined into one
+  command, each as measured with real shells and real git. A command
+  handed on through more than eight shells is refused. Not read yet: a
+  string handed to `cmd /c`; not read: an encoded command, and an
+  argument the string is given when it runs.
 
 ### Fixed
 

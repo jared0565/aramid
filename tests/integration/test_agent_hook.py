@@ -224,6 +224,42 @@ def test_pre_tool_use_armed_denies_a_call_nested_too_deep_to_read(tmp_path, monk
     }}
 
 
+# A command handed from shell to shell one time more than the hook follows
+# (agent_bypass._HANDED_DEPTH is 8). It runs nothing but Write-Output.
+_TOO_MANY = "pwsh -c " * 9 + "Write-Output hi"
+
+
+def test_pre_tool_use_armed_denies_a_call_handed_on_too_often_to_read(tmp_path, monkeypatch, capsys):
+    r = _onboarded(tmp_path, monkeypatch)
+    _arm_agent(r)
+    capsys.readouterr()
+    _feed_stdin(monkeypatch, _powershell_payload(_TOO_MANY))
+    assert agent_hook.cmd_agent_hook("pre-tool-use", r) == 0
+    assert json.loads(capsys.readouterr().out) == {"hookSpecificOutput": {
+        "hookEventName": "PreToolUse",
+        "permissionDecision": "deny",
+        "permissionDecisionReason": (
+            "aramid: this call hands a command from one shell to another more than 8 "
+            "times, deeper than this hook reads, so it is REJECTED in this repo (agent "
+            "surface armed). Take the command out of the nesting and re-run it."),
+    }}
+
+
+def test_pre_tool_use_advises_on_a_call_handed_on_too_often_to_read(tmp_path, monkeypatch, capsys):
+    r = _onboarded(tmp_path, monkeypatch)
+    capsys.readouterr()
+    _feed_stdin(monkeypatch, _hook_payload(_TOO_MANY))
+    assert agent_hook.cmd_agent_hook("pre-tool-use", r) == 0
+    assert json.loads(capsys.readouterr().out) == {"hookSpecificOutput": {
+        "hookEventName": "PreToolUse",
+        "additionalContext": (
+            "aramid: this call hands a command from one shell to another more than 8 "
+            "times, deeper than this hook reads, so a bypass in it could not be seen. "
+            "The armed version of this hook rejects the call outright -- take the "
+            "command out of the nesting."),
+    }}
+
+
 def test_pre_tool_use_advises_on_a_call_nested_too_deep_to_read(tmp_path, monkeypatch, capsys):
     r = _onboarded(tmp_path, monkeypatch)
     capsys.readouterr()

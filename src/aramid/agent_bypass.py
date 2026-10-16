@@ -29,6 +29,15 @@ Known residuals, all false-negative direction: bundled short flags, `git
 config alias.*` indirection, commands built by shell variables or eval,
 and PowerShell-only syntax in a call the hook was not told is PowerShell's.
 
+A STRING HANDED TO ANOTHER SHELL (FN-55). `bash -c "git commit -n"` hands
+bash a string to run, and `pwsh -c` hands PowerShell one. Such a string is
+read by the rules of the shell it is handed to, as a command of its own
+(`_handed`), through as many as _HANDED_DEPTH shells within shells; one
+more is refused. What reached git is in tests/fixtures/handed-argv.json,
+from real shells and real git. Not read: a string handed to `cmd /c`, an
+encoded command (`-EncodedCommand`), and the arguments a string is given
+when it runs (`bash -c 'git commit "$@"' x -n`).
+
 WHICH SHELL (FN-45). `find_bypass` takes the shell the hook was told runs
 the command. A PowerShell call is cut up by `agent_bypass_powershell`, by
 PowerShell's own rules, and what is said below about quotes, comments and
@@ -180,6 +189,9 @@ _ARAMID_NAMES = ("aramid", "aramid.exe", "aramid.cmd", "aramid.bat", "aramid.ps1
 # The shells `find_bypass` can be told a command is for.
 POSIX = "posix"
 POWERSHELL = "powershell"
+# How many times a command may hand a string to another shell, within the
+# strings it hands, before the call is refused (FN-55).
+_HANDED_DEPTH = 8
 # What the POSIX reading takes out of a word on its way to being a program's
 # name: the quotes, the backslash, and a line end (a backslash in front of one
 # joins two lines). For `_may_name_a_program`.
@@ -189,7 +201,7 @@ _MARKS = {ord(ch): None for ch in "'\"\\\r\n"}
 @dataclass(frozen=True)
 class Bypass:
     kind: str        # "no-verify" | "hooks-path" | "no-red-proof" | "too-deep"
-    subcommand: str  # "commit" | "push" | "ledger resolve"
+    subcommand: str  # "commit" | "push" | "ledger resolve"; for "too-deep", "" or "shells"
     token: str       # the exact matched token / -c value, for messages
 
 
@@ -463,6 +475,133 @@ def _first(segments: list[list[str]], git_rules: bool, values: bool) -> Bypass |
     return None
 
 
+# The shells a command can hand a string to run (FN-55), by the program's
+# name under any directory, with `.exe` or without and in any case: Windows
+# finds `BASH` as well as `bash`. zsh is read as sh is; it was not measured.
+_POSIX_SHELLS = ("bash", "sh", "zsh")
+_POWERSHELLS = ("pwsh", "powershell")
+# PowerShell's switches that take the word after them as their value: by
+# their whole names, of which a start of three letters or more is the switch,
+# and by their short names. A switch not known here is taken to have none.
+_PS_VALUES = ("executionpolicy", "workingdirectory", "inputformat", "outputformat",
+              "windowstyle", "configurationname", "configurationfile", "custompipename",
+              "settingsfile", "version", "psconsolefile", "encodedarguments")
+_PS_SHORT_VALUES = ("ep", "ex", "wd", "if", "of", "o", "w", "v", "ea")
+
+
+def _program(token: str) -> str:
+    """The name of the program `token` starts: its last path part, in lower
+    case, without `.exe`."""
+    return token.replace("\\", "/").rpartition("/")[2].lower().removesuffix(".exe")
+
+
+def _posix_string(seg: list[str], start: int) -> str | None:
+    """The string the POSIX shell at seg[start] is handed to run, or None.
+    As bash was measured (tests/fixtures/handed-argv.json): its options run
+    up to the first word that is none, or to a `--` or `-`; a `c` among an
+    option's letters, after `-` or `+` (`-c`, `-lc`, `+c`), makes that first
+    word the command; a `+` alone is an option of no letters; `-o`, `-O`
+    (with `+` as well), `--rcfile` and `--init-file` take the word after
+    them. The words after the string are `$0`, `$1` ...: arguments, not
+    commands. A word that starts with `$` may be nothing and is stepped over."""
+    i, command = start + 1, False
+    while i < len(seg):
+        word = seg[i]
+        if word in ("--", "-"):
+            i += 1
+            break
+        if word.startswith("--"):
+            i += 2 if word in ("--rcfile", "--init-file") else 1
+            continue
+        if word[:1] in ("-", "+"):
+            command = command or "c" in word[1:]
+            i += 1 + sum(ch in "oO" for ch in word[1:])
+            continue
+        if word.startswith("$"):
+            i += 1
+            continue
+        break
+    return seg[i] if command and i < len(seg) else None
+
+
+def _powershell_string(seg: list[str], start: int) -> str | None:
+    """The command the PowerShell at seg[start] is handed, or None. As it was
+    measured (tests/fixtures/handed-argv.json): a switch starts with `-`,
+    `--` or `/`, in any case, and any start of `command` is the command
+    switch (`-c`, `-co`, `-Command`); the words after it, joined with a
+    space, are the command, and so is the word after `-cwa` or
+    `-CommandWithArgs` (a shorter start of that name is no switch). A first
+    word that is no switch is a script to pwsh and the command to Windows
+    PowerShell. `-File` takes a script, and `-EncodedCommand` (`-e`, `-ec`)
+    a command this reading does not decode."""
+    windows = _program(seg[start]) == "powershell"
+    i = start + 1
+    while i < len(seg):
+        word = seg[i]
+        if word.startswith("$"):
+            i += 1
+            continue
+        if word[:1] not in ("-", "/"):
+            return " ".join(seg[i:]) if windows else None
+        name = word.lstrip("-/").lower()
+        if not name:
+            i += 1      # `-` alone: the command comes on standard input
+            continue
+        if "command".startswith(name):
+            return " ".join(seg[i + 1:])
+        if name in ("cwa", "commandwithargs"):
+            return seg[i + 1] if i + 1 < len(seg) else None
+        if "file".startswith(name) or name == "ec" or "encodedcommand".startswith(name):
+            return None
+        takes = name in _PS_SHORT_VALUES or (
+            len(name) >= 3 and any(full.startswith(name) for full in _PS_VALUES))
+        i += 2 if takes else 1
+    return None
+
+
+def _handed(seg: list[str]) -> tuple[str, str] | None:
+    """The string the first shell launched in `seg` is handed to run, and
+    the shell whose rules read it, or None. The string takes up the rest of
+    the command, or what follows it is arguments, so one is enough."""
+    for i, tok in enumerate(seg):
+        name = _program(tok)
+        if name in _POSIX_SHELLS:
+            text, shell = _posix_string(seg, i), POSIX
+        elif name in _POWERSHELLS:
+            text, shell = _powershell_string(seg, i), POWERSHELL
+        else:
+            continue
+        if text is not None:
+            return text, shell
+    return None
+
+
+def _from_handed(segments: list[list[str]], depth: int) -> Bypass | None:
+    """The first match in a string a command in `segments` hands a shell,
+    read by that shell's rules. `depth` counts the shells handed a string on
+    the way here: past _HANDED_DEPTH the call is refused, as it is past the
+    PowerShell reader's own cap -- no real command hands a string on that
+    often, and a reading without a cap could go deep enough to raise."""
+    for seg in segments:
+        handed = _handed(seg)
+        if handed is None:
+            continue
+        if depth >= _HANDED_DEPTH:
+            return Bypass("too-deep", "shells", str(_HANDED_DEPTH))
+        found = find_bypass(handed[0], handed[1], _depth=depth + 1)
+        if found is not None:
+            return found
+    return None
+
+
+def _may_hand_a_string(command: str) -> bool:
+    """Whether `command` can launch a shell that is handed a string, read the
+    POSIX way: each of their names holds `sh`. Like `_may_name_a_program`, a
+    wrong yes costs one reading; it is asked of a call whose own text need
+    not spell git (`pwsh -c 'g`u{69}t commit -n'`)."""
+    return "sh" in command.lower().translate(_MARKS)
+
+
 def _may_name_a_program(command: str) -> bool:
     """Whether `command` can hold a git or an aramid invocation at all, read
     the POSIX way (the second reading, with the backtick, takes nothing more
@@ -482,7 +621,7 @@ def _may_name_a_program(command: str) -> bool:
     return "git" in low or "aramid" in low
 
 
-def find_bypass(command, shell: str | None = None) -> Bypass | None:
+def find_bypass(command, shell: str | None = None, _depth: int = 0) -> Bypass | None:
     """The first git hook-bypass invocation in `command`, or the first
     evidenced close without red proof, or None.
 
@@ -503,21 +642,28 @@ def find_bypass(command, shell: str | None = None) -> Bypass | None:
     (`& ("g" + "it")` is git), which no test of the text sees (the operator's
     decisions, 2026-10-13 and 2026-10-14). A bypass the reader did reach
     answers first.
+
+    A string a command hands bash, sh or zsh with `-c`, or pwsh or
+    powershell with `-Command`, is read by that shell's rules as a command
+    of its own (FN-55, the operator's decision of 2026-10-13), whichever
+    shell runs the call and when none is named. `_depth` counts the shells
+    handed a string on the way to `command`; it is the reading's own.
     """
     if not isinstance(command, str):
         return None
     if shell == POWERSHELL:
         from aramid import agent_bypass_powershell
         done, end = agent_bypass_powershell.reading(command)
-        found = _first(done, True, True)
+        found = _first(done, True, True) or _from_handed(done, _depth)
         if found is None and end == "deep":
             return Bypass("too-deep", "", str(agent_bypass_powershell._DEPTH))
         return found
-    if not _may_name_a_program(command):
+    if not (_may_name_a_program(command) or _may_hand_a_string(command)):
         return None
     posix, posix_whole = _tokens(command, False)
     if shell == POSIX:
-        return _first(_segments(posix), True, True)
+        segments = _segments(posix)
+        return _first(segments, True, True) or _from_handed(segments, _depth)
     powershell, powershell_whole = _tokens(command, True)
     readings = [(False, posix)]
     if powershell_whole or not posix_whole:
@@ -526,4 +672,4 @@ def find_bypass(command, shell: str | None = None) -> Bypass | None:
         found = _first(_segments(tokens), not backtick, False)
         if found is not None:
             return found
-    return None
+    return _from_handed(_segments(posix), _depth)
