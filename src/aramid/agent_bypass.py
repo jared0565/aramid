@@ -677,6 +677,13 @@ def _simple_commands(tokens: list[str]) -> list[dict]:
                 continue
             target = False
             if op in (";", "|", "&", "(", ")", "\n"):
+                # `||` and `&&` are ONE operator, not a pipe: the second `|`/`&`
+                # closes an empty command, and a lone `|` would otherwise make
+                # the shell after it look fed on stdin (`echo x || bash` is not
+                # a pipe -- bash gets nothing -- so it must not be read as one).
+                if op in ("|", "&") and prev_op == op and not words and here is None:
+                    prev_op = prev_op + op
+                    continue
                 out.append({"words": words, "prev_op": prev_op, "here": here})
                 words, prev_op, here = [], op, None
     out.append({"words": words, "prev_op": prev_op, "here": here})

@@ -279,6 +279,8 @@ def test_fish_c_is_a_documented_residual():
     ("echo 'git commit -n' | bash script.sh", None),   # bash runs the script, not stdin
     ("cat f | bash", None),                            # a non-echo/printf upstream: residual
     ("bash << EOF", None),                             # a here-DOC delimiter is not the command
+    ("echo 'git commit -n' || bash", None),            # `||` is logical-or, not a pipe: no stdin
+    ("echo 'git commit -n' && bash", None),            # `&&` is and-then, not a pipe: no stdin
 ])
 def test_the_stdin_fed_reader_edges(command, want):
     # The main stdin forms (echo|shell, bash <<< ..., ... | pwsh -) are pinned by
