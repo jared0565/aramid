@@ -282,8 +282,13 @@ def _after_redirect(line: str, j: int, depth: int) -> int:
     ends just before line[j]: the `&` of a duplicated handle, and the word it
     names, quoted or not. A word ends at a blank or at `&` `|` `<` `>`, and at a
     `)` while a group is open, so a `>>` is two redirections, the first of them
-    with no word."""
+    with no word.
+
+    `j` is always from 1 to len(line) when `_split` calls this; a negative one
+    reads as 0 all the same, because the hook fails open and a reader that raised
+    would let the call through (FN-55; the drain's fuzzer calls it directly)."""
     n = len(line)
+    j = max(j, 0)
     if line[j:j + 1] == "&":
         j += 1
     while j < n and line[j] in " \t":

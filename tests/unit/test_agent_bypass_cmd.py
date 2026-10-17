@@ -246,6 +246,23 @@ def test_an_odd_text_is_read_without_raising_into_commands_of_words(text):
                for words in read)
 
 
+@pytest.mark.parametrize("line,j,depth,after", [
+    # an index inside the line, with a group open or not
+    ("a>b", 0, 0, 1), (">nul", 0, 0, 0), (">nul", 1, 0, 4), (">&2 x", 1, 0, 3), (">^", 1, 0, 2),
+    ("a)b", 0, 1, 1), ("a)b", 0, 0, 3), ("a)b", 0, -1, 3),
+    # no index of the line: a negative one reads as 0, one past the end is the end
+    ("", 0, 0, 0), ("", -1, 0, 0), ("", 5, 0, 0), ("ab", 2, 0, 2), ("ab", 3, 0, 2),
+    ("ab", -1, 0, 2), ("ab", -3, 0, 2), ("ab", -5, 0, 2), ("ab", 9999, 0, 2),
+    ("a>", -1, 0, 1), ("a>", -2, 0, 1), ("a>b", -100, 3, 1), ("a b", -4, 1, 1),
+    ("a b", -9999, 0, 1), ("^", -1, -1, 1), ('"', 0, 2, 1), ('"', -7, 2, 1)])
+def test_the_redirect_reader_never_raises_on_an_out_of_contract_index(line, j, depth, after):
+    # find_bypass fails open (agent_hook.cmd_agent_hook catches every exception
+    # and allows the call), so a reader that raised would be a silent bypass.
+    # _split only ever passes an index from 1 to len(line), but the drain's
+    # fuzzer calls the helpers directly: keep them total (FN-55).
+    assert cmd._after_redirect(line, j, depth) == after
+
+
 # ---- the record of cmd-argv.json ----
 
 # What the reader does not see, and is not built to.
