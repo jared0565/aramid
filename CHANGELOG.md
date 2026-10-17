@@ -120,9 +120,23 @@ to publish a tag that disagrees with it.
   options in front of `-c` (`-lc`, `-o pipefail`), any start of
   PowerShell's `-Command`, and the words after it joined into one
   command, each as measured with real shells and real git. A command
-  handed on through more than eight shells is refused. Not read yet: a
-  string handed to `cmd /c`; not read: an encoded command, and an
-  argument the string is given when it runs.
+  handed on through more than eight shells is refused. Not read: an
+  encoded command, and an argument the string is given when it runs.
+
+  A string handed to `cmd /c` is read as well (`/k` and `/r` too, in any
+  case, with `/d`, `/s` or `/v:on` in front, and `cmd //c` from Git Bash).
+  It is read in the steps that run it, each as measured with the real
+  cmd.exe and real git. Git Bash or PowerShell builds one command line for
+  cmd from the words of the command, and it is not a join with a space:
+  `cmd /c git commit -m 'a & b' -n` is a bypass that a join misses, and
+  `cmd /c git commit -m 'x & git push --no-verify'` is none that a join
+  flags. cmd scans that line for its switch, reads the string (quotes,
+  carets, `&` `&&` `||` `|`, parentheses, redirections, `rem` and labels, a
+  line that ends at a newline), and git reads what is left by the C
+  runtime's rules. Not read: a name cmd puts together from `%VAR%`, a
+  command piped into cmd, a `;`, `,`, `=` or `@` that cmd skips after an
+  `if` or a `do`, and `for /f`. A lone `/c` from Git Bash, which Git Bash
+  makes a path so that cmd runs nothing, is read as the switch.
 
 ### Fixed
 

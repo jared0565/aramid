@@ -58,9 +58,13 @@ def _case(shell):
     return POSIX if shell == "posix" else POWERSHELL
 
 
-_LATER = "cmd's own reading of the string: the next commit"
 _RUN_TIME = "the flag is an argument the string is handed when it runs"
 _ENCODED = "an encoded command, which the decision does not name: put to the operator"
+_BUILT = "cmd works the name out when it runs the line: it expands %VAR% first, and the reader does not"
+_JUNK = ("cmd skips ; , = and @ in front of the command that follows `if` or `do`; the reader "
+         "does so at the start of a command only")
+_ON_STDIN = ("a command piped into cmd on standard input: cmd is not read as a shell that is fed "
+             "so (tests/unit/test_agent_bypass_cmd.py)")
 NOT_SEEN = {
     ("posix", "bash -c 'git commit \"$@\"' x -n"): _RUN_TIME,
     ("posix", "bash -c 'git commit $0' -n"): _RUN_TIME,
@@ -72,24 +76,12 @@ NOT_SEEN = {
     ("posix", f"pwsh -EncodedCommand {ENC}"): _ENCODED,
     ("posix", f"pwsh -e {ENC}"): _ENCODED,
     ("powershell", f"pwsh -EncodedCommand {ENC}"): _ENCODED,
-    ("posix", "cmd //c 'git commit -n'"): _LATER,
-    ("posix", "cmd //C 'git commit -n'"): _LATER,
-    ("posix", "cmd //k 'git commit -n'"): _LATER,
-    ("posix", "cmd //r 'git commit -n'"): _LATER,
-    ("posix", "cmd //c 'g^it commit -n'"): _LATER,
-    ("posix", "cmd //s //c 'git commit -n'"): _LATER,
-    ("posix", "cmd //c 'git status & git commit -n'"): _LATER,
-    ("posix", "cmd.exe //c 'git commit -n'"): _LATER,
-    ("posix", "MSYS_NO_PATHCONV=1 cmd /c 'git commit -n'"): _LATER,
-    ("powershell", "cmd /c 'git commit -n'"): _LATER,
-    ("powershell", 'cmd /c "git commit -n"'): _LATER,
-    ("powershell", "cmd /C 'git commit -n'"): _LATER,
-    ("powershell", "cmd /k 'git commit -n'"): _LATER,
-    ("powershell", "cmd /r 'git commit -n'"): _LATER,
-    ("powershell", "cmd /c 'g^it commit -n'"): _LATER,
-    ("powershell", "cmd /s /c 'git commit -n'"): _LATER,
-    ("powershell", "cmd /c 'git status & git commit -n'"): _LATER,
-    ("powershell", "cmd.exe /c 'git commit -n'"): _LATER,
+    ("powershell", 'cmd /c "g%PATH:~0,0%it commit -n"'): _BUILT,
+    ("posix", "cmd //c 'g%PATH:~0,0%it commit -n'"): _BUILT,
+    ("powershell", 'cmd /c "if 1==1 ;git commit -n"'): _JUNK,
+    ("posix", 'cmd //c "if 1==1 ;git commit -n"'): _JUNK,
+    ("powershell", "'git commit -n' | cmd"): _ON_STDIN,
+    ("posix", "echo 'git commit -n' | cmd"): _ON_STDIN,
 }
 # A bypass git was handed, answered in another way than git's argv is judged.
 HOOKS_DEV_NULL = Bypass("hooks-path", "commit", "core.hooksPath=/dev/null")
@@ -108,6 +100,19 @@ OVER = {
     ("powershell", "echo 'git' 'commit' '-n' | bash"): _ANY_WORD,
     ("posix", "pwsh /c 'git commit -n'"):
         "Git Bash makes a lone /c a path, so pwsh runs nothing; read as the switch",
+    ("posix", "cmd /c 'git commit -n'"):
+        "Git Bash makes a lone /c a path, so cmd runs nothing; read as the switch",
+    ("posix", "cmd /c git commit -n"):
+        "Git Bash makes a lone /c a path, so cmd runs nothing; read as the switch",
+    ("posix", "cmd //c 'echo git commit -n'"): _ANY_WORD,
+    ("powershell", "cmd /c 'echo git commit -n'"): _ANY_WORD,
+    ("powershell", "cmd /c git commit -m '' -n"):
+        "PowerShell builds a line for cmd in which an empty word is nothing, so git was handed"
+        " `-m -n`, a message of `-n`; the call's own words keep the empty word, and a word"
+        " named git starts a scan",
+    ("posix", 'cmd //c "cmd //c git commit -n"'):
+        "`//c` is no switch to the inner cmd, which runs nothing; the string it was given still"
+        " holds git, and a word named git starts a scan",
     ("posix", f"pwsh -c '{H41}'"):
         "too deep to read: refused whatever it names (the operator's decision, 2026-10-14)",
 }
@@ -120,7 +125,8 @@ def test_the_record_is_the_one_a_run_made():
     assert "msys" in record["bash"]
     assert record["pwsh"].split(".")[0] == "7"
     assert record["powershell"].startswith("5.1")
-    assert len(RECORD) == len(record["cases"]) >= 130
+    assert record["cmd"].startswith("Microsoft Windows [Version 10.")
+    assert len(RECORD) == len(record["cases"]) >= 200
     assert {status for status, _ in RECORD.values()} == {"ran"}
     # the record holds both: commands that handed git a bypass, and ones that did not
     assert sum(1 for _, argvs in RECORD.values() if _judged(argvs)) >= 100
@@ -247,6 +253,8 @@ def test_the_handed_readers_never_raise_on_an_out_of_contract_index(seg, start):
     # (FN-55 e660af/c7d64c).
     assert ab._posix_string(seg, start) is None
     assert ab._powershell_string(seg, start) is None
+    for outer in (POSIX, POWERSHELL, ab.CMD):
+        assert ab._cmd_string(seg, start, outer) is None
 
 
 @pytest.mark.parametrize("shell", ["ksh", "mksh", "ash", "yash", "posh"])

@@ -116,7 +116,6 @@ NOT_SEEN = {
     "$g = 'git'; & $g commit -n": "the name is in a variable",
     "Invoke-Expression 'git commit -n'": "the command is a string that is run",
     'iex "git commit -n"': "the command is a string that is run",
-    'cmd /c "git commit -n"': "the command is a string another shell runs",
     "Start-Process git -ArgumentList 'commit','-n' -Wait -NoNewWindow": "the arguments are a list",
 }
 

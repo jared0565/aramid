@@ -30,13 +30,18 @@ config alias.*` indirection, commands built by shell variables or eval,
 and PowerShell-only syntax in a call the hook was not told is PowerShell's.
 
 A STRING HANDED TO ANOTHER SHELL (FN-55). `bash -c "git commit -n"` hands
-bash a string to run, and `pwsh -c` hands PowerShell one. Such a string is
-read by the rules of the shell it is handed to, as a command of its own
-(`_handed`), through as many as _HANDED_DEPTH shells within shells; one
-more is refused. What reached git is in tests/fixtures/handed-argv.json,
-from real shells and real git. The POSIX sh family (bash, sh, zsh, dash, ksh,
-mksh, ash, yash, posh) and PowerShell (pwsh, powershell) are read; dash is the
-family's measured proof and the rest share its `-c` grammar. A command fed to
+bash a string to run, `pwsh -c` hands PowerShell one, and `cmd /c` hands cmd
+one. Such a string is read by the rules of the shell it is handed to, as a
+command of its own (`_handed`), through as many as _HANDED_DEPTH shells within
+shells; one more is refused. What reached git is in
+tests/fixtures/handed-argv.json, from real shells and real git. The POSIX sh
+family (bash, sh, zsh, dash, ksh, mksh, ash, yash, posh), PowerShell (pwsh,
+powershell) and cmd are read; dash is the family's measured proof and the rest
+share its `-c` grammar. cmd's string is read by `agent_bypass_cmd` (CMD, a
+shell no tool call is): the words after `cmd` are put on one command line the
+way the shell that runs them puts them, cmd runs the string after its `/c`,
+`/k` or `/r`, and reads it by its own rules and then git's (`_cmd_string`,
+and the three records tests/fixtures/cmd-*.json). A command fed to
 such a shell on standard input is read too (`_from_stdin`, FN-55 fb16940): a
 here-string (`bash <<< 'git commit -n'`) and the literal echoed or printed
 into a POSIX pipe (`echo 'git commit -n' | bash`, `... | pwsh -`). A PowerShell
@@ -44,7 +49,9 @@ CALL pipes stdin the same way (`_from_stdin_powershell`): a bare quoted string
 (`'git commit -n' | bash`) or an `echo`/`Write-Output` of one, into a shell
 that reads stdin -- a POSIX shell with no `-c`/script, `pwsh -`, or
 `pwsh -Command -`/`-c -`/`-File -`; the call operator keeps the pipe
-(`'git commit -n' | & bash`). Not read: a string handed to `cmd /c`, an
+(`'git commit -n' | & bash`). Not read: a command piped into `cmd` (cmd is
+not a shell `_shell_launched` names, whose standard input is read by the POSIX
+or the PowerShell grammar), a name cmd puts together from `%VAR%`, an
 encoded command (`-EncodedCommand`), a `fish -c` string (fish's option grammar
 is its own), a command handed through `su`, `script` or `flock -c`, a here-DOC
 body or a non-echo/printf pipe upstream (`cat f | bash`), a PowerShell pipe
@@ -201,9 +208,12 @@ _ARAMID_NAMES = ("aramid", "aramid.exe", "aramid.cmd", "aramid.bat", "aramid.ps1
                  "aramid.__main__")
 
 
-# The shells `find_bypass` can be told a command is for.
+# The shells `find_bypass` can be told a command is for. CMD is for the string
+# a command hands cmd.exe (FN-55), which is read by cmd's rules: no tool call
+# is cmd's own.
 POSIX = "posix"
 POWERSHELL = "powershell"
+CMD = "cmd"
 # How many times a command may hand a string to another shell, within the
 # strings it hands, before the call is refused (FN-55).
 _HANDED_DEPTH = 8
@@ -601,35 +611,59 @@ def _powershell_string(seg: list[str], start: int) -> str | None:
     return None
 
 
-def _handed(seg: list[str]):
+def _cmd_string(seg: list[str], start: int, outer: str) -> str | None:
+    """The string the cmd at seg[start] is handed to run, or None. The words
+    after it are not joined with a space: the shell `outer` that runs `seg`
+    builds one command line from them, by its own rules (Git Bash and
+    PowerShell differ, and cmd re-joins the words of a command it runs the
+    PowerShell way), and cmd runs the string after the first `/c`, `/k` or
+    `/r` switch it scans for in that line. See agent_bypass_cmd, and the
+    records it names.
+
+    Guarded against an out-of-range `start` like _posix_string, and for the
+    same reason: the public path never passes one, but the hook fails open so
+    a raise here would be a silent bypass. (A `start` past the end gives no
+    words, so no string; only a negative one needs the guard.)"""
+    if start < 0:
+        return None
+    from aramid import agent_bypass_cmd
+    style = agent_bypass_cmd.MSYS if outer == POSIX else agent_bypass_cmd.POWERSHELL
+    return agent_bypass_cmd.string_to_run(agent_bypass_cmd.command_line(seg[start + 1:], style))
+
+
+def _handed(seg: list[str], outer: str):
     """Each string a shell launched in `seg` is handed to run, with the shell
-    whose rules read it, in the order they appear. More than one when a
-    program launches several commands in one segment (`find ... -exec sh -c
-    ... \\; -exec bash -c ... \\;`): a decoy shell earlier in the segment must
-    not hide a real one after it (FN-55 2fe1a4). A shell handed no string
-    yields nothing."""
+    whose rules read it, in the order they appear. `outer` is the shell that
+    runs `seg`: how it builds the command line for cmd (`_cmd_string`). More
+    than one when a program launches several commands in one segment (`find
+    ... -exec sh -c ... \\; -exec bash -c ... \\;`): a decoy shell earlier in
+    the segment must not hide a real one after it (FN-55 2fe1a4). A shell
+    handed no string yields nothing."""
     for i, tok in enumerate(seg):
         name = _program(tok)
         if name in _POSIX_SHELLS:
             text, shell = _posix_string(seg, i), POSIX
         elif name in _POWERSHELLS:
             text, shell = _powershell_string(seg, i), POWERSHELL
+        elif name == "cmd":
+            text, shell = _cmd_string(seg, i, outer), CMD
         else:
             continue
         if text is not None:
             yield text, shell
 
 
-def _from_handed(segments: list[list[str]], depth: int) -> Bypass | None:
+def _from_handed(segments: list[list[str]], depth: int, outer: str) -> Bypass | None:
     """The first match in a string a command in `segments` hands a shell,
-    read by that shell's rules. Every shell handed a string in a segment is
-    read, not just the first, so a decoy cannot hide a later one (FN-55
-    2fe1a4). `depth` counts the shells handed a string on the way here: past
-    _HANDED_DEPTH the call is refused, as it is past the PowerShell reader's
-    own cap -- no real command hands a string on that often, and a reading
-    without a cap could go deep enough to raise."""
+    read by that shell's rules; `outer` is the shell that runs `segments`.
+    Every shell handed a string in a segment is read, not just the first, so
+    a decoy cannot hide a later one (FN-55 2fe1a4). `depth` counts the shells
+    handed a string on the way here: past _HANDED_DEPTH the call is refused,
+    as it is past the PowerShell reader's own cap -- no real command hands a
+    string on that often, and a reading without a cap could go deep enough to
+    raise."""
     for seg in segments:
-        for text, shell in _handed(seg):
+        for text, shell in _handed(seg, outer):
             if depth >= _HANDED_DEPTH:
                 return Bypass("too-deep", "shells", str(_HANDED_DEPTH))
             found = find_bypass(text, shell, _depth=depth + 1)
@@ -856,10 +890,12 @@ def _from_stdin_powershell(command: str, depth: int) -> Bypass | None:
 
 def _may_hand_a_string(command: str) -> bool:
     """Whether `command` can launch a shell that is handed a string, read the
-    POSIX way: each of their names holds `sh`. Like `_may_name_a_program`, a
-    wrong yes costs one reading; it is asked of a call whose own text need
-    not spell git (`pwsh -c 'g`u{69}t commit -n'`)."""
-    return "sh" in command.lower().translate(_MARKS)
+    POSIX way: each of their names holds `sh`, or is `cmd`. Like
+    `_may_name_a_program`, a wrong yes costs one reading; it is asked of a call
+    whose own text need not spell git (`pwsh -c 'g`u{69}t commit -n'`,
+    `cmd /c 'g^it commit -n'`)."""
+    low = command.lower().translate(_MARKS)
+    return "sh" in low or "cmd" in low
 
 
 def _may_name_a_program(command: str) -> bool:
@@ -904,17 +940,24 @@ def find_bypass(command, shell: str | None = None, _depth: int = 0) -> Bypass | 
     answers first.
 
     A string a command hands bash, sh or zsh with `-c`, or pwsh or
-    powershell with `-Command`, is read by that shell's rules as a command
-    of its own (FN-55, the operator's decision of 2026-10-13), whichever
-    shell runs the call and when none is named. `_depth` counts the shells
-    handed a string on the way to `command`; it is the reading's own.
+    powershell with `-Command`, or cmd with `/c`, is read by that shell's
+    rules as a command of its own (FN-55, the operator's decision of
+    2026-10-13), whichever shell runs the call and when none is named. A string
+    handed to cmd is read as `CMD`, which no tool call is: it is the shell
+    named for that string alone, read by agent_bypass_cmd, for every rule.
+    `_depth` counts the shells handed a string on the way to `command`; it is
+    the reading's own.
     """
     if not isinstance(command, str):
         return None
+    if shell == CMD:
+        from aramid import agent_bypass_cmd
+        done = agent_bypass_cmd.commands(command)
+        return _first(done, True, False) or _from_handed(done, _depth, CMD)
     if shell == POWERSHELL:
         from aramid import agent_bypass_powershell
         done, end = agent_bypass_powershell.reading(command)
-        found = (_first(done, True, True) or _from_handed(done, _depth)
+        found = (_first(done, True, True) or _from_handed(done, _depth, POWERSHELL)
                  or _from_stdin_powershell(command, _depth))
         if found is None and end == "deep":
             return Bypass("too-deep", "", str(agent_bypass_powershell._DEPTH))
@@ -924,7 +967,7 @@ def find_bypass(command, shell: str | None = None, _depth: int = 0) -> Bypass | 
     posix, posix_whole = _tokens(command, False)
     if shell == POSIX:
         segments = _segments(posix)
-        return (_first(segments, True, True) or _from_handed(segments, _depth)
+        return (_first(segments, True, True) or _from_handed(segments, _depth, POSIX)
                 or _from_stdin(posix, _depth))
     powershell, powershell_whole = _tokens(command, True)
     readings = [(False, posix)]
@@ -934,4 +977,4 @@ def find_bypass(command, shell: str | None = None, _depth: int = 0) -> Bypass | 
         found = _first(_segments(tokens), not backtick, False)
         if found is not None:
             return found
-    return _from_handed(_segments(posix), _depth) or _from_stdin(posix, _depth)
+    return _from_handed(_segments(posix), _depth, POSIX) or _from_stdin(posix, _depth)

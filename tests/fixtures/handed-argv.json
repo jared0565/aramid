@@ -2104,6 +2104,753 @@
      "status"
     ]
    ]
+  },
+  {
+   "shell": "powershell",
+   "command": "cmd /c \"git commit --no-verify\"",
+   "status": "ran",
+   "argv": [
+    [
+     "git",
+     "commit",
+     "--no-verify"
+    ]
+   ]
+  },
+  {
+   "shell": "powershell",
+   "command": "cmd /c \"git push --no-verify\"",
+   "status": "ran",
+   "argv": [
+    [
+     "git",
+     "push",
+     "--no-verify"
+    ]
+   ]
+  },
+  {
+   "shell": "powershell",
+   "command": "cmd /c \"git commit ^-n\"",
+   "status": "ran",
+   "argv": [
+    [
+     "git",
+     "commit",
+     "-n"
+    ]
+   ]
+  },
+  {
+   "shell": "powershell",
+   "command": "cmd /c \"git status && git commit -n\"",
+   "status": "ran",
+   "argv": [
+    [
+     "git",
+     "status"
+    ],
+    [
+     "git",
+     "commit",
+     "-n"
+    ]
+   ]
+  },
+  {
+   "shell": "powershell",
+   "command": "cmd /c \"git status & git commit -n\"",
+   "status": "ran",
+   "argv": [
+    [
+     "git",
+     "status"
+    ],
+    [
+     "git",
+     "commit",
+     "-n"
+    ]
+   ]
+  },
+  {
+   "shell": "powershell",
+   "command": "cmd /c \"cd . && git commit --no-verify\"",
+   "status": "ran",
+   "argv": [
+    [
+     "git",
+     "commit",
+     "--no-verify"
+    ]
+   ]
+  },
+  {
+   "shell": "powershell",
+   "command": "cmd /c \"git commit -m 'a & b' -n\"",
+   "status": "ran",
+   "argv": [
+    [
+     "git",
+     "commit",
+     "-m",
+     "'a"
+    ]
+   ]
+  },
+  {
+   "shell": "powershell",
+   "command": "cmd /c git commit -m 'a & b' -n",
+   "status": "ran",
+   "argv": [
+    [
+     "git",
+     "commit",
+     "-m",
+     "a & b",
+     "-n"
+    ]
+   ]
+  },
+  {
+   "shell": "powershell",
+   "command": "cmd /c git commit -m 'x & git push --no-verify'",
+   "status": "ran",
+   "argv": [
+    [
+     "git",
+     "commit",
+     "-m",
+     "x & git push --no-verify"
+    ]
+   ]
+  },
+  {
+   "shell": "powershell",
+   "command": "cmd /c git commit -m '' -n",
+   "status": "ran",
+   "argv": [
+    [
+     "git",
+     "commit",
+     "-m",
+     "-n"
+    ]
+   ]
+  },
+  {
+   "shell": "powershell",
+   "command": "cmd /c 'git commit -m \"a b\" -n'",
+   "status": "ran",
+   "argv": [
+    [
+     "git",
+     "commit",
+     "-m",
+     "a b",
+     "-n"
+    ]
+   ]
+  },
+  {
+   "shell": "powershell",
+   "command": "cmd /c git commit -m \"a b\" -n",
+   "status": "ran",
+   "argv": [
+    [
+     "git",
+     "commit",
+     "-m",
+     "a b",
+     "-n"
+    ]
+   ]
+  },
+  {
+   "shell": "powershell",
+   "command": "cmd /c 'git commit -m \"x & y\" -n'",
+   "status": "ran",
+   "argv": [
+    [
+     "git",
+     "commit",
+     "-m",
+     "x & y",
+     "-n"
+    ]
+   ]
+  },
+  {
+   "shell": "powershell",
+   "command": "cmd /c 'git commit -m \"x\" & git push --no-verify'",
+   "status": "ran",
+   "argv": [
+    [
+     "git",
+     "commit",
+     "-m",
+     "x"
+    ],
+    [
+     "git",
+     "push",
+     "--no-verify"
+    ]
+   ]
+  },
+  {
+   "shell": "powershell",
+   "command": "cmd /c \"git commit -m \"\"a b\"\" -n\"",
+   "status": "ran",
+   "argv": [
+    [
+     "git",
+     "commit",
+     "-m",
+     "a b",
+     "-n"
+    ]
+   ]
+  },
+  {
+   "shell": "powershell",
+   "command": "cmd /c \"cmd /c git commit -n\"",
+   "status": "ran",
+   "argv": [
+    [
+     "git",
+     "commit",
+     "-n"
+    ]
+   ]
+  },
+  {
+   "shell": "powershell",
+   "command": "cmd /d /c \"git commit -n\"",
+   "status": "ran",
+   "argv": [
+    [
+     "git",
+     "commit",
+     "-n"
+    ]
+   ]
+  },
+  {
+   "shell": "powershell",
+   "command": "cmd /v:on /c \"git commit -n\"",
+   "status": "ran",
+   "argv": [
+    [
+     "git",
+     "commit",
+     "-n"
+    ]
+   ]
+  },
+  {
+   "shell": "powershell",
+   "command": "CMD /C \"git commit -n\"",
+   "status": "ran",
+   "argv": [
+    [
+     "git",
+     "commit",
+     "-n"
+    ]
+   ]
+  },
+  {
+   "shell": "powershell",
+   "command": "cmd /c\"git commit -n\"",
+   "status": "ran",
+   "argv": [
+    [
+     "git",
+     "commit",
+     "-n"
+    ]
+   ]
+  },
+  {
+   "shell": "powershell",
+   "command": "cmd /c \"rem git commit -n\"",
+   "status": "ran",
+   "argv": []
+  },
+  {
+   "shell": "powershell",
+   "command": "cmd /c \"git commit -n 2>&1\"",
+   "status": "ran",
+   "argv": [
+    [
+     "git",
+     "commit",
+     "-n"
+    ]
+   ]
+  },
+  {
+   "shell": "powershell",
+   "command": "cmd /c \"(git commit -n)\"",
+   "status": "ran",
+   "argv": [
+    [
+     "git",
+     "commit",
+     "-n"
+    ]
+   ]
+  },
+  {
+   "shell": "powershell",
+   "command": "cmd /c \";git commit -n\"",
+   "status": "ran",
+   "argv": [
+    [
+     "git",
+     "commit",
+     "-n"
+    ]
+   ]
+  },
+  {
+   "shell": "powershell",
+   "command": "cmd /c \"git -c core.hooksPath=nul commit -m x\"",
+   "status": "ran",
+   "argv": [
+    [
+     "git",
+     "-c",
+     "core.hooksPath=nul",
+     "commit",
+     "-m",
+     "x"
+    ]
+   ]
+  },
+  {
+   "shell": "powershell",
+   "command": "cmd /c \"git status`ngit commit -n\"",
+   "status": "ran",
+   "argv": [
+    [
+     "git",
+     "status"
+    ]
+   ]
+  },
+  {
+   "shell": "powershell",
+   "command": "cmd /c \"g%PATH:~0,0%it commit -n\"",
+   "status": "ran",
+   "argv": [
+    [
+     "git",
+     "commit",
+     "-n"
+    ]
+   ]
+  },
+  {
+   "shell": "powershell",
+   "command": "cmd /c \"if 1==1 ;git commit -n\"",
+   "status": "ran",
+   "argv": [
+    [
+     "git",
+     "commit",
+     "-n"
+    ]
+   ]
+  },
+  {
+   "shell": "powershell",
+   "command": "'git commit -n' | cmd",
+   "status": "ran",
+   "argv": [
+    [
+     "git",
+     "commit",
+     "-n"
+    ]
+   ]
+  },
+  {
+   "shell": "powershell",
+   "command": "cmd /c \"git commit -n\" ; cmd /c \"git status\"",
+   "status": "ran",
+   "argv": [
+    [
+     "git",
+     "commit",
+     "-n"
+    ],
+    [
+     "git",
+     "status"
+    ]
+   ]
+  },
+  {
+   "shell": "posix",
+   "command": "cmd //c \"git commit --no-verify\"",
+   "status": "ran",
+   "argv": [
+    [
+     "git",
+     "commit",
+     "--no-verify"
+    ]
+   ]
+  },
+  {
+   "shell": "posix",
+   "command": "cmd //c \"git push --no-verify\"",
+   "status": "ran",
+   "argv": [
+    [
+     "git",
+     "push",
+     "--no-verify"
+    ]
+   ]
+  },
+  {
+   "shell": "posix",
+   "command": "cmd //c \"git commit ^-n\"",
+   "status": "ran",
+   "argv": [
+    [
+     "git",
+     "commit",
+     "-n"
+    ]
+   ]
+  },
+  {
+   "shell": "posix",
+   "command": "cmd //c \"git status && git commit -n\"",
+   "status": "ran",
+   "argv": [
+    [
+     "git",
+     "status"
+    ],
+    [
+     "git",
+     "commit",
+     "-n"
+    ]
+   ]
+  },
+  {
+   "shell": "posix",
+   "command": "cmd //c \"git status & git commit -n\"",
+   "status": "ran",
+   "argv": [
+    [
+     "git",
+     "status"
+    ],
+    [
+     "git",
+     "commit",
+     "-n"
+    ]
+   ]
+  },
+  {
+   "shell": "posix",
+   "command": "cmd //c git commit -m 'a & b' -n",
+   "status": "ran",
+   "argv": [
+    [
+     "git",
+     "commit",
+     "-m",
+     "a & b",
+     "-n"
+    ]
+   ]
+  },
+  {
+   "shell": "posix",
+   "command": "cmd //c git commit -m 'x & git push --no-verify'",
+   "status": "ran",
+   "argv": [
+    [
+     "git",
+     "commit",
+     "-m",
+     "x & git push --no-verify"
+    ]
+   ]
+  },
+  {
+   "shell": "posix",
+   "command": "cmd //c 'git commit -m \"a b\" -n'",
+   "status": "ran",
+   "argv": [
+    [
+     "git",
+     "commit",
+     "-m",
+     "\"a",
+     "b\"",
+     "-n"
+    ]
+   ]
+  },
+  {
+   "shell": "posix",
+   "command": "cmd //c git commit -m \"a b\" -n",
+   "status": "ran",
+   "argv": [
+    [
+     "git",
+     "commit",
+     "-m",
+     "a b",
+     "-n"
+    ]
+   ]
+  },
+  {
+   "shell": "posix",
+   "command": "cmd //c git commit -m '' -n",
+   "status": "ran",
+   "argv": [
+    [
+     "git",
+     "commit",
+     "-m",
+     "",
+     "-n"
+    ]
+   ]
+  },
+  {
+   "shell": "posix",
+   "command": "cmd //c 'git commit -m \"x & y\" -n'",
+   "status": "ran",
+   "argv": [
+    [
+     "git",
+     "commit",
+     "-m",
+     "\"x",
+     "&",
+     "y\"",
+     "-n"
+    ]
+   ]
+  },
+  {
+   "shell": "posix",
+   "command": "cmd //c 'git commit -m \"x\" & git push --no-verify'",
+   "status": "ran",
+   "argv": [
+    [
+     "git",
+     "commit",
+     "-m",
+     "\"x\""
+    ],
+    [
+     "git",
+     "push",
+     "--no-verify"
+    ]
+   ]
+  },
+  {
+   "shell": "posix",
+   "command": "cmd //c \"cmd /c git commit -n\"",
+   "status": "ran",
+   "argv": [
+    [
+     "git",
+     "commit",
+     "-n"
+    ]
+   ]
+  },
+  {
+   "shell": "posix",
+   "command": "cmd //c \"cmd //c git commit -n\"",
+   "status": "ran",
+   "argv": []
+  },
+  {
+   "shell": "posix",
+   "command": "cmd //d //c 'git commit -n'",
+   "status": "ran",
+   "argv": [
+    [
+     "git",
+     "commit",
+     "-n"
+    ]
+   ]
+  },
+  {
+   "shell": "posix",
+   "command": "cmd //v:on //c 'git commit -n'",
+   "status": "ran",
+   "argv": [
+    [
+     "git",
+     "commit",
+     "-n"
+    ]
+   ]
+  },
+  {
+   "shell": "posix",
+   "command": "CMD //C \"git commit -n\"",
+   "status": "ran",
+   "argv": [
+    [
+     "git",
+     "commit",
+     "-n"
+    ]
+   ]
+  },
+  {
+   "shell": "posix",
+   "command": "cmd //c \"rem git commit -n\"",
+   "status": "ran",
+   "argv": []
+  },
+  {
+   "shell": "posix",
+   "command": "cmd //c \"git commit -n 2>&1\"",
+   "status": "ran",
+   "argv": [
+    [
+     "git",
+     "commit",
+     "-n"
+    ]
+   ]
+  },
+  {
+   "shell": "posix",
+   "command": "cmd //c \"(git commit -n)\"",
+   "status": "ran",
+   "argv": [
+    [
+     "git",
+     "commit",
+     "-n"
+    ]
+   ]
+  },
+  {
+   "shell": "posix",
+   "command": "cmd //c \";git commit -n\"",
+   "status": "ran",
+   "argv": [
+    [
+     "git",
+     "commit",
+     "-n"
+    ]
+   ]
+  },
+  {
+   "shell": "posix",
+   "command": "cmd //c \"git -c core.hooksPath=nul commit -m x\"",
+   "status": "ran",
+   "argv": [
+    [
+     "git",
+     "-c",
+     "core.hooksPath=nul",
+     "commit",
+     "-m",
+     "x"
+    ]
+   ]
+  },
+  {
+   "shell": "posix",
+   "command": "cmd //c 'git status\ngit commit -n'",
+   "status": "ran",
+   "argv": [
+    [
+     "git",
+     "status"
+    ]
+   ]
+  },
+  {
+   "shell": "posix",
+   "command": "bash -c \"cmd //c 'git commit -n'\"",
+   "status": "ran",
+   "argv": [
+    [
+     "git",
+     "commit",
+     "-n"
+    ]
+   ]
+  },
+  {
+   "shell": "posix",
+   "command": "pwsh -c 'cmd /c \"git commit -n\"'",
+   "status": "ran",
+   "argv": [
+    [
+     "git",
+     "commit",
+     "-n"
+    ]
+   ]
+  },
+  {
+   "shell": "posix",
+   "command": "cmd //c 'g%PATH:~0,0%it commit -n'",
+   "status": "ran",
+   "argv": [
+    [
+     "git",
+     "commit",
+     "-n"
+    ]
+   ]
+  },
+  {
+   "shell": "posix",
+   "command": "cmd //c \"if 1==1 ;git commit -n\"",
+   "status": "ran",
+   "argv": [
+    [
+     "git",
+     "commit",
+     "-n"
+    ]
+   ]
+  },
+  {
+   "shell": "posix",
+   "command": "echo 'git commit -n' | cmd",
+   "status": "ran",
+   "argv": [
+    [
+     "git",
+     "commit",
+     "-n"
+    ]
+   ]
+  },
+  {
+   "shell": "posix",
+   "command": "cmd /c git commit -n",
+   "status": "ran",
+   "argv": []
   }
  ]
 }
