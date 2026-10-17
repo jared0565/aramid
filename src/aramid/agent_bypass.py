@@ -39,11 +39,18 @@ mksh, ash, yash, posh) and PowerShell (pwsh, powershell) are read; dash is the
 family's measured proof and the rest share its `-c` grammar. A command fed to
 such a shell on standard input is read too (`_from_stdin`, FN-55 fb16940): a
 here-string (`bash <<< 'git commit -n'`) and the literal echoed or printed
-into a pipe (`echo 'git commit -n' | bash`, `... | pwsh -`). Not read: a
-string handed to `cmd /c`, an encoded command (`-EncodedCommand`), a `fish -c`
-string (fish's option grammar is its own), a command handed through `su`,
-`script` or `flock -c`, a here-DOC body or a non-echo/printf pipe upstream
-(`cat f | bash`), and the arguments a string is given when it runs
+into a POSIX pipe (`echo 'git commit -n' | bash`, `... | pwsh -`). A PowerShell
+CALL pipes stdin the same way (`_from_stdin_powershell`): a bare quoted string
+(`'git commit -n' | bash`) or an `echo`/`Write-Output` of one, into a shell
+that reads stdin -- a POSIX shell with no `-c`/script, `pwsh -`, or
+`pwsh -Command -`/`-c -`/`-File -`; the call operator keeps the pipe
+(`'git commit -n' | & bash`). Not read: a string handed to `cmd /c`, an
+encoded command (`-EncodedCommand`), a `fish -c` string (fish's option grammar
+is its own), a command handed through `su`, `script` or `flock -c`, a here-DOC
+body or a non-echo/printf pipe upstream (`cat f | bash`), a PowerShell pipe
+upstream that is unquoted (a command PowerShell RUNS) or more than one word (an
+`echo` of several arguments lands one per line), a stdin handoff nested in a
+group, and the arguments a string is given when it runs
 (`bash -c 'git commit "$@"' x -n`).
 
 WHICH SHELL (FN-45). `find_bypass` takes the shell the hook was told runs
@@ -730,7 +737,10 @@ def _reads_stdin_posix(words: list[str], start: int) -> bool:
 
 def _reads_stdin_powershell(words: list[str], start: int) -> bool:
     """pwsh/powershell at words[start] reads its command from standard input:
-    a lone `-` reached before any command switch."""
+    a lone `-` reached before any command switch, OR the value of its
+    command/script switch is itself a lone `-` (`pwsh -Command -`, `-c -`,
+    `-File -` all read the command from stdin). A `-Command`/`-File` with any
+    other value is a string or a script file, read by `_handed`, not stdin."""
     i = start + 1
     while i < len(words):
         word = words[i]
@@ -738,8 +748,9 @@ def _reads_stdin_powershell(words: list[str], start: int) -> bool:
             name = word.lstrip("-/").lower()
             if name == "":
                 return True              # `-` alone: the command is on stdin
-            if "command".startswith(name):
-                return False             # -Command: a string, read by _handed
+            if (name and ("command".startswith(name) or "file".startswith(name))):
+                # a value-taking switch: stdin only when its value is `-`
+                return i + 1 < len(words) and words[i + 1] == "-"
         i += 1
     return False
 
@@ -779,6 +790,60 @@ def _from_stdin(tokens: list[str], depth: int) -> Bypass | None:
             text = _echoed(cmds[idx - 1]["words"])
         else:
             text = None
+        if text is None:
+            continue
+        if depth >= _HANDED_DEPTH:
+            return Bypass("too-deep", "shells", str(_HANDED_DEPTH))
+        found = find_bypass(text, shell, _depth=depth + 1)
+        if found is not None:
+            return found
+    return None
+
+
+# PowerShell echo/Write-Output (the alias and the cmdlet, case-insensitive).
+_PS_ECHOERS = ("echo", "write-output", "write")
+
+
+def _ps_piped_text(upstream: dict) -> str | None:
+    """The text a PowerShell pipe UPSTREAM writes to the next command's stdin:
+    the one literal an `echo`/`Write-Output` emits, or a bare single quoted
+    string that PowerShell sends down the pipeline (`'git commit -n' | bash`).
+    A word PowerShell would RUN (unquoted, so a command/value) or more than one
+    is not stdin text -- it is a documented residual, the safe-negative side.
+    Multiple echo arguments each land on their own line (so joined they are not
+    one command); that too is left a residual."""
+    words, plains = upstream["words"], upstream["plains"]
+    if words and words[0].lower() in _PS_ECHOERS:
+        # echo/Write-Output of exactly ONE quoted literal argument
+        if len(words) == 2 and len(plains) >= 2 and not plains[1]:
+            return words[1]
+        return None
+    # a bare string expression emitted to the pipeline: one quoted word
+    if len(words) == 1 and plains and not plains[0]:
+        return words[0]
+    return None
+
+
+def _from_stdin_powershell(command: str, depth: int) -> Bypass | None:
+    """A match in a command a shell is fed on standard input from a PowerShell
+    pipeline (FN-55, the PowerShell half of fb16940): `'git commit -n' | bash`,
+    `echo 'git commit -n' | bash`, `... | pwsh -`. The PowerShell tokenizer
+    keeps each command's pipe `upstream`; a shell on the far end that reads its
+    commands from stdin is handed the upstream's literal, read by that shell's
+    rules. `depth` counts the shells handed a string, as `_from_handed`."""
+    from aramid import agent_bypass_powershell
+    cmds, _end = agent_bypass_powershell.simple_commands(command)
+    for cmd in cmds:
+        if cmd["upstream"] is None:
+            continue
+        start, shell = _shell_launched(cmd["words"])
+        if start is None:
+            continue
+        reads = (_reads_stdin_posix(cmd["words"], start) if shell == POSIX
+                 else _reads_stdin_powershell(cmd["words"], start))
+        if not reads:
+            continue
+        text = _ps_piped_text(cmd["upstream"])
         if text is None:
             continue
         if depth >= _HANDED_DEPTH:
@@ -849,7 +914,8 @@ def find_bypass(command, shell: str | None = None, _depth: int = 0) -> Bypass | 
     if shell == POWERSHELL:
         from aramid import agent_bypass_powershell
         done, end = agent_bypass_powershell.reading(command)
-        found = _first(done, True, True) or _from_handed(done, _depth)
+        found = (_first(done, True, True) or _from_handed(done, _depth)
+                 or _from_stdin_powershell(command, _depth))
         if found is None and end == "deep":
             return Bypass("too-deep", "", str(agent_bypass_powershell._DEPTH))
         return found

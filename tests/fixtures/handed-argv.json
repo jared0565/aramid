@@ -2000,6 +2000,110 @@
      "--no-verify"
     ]
    ]
+  },
+  {
+   "shell": "powershell",
+   "command": "'git commit -n' | bash",
+   "status": "ran",
+   "argv": [
+    [
+     "git",
+     "commit",
+     "-n"
+    ]
+   ]
+  },
+  {
+   "shell": "powershell",
+   "command": "echo 'git commit -n' | bash",
+   "status": "ran",
+   "argv": [
+    [
+     "git",
+     "commit",
+     "-n"
+    ]
+   ]
+  },
+  {
+   "shell": "powershell",
+   "command": "'git commit -n' | pwsh -",
+   "status": "ran",
+   "argv": [
+    [
+     "git",
+     "commit",
+     "-n"
+    ]
+   ]
+  },
+  {
+   "shell": "powershell",
+   "command": "'git commit -n' | & bash",
+   "status": "ran",
+   "argv": [
+    [
+     "git",
+     "commit",
+     "-n"
+    ]
+   ]
+  },
+  {
+   "shell": "powershell",
+   "command": "'git commit -n' | pwsh -c -",
+   "status": "ran",
+   "argv": [
+    [
+     "git",
+     "commit",
+     "-n"
+    ]
+   ]
+  },
+  {
+   "shell": "powershell",
+   "command": "Write-Output 'git commit --no-verify' | bash",
+   "status": "ran",
+   "argv": [
+    [
+     "git",
+     "commit",
+     "--no-verify"
+    ]
+   ]
+  },
+  {
+   "shell": "powershell",
+   "command": "echo 'git' 'commit' '-n' | bash",
+   "status": "ran",
+   "argv": [
+    [
+     "git"
+    ]
+   ]
+  },
+  {
+   "shell": "powershell",
+   "command": "echo 'git commit -n' | bash -c 'git status'",
+   "status": "ran",
+   "argv": [
+    [
+     "git",
+     "status"
+    ]
+   ]
+  },
+  {
+   "shell": "powershell",
+   "command": "'git status' | bash",
+   "status": "ran",
+   "argv": [
+    [
+     "git",
+     "status"
+    ]
+   ]
   }
  ]
 }

@@ -80,12 +80,14 @@ class _TooDeep(_CutOff):
     """The groups nest deeper than _DEPTH: the reading stops, PowerShell does not."""
 
 
-def reading(text: str) -> tuple[list[list[str]], str]:
-    """The simple commands in `text`, each a list of words, and how the
-    reading ended: "end" (it got to the end of the text), "cut" (an open
-    quote, comment or group, which PowerShell runs none of) or "deep" (more
-    than _DEPTH groups, which PowerShell runs)."""
-    done: list[list[str]] = []
+def simple_commands(text: str) -> tuple[list[dict], str]:
+    """The simple commands in `text` as records -- `{words, plains, upstream}`
+    -- and how the reading ended ("end"/"cut"/"deep", as `reading`). `plains`
+    marks each word that had no quote/escape/value; `upstream` is the previous
+    command at the same level when a single `|` fed this one its stdin (None
+    otherwise), kept so agent_bypass._from_stdin can read a shell on stdin.
+    `reading` is the words-only projection of this."""
+    done: list[dict] = []
     try:
         _commands(text, 0, "", done, 0)
     except _TooDeep:
@@ -93,6 +95,15 @@ def reading(text: str) -> tuple[list[list[str]], str]:
     except _CutOff:
         return done, "cut"
     return done, "end"
+
+
+def reading(text: str) -> tuple[list[list[str]], str]:
+    """The simple commands in `text`, each a list of words, and how the
+    reading ended: "end" (it got to the end of the text), "cut" (an open
+    quote, comment or group, which PowerShell runs none of) or "deep" (more
+    than _DEPTH groups, which PowerShell runs)."""
+    done, end = simple_commands(text)
+    return [cmd["words"] for cmd in done], end
 
 
 def commands(text: str) -> tuple[list[list[str]], bool]:
@@ -115,11 +126,14 @@ def _commands(text: str, i: int, closer: str, done: list, depth: int) -> int:
         raise _TooDeep
     n = len(text)
     words: list[str] = []
+    plains: list[bool] = []  # per word in `words`: True when it had no quote
     word: list[str] | None = None   # the word being read, None between words
     plain = True        # the word has no quote, escape or value in it
     named = False       # the word is `-name`: it ends at a `.` or a `[`
     target = False      # the next word is where a redirection goes
     comma = False       # a comma was the last thing read: the line goes on
+    prev: dict | None = None   # the previous simple command AT THIS LEVEL
+    prev_op = ""        # the operator just before the command being read
 
     def end_word() -> bool:
         """Close the word being read. True when it was the stop-parsing token,
@@ -135,15 +149,35 @@ def _commands(text: str, i: int, closer: str, done: list, depth: int) -> int:
                 stop = plain    # quoted or escaped it is left out all the same
             else:
                 words.append(known if known or _VALUE not in read else "$")
+                plains.append(plain)
         word, plain, named = None, True, False
         return stop
 
-    def end_command() -> None:
-        nonlocal words, target, comma
+    def end_command(op: str) -> None:
+        """Close the current simple command. `op` is the operator that ended it
+        (`|`, `&`, `;`, a newline, a group closer or `''` at the end). The
+        command keeps its pipe UPSTREAM (the previous command at this level,
+        when a single `|` joined them) so a shell fed on stdin can be read
+        (agent_bypass._from_stdin). `||`/`&&` are one operator, not a pipe; `|
+        &` (the call operator straight after a pipe) keeps the pipe."""
+        nonlocal words, plains, target, comma, prev, prev_op
         end_word()
+        if op in ("|", "&") and not words:
+            if prev_op == op:            # `||` / `&&`: one operator, not a pipe
+                prev_op = prev_op + op
+                plains = []
+                return
+            if op == "&" and prev_op == "|":   # `| &`: the call operator keeps it
+                plains = []
+                return
         if words:
-            done.append(_handed(words))
-        words, target, comma = [], False, False
+            kept = _handed(words)
+            entry = {"words": kept, "plains": plains[:len(kept)],
+                     "upstream": prev if prev_op == "|" else None}
+            done.append(entry)
+            prev = entry
+        prev_op = op
+        words, plains, target, comma = [], [], False, False
 
     try:
         # A turn for each character left, and every turn reads one at least:
@@ -160,7 +194,7 @@ def _commands(text: str, i: int, closer: str, done: list, depth: int) -> int:
                         word = []
                     word.append("\n")
                 else:
-                    end_command()
+                    end_command("\n")
                 i += 1
             elif _blank(ch):
                 i = _verbatim(text, i, words) if end_word() else i + 1
@@ -238,14 +272,15 @@ def _commands(text: str, i: int, closer: str, done: list, depth: int) -> int:
                 i = _commands(text, i + 1, ")" if ch == "(" else "}", done, depth + 1)
                 i = _members(text, i, done, depth)      # `(a).Length` is one value
             elif ch in ")}" or (ch == "]" and closer == "]"):
-                end_command()
+                end_command(")")
                 if ch == closer:
                     return i + 1
                 i += 1                  # one that closes nothing
             elif ch in ";|&":
-                # `&&` and `||` are two of these in a row: the second ends a
-                # command that is empty, which hands nothing over
-                end_command()
+                # `&&` and `||` are two of these in a row, and `| &` is the
+                # call operator straight after a pipe: end_command coalesces
+                # them (a `||`/`&&` is not a pipe; a `| &` keeps the pipe).
+                end_command(ch)
                 i += 1
             elif word is None and ch == "#":
                 while i < n and text[i] not in _NEWLINE:
@@ -275,11 +310,13 @@ def _commands(text: str, i: int, closer: str, done: list, depth: int) -> int:
                 i += 1
         if closer or i < n:
             raise _CutOff       # a group left open, or a turn that read nothing
-        end_command()
+        end_command("")
         return n
     except _CutOff:
         if words:
-            done.append(_handed(words))
+            kept = _handed(words)
+            done.append({"words": kept, "plains": plains[:len(kept)],
+                         "upstream": prev if prev_op == "|" else None})
         raise
 
 

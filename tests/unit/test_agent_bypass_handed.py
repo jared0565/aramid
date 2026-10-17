@@ -105,6 +105,7 @@ _ANY_WORD = "a word named git starts a scan, as it does in any command"
 OVER = {
     ("posix", "bash -c 'echo git commit -n'"): _ANY_WORD,
     ("posix", "powershell -File x.ps1 git commit -n"): _ANY_WORD,
+    ("powershell", "echo 'git' 'commit' '-n' | bash"): _ANY_WORD,
     ("posix", "pwsh /c 'git commit -n'"):
         "Git Bash makes a lone /c a path, so pwsh runs nothing; read as the switch",
     ("posix", f"pwsh -c '{H41}'"):
@@ -300,6 +301,44 @@ def test_a_stdin_handoff_is_read_to_the_cap_and_refused_past_it():
     # the shell-handoff depth cap counts a command fed on stdin like any other
     assert find_bypass(_nest_stdin(ab._HANDED_DEPTH), POSIX) == DASH_N
     assert find_bypass(_nest_stdin(ab._HANDED_DEPTH + 1), POSIX) == TOO_MANY
+
+
+@pytest.mark.parametrize("command", [
+    "echo 'git commit -n' ; bash",           # `;` is not a pipe: bash gets no stdin
+    "echo 'git commit -n' || bash",          # `||` is not a pipe
+    "'x' | bash $(echo 'git commit -n')",    # the $() is bash's SCRIPT, not the pipe upstream
+])
+def test_a_powershell_non_pipe_hands_no_stdin(command):
+    # the PowerShell stdin reader (FN-55) reads only a true single-`|` upstream.
+    # A `;`/`||` is not a pipe, and the nested `$()` command is paired with the
+    # ACTUAL upstream (`'x'`), not whatever list position put before `bash`, so
+    # none of these is read as a stdin bypass (git was handed nothing).
+    assert find_bypass(command, POWERSHELL) is None
+
+
+@pytest.mark.parametrize("command", [
+    "echo | bash",         # echo with no argument: nothing to read
+    "foo | bash",          # an unquoted word PowerShell RUNS, not a literal
+    "foo bar | bash",      # more than one word: a command, not a literal
+])
+def test_a_powershell_pipe_upstream_that_is_not_a_literal_is_not_read(command):
+    # _ps_piped_text reads only a single quoted literal or an echo of one; a
+    # command PowerShell would run is a documented residual (safe-negative).
+    assert find_bypass(command, POWERSHELL) is None
+
+
+def _nest_ps_stdin(times, inner="git commit -n"):
+    text = inner
+    for _ in range(times):
+        text = "'" + text.replace("'", "''") + "' | pwsh -"
+    return text
+
+
+def test_a_powershell_stdin_handoff_is_read_to_the_cap_and_refused_past_it():
+    # a PowerShell pipe into `pwsh -` counts against the shell-handoff depth cap
+    # like a handed string; past it the call is refused (FN-55).
+    assert find_bypass(_nest_ps_stdin(ab._HANDED_DEPTH), POWERSHELL) == DASH_N
+    assert find_bypass(_nest_ps_stdin(ab._HANDED_DEPTH + 1), POWERSHELL) == TOO_MANY
 
 
 def test_a_name_powershell_builds_in_the_string_is_seen_from_a_bash_call():
