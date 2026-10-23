@@ -122,6 +122,10 @@ to publish a tag that disagrees with it.
   command, each as measured with real shells and real git. A command
   handed on through more than eight shells is refused. Not read: an
   encoded command, and an argument the string is given when it runs.
+  In a call from a tool the hook does not know, a string handed on, and a
+  command piped into a shell, are read as Git Bash would hand them on and
+  as PowerShell would: they were read the Git Bash way alone, so
+  `'git commit -n' | bash` from such a tool went through.
 
   A string handed to `cmd /c` is read as well (`/k` and `/r` too, in any
   case, with `/d`, `/s` or `/v:on` in front, and `cmd //c` from Git Bash).

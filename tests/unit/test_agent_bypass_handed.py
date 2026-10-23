@@ -140,23 +140,37 @@ def test_the_lists_name_commands_of_the_record():
     assert not any(_judged(RECORD[case][1]) for case in OVER)
 
 
-def test_nothing_a_shell_handed_git_as_a_bypass_is_let_through():
+# Each whole-record test is asked twice: told the shell that ran the call, and
+# told none, as the hook is for a tool it does not know (agent_hook). A string
+# handed on is read by the rules of every shell that could have run the call,
+# so the lists hold for both (find_bypass's docstring; FN-55 d57bcd).
+TOLD = pytest.mark.parametrize("told", [True, False], ids=["told", "not-told"])
+
+
+def _answer(case, told):
+    return find_bypass(case[1], _case(case[0]) if told else None)
+
+
+@TOLD
+def test_nothing_a_shell_handed_git_as_a_bypass_is_let_through(told):
     missed = {case for case, (_, argvs) in RECORD.items()
-              if _judged(argvs) and find_bypass(case[1], _case(case[0])) is None}
+              if _judged(argvs) and _answer(case, told) is None}
     assert missed == set(NOT_SEEN)
 
 
-def test_every_bypass_the_record_holds_is_answered_as_git_was_handed_it():
-    wrong = {case: find_bypass(case[1], _case(case[0]))
+@TOLD
+def test_every_bypass_the_record_holds_is_answered_as_git_was_handed_it(told):
+    wrong = {case: _answer(case, told)
              for case, (_, argvs) in RECORD.items()
              if _judged(argvs) and case not in NOT_SEEN
-             and find_bypass(case[1], _case(case[0])) != ANSWERED.get(case, _judged(argvs))}
+             and _answer(case, told) != ANSWERED.get(case, _judged(argvs))}
     assert wrong == {}
 
 
-def test_what_reached_git_as_no_bypass_is_answered_only_where_listed():
+@TOLD
+def test_what_reached_git_as_no_bypass_is_answered_only_where_listed(told):
     over = {case for case, (_, argvs) in RECORD.items()
-            if not _judged(argvs) and find_bypass(case[1], _case(case[0])) is not None}
+            if not _judged(argvs) and _answer(case, told) is not None}
     assert over == set(OVER)
 
 

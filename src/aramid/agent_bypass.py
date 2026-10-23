@@ -942,7 +942,10 @@ def find_bypass(command, shell: str | None = None, _depth: int = 0) -> Bypass | 
     A string a command hands bash, sh or zsh with `-c`, or pwsh or
     powershell with `-Command`, or cmd with `/c`, is read by that shell's
     rules as a command of its own (FN-55, the operator's decision of
-    2026-10-13), whichever shell runs the call and when none is named. A string
+    2026-10-13), whichever shell runs the call and when none is named: then
+    the call is taken apart, and cmd's line built, as each of POSIX and
+    PowerShell would, and a command piped into a shell is read both ways too
+    (FN-55 d57bcd). A string
     handed to cmd is read as `CMD`, which no tool call is: it is the shell
     named for that string alone, read by agent_bypass_cmd, for every rule.
     `_depth` counts the shells handed a string on the way to `command`; it is
@@ -977,4 +980,7 @@ def find_bypass(command, shell: str | None = None, _depth: int = 0) -> Bypass | 
         found = _first(_segments(tokens), not backtick, False)
         if found is not None:
             return found
-    return _from_handed(_segments(posix), _depth, POSIX) or _from_stdin(posix, _depth)
+    from aramid import agent_bypass_powershell
+    done, _end = agent_bypass_powershell.reading(command)
+    return (_from_handed(_segments(posix), _depth, POSIX) or _from_stdin(posix, _depth)
+            or _from_handed(done, _depth, POWERSHELL) or _from_stdin_powershell(command, _depth))
