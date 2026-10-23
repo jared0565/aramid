@@ -966,6 +966,18 @@ def test_the_shortest_texts_are_read_without_an_error(text):
     assert find_bypass(text, POWERSHELL) is None
 
 
+def test_a_word_with_many_commas_is_read_in_time():
+    # The reader keeps the commas of every word (`_parts`), for every PowerShell
+    # call the hook reads; a membership test per character on lists made one
+    # word of 16,000 commas take 8 s and 32,000 take 32 s (drain row 0940b5,
+    # measured 2026-10-23), where a word without them takes 34 ms.
+    import time
+    text = "Write-Output " + ",".join(["a"] * 16000)
+    began = time.perf_counter()
+    assert find_bypass(text, POWERSHELL) is None
+    assert time.perf_counter() - began < 1.0
+
+
 def test_every_word_has_its_plain_mark():
     # agent_bypass reads `plains` beside `words` (a literal piped into a shell,
     # the parameters of Start-Process), so every word has its own mark: a group

@@ -390,12 +390,15 @@ def _parts(word: list[str], seps: list[int], gaps: list[int]) -> list[str]:
     """The pieces of a word between the commas that make it a list (at `seps`
     in `word`), without the line ends a comma carried the list over (at
     `gaps`), each written as a word is: what a cmdlet is handed as the
-    elements of an array. A word with no such comma is one piece."""
+    elements of an array. A word with no such comma is one piece. Asked of
+    every word the reader makes, so it is asked in sets (drain row 0940b5: a
+    test per character on the lists made a word of 16,000 commas take 8 s)."""
+    cuts, skipped = set(seps), set(gaps)
     pieces: list[list[str]] = [[]]
     for k, made in enumerate(word):
-        if k in seps:
+        if k in cuts:
             pieces.append([])
-        elif k not in gaps:
+        elif k not in skipped:
             pieces[-1].append(made)
     return [_written("".join(piece)) for piece in pieces]
 
