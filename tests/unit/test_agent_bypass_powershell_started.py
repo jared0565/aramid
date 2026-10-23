@@ -158,6 +158,12 @@ def test_the_named_parameters_are_bound_before_the_positional_ones():
     assert started("Start-Process -file git -arg 'commit -n'") == [("git", "commit -n")]
     assert started("Start-Process -lup git 'commit -n'") == [("git", "commit -n")]
     assert started("Start-Process -r x git 'commit -n'") == [("x", "git")]
+    # a word that begins with a quote is a value, whatever it holds; a `-name:`
+    # written plainly takes a quoted value (the record)
+    assert started("Start-Process git '-C . commit -n -m a:b'") == [("git", "-C . commit -n -m a:b")]
+    assert started("Start-Process '-FilePath:git' 'commit -n'") == [("-FilePath:git", "commit -n")]
+    assert started('Start-Process git "-x:y" -Wait') == [("git", "-x:y")]
+    assert started("Start-Process -ArgumentList:'commit -n' git") == [("git", "commit -n")]
 
 
 def _nest(times, inner="g`u{69}t commit -n"):
@@ -244,12 +250,14 @@ def test_the_parameter_names_are_total_out_of_contract():
     assert abp._start_parameter("w") is None             # Wait, WindowStyle, WhatIf ...
     assert abp._start_parameter("wa") == ("warningaction", True)   # an alias of its own
     assert abp._start_parameter("wai") == ("wait", False)
-    assert not abp._is_parameter("", True)
-    assert not abp._is_parameter("-", True)
-    assert not abp._is_parameter("-1", True)
-    assert not abp._is_parameter("-n", False)
-    assert abp._is_parameter("-n:x", False)
-    assert abp._is_parameter("-?", True)
+    assert not abp._is_parameter("", True, True)
+    assert not abp._is_parameter("-", True, True)
+    assert not abp._is_parameter("-1", True, True)
+    assert not abp._is_parameter("-n", False, True)
+    assert abp._is_parameter("-n:x", False, True)
+    assert not abp._is_parameter("-n:x", False, False)    # it began with a quote
+    assert not abp._is_parameter("-n", True, False)
+    assert abp._is_parameter("-?", True, True)
 
 
 @pytest.mark.parametrize("depth", [-2**63, -1, 0, ab._HANDED_DEPTH, 2**63])

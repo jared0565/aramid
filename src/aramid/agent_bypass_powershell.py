@@ -89,9 +89,10 @@ class _TooDeep(_CutOff):
 
 
 def simple_commands(text: str) -> tuple[list[dict], str]:
-    """The simple commands in `text` as records -- `{words, plains, upstream}`
-    -- and how the reading ended ("end"/"cut"/"deep", as `reading`). `plains`
-    marks each word that had no quote/escape/value; `upstream` is the previous
+    """The simple commands in `text` as records -- `{words, plains, heads,
+    upstream, parts, groups}` -- and how the reading ended ("end"/"cut"/"deep",
+    as `reading`). `plains` marks each word that had no quote/escape/value,
+    `heads` each that began as `-name` written plainly; `upstream` is the previous
     command at the same level when a single `|` fed this one its stdin (None
     otherwise), kept so agent_bypass._from_stdin can read a shell on stdin.
     `reading` is the words-only projection of this."""
@@ -135,9 +136,13 @@ def _commands(text: str, i: int, closer: str, done: list, depth: int) -> int:
     n = len(text)
     words: list[str] = []
     plains: list[bool] = []  # per word in `words`: True when it had no quote
+    heads: list[bool] = []   # per word in `words`: True when it began as `-name`
     word: list[str] | None = None   # the word being read, None between words
     plain = True        # the word has no quote, escape or value in it
     named = False       # the word is `-name`: it ends at a `.` or a `[`
+    head = False        # the word began as `-name`, written plainly: to a cmdlet,
+                        # a parameter's name (`started`), and its value may follow
+                        # a `:` quoted (`-ArgumentList:'commit -n'`)
     target = False      # the next word is where a redirection goes
     comma = False       # a comma was the last thing read: the line goes on
     prev: dict | None = None   # the previous simple command AT THIS LEVEL
@@ -152,7 +157,7 @@ def _commands(text: str, i: int, closer: str, done: list, depth: int) -> int:
     def end_word() -> bool:
         """Close the word being read. True when it was the stop-parsing token,
         written plainly: the caller reads the rest of the line as it stands."""
-        nonlocal word, plain, named, target, seps, gaps
+        nonlocal word, plain, named, head, target, seps, gaps
         stop = False
         if word is not None:
             read = "".join(word)
@@ -164,8 +169,9 @@ def _commands(text: str, i: int, closer: str, done: list, depth: int) -> int:
             else:
                 words.append(_written(read))
                 plains.append(plain)
+                heads.append(head)
                 parts.append(_parts(word, seps, gaps))
-        word, plain, named, seps, gaps = None, True, False, [], []
+        word, plain, named, head, seps, gaps = None, True, False, False, [], []
         return stop
 
     def verbatim(at: int) -> int:
@@ -174,6 +180,7 @@ def _commands(text: str, i: int, closer: str, done: list, depth: int) -> int:
         before = len(words)
         at = _verbatim(text, at, words)
         plains.extend([True] * (len(words) - before))
+        heads.extend([False] * (len(words) - before))   # none is a parameter's name
         parts.extend([w] for w in words[before:])
         return at
 
@@ -184,25 +191,26 @@ def _commands(text: str, i: int, closer: str, done: list, depth: int) -> int:
         when a single `|` joined them) so a shell fed on stdin can be read
         (agent_bypass._from_stdin). `||`/`&&` are one operator, not a pipe; `|
         &` (the call operator straight after a pipe) keeps the pipe."""
-        nonlocal words, plains, parts, groups, target, comma, prev, prev_op
+        nonlocal words, plains, heads, parts, groups, target, comma, prev, prev_op
         end_word()
         if op in ("|", "&") and not words:
             if prev_op == op:            # `||` / `&&`: one operator, not a pipe
                 prev_op = prev_op + op
-                plains = []
+                plains, heads = [], []
                 return
             if op == "&" and prev_op == "|":   # `| &`: the call operator keeps it
-                plains = []
+                plains, heads = [], []
                 return
         if words:
             kept = _handed(words)
-            entry = {"words": kept, "plains": plains[:len(kept)],
+            entry = {"words": kept, "plains": plains[:len(kept)], "heads": heads[:len(kept)],
                      "upstream": prev if prev_op == "|" else None,
                      "parts": parts[:len(kept)], "groups": groups}
             done.append(entry)
             prev = entry
         prev_op = op
-        words, plains, parts, groups, target, comma = [], [], [], {}, False, False
+        words, plains, heads, parts, groups = [], [], [], [], {}
+        target, comma = False, False
 
     try:
         # A turn for each character left, and every turn reads one at least:
@@ -296,6 +304,7 @@ def _commands(text: str, i: int, closer: str, done: list, depth: int) -> int:
                 elif words:
                     words.append("$")   # a group among the arguments: a value
                     plains.append(False)
+                    heads.append(False)
                     parts.append(["$"])
                     place = len(words) - 1
                 comma = False
@@ -334,6 +343,7 @@ def _commands(text: str, i: int, closer: str, done: list, depth: int) -> int:
                     word = []
                     nxt = text[i + 1:i + 2]
                     named = ch == "-" and (nxt.isalpha() or nxt in ("_", "?"))
+                    head = named
                 elif named and ch in ".[":
                     end_word()          # `-n.x` is `-n` and `.x`
                     word = []
@@ -351,7 +361,7 @@ def _commands(text: str, i: int, closer: str, done: list, depth: int) -> int:
     except _CutOff:
         if words:
             kept = _handed(words)
-            done.append({"words": kept, "plains": plains[:len(kept)],
+            done.append({"words": kept, "plains": plains[:len(kept)], "heads": heads[:len(kept)],
                          "upstream": prev if prev_op == "|" else None,
                          "parts": parts[:len(kept)], "groups": groups})
         raise
@@ -446,9 +456,9 @@ def _start(cmd: dict, first: int) -> tuple[str, str] | None:
     args = _arguments(cmd, first)
     k = 0
     while k < len(args):
-        word, plain, elements = args[k]
+        word, plain, elements, head = args[k]
         k += 1
-        if not _is_parameter(word, plain):
+        if not _is_parameter(word, plain, head):
             positional.append(elements)
             continue
         name, colon, _ = word[1:].partition(":")
@@ -460,7 +470,7 @@ def _start(cmd: dict, first: int) -> tuple[str, str] | None:
             return None
         if colon:
             given = [elements[0].partition(":")[2]] + elements[1:]
-        elif takes and k < len(args) and not _is_parameter(*args[k][:2]):
+        elif takes and k < len(args) and not _is_parameter(args[k][0], args[k][1], args[k][3]):
             given = args[k][2]
             k += 1
         else:
@@ -477,10 +487,13 @@ def _start(cmd: dict, first: int) -> tuple[str, str] | None:
     return program[0], " ".join(bound.get("argumentlist", []))
 
 
-def _is_parameter(word: str, plain: bool) -> bool:
+def _is_parameter(word: str, plain: bool, head: bool) -> bool:
     """Whether a word is a parameter's name (`-Wait`, `-FilePath:git`) and not
-    a value: written plainly, or with its value after a colon."""
-    return (word[:1] == "-" and (word[1:2].isalpha() or word[1:2] in ("_", "?"))
+    a value: it began as `-name` written plainly (`head`), and it is plain
+    throughout or has its value after a colon (`-ArgumentList:'commit -n'`).
+    A word that begins with a quote is a value, whatever it holds: the record
+    hands git all of `'-C . commit -n -m a:b'`."""
+    return (head and word[:1] == "-" and (word[1:2].isalpha() or word[1:2] in ("_", "?"))
             and (plain or ":" in word))
 
 
@@ -497,14 +510,16 @@ def _start_parameter(name: str) -> tuple[str, bool] | None:
     return found[0] if len(found) == 1 else None
 
 
-def _arguments(cmd: dict, first: int) -> list[tuple[str, bool, list[str]]]:
+def _arguments(cmd: dict, first: int) -> list[tuple[str, bool, list[str], bool]]:
     """The arguments of a cmdlet from the word of `cmd` at `first` on, each as
-    (its first word, whether that is plain, its elements). A list is one
-    argument though it is several words (`'a','b'` is `a` and `,b`): a word
-    joins the one in front of it when a comma ends that one or starts this
-    one. A `( )` that holds a list of strings is that list (`_listed`)."""
+    (its first word, whether that is plain, its elements, whether that began
+    as `-name`). A list is one argument though it is several words (`'a','b'`
+    is `a` and `,b`): a word joins the one in front of it when a comma ends
+    that one or starts this one. A `( )` that holds a list of strings is that
+    list (`_listed`)."""
     words, plains, parts, groups = cmd["words"], cmd["plains"], cmd["parts"], cmd["groups"]
-    out: list[tuple[str, bool, list[str]]] = []
+    heads = cmd["heads"]
+    out: list[tuple[str, bool, list[str], bool]] = []
     joined = False      # the word in front ended with a comma
     for k in range(first, len(words)):
         own = parts[k] if k < len(parts) else [words[k]]
@@ -513,7 +528,8 @@ def _arguments(cmd: dict, first: int) -> list[tuple[str, bool, list[str]]]:
             out[-1][2][-1] += pieces[0]
             out[-1][2].extend(pieces[1:])
         else:
-            out.append((words[k], k < len(plains) and plains[k], pieces))
+            out.append((words[k], k < len(plains) and plains[k], pieces,
+                        k < len(heads) and heads[k]))
         joined = len(own) > 1 and own[-1] == ""
     return out
 

@@ -982,6 +982,8 @@ def test_every_word_has_its_plain_mark():
     for text in texts:
         for cmd in simple_commands(text)[0]:
             assert len(cmd["plains"]) == len(cmd["words"]), text
+            assert len(cmd["heads"]) == len(cmd["words"]), text   # and whether it began `-name`
+            assert all(not head or word[:1] == "-" for word, head in zip(cmd["words"], cmd["heads"]))
 
 
 @pytest.mark.parametrize("text,i,answer", [

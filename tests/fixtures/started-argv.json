@@ -1213,6 +1213,95 @@
      "-n"
     ]
    ]
+  },
+  {
+   "command": "Start-Process git '-C . commit -n -m a:b' -NoNewWindow -Wait",
+   "status": "ran",
+   "argv": [
+    [
+     "git",
+     "-C",
+     ".",
+     "commit",
+     "-n",
+     "-m",
+     "a:b"
+    ]
+   ]
+  },
+  {
+   "command": "Start-Process git -ArgumentList '-C . commit -n -m a:b' -NoNewWindow -Wait",
+   "status": "ran",
+   "argv": [
+    [
+     "git",
+     "-C",
+     ".",
+     "commit",
+     "-n",
+     "-m",
+     "a:b"
+    ]
+   ]
+  },
+  {
+   "command": "Start-Process -FilePath git -ArgumentList \"-C . commit -n -m a:b\" -NoNewWindow -Wait",
+   "status": "ran",
+   "argv": [
+    [
+     "git",
+     "-C",
+     ".",
+     "commit",
+     "-n",
+     "-m",
+     "a:b"
+    ]
+   ]
+  },
+  {
+   "command": "Start-Process bash '-c \"git commit -n -m a:b\"' -NoNewWindow -Wait",
+   "status": "ran",
+   "argv": [
+    [
+     "git",
+     "commit",
+     "-n",
+     "-m",
+     "a:b"
+    ]
+   ]
+  },
+  {
+   "command": "Start-Process '-FilePath:git' 'commit -n' -NoNewWindow -Wait",
+   "status": "ran",
+   "argv": []
+  },
+  {
+   "command": "Start-Process git '-ArgumentList:commit -n' -NoNewWindow -Wait",
+   "status": "ran",
+   "argv": [
+    [
+     "git",
+     "-ArgumentList:commit",
+     "-n"
+    ]
+   ]
+  },
+  {
+   "command": "Start-Process -FilePath:git -ArgumentList:'-C . commit -n -m a:b' -NoNewWindow -Wait",
+   "status": "ran",
+   "argv": [
+    [
+     "git",
+     "-C",
+     ".",
+     "commit",
+     "-n",
+     "-m",
+     "a:b"
+    ]
+   ]
   }
  ]
 }
