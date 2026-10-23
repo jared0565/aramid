@@ -378,6 +378,51 @@ def _find_chained_aramid_shim(hdir: Path, hook: str) -> Path | None:
     return None
 
 
+def _chain_target(slot: Path, hook: str) -> Path | None:
+    """Where aramid's own `hook` shim goes when ANOTHER tool's managed
+    trampoline holds `slot` and runs a sibling it names in its own bytes
+    (graphite's runs `"$DIR/post-commit.local"`): that sibling, when the
+    trampoline names exactly one and nothing is there yet (FN-57, channel
+    round 322, the operator's decision of 2026-10-23). Read off the
+    trampoline, so no other tool's suffix is built in here.
+
+    Only for the triage hook. graphite runs its sibling `|| true`: a
+    post-commit triage shim swallows its own exit anyway, but a gate there
+    could never block while doctor called it armed. None otherwise -- no
+    sibling named, or more than one (a guess could put the shim where nothing
+    runs it), or only `<hook>.aramid-chained` (what aramid's own shim EXECS:
+    a shim there would exec itself), or a file already there, which
+    `_find_chained_aramid_shim` would have found were it aramid's and which
+    is not aramid's to replace otherwise."""
+    if hook != TRIAGE_HOOK:
+        return None
+    try:
+        data = slot.read_bytes()
+    except OSError:
+        return None
+    names = set(re.findall(rb"(?<![\w.-])" + re.escape(hook.encode()) + rb"\.[\w-]+", data))
+    names.discard(f"{hook}{CHAINED_SUFFIX}".encode())
+    if len(names) != 1:
+        return None
+    target = slot.parent / names.pop().decode("ascii")
+    return None if target.exists() else target
+
+
+def _install_in_chain(slot: Path, hook: str, current: bytes) -> Path | None:
+    """Write aramid's `hook` shim where the trampoline in `slot` runs it
+    (`_chain_target`); the path written, or None when there is no such place
+    or the write was refused (never fatal, as `_refresh_relocated_shim`)."""
+    target = _chain_target(slot, hook)
+    if target is None:
+        return None
+    try:
+        target.write_bytes(current)
+    except OSError:
+        return None
+    _make_executable(target)
+    return target
+
+
 def _refresh_relocated_shim(relocated: Path | None, hook: str,
                             current: bytes) -> str:
     """Regenerate aramid's OWN relocated shim in place. Returns what actually
@@ -432,10 +477,33 @@ _RELOCATED_STATE_TEXT = {
 }
 
 
+def _foreign_slot_remedy(hook: str, foreign_tool: str) -> str:
+    """What to do about a `hook` slot another tool's managed trampoline holds
+    when aramid's shim is in no place it runs and `aramid init .` cannot put
+    it in one (round 322: the remedy named was `aramid init .`, which could
+    not change the state). For the triage hook, the order the round measured
+    working: aramid first, then the other tool, which relocates aramid's shim
+    beside its own and runs it. A gate has none from aramid's side: in
+    another tool's chain it could be run `|| true` (`_chain_target`)."""
+    if hook == TRIAGE_HOOK:
+        return (f"`aramid init .` cannot install it: move '{foreign_tool}'s {hook} aside, "
+                f"run `aramid init .`, then re-run '{foreign_tool}'s installer")
+    return f"no aramid command can install it while '{foreign_tool}' holds the slot"
+
+
 def _warn_foreign_managed_conflict(
     hook: str, foreign_tool: str, chained_via: Path | None = None,
     state: str = "skipped",
 ) -> None:
+    if chained_via is not None and state == "installed":
+        print(f"aramid: install: {hook}: already managed by '{foreign_tool}' -- "
+              f"not chaining another tool's managed hook (chaining it would "
+              f"silently double-run both tools' gates on every {hook}). "
+              f"'{foreign_tool}'s hook runs '{chained_via.name}' beside it, so "
+              f"aramid's own {hook} shim is INSTALLED there and runs once, via "
+              f"'{foreign_tool}'s chain; this slot itself stays untouched.",
+              file=sys.stderr)
+        return
     if chained_via is not None:
         print(f"aramid: install: {hook}: already managed by '{foreign_tool}' -- "
               f"refusing to chain another tool's managed hook (chaining it would "
@@ -450,7 +518,8 @@ def _warn_foreign_managed_conflict(
           f"refusing to chain another tool's managed hook (chaining it would "
           f"silently double-run both tools' gates on every {hook}). Left "
           f"'{foreign_tool}'s hook untouched; aramid's {hook} gate is NOT "
-          f"installed until this is resolved manually.", file=sys.stderr)
+          f"installed, and " + _foreign_slot_remedy(hook, foreign_tool) + ".",
+          file=sys.stderr)
 
 
 def _match_ci(root: Path) -> bool:
@@ -529,9 +598,15 @@ def install(root: Path, interpreter: Path) -> None:
     if shim_path.exists() and not _is_aramid_shim(shim_path):
         foreign_tool = _foreign_managed_tool(shim_path)
         if foreign_tool is not None:
+            current = render_triage_shim(interpreter)
             relocated = _find_chained_aramid_shim(hdir, hook)
-            state = _refresh_relocated_shim(
-                relocated, hook, render_triage_shim(interpreter))
+            if relocated is None:
+                # Installed after that tool (FN-57): put the shim where its
+                # trampoline runs it, if it names one place.
+                relocated = _install_in_chain(shim_path, hook, current)
+                state = "skipped" if relocated is None else "installed"
+            else:
+                state = _refresh_relocated_shim(relocated, hook, current)
             _warn_foreign_managed_conflict(
                 hook, foreign_tool, relocated, state)
             skip_triage = True
@@ -579,6 +654,15 @@ def uninstall(root: Path) -> None:
     for hook in [g.value for g in GATES] + [TRIAGE_HOOK]:
         shim_path = hdir / hook
         chained_path = hdir / f"{hook}{CHAINED_SUFFIX}"
+
+        # aramid's own shim where another tool's trampoline runs it -- put
+        # there by `install()` (FN-57) or relocated there by that tool -- is
+        # aramid's to take away: left, it would keep running after a clean
+        # uninstall. A file there without aramid's marker is left alone.
+        for sibling in sorted(hdir.iterdir()):
+            if (sibling.name.startswith(f"{hook}.") and sibling != chained_path
+                    and sibling.is_file() and _is_aramid_shim(sibling)):
+                sibling.unlink()
 
         was_ours = _is_aramid_shim(shim_path)
         if was_ours:

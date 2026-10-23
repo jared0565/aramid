@@ -167,6 +167,39 @@ def test_chained_foreign_pre_commit_hook_runs_through_real_git_dispatch(tmp_path
     assert marker.exists(), "chained foreign hook must actually run through real git dispatch"
 
 
+def test_a_triage_shim_put_in_a_foreign_chain_runs_through_real_git_dispatch(tmp_path):
+    # FN-57 (channel round 322): another tool's managed post-commit trampoline
+    # took the slot first and runs the sibling it names. install() puts
+    # aramid's triage shim there, and a real commit reaches it once.
+    r = _repo(tmp_path)
+    hdir = r / ".git" / "hooks"
+    hdir.mkdir(exist_ok=True)
+    trampoline = (b'#!/bin/sh\n# >>> graphite managed >>>\n'
+                  b'DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)\n'
+                  b'CHAINED="$DIR/post-commit.local"\n'
+                  b'if [ -f "$CHAINED" ]; then\n    "$CHAINED" "$@" || true\nfi\n'
+                  b'# <<< graphite managed <<<\nexit 0\n')
+    slot = hdir / "post-commit"
+    slot.write_bytes(trampoline)
+    slot.chmod(slot.stat().st_mode | 0o111)
+    marker = tmp_path / "triage-ran.txt"
+    engine = tmp_path / "recording_engine.sh"
+    engine.write_bytes(f'#!/bin/sh\necho "$@" >> "{hooks.win_sh_path(marker)}"\n'.encode())
+    engine.chmod(engine.stat().st_mode | 0o111)
+
+    hooks.install(r, engine)
+    assert slot.read_bytes() == trampoline
+    assert (hdir / "post-commit.local").exists()
+
+    (r / "a.txt").write_text("hi\n")
+    _git(r, "add", "a.txt")
+    cp = _git(r, "commit", "-m", "c1")
+    assert cp.returncode == 0, cp.stderr
+    runs = marker.read_text().splitlines() if marker.exists() else []
+    triage = [line for line in runs if "-m aramid triage HEAD" in line]
+    assert len(triage) == 1, runs
+
+
 def test_chained_foreign_hook_that_blocks_stops_the_commit(tmp_path):
     r = _repo(tmp_path)
     hdir = r / ".git" / "hooks"

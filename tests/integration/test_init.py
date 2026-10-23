@@ -448,9 +448,10 @@ def test_scan_history_drops_findings_under_ignored_graphite_paths(tmp_path, monk
 # Before this fix, `_validate_hook_shim` looped only `for gate in hooks.GATES`
 # (pre-commit, pre-push) -- so a post-commit shim that silently failed to
 # write would still let `init` print "hooks armed: yes". This test drives
-# `_validate_hook_shim` directly (the `cmd_init` return code doesn't depend
-# on `shim_ok` at all -- it only feeds the printed summary) so it actually
-# exercises the change: run a real `cmd_init`, confirm the post-commit shim
+# `_validate_hook_shim` directly (when this was written the `cmd_init` return
+# code did not depend on `shim_ok`; since FN-57 an unarmed init exits 3, which
+# `test_init_that_cannot_arm_the_hooks_says_so_and_exits_3` pins) so it
+# exercises the check itself: run a real `cmd_init`, confirm the post-commit shim
 # it wrote exists and carries aramid's marker, then delete it and confirm
 # `_validate_hook_shim` now reports the repo as NOT fully armed.
 
@@ -544,6 +545,49 @@ def test_validate_hook_shim_still_fails_when_foreign_slot_has_no_relocation(
 
     assert hooks._find_chained_aramid_shim(hdir, hooks.TRIAGE_HOOK) is None
     assert init._validate_hook_shim(r) is False
+
+
+# --- FN-57 (channel round 322): another tool's hooks installed FIRST --------
+#
+# graphite's post-commit trampoline (this repo's own .githooks/post-commit),
+# in the slot before aramid arrives. It runs `post-commit.local` beside it.
+_TRAMPOLINE = (b'#!/bin/sh\n# >>> graphite managed >>>\n'
+               b'DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)\n'
+               b'CHAINED="$DIR/post-commit.local"\n'
+               b'if [ -f "$CHAINED" ]; then\n    "$CHAINED" "$@" || true\nfi\n'
+               b'# <<< graphite managed <<<\nexit 0\n')
+
+
+def test_init_after_a_tool_whose_trampoline_runs_a_sibling_arms_the_triage(
+        tmp_path, monkeypatch):
+    monkeypatch.setattr(doctor, "probe_toolchain", _fake_present)
+    r = _repo(tmp_path)
+    hdir = hooks.hooks_dir(r)
+    hdir.mkdir(parents=True, exist_ok=True)
+    (hdir / hooks.TRIAGE_HOOK).write_bytes(_TRAMPOLINE)
+
+    assert init.cmd_init(r) == 0
+
+    assert (hdir / hooks.TRIAGE_HOOK).read_bytes() == _TRAMPOLINE
+    assert hooks._is_aramid_shim(hdir / f"{hooks.TRIAGE_HOOK}.local")
+    assert init._validate_hook_shim(r) is True
+    assert doctor.probe_relocated_shims(r) == []
+
+
+def test_init_that_cannot_arm_the_hooks_says_so_and_exits_3(tmp_path, monkeypatch, capsys):
+    # Round 322: init printed `hooks armed: NO` and exited 0, so nothing that
+    # ran it could tell. The trampoline here names no sibling it runs.
+    monkeypatch.setattr(doctor, "probe_toolchain", _fake_present)
+    r = _repo(tmp_path)
+    hdir = hooks.hooks_dir(r)
+    hdir.mkdir(parents=True, exist_ok=True)
+    (hdir / hooks.TRIAGE_HOOK).write_bytes(b"#!/bin/sh\n# >>> graphite managed >>>\nexit 0\n")
+
+    assert init.cmd_init(r) == 3
+
+    captured = capsys.readouterr()
+    assert "  hooks armed:       NO -- see warning above" in captured.out
+    assert "re-run 'graphite's installer" in captured.err
 
 
 def test_init_installs_hooks_on_a_configured_but_unenforced_repo(tmp_path, monkeypatch):

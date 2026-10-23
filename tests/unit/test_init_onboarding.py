@@ -392,9 +392,11 @@ def test_init_one_re_run_leaves_toml_and_baseline_alone(tmp_path, capsys, onboar
 def test_init_one_reports_unarmed_hooks_in_the_summary(tmp_path, capsys, onboard, monkeypatch):
     r = _repo(tmp_path)
     monkeypatch.setattr(init, "_validate_hook_shim", lambda root: False)
-    assert init._init_one(r) == 0
-    out, _ = capsys.readouterr()
+    # 3 since FN-57: exit 0 here hid the gap from whatever ran init (round 322)
+    assert init._init_one(r) == 3
+    out, err = capsys.readouterr()
     assert "  hooks armed:       NO -- see warning above\n" in out
+    assert "aramid: init: done, but the hooks are NOT armed -- see the warning above.\n" in err
 
 
 # ------------------------------------------------------------- discovery --

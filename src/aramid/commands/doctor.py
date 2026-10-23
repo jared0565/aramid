@@ -1069,9 +1069,16 @@ def probe_relocated_shims(root: Path) -> list[str]:
                 continue
             relocated = hooks_mod._find_chained_aramid_shim(hdir, hook)
             if relocated is None:
-                lines.append(f"hooks: {hook} is managed by '{tool}' and no relocated aramid "
-                             f"shim survives beside it in {hdir} -- aramid's {hook} gate is "
-                             f"NOT running here; run `aramid init .`")
+                # `aramid init .` is the remedy only where it can put the shim
+                # where the trampoline runs it (FN-57); round 322 measured it
+                # named for a state it could not change.
+                gap = (f"hooks: {hook} is managed by '{tool}' and no relocated aramid "
+                       f"shim survives beside it in {hdir} -- aramid's {hook} gate is "
+                       f"NOT running here")
+                if hooks_mod._chain_target(slot, hook) is not None:
+                    lines.append(gap + "; run `aramid init .`")
+                else:
+                    lines.append(gap + ", and " + hooks_mod._foreign_slot_remedy(hook, tool))
                 continue
             current = relocated.read_bytes()
             interp_sh = _baked_interpreter(current)

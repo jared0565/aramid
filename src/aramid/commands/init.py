@@ -603,6 +603,12 @@ def _init_one(target: Path) -> int:
     print(f"  hooks armed:       {'yes' if shim_ok else 'NO -- see warning above'}")
     print(f"  baseline findings: {baseline_count}")
     print(f"  historical secrets:{historical_count}")
+    if not shim_ok:
+        # Exit 0 here hid the gap from anything that ran init (round 322):
+        # 3, as for the other refusal to arm hooks above.
+        print("aramid: init: done, but the hooks are NOT armed -- see the warning "
+              "above.", file=sys.stderr)
+        return 3
     print("aramid: init: done. Run `aramid status` any time to see open findings.")
 
     return 0

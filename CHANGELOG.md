@@ -193,6 +193,22 @@ to publish a tag that disagrees with it.
   `aramid check --gate pre-push --all` from it by hand. Running the js gates
   in such folders from the hooks is not part of this change. `aramid init
   --help` now describes `--discover`. Reported by a consumer on 0.20.8.
+- **Installed after a tool that already manages `post-commit`, such as
+  graphite, aramid's post-commit triage is installed (FN-57).** aramid
+  refuses to chain another tool's managed hook, which would run both tools'
+  gates twice, so with graphite installed first its triage was installed
+  nowhere. `aramid init` printed `hooks armed: NO` and exited 0, and `aramid
+  doctor` said to run `aramid init .`, which changed nothing. When the other
+  tool's hook names a file beside it that it runs (graphite's runs
+  `post-commit.local`), aramid now puts its triage there, so the end state is
+  the same whichever tool came first; `aramid uninstall` removes it again.
+  A pre-commit or pre-push gate is never put in another tool's chain: a
+  trampoline may run that file and ignore its exit, as graphite's runs
+  `post-commit.local` (`|| true`), and a gate there would never block.
+  When aramid cannot install a hook, `init` exits 3, and `doctor`
+  names what does work: for post-commit, install aramid before the other
+  tool (move its hook aside, run `aramid init .`, then re-run its
+  installer). Reported by a consumer on 0.20.9 (channel round 322).
 
 ## [0.20.9] — 2026-10-12
 

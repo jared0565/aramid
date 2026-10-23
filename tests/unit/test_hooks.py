@@ -265,6 +265,23 @@ def test_uninstall_does_not_clobber_live_foreign_hook_that_replaced_the_shim(tmp
     assert "foreign hook" in capsys.readouterr().err
 
 
+def test_uninstall_restores_the_chained_original_into_a_slot_left_empty(tmp_path):
+    # The docstring's "(or absent)": aramid's shim deleted by hand, the backup
+    # still there. Nothing live holds the slot, so the original goes back.
+    r = _repo(tmp_path)
+    hdir = r / ".git" / "hooks"
+    hdir.mkdir(exist_ok=True)
+    original = b"#!/bin/sh\necho original-foreign-hook\n"
+    (hdir / "pre-commit").write_bytes(original)
+    install(r, Path("C:/py/python.exe"))
+    (hdir / "pre-commit").unlink()
+
+    uninstall(r)
+
+    assert (hdir / "pre-commit").read_bytes() == original
+    assert not (hdir / "pre-commit.aramid-chained").exists()
+
+
 # --- foreign-MANAGED hook (another tool's own trampoline) ------------------
 #
 # A hook already carrying SOME tool's `# >>> <tool> managed >>>` marker is not
@@ -367,6 +384,138 @@ def test_install_softens_warning_for_post_commit_when_local_shim_survives(tmp_pa
     assert "graphite" in err
     assert "resolve manually" not in err.lower() and "resolved manually" not in err.lower()
     assert "post-commit.local" in err
+
+
+# FN-57 (channel round 322; the operator's decision of 2026-10-23, "install at
+# the chain slot"). Installed AFTER a tool whose managed post-commit trampoline
+# runs a sibling it names, aramid wrote no shim anywhere, and `aramid init .`,
+# the remedy doctor named, could not change that. graphite's trampoline, as
+# this repo's own .githooks/post-commit holds it:
+GRAPHITE_POST_COMMIT = (
+    b'#!/bin/sh\n# >>> graphite managed >>>\n'
+    b'DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)\n'
+    b'CHAINED="$DIR/post-commit.local"\n'
+    b'if [ -f "$CHAINED" ]; then\n    "$CHAINED" "$@" || true\nfi\n'
+    b'INTERP="/c/Python314/python.exe"\n'
+    b'if [ -x "$INTERP" ]; then\n'
+    b'    "$INTERP" -P -m graphite.hook_entry >/dev/null 2>&1 || true\n'
+    b'elif command -v py >/dev/null 2>&1; then\n'
+    b'    py -3 -P -m graphite.hook_entry >/dev/null 2>&1 || true\nfi\n'
+    b'# <<< graphite managed <<<\nexit 0\n')
+
+
+def _siblings(hdir, hook):
+    return sorted(p.name for p in hdir.iterdir()
+                  if p.name.startswith(hook + ".") and not p.name.endswith(".sample"))
+
+
+def test_install_puts_its_triage_shim_where_a_foreign_trampoline_runs_it(tmp_path, capsys):
+    r = _repo(tmp_path)
+    hdir = r / ".git" / "hooks"
+    hdir.mkdir(exist_ok=True)
+    (hdir / "post-commit").write_bytes(GRAPHITE_POST_COMMIT)
+    interp = Path("C:/py/python.exe")
+
+    install(r, interp)
+
+    assert (hdir / "post-commit").read_bytes() == GRAPHITE_POST_COMMIT
+    assert (hdir / "post-commit.local").read_bytes() == render_triage_shim(interp)
+    err = capsys.readouterr().err
+    assert "'graphite'" in err and "post-commit.local" in err and "INSTALLED" in err
+    assert "manually" not in err and "NOT installed" not in err
+    # a second install finds it as aramid's own relocated shim, and current
+    install(r, interp)
+    assert _siblings(hdir, "post-commit") == ["post-commit.local"]
+    assert "already current" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize("trampoline,there", [
+    (b"#!/bin/sh\n# >>> graphite managed >>>\necho gt\n# <<< graphite managed <<<\n", None),
+    (GRAPHITE_POST_COMMIT.replace(b'CHAINED="$DIR/post-commit.local"',
+                                  b'CHAINED="$DIR/post-commit.local"\nMORE="$DIR/post-commit.d"'),
+     None),
+    (GRAPHITE_POST_COMMIT.replace(b"post-commit.local", b"post-commit.aramid-chained"), None),
+    (GRAPHITE_POST_COMMIT, b"#!/bin/sh\necho somebody else's\n"),
+], ids=["names-none", "names-two", "names-what-a-shim-execs", "a-foreign-file-is-there"])
+def test_install_writes_no_triage_shim_unless_one_free_sibling_is_named(
+        tmp_path, capsys, trampoline, there):
+    # A shim in the chained name would exec itself; a file already there is
+    # not aramid's to replace; with none or two named, a guess could put the
+    # shim where nothing runs it.
+    r = _repo(tmp_path)
+    hdir = r / ".git" / "hooks"
+    hdir.mkdir(exist_ok=True)
+    (hdir / "post-commit").write_bytes(trampoline)
+    if there is not None:
+        (hdir / "post-commit.local").write_bytes(there)
+
+    install(r, Path("C:/py/python.exe"))
+
+    assert (hdir / "post-commit").read_bytes() == trampoline
+    assert _siblings(hdir, "post-commit") == ([] if there is None else ["post-commit.local"])
+    if there is not None:
+        assert (hdir / "post-commit.local").read_bytes() == there
+    assert "NOT installed" in capsys.readouterr().err
+
+
+def test_install_never_puts_a_gate_where_a_foreign_trampoline_runs_it(tmp_path, capsys):
+    # graphite runs its sibling `|| true`: a pre-commit gate there could never
+    # block, and doctor would call it armed. Only the triage hook, which
+    # swallows its own exit anyway, goes into another tool's chain.
+    r = _repo(tmp_path)
+    hdir = r / ".git" / "hooks"
+    hdir.mkdir(exist_ok=True)
+    trampoline = GRAPHITE_POST_COMMIT.replace(b"post-commit", b"pre-commit")
+    (hdir / "pre-commit").write_bytes(trampoline)
+
+    install(r, Path("C:/py/python.exe"))
+
+    assert (hdir / "pre-commit").read_bytes() == trampoline
+    assert _siblings(hdir, "pre-commit") == []
+    err = capsys.readouterr().err
+    assert "no aramid command can install it while 'graphite' holds the slot" in err
+
+
+def test_a_triage_shim_that_cannot_go_in_the_chain_names_a_remedy_that_works(tmp_path, capsys):
+    # The measured order that works (round 322's order B): aramid first, then
+    # the other tool, which relocates aramid's shim beside its own and runs it.
+    r = _repo(tmp_path)
+    hdir = r / ".git" / "hooks"
+    hdir.mkdir(exist_ok=True)
+    (hdir / "post-commit").write_bytes(b"#!/bin/sh\n# >>> graphite managed >>>\nexit 0\n")
+
+    install(r, Path("C:/py/python.exe"))
+
+    err = capsys.readouterr().err
+    assert ("move 'graphite's post-commit aside, run `aramid init .`, then re-run "
+            "'graphite's installer") in err
+    assert "resolved manually" not in err
+
+
+def test_uninstall_removes_the_shim_it_put_where_a_foreign_trampoline_runs_it(tmp_path):
+    r = _repo(tmp_path)
+    hdir = r / ".git" / "hooks"
+    hdir.mkdir(exist_ok=True)
+    (hdir / "post-commit").write_bytes(GRAPHITE_POST_COMMIT)
+    install(r, Path("C:/py/python.exe"))
+    assert (hdir / "post-commit.local").exists()
+
+    uninstall(r)
+
+    assert (hdir / "post-commit").read_bytes() == GRAPHITE_POST_COMMIT
+    assert _siblings(hdir, "post-commit") == []
+
+
+def test_uninstall_leaves_a_foreign_file_in_the_chain_alone(tmp_path):
+    r = _repo(tmp_path)
+    hdir = r / ".git" / "hooks"
+    hdir.mkdir(exist_ok=True)
+    (hdir / "post-commit").write_bytes(GRAPHITE_POST_COMMIT)
+    (hdir / "post-commit.local").write_bytes(b"#!/bin/sh\necho somebody else's\n")
+
+    uninstall(r)
+
+    assert (hdir / "post-commit.local").read_bytes() == b"#!/bin/sh\necho somebody else's\n"
 
 
 def test_install_still_chains_a_genuinely_unmanaged_foreign_hook(tmp_path):
