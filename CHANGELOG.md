@@ -142,7 +142,9 @@ to publish a tag that disagrees with it.
   are read as PowerShell builds them (`& "St`u{61}rt-Process" git 'commit
   -n'`, `saps "g`u{69}t" 'commit -n'`), and so is a call from a tool that
   names no shell. Not read: a program or an argument that comes from a
-  variable or an expression (`Start-Process git $a`). A call that starts
+  variable or an expression (`Start-Process git $a`), or a parameter
+  written with an en dash, which PowerShell takes for its dash
+  (`Start-Process –ArgumentList 'commit -n' git` commits). A call that starts
   nothing, such as one with a parameter PowerShell does not know, or
   `-WhatIf:$true`, is read as if it ran.
 
@@ -202,9 +204,11 @@ to publish a tag that disagrees with it.
   gates twice, so with graphite installed first its triage was installed
   nowhere. `aramid init` printed `hooks armed: NO` and exited 0, and `aramid
   doctor` said to run `aramid init .`, which changed nothing. When the other
-  tool's hook names a file beside it that it runs (graphite's runs
-  `post-commit.local`), aramid now puts its triage there, so the end state is
-  the same whichever tool came first; `aramid uninstall` removes it again.
+  tool's hook names exactly one file beside it (graphite's names
+  `post-commit.local`, and runs it), aramid now puts its triage there, so the
+  end state is the same whichever tool came first; `aramid uninstall` removes
+  it again. aramid takes that name from the hook's text and does not check
+  that the hook runs it.
   A pre-commit or pre-push gate is never put in another tool's chain: a
   trampoline may run that file and ignore its exit, as graphite's runs
   `post-commit.local` (`|| true`), and a gate there would never block.
