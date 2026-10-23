@@ -1302,6 +1302,553 @@
      "a:b"
     ]
    ]
+  },
+  {
+   "command": "Start-Process bash '-c git\\ commit -n' -NoNewWindow -Wait",
+   "status": "ran",
+   "argv": []
+  },
+  {
+   "command": "Start-Process bash '-c \"git commit -m \\\"a b\\\" -n\"' -NoNewWindow -Wait",
+   "status": "ran",
+   "argv": [
+    [
+     "git",
+     "commit",
+     "-m",
+     "a b",
+     "-n"
+    ]
+   ]
+  },
+  {
+   "command": "Start-Process bash '-c \\\"git commit -n\\\"' -NoNewWindow -Wait",
+   "status": "ran",
+   "argv": []
+  },
+  {
+   "command": "Start-Process bash '-c \"git commit -n\" x\\' -NoNewWindow -Wait",
+   "status": "ran",
+   "argv": [
+    [
+     "git",
+     "commit",
+     "-n"
+    ]
+   ]
+  },
+  {
+   "command": "Start-Process bash '\\-c \"git commit -n\"' -NoNewWindow -Wait",
+   "status": "ran",
+   "argv": []
+  },
+  {
+   "command": "Start-Process bash '-c \"git commit -m C:\\x\\ -n\"' -NoNewWindow -Wait",
+   "status": "ran",
+   "argv": [
+    [
+     "git",
+     "commit",
+     "-m",
+     "C:x -n"
+    ]
+   ]
+  },
+  {
+   "command": "Start-Process bash '-c \"git commit -m x\\\\\" -n\"' -NoNewWindow -Wait",
+   "status": "ran",
+   "argv": [
+    [
+     "git",
+     "commit",
+     "-m",
+     "x\\"
+    ]
+   ]
+  },
+  {
+   "command": "Start-Process bash '-c ''git commit -m \"a b\" -n''' -NoNewWindow -Wait",
+   "status": "ran",
+   "argv": [
+    [
+     "git",
+     "commit",
+     "-m",
+     "a b",
+     "-n"
+    ]
+   ]
+  },
+  {
+   "command": "Start-Process bash '-c \"git commit -m it''s -n\"' -NoNewWindow -Wait",
+   "status": "ran",
+   "argv": []
+  },
+  {
+   "command": "Start-Process bash '-c git commit -n' -NoNewWindow -Wait",
+   "status": "ran",
+   "argv": [
+    [
+     "git"
+    ]
+   ]
+  },
+  {
+   "command": "Start-Process bash '-c ''git commit -n'' extra' -NoNewWindow -Wait",
+   "status": "ran",
+   "argv": [
+    [
+     "git",
+     "commit",
+     "-n"
+    ]
+   ]
+  },
+  {
+   "command": "Start-Process bash '-c \"git commit \\\"-n\\\"\"' -NoNewWindow -Wait",
+   "status": "ran",
+   "argv": [
+    [
+     "git",
+     "commit",
+     "-n"
+    ]
+   ]
+  },
+  {
+   "command": "Start-Process bash '-o it''s -c \"git commit -n\"' -NoNewWindow -Wait",
+   "status": "ran",
+   "argv": []
+  },
+  {
+   "command": "Start-Process bash '-c ''git commit'' -n' -NoNewWindow -Wait",
+   "status": "ran",
+   "argv": [
+    [
+     "git",
+     "commit"
+    ]
+   ]
+  },
+  {
+   "command": "Start-Process bash '-c \"git commit\\\" -n\"' -NoNewWindow -Wait",
+   "status": "ran",
+   "argv": []
+  },
+  {
+   "command": "Start-Process bash '-c ''git commit -m it\\''s -n''' -NoNewWindow -Wait",
+   "status": "ran",
+   "argv": []
+  },
+  {
+   "command": "Start-Process bash '-c \\''git commit -n ''' -NoNewWindow -Wait",
+   "status": "ran",
+   "argv": [
+    [
+     "git",
+     "commit",
+     "-n"
+    ]
+   ]
+  },
+  {
+   "command": "Start-Process bash '-c \\''git commit -n''' -NoNewWindow -Wait",
+   "status": "ran",
+   "argv": [
+    [
+     "git",
+     "commit",
+     "-n"
+    ]
+   ]
+  },
+  {
+   "command": "Start-Process bash '-c \\\"git commit -n \"' -NoNewWindow -Wait",
+   "status": "ran",
+   "argv": [
+    [
+     "git",
+     "commit",
+     "-n"
+    ]
+   ]
+  },
+  {
+   "command": "Start-Process bash '-c \\\"git commit -n\"' -NoNewWindow -Wait",
+   "status": "ran",
+   "argv": [
+    [
+     "git",
+     "commit",
+     "-n"
+    ]
+   ]
+  },
+  {
+   "command": "Start-Process bash '-c git\\ commit\\ -n' -NoNewWindow -Wait",
+   "status": "ran",
+   "argv": []
+  },
+  {
+   "command": "Start-Process bash '-c x\\''; git commit -n #''' -NoNewWindow -Wait",
+   "status": "ran",
+   "argv": []
+  },
+  {
+   "command": "Start-Process bash '-c ''git commit \"$@\"'' x a\\b' -NoNewWindow -Wait",
+   "status": "ran",
+   "argv": [
+    [
+     "git",
+     "commit",
+     "a\\b"
+    ]
+   ]
+  },
+  {
+   "command": "Start-Process bash '-c ''git commit \"$@\"'' x a\\\"b c\"' -NoNewWindow -Wait",
+   "status": "ran",
+   "argv": [
+    [
+     "git",
+     "commit",
+     "a\\b c"
+    ]
+   ]
+  },
+  {
+   "command": "Start-Process bash '-c ''git commit \"$@\"'' x a\\x\"b\"' -NoNewWindow -Wait",
+   "status": "ran",
+   "argv": [
+    [
+     "git",
+     "commit",
+     "axb"
+    ]
+   ]
+  },
+  {
+   "command": "Start-Process bash '-c ''git commit \"$@\"'' x \"a\\x\"' -NoNewWindow -Wait",
+   "status": "ran",
+   "argv": [
+    [
+     "git",
+     "commit",
+     "a\\x"
+    ]
+   ]
+  },
+  {
+   "command": "Start-Process bash '-c ''git commit \"$@\"'' x \"a\\\\b\"' -NoNewWindow -Wait",
+   "status": "ran",
+   "argv": [
+    [
+     "git",
+     "commit",
+     "a\\b"
+    ]
+   ]
+  },
+  {
+   "command": "Start-Process bash '-c ''git commit \"$@\"'' x \"a\\\"b\"' -NoNewWindow -Wait",
+   "status": "ran",
+   "argv": [
+    [
+     "git",
+     "commit",
+     "a\"b"
+    ]
+   ]
+  },
+  {
+   "command": "Start-Process bash '-c ''git commit \"$@\"'' x \"a\"\"b\"' -NoNewWindow -Wait",
+   "status": "ran",
+   "argv": [
+    [
+     "git",
+     "commit",
+     "a\"b"
+    ]
+   ]
+  },
+  {
+   "command": "Start-Process bash '-c ''git commit \"$@\"'' x ''a\\\\b''' -NoNewWindow -Wait",
+   "status": "ran",
+   "argv": [
+    [
+     "git",
+     "commit",
+     "a\\b"
+    ]
+   ]
+  },
+  {
+   "command": "Start-Process bash '-c ''git commit \"$@\"'' x ''a\\''b''' -NoNewWindow -Wait",
+   "status": "ran",
+   "argv": [
+    [
+     "git",
+     "commit",
+     "a'b"
+    ]
+   ]
+  },
+  {
+   "command": "Start-Process bash '-c ''git commit \"$@\"'' x ''a\\''b c''' -NoNewWindow -Wait",
+   "status": "ran",
+   "argv": [
+    [
+     "git",
+     "commit",
+     "a'b",
+     "c"
+    ]
+   ]
+  },
+  {
+   "command": "Start-Process bash '-c ''git commit \"$@\"'' x \" a\"' -NoNewWindow -Wait",
+   "status": "ran",
+   "argv": [
+    [
+     "git",
+     "commit",
+     " a"
+    ]
+   ]
+  },
+  {
+   "command": "Start-Process bash '-c ''git commit \"$@\"'' x C:\\x\"y\"' -NoNewWindow -Wait",
+   "status": "ran",
+   "argv": [
+    [
+     "git",
+     "commit",
+     "C:\\xy"
+    ]
+   ]
+  },
+  {
+   "command": "Start-Process bash '-c ''git commit \"$@\"'' x a\"b\"\\ ' -NoNewWindow -Wait",
+   "status": "ran",
+   "argv": [
+    [
+     "git",
+     "commit",
+     "ab\\"
+    ]
+   ]
+  },
+  {
+   "command": "Start-Process bash '-c ''git commit \"$@\"'' x \"a b' -NoNewWindow -Wait",
+   "status": "ran",
+   "argv": [
+    [
+     "git",
+     "commit",
+     "a b"
+    ]
+   ]
+  },
+  {
+   "command": "Start-Process bash '-c ''git commit \"$@\"'' x a\\ b' -NoNewWindow -Wait",
+   "status": "ran",
+   "argv": [
+    [
+     "git",
+     "commit",
+     "a\\",
+     "b"
+    ]
+   ]
+  },
+  {
+   "command": "Start-Process bash '-c ''git commit \"$@\"'' x \"a\\\\\"b c\"' -NoNewWindow -Wait",
+   "status": "ran",
+   "argv": [
+    [
+     "git",
+     "commit",
+     "a\\b",
+     "c"
+    ]
+   ]
+  },
+  {
+   "command": "Start-Process bash '-c ''git commit \"$@\"'' x a\\x(' -NoNewWindow -Wait",
+   "status": "ran",
+   "argv": [
+    [
+     "git",
+     "commit",
+     "ax("
+    ]
+   ]
+  },
+  {
+   "command": "Start-Process bash '-c ''git commit \"$@\"'' x a\\x)' -NoNewWindow -Wait",
+   "status": "ran",
+   "argv": [
+    [
+     "git",
+     "commit",
+     "ax)"
+    ]
+   ]
+  },
+  {
+   "command": "Start-Process bash '-c ''git commit \"$@\"'' x a\\x{' -NoNewWindow -Wait",
+   "status": "ran",
+   "argv": [
+    [
+     "git",
+     "commit",
+     "ax"
+    ]
+   ]
+  },
+  {
+   "command": "Start-Process bash '-c ''git commit \"$@\"'' x a\\x}' -NoNewWindow -Wait",
+   "status": "ran",
+   "argv": [
+    [
+     "git",
+     "commit",
+     "ax}"
+    ]
+   ]
+  },
+  {
+   "command": "Start-Process bash '-c ''git commit \"$@\"'' x a\\x?' -NoNewWindow -Wait",
+   "status": "ran",
+   "argv": [
+    [
+     "git",
+     "commit",
+     "ax?"
+    ]
+   ]
+  },
+  {
+   "command": "Start-Process bash '-c ''git commit \"$@\"'' x a\\x*' -NoNewWindow -Wait",
+   "status": "ran",
+   "argv": [
+    [
+     "git",
+     "commit",
+     "ax*"
+    ]
+   ]
+  },
+  {
+   "command": "Start-Process bash '-c ''git commit \"$@\"'' x a\\x[' -NoNewWindow -Wait",
+   "status": "ran",
+   "argv": [
+    [
+     "git",
+     "commit",
+     "ax["
+    ]
+   ]
+  },
+  {
+   "command": "Start-Process bash '-c ''git commit \"$@\"'' x ~a\\x' -NoNewWindow -Wait",
+   "status": "ran",
+   "argv": [
+    [
+     "git",
+     "commit",
+     "~ax"
+    ]
+   ]
+  },
+  {
+   "command": "Start-Process bash '-c ''git commit \"$@\"'' x a\\\"\"b' -NoNewWindow -Wait",
+   "status": "ran",
+   "argv": [
+    [
+     "git",
+     "commit",
+     "ab"
+    ]
+   ]
+  },
+  {
+   "command": "Start-Process bash '-c ''git commit \"$@\"'' x a\\''''b' -NoNewWindow -Wait",
+   "status": "ran",
+   "argv": [
+    [
+     "git",
+     "commit",
+     "ab"
+    ]
+   ]
+  },
+  {
+   "command": "Start-Process bash '-c ''git commit \"$@\"'' x C:\"a\\\\b\"' -NoNewWindow -Wait",
+   "status": "ran",
+   "argv": [
+    [
+     "git",
+     "commit",
+     "C:a\\b"
+    ]
+   ]
+  },
+  {
+   "command": "Start-Process bash '-c ''git commit \"$@\"'' x C:\"a\\\"b c\"' -NoNewWindow -Wait",
+   "status": "ran",
+   "argv": [
+    [
+     "git",
+     "commit",
+     "C:a\"b c"
+    ]
+   ]
+  },
+  {
+   "command": "Start-Process bash '-c ''git commit \"$@\"'' x \"a\\\\\\\"b\"' -NoNewWindow -Wait",
+   "status": "ran",
+   "argv": [
+    [
+     "git",
+     "commit",
+     "a\\\"b"
+    ]
+   ]
+  },
+  {
+   "command": "Start-Process bash '-c ''git commit \"$@\"'' x ''a\\\\\\''b''' -NoNewWindow -Wait",
+   "status": "ran",
+   "argv": [
+    [
+     "git",
+     "commit",
+     "a\\'b"
+    ]
+   ]
+  },
+  {
+   "command": "Start-Process bash '-c ''git commit \"$@\"'' x a\tb' -NoNewWindow -Wait",
+   "status": "ran",
+   "argv": [
+    [
+     "git",
+     "commit",
+     "a",
+     "b"
+    ]
+   ]
+  },
+  {
+   "command": "Start-Process bash '-c ''git commit \"$@\"'' x \"a\"\\\"b c\"' -NoNewWindow -Wait",
+   "status": "ran",
+   "argv": [
+    [
+     "git",
+     "commit",
+     "a\\b c"
+    ]
+   ]
   }
  ]
 }

@@ -61,6 +61,8 @@ NOT_SEEN = {
 ANSWERED = {}
 _REFUSED = "PowerShell refuses the call and starts nothing; read as if it ran"
 _ANY_WORD = "a word named git starts a scan, as it does in any command"
+_POSIX_TOO = ("a started POSIX shell's line is read the POSIX way as well as Git Bash's "
+              "runtime makes it, and Git Bash keeps a backslash outside quotes")
 OVER = {
     "Start-Process git 'commit -n' -W -NoNewWindow": _REFUSED + " (`-W` names more than one)",
     "Start-Process git 'commit -n' -Bogus" + W: _REFUSED + " (no such parameter)",
@@ -76,6 +78,11 @@ OVER = {
     "Start-Process git 'commit' -n -Wait": _ANY_WORD + "; the `-n` is Start-Process's -NoNewWindow",
     "Start-Process sh -ArgumentList '-c','git commit -n'" + W:
         _ANY_WORD + " (sh runs `git` alone: the words after its string are $0 and $1)",
+    "Start-Process bash '-c git commit -n'" + W: _ANY_WORD + " (bash runs `git` alone)",
+    "Start-Process bash '-c x\\''; git commit -n #'''" + W:
+        _ANY_WORD + " (in the words the C runtime makes of the line)",
+    "Start-Process bash '-c git\\ commit\\ -n'" + W: _POSIX_TOO + " (`\\ ` is a blank there)",
+    "Start-Process bash '\\-c \"git commit -n\"'" + W: _POSIX_TOO + " (`\\-c` is `-c` there)",
 }
 
 
@@ -129,6 +136,30 @@ def test_what_reached_git_as_no_bypass_is_answered_only_where_listed(told):
     over = {command for command, (_, argvs) in RECORD.items()
             if not _judged(argvs) and _answer(command, told) is not None}
     assert over == set(OVER)
+
+
+_PROBE = "Start-Process bash '-c ''git commit \"$@\"'' x "
+NOT_MODELLED = {
+    _PROBE + "a\\x{'" + W: "a brace outside quotes, which the runtime expands: `{` alone vanished",
+}
+
+
+def test_git_bash_is_read_as_its_runtime_makes_its_words():
+    # The record's probes start bash with `-c 'git commit "$@"' x TEST`: git is
+    # handed the words Git Bash's runtime (msys) made of TEST, bash's own
+    # reading of a script left out of it. Each probe pins one rule of
+    # `_msys_argv`; the ones it does not model are listed, and still differ.
+    probes = {command: argvs for command, (_, argvs) in RECORD.items()
+              if command.startswith(_PROBE)}
+    assert len(probes) >= 30 and set(NOT_MODELLED) <= set(probes)
+    wrong = {}
+    for command, argvs in probes.items():
+        (program, line), = started(command)
+        words = ab._msys_argv(line)
+        assert program == "bash" and words[:3] == ["-c", 'git commit "$@"', "x"], command
+        if (words[3:] == argvs[0][2:]) == (command in NOT_MODELLED):
+            wrong[command] = (words[3:], argvs[0][2:])
+    assert wrong == {}
 
 
 # ---- what the record does not hold ----

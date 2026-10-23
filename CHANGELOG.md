@@ -135,7 +135,10 @@ to publish a tag that disagrees with it.
   and quotes none of them, and the program reads that one line by its own
   rules, git by the C runtime's. The hook now reads the line so, and a
   shell started this way (`Start-Process cmd '/c git commit -n'`) as one
-  handed a string. Not read: a program or an argument that comes from a
+  handed a string. A POSIX shell's line is read as Git Bash's runtime makes
+  its words, measured word by word (a backslash outside quotes stays, and a
+  quote after it still opens: `Start-Process bash '-c \''git commit -n'''`
+  commits), and the POSIX way as well. Not read: a program or an argument that comes from a
   variable or an expression (`Start-Process git $a`). A call that starts
   nothing, such as one with a parameter PowerShell does not know, or
   `-WhatIf:$true`, is read as if it ran.

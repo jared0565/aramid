@@ -888,6 +888,96 @@ def _from_stdin_powershell(command: str, depth: int) -> Bypass | None:
     return None
 
 
+# Git Bash's runtime (msys), making the words of the line it is started with
+# by a program that is not its own (`_msys_argv`): what ends a word, and what
+# makes a word a pattern (`_msys_word`).
+_MSYS_BLANKS = " \t\r\n"
+_MSYS_PATTERN = "?*[\"'(){}"
+_MSYS_DRIVES = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz"
+
+
+def _msys_argv(line: str) -> list[str]:
+    """The words Git Bash's runtime (msys) makes of the line a program that is
+    not its own starts it with, as tests/fixtures/started-argv.json records
+    them (git handed `"$@"`; FN-55). A blank outside quotes ends a word. A
+    double or a single quote opens a quote wherever it stands, a backslash in
+    front of it too (`\\'git commit -n'` is a quote, and bash runs it). A
+    double quote is closed by the next one no backslash stands in front of,
+    and `""` in it is a quote; a single quote by the next single quote. What
+    the word is then made of is `_msys_word`'s."""
+    out: list[str] = []
+    n = len(line)
+    i = 0
+    while i < n:
+        if line[i] in _MSYS_BLANKS:
+            i += 1
+            continue
+        word: list[str] = []
+        while i < n and line[i] not in _MSYS_BLANKS:
+            ch = line[i]
+            word.append(ch)
+            i += 1
+            if ch == "'":
+                end = line.find("'", i) + 1 or n    # past the next one, or to the end
+                word.append(line[i:end])
+                i = max(end, i)                     # never back: the line bounds the walk
+            elif ch == '"':
+                while i < n:
+                    ch = line[i]
+                    if ch == "\\":
+                        word.append(line[i:i + 2])
+                        i += 2
+                    elif ch == '"' and line[i + 1:i + 2] == '"':
+                        word.append('\\"')      # a quote in the quote
+                        i += 2
+                    else:
+                        word.append(ch)
+                        i += 1
+                        if ch == '"':
+                            break
+        out.append(_msys_word("".join(word)))
+    return out
+
+
+def _msys_word(word: str) -> str:
+    """A word of `_msys_argv` as the program is handed it. A word with none
+    of `?*["'(){}` in it and no `~` at its start is handed over as it stands,
+    every backslash with it (`\\-c` is not `-c`). Any other is read as a
+    pattern: in a quote, `\\\\` and a backslash in front of that quote are one
+    character, and every other character, a backslash too, is itself; outside
+    the quotes a backslash takes the character after it as it stands, unless
+    the word starts with a drive (`C:`), where it is itself. Not modelled: what
+    the runtime makes of a brace, of a pattern that matches a file, of a `~`,
+    and of a word that starts with `@` (a file of arguments); the record holds
+    `a\\x{` coming back `ax`."""
+    if word[:1] != "~" and not any(ch in _MSYS_PATTERN for ch in word):
+        return word
+    drive = word[1:2] == ":" and word[:1] in _MSYS_DRIVES
+    pattern: list[str] = []
+    k, n = 0, len(word)
+    while k < n:
+        ch = word[k]
+        k += 1
+        if ch not in "\"'":
+            pattern.append("\\\\" if drive and ch == "\\" else ch)
+            continue
+        while k < n and word[k] != ch:
+            if word[k] == "\\" and word[k + 1:k + 2] in (ch, "\\"):
+                k += 1
+            pattern.append("\\" + word[k])
+            k += 1
+        k += 1                          # the quote that closes it
+    text = "".join(pattern)
+    out: list[str] = []
+    k = 0
+    while k < len(text):
+        if text[k] == "\\" and k + 1 < len(text):
+            k += 1                      # a backslash takes the next character
+        out.append(text[k])
+        k += 1
+    return "".join(out)
+
+
 def _from_started(command: str, depth: int) -> Bypass | None:
     """A match in a program a PowerShell command starts with Start-Process,
     `saps` or `start` (FN-55 0110f7, the operator's decision of 2026-10-23):
@@ -896,9 +986,13 @@ def _from_started(command: str, depth: int) -> Bypass | None:
     rules (agent_bypass_cmd._argv), so it is judged as git's own words are. A
     shell started so is handed a string as `_from_handed` reads one: cmd runs
     what follows its switch on that line, pwsh and powershell read it by the
-    C runtime's rules too, and a POSIX shell reads it the POSIX way (Git
-    Bash's runtime takes a single quote for a quote there, as the record
-    shows; how it takes a backslash is not measured).
+    C runtime's rules too, and a POSIX shell's line is read both as Git Bash's
+    runtime makes its words (`_msys_argv`, measured word by word) and the
+    POSIX way. The C runtime's reading of it decides none of the record's
+    cases and is not asked (0f9de4b): Git Bash takes a single quote for a
+    quote, as only the POSIX reading does, and a backslash outside quotes for
+    itself, as neither does (`\\'git commit -n'` commits). Only Git Bash is
+    measured, the bash PowerShell finds first here; WSL's is not.
     `depth` counts the shells handed a string, as `_from_handed`."""
     low = command.lower()
     if "start" not in low and "saps" not in low:
@@ -917,7 +1011,8 @@ def _from_started(command: str, depth: int) -> Bypass | None:
         elif name in _POWERSHELLS:
             strings = [(_powershell_string(argv, 0), POWERSHELL)]
         elif name in _POSIX_SHELLS:
-            strings = [(_posix_string([program] + _tokens(line, False)[0], 0), POSIX)]
+            strings = [(_posix_string([program] + _tokens(line, False)[0], 0), POSIX),
+                       (_posix_string([program] + _msys_argv(line), 0), POSIX)]
         else:
             continue
         for text, shell in strings:
