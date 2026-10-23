@@ -896,8 +896,9 @@ def _from_started(command: str, depth: int) -> Bypass | None:
     rules (agent_bypass_cmd._argv), so it is judged as git's own words are. A
     shell started so is handed a string as `_from_handed` reads one: cmd runs
     what follows its switch on that line, pwsh and powershell read it by the
-    C runtime's rules too, and a POSIX shell is read that way and the POSIX
-    way as well (Git Bash's runtime takes a single quote for a quote there).
+    C runtime's rules too, and a POSIX shell reads it the POSIX way (Git
+    Bash's runtime takes a single quote for a quote there, as the record
+    shows; how it takes a backslash is not measured).
     `depth` counts the shells handed a string, as `_from_handed`."""
     low = command.lower()
     if "start" not in low and "saps" not in low:
@@ -916,8 +917,7 @@ def _from_started(command: str, depth: int) -> Bypass | None:
         elif name in _POWERSHELLS:
             strings = [(_powershell_string(argv, 0), POWERSHELL)]
         elif name in _POSIX_SHELLS:
-            strings = [(_posix_string(argv, 0), POSIX),
-                       (_posix_string([program] + _tokens(line, False)[0], 0), POSIX)]
+            strings = [(_posix_string([program] + _tokens(line, False)[0], 0), POSIX)]
         else:
             continue
         for text, shell in strings:
