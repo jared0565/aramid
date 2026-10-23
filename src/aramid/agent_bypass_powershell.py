@@ -700,7 +700,10 @@ def _members(text: str, i: int, done: list, depth: int) -> int:
 
 def _here_string_starts(text: str, i: int) -> bool:
     """Whether the `@` at text[i] opens a here-string: a quote after it, and
-    nothing but blanks up to the end of the line."""
+    nothing but blanks up to the end of the line. Guarded as `_variable` is:
+    the hook fails open, so a test that raised would let the call through."""
+    if not 0 <= i < len(text):
+        return False
     # (an `@` that is the last character has no quote after it, and the line
     # end test below then says no)
     if text[i + 1:i + 2] not in _SINGLE + _DOUBLE:

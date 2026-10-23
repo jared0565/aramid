@@ -271,6 +271,17 @@ def test_the_handed_readers_never_raise_on_an_out_of_contract_index(seg, start):
         assert ab._cmd_string(seg, start, outer) is None
 
 
+@pytest.mark.parametrize("words,start", [
+    ([], -2), ([], 0), (["a"], 1), (["a"], 9999), (["bash"], -5), (["\n"], -27),
+    (["0", "\n", "%s%n"], -2 ** 63), (["-"], -1), (["bash", "-"], 2)])
+def test_the_stdin_readers_never_raise_on_an_out_of_contract_index(words, start):
+    # Kept total as the handed readers are (a2fd1ec), and for the same reason:
+    # the hook fails open, and the drain's fuzzer calls these directly. An index
+    # out of range reads nothing, so `-` behind it is not standard input.
+    assert ab._reads_stdin_posix(words, start) is False
+    assert ab._reads_stdin_powershell(words, start) is False
+
+
 @pytest.mark.parametrize("shell", ["ksh", "mksh", "ash", "yash", "posh"])
 def test_a_posix_sh_family_shell_hands_its_c_string_like_bash(shell):
     # dash, ksh, mksh, ash, yash and posh share bash's -c grammar (FN-55

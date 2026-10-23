@@ -761,7 +761,11 @@ def _shell_launched(words: list[str]) -> tuple[int | None, str | None]:
 def _reads_stdin_posix(words: list[str], start: int) -> bool:
     """The POSIX shell at words[start] reads its COMMANDS from standard input:
     no `-c` string and no script file (`bash`, `bash -s`, `bash -` do;
-    `bash -c x` and `bash script.sh` do not). The option walk is _posix_string's."""
+    `bash -c x` and `bash script.sh` do not). The option walk is _posix_string's.
+    `start` is guarded as there: the hook fails open, so a reader that raised
+    would let the call through."""
+    if not 0 <= start < len(words):
+        return False
     i = start + 1
     while i < len(words):
         word = words[i]
@@ -792,7 +796,9 @@ def _reads_stdin_powershell(words: list[str], start: int) -> bool:
     other value is a string or a script file, read by `_handed`, not stdin.
     A switch may be written with any dash of `_PS_DASHES` (`–Command -`), but
     only a lone `-` is standard input: pwsh read none for a lone `--`, `/` or
-    en dash (measured)."""
+    en dash (measured). `start` is guarded as in `_posix_string`."""
+    if not 0 <= start < len(words):
+        return False
     i = start + 1
     while i < len(words):
         word = words[i]

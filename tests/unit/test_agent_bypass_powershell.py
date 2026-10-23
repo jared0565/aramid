@@ -33,8 +33,8 @@ import pytest
 
 from aramid import agent_bypass as ab
 from aramid.agent_bypass import POWERSHELL, Bypass, find_bypass
-from aramid.agent_bypass_powershell import (_DASHES, _DEPTH, _variable, commands, reading,
-                                            simple_commands)
+from aramid.agent_bypass_powershell import (_DASHES, _DEPTH, _here_string_starts, _variable,
+                                            commands, reading, simple_commands)
 
 FIXTURE = Path(__file__).parent.parent / "fixtures" / "powershell-argv.json"
 RECORD = {case["command"]: (case["status"], case["argv"])
@@ -1040,3 +1040,16 @@ def test_the_variable_reader_never_raises_on_an_out_of_contract_index(text, i, a
     # caller asks `_value_starts` first, but the drain's fuzzer calls it
     # directly: keep it total (FN-55 7e8088).
     assert _variable(text, i) == answer
+
+
+@pytest.mark.parametrize("text,i,answer", [
+    # out of contract: no `@` at text[i], so no here-string opens there
+    ("x", -10**9, False), ("", -2**63, False), ("@'\n", -3, False), ("@'\n", 3, False),
+    ("@'\n", 2**63, False), ("", 0, False),
+    # in contract, and the guard must not change them
+    ("@'\n", 0, True), ('@"\n', 0, True), ("a@'\n", 1, True), ("@' \t\n", 0, True),
+    ("@'x\n", 0, False), ("@", 0, False), ("@'", 0, False)])
+def test_the_here_string_test_never_raises_on_an_out_of_contract_index(text, i, answer):
+    # Kept total as `_variable` is (7e8088): the hook fails open, and the
+    # drain's fuzzer calls it directly. `_commands` only asks at an `@`.
+    assert _here_string_starts(text, i) is answer
