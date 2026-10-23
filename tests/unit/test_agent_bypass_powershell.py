@@ -33,7 +33,7 @@ import pytest
 
 from aramid import agent_bypass as ab
 from aramid.agent_bypass import POWERSHELL, Bypass, find_bypass
-from aramid.agent_bypass_powershell import _DEPTH, _variable, commands, reading
+from aramid.agent_bypass_powershell import _DEPTH, _variable, commands, reading, simple_commands
 
 FIXTURE = Path(__file__).parent.parent / "fixtures" / "powershell-argv.json"
 RECORD = {case["command"]: (case["status"], case["argv"])
@@ -965,6 +965,24 @@ def test_the_shortest_texts_are_read_without_an_error(text):
     words, whole = commands(text)
     assert isinstance(words, list) and isinstance(whole, bool)
     assert find_bypass(text, POWERSHELL) is None
+
+
+def test_every_word_has_its_plain_mark():
+    # agent_bypass reads `plains` beside `words` (a literal piped into a shell,
+    # the parameters of Start-Process), so every word has its own mark: a group
+    # among the arguments and the words after a stop token too.
+    fixtures = Path(__file__).parent.parent / "fixtures"
+    texts = list(RECORD)
+    for name in ("handed-argv.json",):
+        texts += [case["command"] for case in
+                  json.loads((fixtures / name).read_text(encoding="ascii"))["cases"]]
+    rng = random.Random(23)  # noqa: S311  -- seeded, reproducible, not crypto
+    alphabet = "`'\"$(){}@<>#;|&,.-:[]=%\\ \n\r\tgitx" + LDQ + RSQ
+    texts += ["".join(rng.choice(alphabet) for _ in range(rng.randint(1, 24)))
+              for _ in range(3000)]
+    for text in texts:
+        for cmd in simple_commands(text)[0]:
+            assert len(cmd["plains"]) == len(cmd["words"]), text
 
 
 @pytest.mark.parametrize("text,i,answer", [

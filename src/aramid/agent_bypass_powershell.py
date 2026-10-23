@@ -153,6 +153,14 @@ def _commands(text: str, i: int, closer: str, done: list, depth: int) -> int:
         word, plain, named = None, True, False
         return stop
 
+    def verbatim(at: int) -> int:
+        """`_verbatim`, with a mark for each word it hands over: PowerShell
+        reads no quote in them."""
+        before = len(words)
+        at = _verbatim(text, at, words)
+        plains.extend([True] * (len(words) - before))
+        return at
+
     def end_command(op: str) -> None:
         """Close the current simple command. `op` is the operator that ended it
         (`|`, `&`, `;`, a newline, a group closer or `''` at the end). The
@@ -197,7 +205,7 @@ def _commands(text: str, i: int, closer: str, done: list, depth: int) -> int:
                     end_command("\n")
                 i += 1
             elif _blank(ch):
-                i = _verbatim(text, i, words) if end_word() else i + 1
+                i = verbatim(i) if end_word() else i + 1
             elif ch == "`" and not named:
                 nxt = text[i + 1:i + 2]
                 if not nxt:
@@ -262,12 +270,13 @@ def _commands(text: str, i: int, closer: str, done: list, depth: int) -> int:
                     i += 1
                     ch = text[i]
                 if end_word():
-                    i = _verbatim(text, i, words)
+                    i = verbatim(i)
                     continue
                 if target:
                     target = False
                 elif words:
                     words.append("$")   # a group among the arguments: a value
+                    plains.append(False)
                 comma = False
                 i = _commands(text, i + 1, ")" if ch == "(" else "}", done, depth + 1)
                 i = _members(text, i, done, depth)      # `(a).Length` is one value
