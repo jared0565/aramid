@@ -971,11 +971,24 @@ def test_a_word_with_many_commas_is_read_in_time():
     # call the hook reads; a membership test per character on lists made one
     # word of 16,000 commas take 8 s and 32,000 take 32 s (drain row 0940b5,
     # measured 2026-10-23), where a word without them takes 34 ms.
+    # Timed against a word as long without commas, not against a clock: under
+    # coverage's tracer on Python 3.12 (CI's latent-mutant leg) the whole reader
+    # runs some 85 times slower, and a 1 s budget failed there at 3.75 s. Measured
+    # 2026-10-23 at 4,000 commas, best of three: 1.1 to 1.3 times the plain word,
+    # bare and traced, on 3.12 and 3.14; 64 times before the fix (745bcaa).
     import time
-    text = "Write-Output " + ",".join(["a"] * 16000)
-    began = time.perf_counter()
-    assert find_bypass(text, POWERSHELL) is None
-    assert time.perf_counter() - began < 1.0
+
+    def best(text):
+        runs = []
+        for _ in range(2):
+            began = time.perf_counter()
+            assert find_bypass(text, POWERSHELL) is None
+            runs.append(time.perf_counter() - began)
+        return min(runs)
+
+    commas = best("Write-Output " + ",".join(["a"] * 3000))
+    plain = best("Write-Output " + "a" * 5999)
+    assert commas < 10 * plain
 
 
 def test_every_word_has_its_plain_mark():
