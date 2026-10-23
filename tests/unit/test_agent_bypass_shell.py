@@ -198,9 +198,9 @@ def test_the_cheap_test_never_costs_an_answer():
     rng = random.Random(4545)  # noqa: S311  -- seeded, reproducible, not crypto
     bases = ["git commit -m x --no-verify", "git commit -n", "git push --no-verify",
              "git -c core.hooksPath=h commit", f"aramid {CLOSE}", f"aramid {CLOSE} --red-proof",
-             "python -m aramid " + CLOSE]
+             "python -m aramid " + CLOSE, "$'" + BS + "x67it' commit -n"]
     pieces = ["'", '"', BS, "`", "\n", "\r\n", BS + "\n", " ", ";", "$", "$(true)", "#", "''",
-              '""', "x", "|", "&&", "$U", "(", ")"]
+              '""', "x", "|", "&&", "$U", "(", ")", "$'"]
     commands = []
     for _ in range(3000):
         text = rng.choice(bases)
@@ -255,3 +255,207 @@ def test_a_bash_call_does_not_load_the_powershell_reader(monkeypatch):
     monkeypatch.delattr(aramid, "agent_bypass_powershell")
     assert find_bypass("git commit -n", POWERSHELL) == DASH_N
     assert "aramid.agent_bypass_powershell" in sys.modules
+
+
+# ---- bash's ANSI-C quoting, $'...' (FN-55 43dd71) ----
+
+# What git was handed for each command, read off real git (trace2) under Git Bash 5.2.37 on
+# 2026-10-23, each command run twice with the same answer: the operator's decision that day
+# was "Read $'...'". The table is written from the captures, not typed: a `\u` and four hex
+# digits typed in was decoded on its way in.
+ANSI_C = [
+    ("$'\\x67it' commit -n",
+     [['git', 'commit', '-n']]),
+    ("$'\\147\\151\\164' commit -n",
+     [['git', 'commit', '-n']]),
+    ("$'\\U00000067it' commit -n",
+     [['git', 'commit', '-n']]),
+    ('g$\'\\x69\'"t" commit -n',
+     [['git', 'commit', '-n']]),
+    ("gi$'t' commit -n",
+     [['git', 'commit', '-n']]),
+    ("git commit $'--no-verify'",
+     [['git', 'commit', '--no-verify']]),
+    ("git commit $'-n'",
+     [['git', 'commit', '-n']]),
+    ("git commit -m $'it\\'s' --no-verify",
+     [['git', 'commit', '-m', "it's", '--no-verify']]),
+    ("git commit -m a$'b'c -n",
+     [['git', 'commit', '-m', 'abc', '-n']]),
+    ("git commit -m $'[\\x4][\\x41][\\x414]' -n",
+     [['git', 'commit', '-m', '[\x04][A][A4]', '-n']]),
+    ("git commit -m $'[\\1][\\101][\\1011][\\0101]' -n",
+     [['git', 'commit', '-m', '[\x01][A][A1][\x081]', '-n']]),
+    ("git commit -m $'[\\U41][\\U00000041][\\U000000411]' -n",
+     [['git', 'commit', '-m', '[A][A][A1]', '-n']]),
+    ("git commit -m $'[\\cA][\\ca][\\c?][\\c@]' -n",
+     [['git', 'commit', '-m', '[\x01][\x01][\x7f][', '-n']]),
+    ("git commit -m $'[\\e][\\E]' -n",
+     [['git', 'commit', '-m', '[\x1b][\x1b]', '-n']]),
+    ("git commit -m $'[\\a][\\b][\\f][\\n][\\r][\\t][\\v]' -n",
+     [['git', 'commit', '-m', '[\x07][\x08][\x0c][\n][\r][\t][\x0b]', '-n']]),
+    ('git commit -m $\'[\\\\][\\\'][\\"][\\?]\' -n',
+     [['git', 'commit', '-m', '[\\][\']["][?]', '-n']]),
+    ("git commit -m $'[\\-][\\z][\\ ]' -n",
+     [['git', 'commit', '-m', '[\\-][\\z][\\ ]', '-n']]),
+    ("git commit -m $'[\\x][\\xg][\\u][\\U][\\c]' -n",
+     [['git', 'commit', '-m', '[\\x][\\xg][\\u][\\U][\x1d', '-n']]),
+    ("git commit -m $'a\\0b' -n",
+     [['git', 'commit', '-m', 'a', '-n']]),
+    ("git commit -m $'a\\x00b' -n",
+     [['git', 'commit', '-m', 'a', '-n']]),
+    ('git commit -m "$\'\\x41\'" -n',
+     [['git', 'commit', '-m', "$'\\x41'", '-n']]),
+    ("git commit -m \\$'\\x41' -n",
+     [['git', 'commit', '-m', '$\\x41', '-n']]),
+    ("git commit -m '$'\\x41 -n",
+     [['git', 'commit', '-m', '$x41', '-n']]),
+    ("git commit $'--no-verify",
+     []),
+    ("git commit -m $'a\\' -n",
+     []),
+    ("$'\\u0067it' commit -n",
+     [['git', 'commit', '-n']]),
+    ("git commit -m $'[\\u41][\\u0041][\\u00411][\\u004]' -n",
+     [['git', 'commit', '-m', '[A][A][A1][\x04]', '-n']]),
+    ("git commit -m $'[\\uD800][\\u00e9][\\U0001F600][\\UFFFFFFFF]' -n",
+     [['git', 'commit', '-m', '[\\uD800][\xe9][\\U0001F600][]', '-n']]),
+    ("git commit -m $'[\\c\\\\]x' -n",
+     [['git', 'commit', '-m', '[\x1c]x', '-n']]),
+    ("git commit -m $'a\\0b'c -n",
+     [['git', 'commit', '-m', 'ac', '-n']]),
+    ("git commit -m $'a\\c@b'c -n",
+     [['git', 'commit', '-m', 'ac', '-n']]),
+    ("git commit -m $'[\\u007f][\\u0080][\\U00000080][\\u0081]' -n",
+     [['git', 'commit', '-m', '[\x7f][\x80][\x80][\x81]', '-n']]),
+    ("git commit -m $'[\\uFFFF][\\U0000FFFF][\\U00010000][\\uFFFE]' -n",
+     [['git', 'commit', '-m', '[\\uFFFF][\\uFFFF][\\U00010000][\\uFFFE]', '-n']]),
+    ("git commit -m $'a\\t' -n",
+     [['git', 'commit', '-m', 'a\t', '-n']]),
+    ("git commit -m $'a\\x' -n",
+     [['git', 'commit', '-m', 'a\\x', '-n']]),
+    ("git commit -m $'a\\x4' -n",
+     [['git', 'commit', '-m', 'a\x04', '-n']]),
+    ("git commit -m $'[\\u00ff][\\u0100][\\U000000FF][\\U00000100]' -n",
+     [['git', 'commit', '-m', '[\xff][\\u0100][\xff][\\u0100]', '-n']]),
+    ("git commit $'--no-verify\\UFFFFFFFF'",
+     [['git', 'commit', '--no-verify']]),
+    ("git commit $'--no-verify\\U00110000'",
+     [['git', 'commit', '--no-verify\\U00110000']]),
+    ("git commit $'--no-verify\\U7FFFFFFF'",
+     [['git', 'commit', '--no-verify\\U7FFFFFFF']]),
+    ("git commit $'--no-verify\\0junk'",
+     [['git', 'commit', '--no-verify']]),
+    ("git commit $'-n\\x00'",
+     [['git', 'commit', '-n']]),
+    ("git commit $'--no-verify\\uD800'",
+     [['git', 'commit', '--no-verify\\uD800']]),
+    ("git commit -m $'[\\U0010FFFF][\\U0000D800][\\xe9][\\351]' -n",
+     [['git', 'commit', '-m', '[\\U0010FFFF][\\uD800][\xe9][\xe9]', '-n']]),
+    ("git commit -m $'a\\c'b -n",
+     [['git', 'commit', '-m', 'a\\cb', '-n']]),
+    ("git commit -m $'[\\c\\x41]' -n",
+     [['git', 'commit', '-m', '[\x1cx41]', '-n']]),
+    ("git commit -m $'[\\U80000000][\\U7FFFFFFF][\\UF0000000][\\UFFFFFFFE][\\U8000000][\\Uffffffff]' -n",
+     [['git', 'commit', '-m', '[][\\U7FFFFFFF][][][\\U08000000][]', '-n']]),
+    ("git commit $'-n\\U80000000'",
+     [['git', 'commit', '-n']]),
+    ("git commit $'-n\\U8000000'",
+     [['git', 'commit', '-n\\U08000000']]),
+    ("git commit -m $'[\\400][\\401][\\555][\\777][\\377]' -n",
+     [['git', 'commit', '-m', '[', '-n']]),
+    ("git commit $'-n\\400'",
+     [['git', 'commit', '-n']]),
+    ("git commit $'-n\\500x'",
+     [['git', 'commit', '-n@x']]),
+    ("git commit $'\\455n'",
+     [['git', 'commit', '-n']]),
+    ('git commit "$\'\\x2dn\'" ',
+     [['git', 'commit', "$'\\x2dn'"]]),
+    ("git commit \\$'\\x2dn'",
+     [['git', 'commit', '$\\x2dn']]),
+    ("git commit '$'\\x2dn",
+     [['git', 'commit', '$x2dn']]),
+    ("git $'' commit -n",
+     [['git', '', 'commit', '-n']]),
+    ("git commit $'' -n",
+     [['git', 'commit', '', '-n']]),
+    ("echo $'x\\ngit commit -n'",
+     []),
+    ("echo $'x;git commit -n'",
+     []),
+    ("echo $'\\x3b' git commit -n",
+     []),
+    ("echo $'x\\x0agit commit -n'",
+     []),
+    ("git $'-c' $'core.hooksPath=h' commit -m x",
+     [['git', '-c', 'core.hooksPath=h', 'commit', '-m', 'x']]),
+    ("git -c $'core.hooks\\x50ath=h' commit -m x",
+     [['git', '-c', 'core.hooksPath=h', 'commit', '-m', 'x']]),
+]
+
+
+def _judged(argvs):
+    """The hook's own flag rules on the words git was handed."""
+    for argv in argvs:
+        found = ab._scan_one_git(argv, 0)
+        if found is not None:
+            return found
+    return None
+
+
+@pytest.mark.parametrize("command,argvs", ANSI_C)
+def test_the_reading_makes_the_words_bash_makes_of_ansi_c_quoting(command, argvs):
+    if argvs:
+        tokens, whole = ab._tokens(command, False, ansi_c=True)
+        assert whole and [t.translate(ab._PUT_BACK) for t in tokens] == argvs[0]
+
+
+# Answered though bash ran no git: a word named git starts a scan, as it does in
+# any command (`echo git commit -n`; OVER in tests/unit/test_agent_bypass_handed.py)
+ANSI_C_OVER = {"echo $'" + BS + "x3b' git commit -n": DASH_N}
+
+
+@pytest.mark.parametrize("command,argvs", ANSI_C)
+def test_a_command_in_ansi_c_quoting_is_answered_as_what_git_was_handed(command, argvs):
+    for shell in (POSIX, None):
+        assert find_bypass(command, shell) == ANSI_C_OVER.get(command, _judged(argvs)), shell
+
+
+def test_every_over_read_listed_for_ansi_c_quoting_is_in_the_table():
+    assert set(ANSI_C_OVER) <= {command for command, _argvs in ANSI_C}
+
+
+def test_the_ansi_c_readers_read_only_what_is_theirs():
+    # `_ansi_c` reads only a `$'` at the index it is given, and
+    # `_ansi_c_body` keeps a backslash at the end, which the drain's fuzzer
+    # can hand it though no closed quote leaves one there
+    assert ab._ansi_c("ab'c", 0) is None
+    assert ab._ansi_c("x$'a'", 1) == ("a", 5)
+    assert ab._ansi_c_body("a" + BS) == "a" + BS
+
+
+def test_an_ansi_c_quote_that_never_closes_still_stops_the_reading():
+    # bash runs nothing for either (in the table); the words in front are read
+    assert ab._tokens("git commit $'--no-verify", False, ansi_c=True) == (["git", "commit"], False)
+    assert ab._tokens("git commit -m $'a" + BS + "' -n", False, ansi_c=True) == (
+        ["git", "commit", "-m"], False)
+
+
+@pytest.mark.parametrize("shell", [POSIX, None])
+def test_a_reason_in_ansi_c_quoting_ends_where_bash_ends_it(shell):
+    # `$'it\'s'` is the one word it's (in the table, as git's -m): the
+    # --red-proof after it counts, where up to now it was read as cut off
+    close = "aramid ledger resolve llm1 --fixed abc --test t --reason $'it" + BS + "'s'"
+    assert find_bypass(close + " --red-proof", shell) is None
+    assert find_bypass(close, shell) == NO_RED
+
+
+def test_the_cheap_test_says_yes_to_ansi_c_quoting():
+    assert ab._may_name_a_program("$'" + BS + "x67it' commit -n")
+    assert ab._may_name_a_program("x $'y'")
+
+
+def test_the_line_a_started_shell_is_handed_is_not_read_for_ansi_c_quoting():
+    # its quotes are the runtime's, not bash's (`_from_started`)
+    assert ab._tokens("-c $'git'", False) == (["-c", "$git"], True)

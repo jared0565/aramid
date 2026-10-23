@@ -154,9 +154,9 @@ would never close, and a proper close would be answered.
 What this leaves, for every rule. The quoting is POSIX quoting: where
 PowerShell differs otherwise (a backslash escapes nothing there, a quote is
 doubled inside single quotes, `<# #>` is a comment) a command whose shell
-was not named is read by the POSIX rule. bash's `$'...'` is not followed
-either, nor a heredoc body:
-its lines are read as commands. And a command that is built when it runs
+was not named is read by the POSIX rule. bash's `$'...'` is read as bash
+makes it (`_ansi_c`; FN-55 43dd71), but not its locale quoting, `$"..."`,
+nor a heredoc body: its lines are read as commands. And a command that is built when it runs
 (backticks, a variable, `eval`, the output of `$( )`) is read as written,
 not as built.
 """
@@ -221,6 +221,14 @@ _HANDED_DEPTH = 8
 # name: the quotes, the backslash, and a line end (a backslash in front of one
 # joins two lines). For `_may_name_a_program`.
 _MARKS = {ord(ch): None for ch in "'\"\\\r\n"}
+# bash's ANSI-C quoting, `$'...'`, as Git Bash 5.2.37 was measured (FN-55
+# 43dd71; tests/unit/test_agent_bypass_shell.py): the escapes that are one
+# character, and how many hex digits `\x`, `\u` and `\U` take at most.
+_ANSI_C_LETTERS = {"a": "\a", "b": "\b", "e": "\x1b", "E": "\x1b", "f": "\f", "n": "\n",
+                   "r": "\r", "t": "\t", "v": "\v", "\\": "\\", "'": "'", '"': '"', "?": "?"}
+_ANSI_C_HEX = {"x": 2, "u": 4, "U": 8}
+_HEX_DIGITS = "0123456789abcdefABCDEF"
+_OCTAL_DIGITS = "01234567"
 
 
 @dataclass(frozen=True)
@@ -230,7 +238,79 @@ class Bypass:
     token: str       # the exact matched token / -c value, for messages
 
 
-def _shell_text(command: str, backtick: bool) -> str:
+def _ansi_c(command: str, i: int) -> tuple[str, int] | None:
+    """What bash makes of the `$'...'` that starts at command[i], and the
+    index just past its closing quote; None if it never closes, or there is
+    no `$'` at `i`. Inside, a backslash escapes the next character, a quote
+    as well; what the escapes make is `_ansi_c_body`'s."""
+    if not (0 <= i < len(command) and command.startswith("$'", i)):
+        return None
+    j = i + 2
+    while j < len(command):
+        if command[j] == "'":
+            return _ansi_c_body(command[i + 2:j]), j + 1
+        j += 2 if command[j] == "\\" else 1
+    return None
+
+
+def _ansi_c_body(body: str) -> str:
+    """The text bash makes of what is inside a `$'...'`. The one-character
+    escapes are `_ANSI_C_LETTERS`. `\\nnn` takes one to three octal digits,
+    kept to a byte (`\\455` is `-`). `\\x`, `\\u` and `\\U` take up to two,
+    four and eight hex digits, and with none are kept as written, as is an
+    escape bash does not know (`\\z`). `\\cX` is the control character of X:
+    `\\c?` is DEL, `\\c\\\\` takes both backslashes, and a `\\c` at the end is
+    kept. A character that comes to 0 ends the text, whatever follows it.
+    Up to 0xFF a value is that character, as Git Bash's bash makes it; a
+    `\\u` or `\\U` above that is written back as bash writes it (`\\uD800`,
+    `\\U0001F600`), and from 0x80000000 up is nothing. No name or flag is
+    spelled past ASCII. This walk cannot raise."""
+    out: list[str] = []
+    k, n = 0, len(body)
+    while k < n:
+        ch = body[k]
+        if ch != "\\" or k + 1 >= n:
+            out.append(ch)
+            k += 1
+            continue
+        kind = body[k + 1]
+        if kind in _ANSI_C_LETTERS:
+            out.append(_ANSI_C_LETTERS[kind])
+            k += 2
+            continue
+        if kind in _OCTAL_DIGITS:
+            m = k + 2
+            while m < min(k + 4, n) and body[m] in _OCTAL_DIGITS:
+                m += 1
+            value = int(body[k + 1:m], 8) & 0xFF
+        elif kind in _ANSI_C_HEX:
+            m = k + 2
+            while m < min(k + 2 + _ANSI_C_HEX[kind], n) and body[m] in _HEX_DIGITS:
+                m += 1
+            if m == k + 2:
+                out.append(body[k:m])       # no digit: kept as written
+                k = m
+                continue
+            value = int(body[k + 2:m], 16)
+        elif kind == "c" and k + 2 < n:
+            x = body[k + 2]
+            m = k + 4 if x == "\\" and body[k + 3:k + 4] == "\\" else k + 3
+            value = 0x7F if x == "?" else ord(x.upper() if "a" <= x <= "z" else x) & 0x1F
+        else:
+            out.append(body[k:k + 2])
+            k += 2
+            continue
+        k = m
+        if value == 0:
+            break
+        if value < 0x100:
+            out.append(chr(value))
+        elif value < 0x80000000:
+            out.append(f"\\u{value:04X}" if value <= 0xFFFF else f"\\U{value:08X}")
+    return "".join(out)
+
+
+def _shell_text(command: str, backtick: bool, ansi_c: bool = False) -> str:
     """`command` as the lexer is to read it: comments taken out, continued
     lines joined, the number in front of a redirection dropped, and every
     quoted or escaped operator character replaced by its stand-in. Quotes
@@ -239,6 +319,10 @@ def _shell_text(command: str, backtick: bool) -> str:
     `backtick` picks the reading of a backtick inside double quotes: True
     for PowerShell's, where it escapes the next character and a quote after
     it does not end the string; False for a character like any other.
+
+    `ansi_c` is for bash's text: a `$'...'` there is handed over as the text
+    bash makes of it (`_ansi_c`), each character escaped, and one that never
+    closes ends the text, so the lexer stops at it as at any open quote.
 
     shlex has a comment rule of its own, and it is not the shell's: it ends
     the line at a `#` in the middle of a word, and it takes the newline with
@@ -266,6 +350,15 @@ def _shell_text(command: str, backtick: bool) -> str:
             quote = "" if ch == quote else quote
             i += 1
             continue
+        if ansi_c and ch == "$" and command.startswith("'", i + 1):
+            made = _ansi_c(command, i)
+            if made is None:
+                out.append("$'")    # it never closes: the lexer stops here
+                break
+            text, i = made
+            out.append("''" + "".join("\\" + c.translate(_STAND_IN) for c in text))
+            fresh = False
+            continue
         if ch == "#" and fresh:
             # a comment: to the end of its line, the newline not included
             while i < n and command[i] != "\n":
@@ -286,7 +379,7 @@ def _shell_text(command: str, backtick: bool) -> str:
     return "".join(out)
 
 
-def _tokens(command: str, backtick: bool) -> tuple[list[str], bool]:
+def _tokens(command: str, backtick: bool, ansi_c: bool = False) -> tuple[list[str], bool]:
     """The words and operators of `command` as far as it can be read, and
     whether that was to its end. A quote that never closes (or a backslash
     with nothing after it) stops the lexer; the tokens before it are
@@ -296,8 +389,10 @@ def _tokens(command: str, backtick: bool) -> tuple[list[str], bool]:
     that runs it (a heredoc body, a PowerShell string that ends in a
     backslash). What follows the open quote is not read: for the git rules a
     flag there is missed, for the close rule a `--red-proof` there does not
-    count."""
-    lex = shlex.shlex(_shell_text(command, backtick), posix=True,
+    count. `ansi_c` reads bash's `$'...'` (`_shell_text`): for a command
+    bash reads, not for the line a started program is handed, whose quotes
+    are the runtime's."""
+    lex = shlex.shlex(_shell_text(command, backtick, ansi_c), posix=True,
                       punctuation_chars=_OPERATORS)
     lex.whitespace_split = True
     lex.whitespace = " \t\r"   # not the newline: it is an operator here
@@ -1077,9 +1172,10 @@ def _may_name_a_program(command: str) -> bool:
     refused without asking (`find_bypass`). With no shell named, a no from
     here leaves out the POSIX readings alone: what PowerShell hands, pipes
     and starts is read all the same (`saps "g`u{69}t" 'commit -n'` commits;
-    FN-55 e623dc)."""
+    FN-55 e623dc). Any `$'` is a yes: bash's ANSI-C quoting spells a name
+    in escapes (`$'\\x67it'`; FN-55 43dd71)."""
     low = command.lower().translate(_MARKS)
-    return "git" in low or "aramid" in low
+    return "$'" in command or "git" in low or "aramid" in low
 
 
 def find_bypass(command, shell: str | None = None, _depth: int = 0) -> Bypass | None:
@@ -1136,7 +1232,7 @@ def find_bypass(command, shell: str | None = None, _depth: int = 0) -> Bypass | 
         return found
     if not (_may_name_a_program(command) or _may_hand_a_string(command)):
         return None if shell == POSIX else _from_powershell(command, _depth)
-    posix, posix_whole = _tokens(command, False)
+    posix, posix_whole = _tokens(command, False, ansi_c=True)
     if shell == POSIX:
         segments = _segments(posix)
         return (_first(segments, True, True) or _from_handed(segments, _depth, POSIX)

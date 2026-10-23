@@ -69,7 +69,6 @@ NOT_SEEN = {
     ("posix", "bash -c 'git commit \"$@\"' x -n"): _RUN_TIME,
     ("posix", "bash -c 'git commit $0' -n"): _RUN_TIME,
     ("posix", "pwsh -cwa 'git commit $args' -n"): _RUN_TIME,
-    ("posix", "bash -c $'git commit -n'"): "bash's $'...' is not followed (module docstring)",
     ("posix", "pwsh -c '& g$(\"i\")t commit -n'"):
         "the name is worked out when it runs; the PowerShell reader takes a $( ) in a word"
         " as empty in any call (its module docstring)",

@@ -31,6 +31,14 @@ to publish a tag that disagrees with it.
   in the text as written. The test now takes the quotes, the backslash and a
   line end out first, so the name is found however it is spelled. This also
   covers a call from a tool the hook does not name.
+- **bash's ANSI-C quoting, `$'...'`, is read as bash makes it (FN-55).**
+  `$'\x67it' commit -n` and `git commit $'--no-verify'` commit in bash, and
+  the hook let them through, as it did `bash -c $'git commit -n'`. Each
+  escape is now read the way Git Bash was measured to read it, a `\0` that
+  cuts the rest of the quote off included (`$'--no-verify\0x'`), so these are
+  refused. A reason written `--reason $'it\'s' --red-proof` no longer draws a
+  warning. Not read: bash's locale quoting, `$"..."` (`$"git" commit -n` is
+  git).
 - **A word that starts with `$` in front of git's subcommand is stepped
   over.** `git $(true) commit -n` commits, and in a Bash or PowerShell call
   it is now refused (finding 4ce6a085).
