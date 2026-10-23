@@ -26,7 +26,8 @@ Every rule here was read off the real cmd.exe, not written from memory.
 
 Pure stdlib, no aramid imports, no I/O, and it cannot raise: it runs inside the
 agent hook, which fails open, so a raise here would let a command through unread.
-A call imports it only when a command hands cmd a string (or is cmd's own).
+A call imports it only when a command hands cmd a string (or is cmd's own), or
+starts a program with Start-Process, whose line `_argv` reads (FN-55 0110f7).
 
 WHAT IS NOT KNOWN HERE. cmd expands `%VAR%` (and `!VAR!` when delayed expansion
 is on) before it reads the line, so a name put together from variables

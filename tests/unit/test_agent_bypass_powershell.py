@@ -116,7 +116,6 @@ NOT_SEEN = {
     "$g = 'git'; & $g commit -n": "the name is in a variable",
     "Invoke-Expression 'git commit -n'": "the command is a string that is run",
     'iex "git commit -n"': "the command is a string that is run",
-    "Start-Process git -ArgumentList 'commit','-n' -Wait -NoNewWindow": "the arguments are a list",
 }
 
 
@@ -973,7 +972,7 @@ def test_every_word_has_its_plain_mark():
     # among the arguments and the words after a stop token too.
     fixtures = Path(__file__).parent.parent / "fixtures"
     texts = list(RECORD)
-    for name in ("handed-argv.json",):
+    for name in ("handed-argv.json", "started-argv.json"):
         texts += [case["command"] for case in
                   json.loads((fixtures / name).read_text(encoding="ascii"))["cases"]]
     rng = random.Random(23)  # noqa: S311  -- seeded, reproducible, not crypto

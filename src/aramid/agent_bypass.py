@@ -888,6 +888,49 @@ def _from_stdin_powershell(command: str, depth: int) -> Bypass | None:
     return None
 
 
+def _from_started(command: str, depth: int) -> Bypass | None:
+    """A match in a program a PowerShell command starts with Start-Process,
+    `saps` or `start` (FN-55 0110f7, the operator's decision of 2026-10-23):
+    the program is handed the one line Start-Process makes of its arguments
+    (agent_bypass_powershell.started), and git reads it by the C runtime's
+    rules (agent_bypass_cmd._argv), so it is judged as git's own words are. A
+    shell started so is handed a string as `_from_handed` reads one: cmd runs
+    what follows its switch on that line, pwsh and powershell read it by the
+    C runtime's rules too, and a POSIX shell is read that way and the POSIX
+    way as well (Git Bash's runtime takes a single quote for a quote there).
+    `depth` counts the shells handed a string, as `_from_handed`."""
+    low = command.lower()
+    if "start" not in low and "saps" not in low:
+        return None
+    from aramid import agent_bypass_powershell
+    for program, line in agent_bypass_powershell.started(command):
+        from aramid import agent_bypass_cmd
+        line = line.partition("\0")[0]      # a NUL ends the line a program is started with
+        argv = [program] + agent_bypass_cmd._argv(line)
+        found = _first([argv], True, True)
+        if found is not None:
+            return found
+        name = _program(program)
+        if name == "cmd":
+            strings = [(agent_bypass_cmd.string_to_run(line), CMD)]
+        elif name in _POWERSHELLS:
+            strings = [(_powershell_string(argv, 0), POWERSHELL)]
+        elif name in _POSIX_SHELLS:
+            strings = [(_posix_string(argv, 0), POSIX),
+                       (_posix_string([program] + _tokens(line, False)[0], 0), POSIX)]
+        else:
+            continue
+        for text, shell in strings:
+            if text is None:
+                continue
+            if depth >= _HANDED_DEPTH:
+                return Bypass("too-deep", "shells", str(_HANDED_DEPTH))
+            found = find_bypass(text, shell, _depth=depth + 1)
+            if found is not None:
+                return found
+    return None
+
+
 def _may_hand_a_string(command: str) -> bool:
     """Whether `command` can launch a shell that is handed a string, read the
     POSIX way: each of their names holds `sh`, or is `cmd`. Like
@@ -948,6 +991,10 @@ def find_bypass(command, shell: str | None = None, _depth: int = 0) -> Bypass | 
     (FN-55 d57bcd). A string
     handed to cmd is read as `CMD`, which no tool call is: it is the shell
     named for that string alone, read by agent_bypass_cmd, for every rule.
+    A program a PowerShell command starts with Start-Process is read as the
+    line it is started with, and a shell started so as one handed a string,
+    also when none is named (`_from_started`; FN-55 0110f7, the operator's
+    decision of 2026-10-23).
     `_depth` counts the shells handed a string on the way to `command`; it is
     the reading's own.
     """
@@ -961,7 +1008,7 @@ def find_bypass(command, shell: str | None = None, _depth: int = 0) -> Bypass | 
         from aramid import agent_bypass_powershell
         done, end = agent_bypass_powershell.reading(command)
         found = (_first(done, True, True) or _from_handed(done, _depth, POWERSHELL)
-                 or _from_stdin_powershell(command, _depth))
+                 or _from_stdin_powershell(command, _depth) or _from_started(command, _depth))
         if found is None and end == "deep":
             return Bypass("too-deep", "", str(agent_bypass_powershell._DEPTH))
         return found
@@ -983,4 +1030,5 @@ def find_bypass(command, shell: str | None = None, _depth: int = 0) -> Bypass | 
     from aramid import agent_bypass_powershell
     done, _end = agent_bypass_powershell.reading(command)
     return (_from_handed(_segments(posix), _depth, POSIX) or _from_stdin(posix, _depth)
-            or _from_handed(done, _depth, POWERSHELL) or _from_stdin_powershell(command, _depth))
+            or _from_handed(done, _depth, POWERSHELL) or _from_stdin_powershell(command, _depth)
+            or _from_started(command, _depth))

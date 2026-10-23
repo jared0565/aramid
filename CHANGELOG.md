@@ -126,6 +126,19 @@ to publish a tag that disagrees with it.
   command piped into a shell, are read as Git Bash would hand them on and
   as PowerShell would: they were read the Git Bash way alone, so
   `'git commit -n' | bash` from such a tool went through.
+- **A program a PowerShell call starts with `Start-Process` is read
+  (FN-55).** `Start-Process git -ArgumentList 'commit -n'`, and the same
+  with `saps` or `start`, a list of arguments, `-FilePath`, or the
+  parameters in any order, went through unread. Measured with PowerShell 7
+  and real git: Start-Process binds its named parameters first and then the
+  program and its arguments, joins a list of arguments with single spaces
+  and quotes none of them, and the program reads that one line by its own
+  rules, git by the C runtime's. The hook now reads the line so, and a
+  shell started this way (`Start-Process cmd '/c git commit -n'`) as one
+  handed a string. Not read: a program or an argument that comes from a
+  variable or an expression (`Start-Process git $a`). A call that starts
+  nothing, such as one with a parameter PowerShell does not know, or
+  `-WhatIf:$true`, is read as if it ran.
 
   A string handed to `cmd /c` is read as well (`/k` and `/r` too, in any
   case, with `/d`, `/s` or `/v:on` in front, and `cmd //c` from Git Bash).

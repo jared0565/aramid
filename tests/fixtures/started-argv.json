@@ -1,0 +1,1218 @@
+{
+ "what": "What git was handed when a PowerShell call starts a program with Start-Process (or its aliases saps and start), command by command (FN-55, finding 0110f7). `argv` is every git started from outside git, in order, with its whole argv as git itself wrote it down (the trace2 start event, GIT_TRACE2_EVENT); an empty list: no git ran.",
+ "how": "Each command was written to a .ps1 file and run by PowerShell 7 (pwsh -NoProfile -NonInteractive -File) in a scratch repository with an empty template, no hooks and nothing staged, so nothing was committed; run twice, with the same answer both times. Every case keeps its window off the desktop (-NoNewWindow or -WindowStyle Hidden) and none uses -Verb. -UseNewEnvironment is left out: git then starts without GIT_TRACE2_EVENT, so this method cannot see it.",
+ "git": "git version 2.53.0.windows.1",
+ "pwsh": "7.6.8",
+ "powershell": "5.1.26100.9444",
+ "bash": "GNU bash, version 5.2.37(1)-release (x86_64-pc-msys)",
+ "recorded": "2026-10-23",
+ "provisional": false,
+ "cases": [
+  {
+   "command": "Start-Process git -ArgumentList 'commit -n' -NoNewWindow -Wait",
+   "status": "ran",
+   "argv": [
+    [
+     "git",
+     "commit",
+     "-n"
+    ]
+   ]
+  },
+  {
+   "command": "Start-Process git -ArgumentList 'commit','-n' -NoNewWindow -Wait",
+   "status": "ran",
+   "argv": [
+    [
+     "git",
+     "commit",
+     "-n"
+    ]
+   ]
+  },
+  {
+   "command": "Start-Process git -ArgumentList @('commit', '-n') -NoNewWindow -Wait",
+   "status": "ran",
+   "argv": [
+    [
+     "git",
+     "commit",
+     "-n"
+    ]
+   ]
+  },
+  {
+   "command": "Start-Process git 'commit -n' -NoNewWindow -Wait",
+   "status": "ran",
+   "argv": [
+    [
+     "git",
+     "commit",
+     "-n"
+    ]
+   ]
+  },
+  {
+   "command": "saps git 'commit -n' -NoNewWindow -Wait",
+   "status": "ran",
+   "argv": [
+    [
+     "git",
+     "commit",
+     "-n"
+    ]
+   ]
+  },
+  {
+   "command": "start git 'commit -n' -NoNewWindow -Wait",
+   "status": "ran",
+   "argv": [
+    [
+     "git",
+     "commit",
+     "-n"
+    ]
+   ]
+  },
+  {
+   "command": "START-PROCESS git 'commit -n' -NoNewWindow -Wait",
+   "status": "ran",
+   "argv": [
+    [
+     "git",
+     "commit",
+     "-n"
+    ]
+   ]
+  },
+  {
+   "command": "Start-Process -FilePath git -ArgumentList 'push --no-verify' -NoNewWindow -Wait",
+   "status": "ran",
+   "argv": [
+    [
+     "git",
+     "push",
+     "--no-verify"
+    ]
+   ]
+  },
+  {
+   "command": "Start-Process git 'commit --no-verify' -NoNewWindow -Wait",
+   "status": "ran",
+   "argv": [
+    [
+     "git",
+     "commit",
+     "--no-verify"
+    ]
+   ]
+  },
+  {
+   "command": "Start-Process -ArgumentList 'commit -n' -FilePath git -NoNewWindow -Wait",
+   "status": "ran",
+   "argv": [
+    [
+     "git",
+     "commit",
+     "-n"
+    ]
+   ]
+  },
+  {
+   "command": "Start-Process -ArgumentList 'commit -n' git -NoNewWindow -Wait",
+   "status": "ran",
+   "argv": [
+    [
+     "git",
+     "commit",
+     "-n"
+    ]
+   ]
+  },
+  {
+   "command": "Start-Process git -NoNewWindow -Wait -ArgumentList 'commit -n'",
+   "status": "ran",
+   "argv": [
+    [
+     "git",
+     "commit",
+     "-n"
+    ]
+   ]
+  },
+  {
+   "command": "Start-Process git -NoNewWindow -Wait 'commit -n'",
+   "status": "ran",
+   "argv": [
+    [
+     "git",
+     "commit",
+     "-n"
+    ]
+   ]
+  },
+  {
+   "command": "Start-Process -NoNewWindow -Wait git 'commit -n'",
+   "status": "ran",
+   "argv": [
+    [
+     "git",
+     "commit",
+     "-n"
+    ]
+   ]
+  },
+  {
+   "command": "Start-Process git -Args 'commit -n' -NoNewWindow -Wait",
+   "status": "ran",
+   "argv": [
+    [
+     "git",
+     "commit",
+     "-n"
+    ]
+   ]
+  },
+  {
+   "command": "Start-Process -Path git 'commit -n' -NoNewWindow -Wait",
+   "status": "ran",
+   "argv": [
+    [
+     "git",
+     "commit",
+     "-n"
+    ]
+   ]
+  },
+  {
+   "command": "Start-Process -PSPath git 'commit -n' -NoNewWindow -Wait",
+   "status": "ran",
+   "argv": [
+    [
+     "git",
+     "commit",
+     "-n"
+    ]
+   ]
+  },
+  {
+   "command": "Start-Process -FilePath:git -ArgumentList:'commit -n' -NoNewWindow -Wait",
+   "status": "ran",
+   "argv": [
+    [
+     "git",
+     "commit",
+     "-n"
+    ]
+   ]
+  },
+  {
+   "command": "Start-Process -Fi git -Ar 'commit -n' -NoNewWindow -Wait",
+   "status": "ran",
+   "argv": [
+    [
+     "git",
+     "commit",
+     "-n"
+    ]
+   ]
+  },
+  {
+   "command": "Start-Process -f git -a 'commit -n' -NoNewWindow -Wait",
+   "status": "ran",
+   "argv": [
+    [
+     "git",
+     "commit",
+     "-n"
+    ]
+   ]
+  },
+  {
+   "command": "Start-Process 'git' 'commit -n' -NoNewWindow -Wait",
+   "status": "ran",
+   "argv": [
+    [
+     "git",
+     "commit",
+     "-n"
+    ]
+   ]
+  },
+  {
+   "command": "Start-Process \"git\" \"commit -n\" -NoNewWindow -Wait",
+   "status": "ran",
+   "argv": [
+    [
+     "git",
+     "commit",
+     "-n"
+    ]
+   ]
+  },
+  {
+   "command": "Start-Process git.exe 'commit -n' -NoNewWindow -Wait",
+   "status": "ran",
+   "argv": [
+    [
+     "git",
+     "commit",
+     "-n"
+    ]
+   ]
+  },
+  {
+   "command": "Start-Process GIT 'commit -n' -NoNewWindow -Wait",
+   "status": "ran",
+   "argv": [
+    [
+     "git",
+     "commit",
+     "-n"
+    ]
+   ]
+  },
+  {
+   "command": "Start-Process 'C:\\Program Files\\Git\\cmd\\git.exe' 'commit -n' -NoNewWindow -Wait",
+   "status": "ran",
+   "argv": [
+    [
+     "git",
+     "commit",
+     "-n"
+    ]
+   ]
+  },
+  {
+   "command": "Start-Process git commit,-n -NoNewWindow -Wait",
+   "status": "ran",
+   "argv": [
+    [
+     "git",
+     "commit",
+     "-n"
+    ]
+   ]
+  },
+  {
+   "command": "Start-Process git commit, -n -NoNewWindow -Wait",
+   "status": "ran",
+   "argv": [
+    [
+     "git",
+     "commit",
+     "-n"
+    ]
+   ]
+  },
+  {
+   "command": "Start-Process git commit -NoNewWindow -Wait",
+   "status": "ran",
+   "argv": [
+    [
+     "git",
+     "commit"
+    ]
+   ]
+  },
+  {
+   "command": "Start-Process git ('commit', '-n') -NoNewWindow -Wait",
+   "status": "ran",
+   "argv": [
+    [
+     "git",
+     "commit",
+     "-n"
+    ]
+   ]
+  },
+  {
+   "command": "Start-Process git 'commit','-m','a b','-n' -NoNewWindow -Wait",
+   "status": "ran",
+   "argv": [
+    [
+     "git",
+     "commit",
+     "-m",
+     "a",
+     "b",
+     "-n"
+    ]
+   ]
+  },
+  {
+   "command": "Start-Process git 'commit','-m','-n' -NoNewWindow -Wait",
+   "status": "ran",
+   "argv": [
+    [
+     "git",
+     "commit",
+     "-m",
+     "-n"
+    ]
+   ]
+  },
+  {
+   "command": "Start-Process git '','commit','-n' -NoNewWindow -Wait",
+   "status": "ran",
+   "argv": [
+    [
+     "git",
+     "commit",
+     "-n"
+    ]
+   ]
+  },
+  {
+   "command": "Start-Process git 'commit','','-n' -NoNewWindow -Wait",
+   "status": "ran",
+   "argv": [
+    [
+     "git",
+     "commit",
+     "-n"
+    ]
+   ]
+  },
+  {
+   "command": "Start-Process git 'commit -m \"a b\" -n' -NoNewWindow -Wait",
+   "status": "ran",
+   "argv": [
+    [
+     "git",
+     "commit",
+     "-m",
+     "a b",
+     "-n"
+    ]
+   ]
+  },
+  {
+   "command": "Start-Process git 'commit -m \"-n\"' -NoNewWindow -Wait",
+   "status": "ran",
+   "argv": [
+    [
+     "git",
+     "commit",
+     "-m",
+     "-n"
+    ]
+   ]
+  },
+  {
+   "command": "Start-Process git 'commit -m \"a -n\"' -NoNewWindow -Wait",
+   "status": "ran",
+   "argv": [
+    [
+     "git",
+     "commit",
+     "-m",
+     "a -n"
+    ]
+   ]
+  },
+  {
+   "command": "Start-Process git 'commit \"-n\"' -NoNewWindow -Wait",
+   "status": "ran",
+   "argv": [
+    [
+     "git",
+     "commit",
+     "-n"
+    ]
+   ]
+  },
+  {
+   "command": "Start-Process git 'commit -m x\" -n' -NoNewWindow -Wait",
+   "status": "ran",
+   "argv": [
+    [
+     "git",
+     "commit",
+     "-m",
+     "x -n"
+    ]
+   ]
+  },
+  {
+   "command": "Start-Process git 'commit -m \\\"x -n' -NoNewWindow -Wait",
+   "status": "ran",
+   "argv": [
+    [
+     "git",
+     "commit",
+     "-m",
+     "\"x",
+     "-n"
+    ]
+   ]
+  },
+  {
+   "command": "Start-Process git '  commit   -n  ' -NoNewWindow -Wait",
+   "status": "ran",
+   "argv": [
+    [
+     "git",
+     "commit",
+     "-n"
+    ]
+   ]
+  },
+  {
+   "command": "Start-Process git \"commit `t-n\" -NoNewWindow -Wait",
+   "status": "ran",
+   "argv": [
+    [
+     "git",
+     "commit",
+     "-n"
+    ]
+   ]
+  },
+  {
+   "command": "Start-Process git 'commit `-n' -NoNewWindow -Wait",
+   "status": "ran",
+   "argv": [
+    [
+     "git",
+     "commit",
+     "`-n"
+    ]
+   ]
+  },
+  {
+   "command": "Start-Process git \"commit `-n\" -NoNewWindow -Wait",
+   "status": "ran",
+   "argv": [
+    [
+     "git",
+     "commit",
+     "-n"
+    ]
+   ]
+  },
+  {
+   "command": "Start-Process git '-c core.hooksPath=/dev/null commit' -NoNewWindow -Wait",
+   "status": "ran",
+   "argv": [
+    [
+     "git",
+     "-c",
+     "core.hooksPath=/dev/null",
+     "commit"
+    ]
+   ]
+  },
+  {
+   "command": "Start-Process git 'log -n 1' -NoNewWindow -Wait",
+   "status": "ran",
+   "argv": [
+    [
+     "git",
+     "log",
+     "-n",
+     "1"
+    ]
+   ]
+  },
+  {
+   "command": "Start-Process git 'status' -NoNewWindow -Wait",
+   "status": "ran",
+   "argv": [
+    [
+     "git",
+     "status"
+    ]
+   ]
+  },
+  {
+   "command": "Start-Process git -NoNewWindow -Wait",
+   "status": "ran",
+   "argv": [
+    [
+     "git"
+    ]
+   ]
+  },
+  {
+   "command": "Start-Process git 'commit -n' -Wait -WindowStyle Hidden",
+   "status": "ran",
+   "argv": [
+    [
+     "git",
+     "commit",
+     "-n"
+    ]
+   ]
+  },
+  {
+   "command": "Start-Process git 'commit -n' -WindowStyle Hidden -PassThru | Wait-Process",
+   "status": "ran",
+   "argv": [
+    [
+     "git",
+     "commit",
+     "-n"
+    ]
+   ]
+  },
+  {
+   "command": "Start-Process git 'commit -n' -NoNewWindow",
+   "status": "ran",
+   "argv": [
+    [
+     "git",
+     "commit",
+     "-n"
+    ]
+   ]
+  },
+  {
+   "command": "Start-Process git 'commit -n' -NoNewWindow -Wait -RedirectStandardError err.txt",
+   "status": "ran",
+   "argv": [
+    [
+     "git",
+     "commit",
+     "-n"
+    ]
+   ]
+  },
+  {
+   "command": "Start-Process git 'commit -n' -NoNewWindow -Wait -WorkingDirectory .",
+   "status": "ran",
+   "argv": [
+    [
+     "git",
+     "commit",
+     "-n"
+    ]
+   ]
+  },
+  {
+   "command": "Start-Process git 'commit -n' -NoNewWindow -Wait -WhatIf",
+   "status": "ran",
+   "argv": []
+  },
+  {
+   "command": "$p = Start-Process git 'commit -n' -NoNewWindow -PassThru; $p.WaitForExit()",
+   "status": "ran",
+   "argv": [
+    [
+     "git",
+     "commit",
+     "-n"
+    ]
+   ]
+  },
+  {
+   "command": "git status; Start-Process git 'commit -n' -NoNewWindow -Wait",
+   "status": "ran",
+   "argv": [
+    [
+     "git",
+     "status"
+    ],
+    [
+     "git",
+     "commit",
+     "-n"
+    ]
+   ]
+  },
+  {
+   "command": "if ($true) { Start-Process git 'commit -n' -NoNewWindow -Wait }",
+   "status": "ran",
+   "argv": [
+    [
+     "git",
+     "commit",
+     "-n"
+    ]
+   ]
+  },
+  {
+   "command": "& { Start-Process git 'commit -n' -NoNewWindow -Wait }",
+   "status": "ran",
+   "argv": [
+    [
+     "git",
+     "commit",
+     "-n"
+    ]
+   ]
+  },
+  {
+   "command": "Write-Output Start-Process git 'commit -n'",
+   "status": "ran",
+   "argv": []
+  },
+  {
+   "command": "echo 'Start-Process git commit -n'",
+   "status": "ran",
+   "argv": []
+  },
+  {
+   "command": "Start-Process cmd '/c git commit -n' -NoNewWindow -Wait",
+   "status": "ran",
+   "argv": [
+    [
+     "git",
+     "commit",
+     "-n"
+    ]
+   ]
+  },
+  {
+   "command": "Start-Process cmd -ArgumentList '/c','git','commit','-n' -NoNewWindow -Wait",
+   "status": "ran",
+   "argv": [
+    [
+     "git",
+     "commit",
+     "-n"
+    ]
+   ]
+  },
+  {
+   "command": "Start-Process cmd '/c echo git commit -n' -NoNewWindow -Wait",
+   "status": "ran",
+   "argv": []
+  },
+  {
+   "command": "Start-Process pwsh '-NoProfile -c git commit -n' -NoNewWindow -Wait",
+   "status": "ran",
+   "argv": [
+    [
+     "git",
+     "commit",
+     "-n"
+    ]
+   ]
+  },
+  {
+   "command": "Start-Process bash '-c \"git commit -n\"' -NoNewWindow -Wait",
+   "status": "ran",
+   "argv": [
+    [
+     "git",
+     "commit",
+     "-n"
+    ]
+   ]
+  },
+  {
+   "command": "Start-Process bash \"-c 'git commit -n'\" -NoNewWindow -Wait",
+   "status": "ran",
+   "argv": [
+    [
+     "git",
+     "commit",
+     "-n"
+    ]
+   ]
+  },
+  {
+   "command": "Start-Process -WorkingDirectory . git 'commit -n' -NoNewWindow -Wait",
+   "status": "ran",
+   "argv": [
+    [
+     "git",
+     "commit",
+     "-n"
+    ]
+   ]
+  },
+  {
+   "command": "Start-Process -WindowStyle Hidden git 'commit -n' -Wait",
+   "status": "ran",
+   "argv": [
+    [
+     "git",
+     "commit",
+     "-n"
+    ]
+   ]
+  },
+  {
+   "command": "Start-Process -RedirectStandardOutput out.txt git 'commit -n' -NoNewWindow -Wait",
+   "status": "ran",
+   "argv": [
+    [
+     "git",
+     "commit",
+     "-n"
+    ]
+   ]
+  },
+  {
+   "command": "Start-Process -ErrorAction Stop git 'commit -n' -NoNewWindow -Wait",
+   "status": "ran",
+   "argv": [
+    [
+     "git",
+     "commit",
+     "-n"
+    ]
+   ]
+  },
+  {
+   "command": "Start-Process -ea 0 git 'commit -n' -NoNewWindow -Wait",
+   "status": "ran",
+   "argv": [
+    [
+     "git",
+     "commit",
+     "-n"
+    ]
+   ]
+  },
+  {
+   "command": "Start-Process -OutVariable o git 'commit -n' -NoNewWindow -Wait",
+   "status": "ran",
+   "argv": [
+    [
+     "git",
+     "commit",
+     "-n"
+    ]
+   ]
+  },
+  {
+   "command": "Start-Process -ov o git 'commit -n' -NoNewWindow -Wait",
+   "status": "ran",
+   "argv": [
+    [
+     "git",
+     "commit",
+     "-n"
+    ]
+   ]
+  },
+  {
+   "command": "Start-Process git 'commit -n' -PipelineVariable pv -NoNewWindow -Wait",
+   "status": "ran",
+   "argv": [
+    [
+     "git",
+     "commit",
+     "-n"
+    ]
+   ]
+  },
+  {
+   "command": "Start-Process -Wait:$true git 'commit -n' -NoNewWindow",
+   "status": "ran",
+   "argv": [
+    [
+     "git",
+     "commit",
+     "-n"
+    ]
+   ]
+  },
+  {
+   "command": "Start-Process git 'commit -n' -Verbose -NoNewWindow -Wait",
+   "status": "ran",
+   "argv": [
+    [
+     "git",
+     "commit",
+     "-n"
+    ]
+   ]
+  },
+  {
+   "command": "Start-Process git 'commit -n' -NoNewWindow -Wait -WhatIf:$false",
+   "status": "ran",
+   "argv": [
+    [
+     "git",
+     "commit",
+     "-n"
+    ]
+   ]
+  },
+  {
+   "command": "Start-Process git 'commit -n' -WhatIf:$true -NoNewWindow -Wait",
+   "status": "ran",
+   "argv": []
+  },
+  {
+   "command": "Start-Process git 'commit -n' -W -NoNewWindow",
+   "status": "ran",
+   "argv": []
+  },
+  {
+   "command": "Start-Process git 'commit -n' -Bogus -NoNewWindow -Wait",
+   "status": "ran",
+   "argv": []
+  },
+  {
+   "command": "Start-Process git 'commit' -n -Wait",
+   "status": "ran",
+   "argv": [
+    [
+     "git",
+     "commit"
+    ]
+   ]
+  },
+  {
+   "command": "Start-Process git 'commit' '-n' -NoNewWindow -Wait",
+   "status": "ran",
+   "argv": []
+  },
+  {
+   "command": "Start-Process git -ArgumentList 'commit -n' -ArgumentList 'status' -NoNewWindow -Wait",
+   "status": "ran",
+   "argv": []
+  },
+  {
+   "command": "Start-Process git -nnw -Wait 'commit -n'",
+   "status": "ran",
+   "argv": [
+    [
+     "git",
+     "commit",
+     "-n"
+    ]
+   ]
+  },
+  {
+   "command": "Microsoft.PowerShell.Management\\Start-Process git 'commit -n' -NoNewWindow -Wait",
+   "status": "ran",
+   "argv": [
+    [
+     "git",
+     "commit",
+     "-n"
+    ]
+   ]
+  },
+  {
+   "command": "Start-Process git @('commit'; '-n') -NoNewWindow -Wait",
+   "status": "ran",
+   "argv": [
+    [
+     "git",
+     "commit",
+     "-n"
+    ]
+   ]
+  },
+  {
+   "command": "Start-Process git @(\"commit\", \"-n\") -NoNewWindow -Wait",
+   "status": "ran",
+   "argv": [
+    [
+     "git",
+     "commit",
+     "-n"
+    ]
+   ]
+  },
+  {
+   "command": "Start-Process git @('commit'\n'-n') -NoNewWindow -Wait",
+   "status": "ran",
+   "argv": [
+    [
+     "git",
+     "commit",
+     "-n"
+    ]
+   ]
+  },
+  {
+   "command": "Start-Process git ('commit' + ' -n') -NoNewWindow -Wait",
+   "status": "ran",
+   "argv": [
+    [
+     "git",
+     "commit",
+     "-n"
+    ]
+   ]
+  },
+  {
+   "command": "$a = 'commit -n'; Start-Process git $a -NoNewWindow -Wait",
+   "status": "ran",
+   "argv": [
+    [
+     "git",
+     "commit",
+     "-n"
+    ]
+   ]
+  },
+  {
+   "command": "$a = 'commit','-n'; Start-Process git $a -NoNewWindow -Wait",
+   "status": "ran",
+   "argv": [
+    [
+     "git",
+     "commit",
+     "-n"
+    ]
+   ]
+  },
+  {
+   "command": "Start-Process git 'commit','-n',$u -NoNewWindow -Wait",
+   "status": "ran",
+   "argv": [
+    [
+     "git",
+     "commit",
+     "-n"
+    ]
+   ]
+  },
+  {
+   "command": "Start-Process git 'commit,-n' -NoNewWindow -Wait",
+   "status": "ran",
+   "argv": [
+    [
+     "git",
+     "commit,-n"
+    ]
+   ]
+  },
+  {
+   "command": "Start-Process git 'commit -m x,-n' -NoNewWindow -Wait",
+   "status": "ran",
+   "argv": [
+    [
+     "git",
+     "commit",
+     "-m",
+     "x,-n"
+    ]
+   ]
+  },
+  {
+   "command": "Start-Process git 'commit','-m','x,-n' -NoNewWindow -Wait",
+   "status": "ran",
+   "argv": [
+    [
+     "git",
+     "commit",
+     "-m",
+     "x,-n"
+    ]
+   ]
+  },
+  {
+   "command": "Start-Process git -ArgumentList 'commit',\n'-n' -NoNewWindow -Wait",
+   "status": "ran",
+   "argv": [
+    [
+     "git",
+     "commit",
+     "-n"
+    ]
+   ]
+  },
+  {
+   "command": "Start-Process $env:ComSpec '/c git commit -n' -NoNewWindow -Wait",
+   "status": "ran",
+   "argv": [
+    [
+     "git",
+     "commit",
+     "-n"
+    ]
+   ]
+  },
+  {
+   "command": "Start-Process sh -ArgumentList '-c','git commit -n' -NoNewWindow -Wait",
+   "status": "ran",
+   "argv": [
+    [
+     "git"
+    ]
+   ]
+  },
+  {
+   "command": "Start-Process bash -ArgumentList '-c','\"git commit -n\"' -NoNewWindow -Wait",
+   "status": "ran",
+   "argv": [
+    [
+     "git",
+     "commit",
+     "-n"
+    ]
+   ]
+  },
+  {
+   "command": "Start-Process pwsh -ArgumentList '-NoProfile','-c','git commit -n' -NoNewWindow -Wait",
+   "status": "ran",
+   "argv": [
+    [
+     "git",
+     "commit",
+     "-n"
+    ]
+   ]
+  },
+  {
+   "command": "Start-Process cmd '/c \"git commit -n\"' -NoNewWindow -Wait",
+   "status": "ran",
+   "argv": [
+    [
+     "git",
+     "commit",
+     "-n"
+    ]
+   ]
+  },
+  {
+   "command": "Start-Process cmd '/c git status & git commit -n' -NoNewWindow -Wait",
+   "status": "ran",
+   "argv": [
+    [
+     "git",
+     "status"
+    ],
+    [
+     "git",
+     "commit",
+     "-n"
+    ]
+   ]
+  },
+  {
+   "command": "Start-Process powershell '-NoProfile -c git commit -n' -NoNewWindow -Wait",
+   "status": "ran",
+   "argv": [
+    [
+     "git",
+     "commit",
+     "-n"
+    ]
+   ]
+  },
+  {
+   "command": "Start-Process 'commit -n' -FilePath git -NoNewWindow -Wait",
+   "status": "ran",
+   "argv": [
+    [
+     "git",
+     "commit",
+     "-n"
+    ]
+   ]
+  },
+  {
+   "command": "Start-Process 'commit -n' -NoNewWindow -FilePath git -Wait",
+   "status": "ran",
+   "argv": [
+    [
+     "git",
+     "commit",
+     "-n"
+    ]
+   ]
+  },
+  {
+   "command": "Start-Process -NoNewWindow 'commit -n' -Wait -FilePath git",
+   "status": "ran",
+   "argv": [
+    [
+     "git",
+     "commit",
+     "-n"
+    ]
+   ]
+  },
+  {
+   "command": "Start-Process git -NoNewWindow -Wait -FilePath git",
+   "status": "ran",
+   "argv": [
+    [
+     "git",
+     "git"
+    ]
+   ]
+  },
+  {
+   "command": "$p = Start-Process git 'commit -n' -NoNewWindow -PassThru; $p | Wait-Process",
+   "status": "ran",
+   "argv": [
+    [
+     "git",
+     "commit",
+     "-n"
+    ]
+   ]
+  },
+  {
+   "command": "[void](Start-Process git 'commit -n' -NoNewWindow -PassThru -Wait)",
+   "status": "ran",
+   "argv": [
+    [
+     "git",
+     "commit",
+     "-n"
+    ]
+   ]
+  },
+  {
+   "command": "$null = Start-Process git 'commit -n' -NoNewWindow -Wait",
+   "status": "ran",
+   "argv": [
+    [
+     "git",
+     "commit",
+     "-n"
+    ]
+   ]
+  },
+  {
+   "command": "Start-Process git 'commit -n' -Wait -NoNewWindow -RunAs",
+   "status": "ran",
+   "argv": []
+  },
+  {
+   "command": "Start-Process git \"commit`0 -n\" -NoNewWindow -Wait",
+   "status": "ran",
+   "argv": [
+    [
+     "git",
+     "commit"
+    ]
+   ]
+  },
+  {
+   "command": "Start-Process git \"commit -n`0x\" -NoNewWindow -Wait",
+   "status": "ran",
+   "argv": [
+    [
+     "git",
+     "commit",
+     "-n"
+    ]
+   ]
+  },
+  {
+   "command": "Start-Process git 'commit',\"`0\",'-n' -NoNewWindow -Wait",
+   "status": "ran",
+   "argv": [
+    [
+     "git",
+     "commit"
+    ]
+   ]
+  },
+  {
+   "command": "Start-Process pwsh \"-NoProfile -c Start-Process git 'commit -n' -NoNewWindow -Wait\" -NoNewWindow -Wait",
+   "status": "ran",
+   "argv": [
+    [
+     "git",
+     "commit",
+     "-n"
+    ]
+   ]
+  }
+ ]
+}

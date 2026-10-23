@@ -21,7 +21,15 @@ PowerShell handed over.
 Pure stdlib, no aramid imports, no I/O, and it cannot raise: it runs inside
 the agent hook, which fails open, so a raise here would let a command
 through unread. A Bash tool call imports it only to read a string it hands
-to PowerShell (`pwsh -c`, FN-55).
+to PowerShell (`pwsh -c`, FN-55); a call from a tool the hook does not know
+imports it to read what it hands on the PowerShell way too.
+
+START-PROCESS. `started` hands back each program a Start-Process command
+starts and the line it is started with, as tests/fixtures/started-argv.json
+records them (FN-55 0110f7). A cmdlet is handed a list as its elements, not
+as the words a program would get, so each word keeps the commas that make it
+a list (`parts`), and a `( )` among the words keeps the commands it holds
+(`groups`); the words themselves are what they were.
 
 WHAT IS NOT KNOWN HERE. A variable, a `$( )`, a `( )` or a `{ }` stands for
 a value only the run will show. As a whole word it stays one word, written
@@ -134,11 +142,17 @@ def _commands(text: str, i: int, closer: str, done: list, depth: int) -> int:
     comma = False       # a comma was the last thing read: the line goes on
     prev: dict | None = None   # the previous simple command AT THIS LEVEL
     prev_op = ""        # the operator just before the command being read
+    # A cmdlet is handed a list as its elements (`started`), so the word keeps
+    # where a comma made it one and where a line end carried the list on.
+    parts: list[list[str]] = []     # per word in `words`: its pieces (_parts)
+    seps: list[int] = []            # in `word`: the commas that make a list
+    gaps: list[int] = []            # in `word`: the line ends after one of them
+    groups: dict[int, list] = {}    # a `( )` among the words, by its place: its commands
 
     def end_word() -> bool:
         """Close the word being read. True when it was the stop-parsing token,
         written plainly: the caller reads the rest of the line as it stands."""
-        nonlocal word, plain, named, target
+        nonlocal word, plain, named, target, seps, gaps
         stop = False
         if word is not None:
             read = "".join(word)
@@ -148,9 +162,10 @@ def _commands(text: str, i: int, closer: str, done: list, depth: int) -> int:
             elif known == _STOP:
                 stop = plain    # quoted or escaped it is left out all the same
             else:
-                words.append(known if known or _VALUE not in read else "$")
+                words.append(_written(read))
                 plains.append(plain)
-        word, plain, named = None, True, False
+                parts.append(_parts(word, seps, gaps))
+        word, plain, named, seps, gaps = None, True, False, [], []
         return stop
 
     def verbatim(at: int) -> int:
@@ -159,6 +174,7 @@ def _commands(text: str, i: int, closer: str, done: list, depth: int) -> int:
         before = len(words)
         at = _verbatim(text, at, words)
         plains.extend([True] * (len(words) - before))
+        parts.extend([w] for w in words[before:])
         return at
 
     def end_command(op: str) -> None:
@@ -168,7 +184,7 @@ def _commands(text: str, i: int, closer: str, done: list, depth: int) -> int:
         when a single `|` joined them) so a shell fed on stdin can be read
         (agent_bypass._from_stdin). `||`/`&&` are one operator, not a pipe; `|
         &` (the call operator straight after a pipe) keeps the pipe."""
-        nonlocal words, plains, target, comma, prev, prev_op
+        nonlocal words, plains, parts, groups, target, comma, prev, prev_op
         end_word()
         if op in ("|", "&") and not words:
             if prev_op == op:            # `||` / `&&`: one operator, not a pipe
@@ -181,11 +197,12 @@ def _commands(text: str, i: int, closer: str, done: list, depth: int) -> int:
         if words:
             kept = _handed(words)
             entry = {"words": kept, "plains": plains[:len(kept)],
-                     "upstream": prev if prev_op == "|" else None}
+                     "upstream": prev if prev_op == "|" else None,
+                     "parts": parts[:len(kept)], "groups": groups}
             done.append(entry)
             prev = entry
         prev_op = op
-        words, plains, target, comma = [], [], False, False
+        words, plains, parts, groups, target, comma = [], [], [], {}, False, False
 
     try:
         # A turn for each character left, and every turn reads one at least:
@@ -200,6 +217,7 @@ def _commands(text: str, i: int, closer: str, done: list, depth: int) -> int:
                     # the line end is handed over as part of a word
                     if word is None:
                         word = []
+                    gaps.append(len(word))
                     word.append("\n")
                 else:
                     end_command("\n")
@@ -272,14 +290,21 @@ def _commands(text: str, i: int, closer: str, done: list, depth: int) -> int:
                 if end_word():
                     i = verbatim(i)
                     continue
+                place = None
                 if target:
                     target = False
                 elif words:
                     words.append("$")   # a group among the arguments: a value
                     plains.append(False)
+                    parts.append(["$"])
+                    place = len(words) - 1
                 comma = False
+                before = len(done)
                 i = _commands(text, i + 1, ")" if ch == "(" else "}", done, depth + 1)
-                i = _members(text, i, done, depth)      # `(a).Length` is one value
+                after = _members(text, i, done, depth)  # `(a).Length` is one value
+                if place is not None and ch == "(" and after == i:
+                    groups[place] = done[before:]
+                i = after
             elif ch in ")}" or (ch == "]" and closer == "]"):
                 end_command(")")
                 if ch == closer:
@@ -314,6 +339,8 @@ def _commands(text: str, i: int, closer: str, done: list, depth: int) -> int:
                     word = []
                 elif named and ch == ":":
                     named = False       # `-n:.x` is one word
+                if ch == ",":
+                    seps.append(len(word))
                 word.append(ch)
                 comma = ch == ","
                 i += 1
@@ -325,7 +352,8 @@ def _commands(text: str, i: int, closer: str, done: list, depth: int) -> int:
         if words:
             kept = _handed(words)
             done.append({"words": kept, "plains": plains[:len(kept)],
-                         "upstream": prev if prev_op == "|" else None})
+                         "upstream": prev if prev_op == "|" else None,
+                         "parts": parts[:len(kept)], "groups": groups})
         raise
 
 
@@ -339,6 +367,170 @@ def _handed(words: list[str]) -> list[str]:
         if at >= 0:
             return words[:k] + ([word[:at]] if at else [])
     return words
+
+
+def _written(read: str) -> str:
+    """A word as it is handed over: a value inside it is taken out, and one
+    that is all of it is written `$` (module docstring)."""
+    known = read.replace(_VALUE, "")
+    return known if known or _VALUE not in read else "$"
+
+
+def _parts(word: list[str], seps: list[int], gaps: list[int]) -> list[str]:
+    """The pieces of a word between the commas that make it a list (at `seps`
+    in `word`), without the line ends a comma carried the list over (at
+    `gaps`), each written as a word is: what a cmdlet is handed as the
+    elements of an array. A word with no such comma is one piece."""
+    pieces: list[list[str]] = [[]]
+    for k, made in enumerate(word):
+        if k in seps:
+            pieces.append([])
+        elif k not in gaps:
+            pieces[-1].append(made)
+    return [_written("".join(piece)) for piece in pieces]
+
+
+# Start-Process, as pwsh 7.6.8 lists it (`(Get-Command Start-Process).Parameters`):
+# each parameter by its names, its own first and then its aliases, and whether
+# a value goes with it. FilePath and ArgumentList are also the first and the
+# second positional ones.
+_STARTERS = ("start-process", "saps", "start")
+_START_PARAMETERS = (
+    (("filepath", "pspath", "path"), True), (("argumentlist", "args"), True),
+    (("credential", "runas"), True), (("workingdirectory",), True),
+    (("loaduserprofile", "lup"), False), (("nonewwindow", "nnw"), False),
+    (("passthru",), False), (("redirectstandarderror", "rse"), True),
+    (("redirectstandardinput", "rsi"), True), (("redirectstandardoutput", "rso"), True),
+    (("verb",), True), (("windowstyle",), True), (("wait",), False),
+    (("usenewenvironment",), False), (("environment",), True),
+    (("verbose", "vb"), False), (("debug", "db"), False),
+    (("erroraction", "ea"), True), (("warningaction", "wa"), True),
+    (("informationaction", "infa"), True), (("progressaction", "proga"), True),
+    (("errorvariable", "ev"), True), (("warningvariable", "wv"), True),
+    (("informationvariable", "iv"), True), (("outvariable", "ov"), True),
+    (("outbuffer", "ob"), True), (("pipelinevariable", "pv"), True),
+    (("whatif", "wi"), False), (("confirm", "cf"), False),
+)
+
+
+def started(text: str) -> list[tuple[str, str]]:
+    """Each program a Start-Process command in `text` starts (`saps` and
+    `start` are its aliases), as (the program as it is named, the line of
+    arguments it is started with). As tests/fixtures/started-argv.json
+    records it: the named parameters are bound first and then the positional
+    ones, the program and then its arguments; a list of arguments is joined
+    with single spaces and none of them is quoted; with a bare -WhatIf
+    nothing is started. A word that names the cmdlet starts a reading
+    wherever it stands, as a word named git does.
+
+    A program or an argument that is a value (`$a`, an expression, what a
+    command writes) is not known here: such a program starts nothing that is
+    read, and such an argument is written `$`. A call PowerShell refuses -- a
+    parameter it does not know, or given twice, or without its value -- is
+    read as if it ran."""
+    out: list[tuple[str, str]] = []
+    for cmd in simple_commands(text)[0]:
+        for k, word in enumerate(cmd["words"]):
+            if word.rpartition("\\")[2].lower() in _STARTERS:
+                found = _start(cmd, k + 1)
+                if found is not None:
+                    out.append(found)
+    return out
+
+
+def _start(cmd: dict, first: int) -> tuple[str, str] | None:
+    """The program and the line of arguments of the Start-Process whose
+    arguments are the words of `cmd` from `first` on, or None (`started`)."""
+    bound: dict[str, list[str]] = {}
+    positional: list[list[str]] = []
+    args = _arguments(cmd, first)
+    k = 0
+    while k < len(args):
+        word, plain, elements = args[k]
+        k += 1
+        if not _is_parameter(word, plain):
+            positional.append(elements)
+            continue
+        name, colon, _ = word[1:].partition(":")
+        found = _start_parameter(name)
+        if found is None:
+            continue
+        own, takes = found
+        if own == "whatif" and not colon:
+            return None
+        if colon:
+            given = [elements[0].partition(":")[2]] + elements[1:]
+        elif takes and k < len(args) and not _is_parameter(*args[k][:2]):
+            given = args[k][2]
+            k += 1
+        else:
+            continue
+        bound.setdefault(own, given)
+    for elements in positional:
+        own = "filepath" if "filepath" not in bound else "argumentlist"
+        if own in bound:
+            break
+        bound[own] = elements
+    program = bound.get("filepath", [])
+    if len(program) != 1 or program[0] in ("", "$"):
+        return None
+    return program[0], " ".join(bound.get("argumentlist", []))
+
+
+def _is_parameter(word: str, plain: bool) -> bool:
+    """Whether a word is a parameter's name (`-Wait`, `-FilePath:git`) and not
+    a value: written plainly, or with its value after a colon."""
+    return (word[:1] == "-" and (word[1:2].isalpha() or word[1:2] in ("_", "?"))
+            and (plain or ":" in word))
+
+
+def _start_parameter(name: str) -> tuple[str, bool] | None:
+    """The parameter of Start-Process `-name` names -- by a name or an alias of
+    its own, or by the start of only one -- as (its own name, whether a value
+    goes with it); None when it names none or more than one, and PowerShell
+    refuses the call."""
+    name = name.lower()
+    found = [(names[0], takes) for names, takes in _START_PARAMETERS if name in names]
+    if not found:
+        found = [(names[0], takes) for names, takes in _START_PARAMETERS
+                 if any(each.startswith(name) for each in names)]
+    return found[0] if len(found) == 1 else None
+
+
+def _arguments(cmd: dict, first: int) -> list[tuple[str, bool, list[str]]]:
+    """The arguments of a cmdlet from the word of `cmd` at `first` on, each as
+    (its first word, whether that is plain, its elements). A list is one
+    argument though it is several words (`'a','b'` is `a` and `,b`): a word
+    joins the one in front of it when a comma ends that one or starts this
+    one. A `( )` that holds a list of strings is that list (`_listed`)."""
+    words, plains, parts, groups = cmd["words"], cmd["plains"], cmd["parts"], cmd["groups"]
+    out: list[tuple[str, bool, list[str]]] = []
+    joined = False      # the word in front ended with a comma
+    for k in range(first, len(words)):
+        own = parts[k] if k < len(parts) else [words[k]]
+        pieces = (_listed(groups[k]) if k in groups else None) or list(own)
+        if out and (joined or (len(own) > 1 and own[0] == "")):
+            out[-1][2][-1] += pieces[0]
+            out[-1][2].extend(pieces[1:])
+        else:
+            out.append((words[k], k < len(plains) and plains[k], pieces))
+        joined = len(own) > 1 and own[-1] == ""
+    return out
+
+
+def _listed(entries: list) -> list[str] | None:
+    """The strings a `( )` among the words is, when its commands are nothing
+    but strings and the commas between them (`@('commit', '-n')`, or one to a
+    line); None when it holds anything else, a value only the run shows."""
+    out: list[str] = []
+    for entry in entries:
+        args = _arguments(entry, 0)
+        if len(args) != 1 or args[0][1]:
+            return None
+        if any(plain and word.strip(",\r\n") for word, plain in zip(entry["words"], entry["plains"])):
+            return None
+        out.extend(args[0][2])
+    return out or None
 
 
 def _escape(text: str, i: int) -> tuple[str, int]:
