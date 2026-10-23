@@ -83,6 +83,9 @@ OVER = {
         _ANY_WORD + " (in the words the C runtime makes of the line)",
     "Start-Process bash '-c git\\ commit\\ -n'" + W: _POSIX_TOO + " (`\\ ` is a blank there)",
     "Start-Process bash '\\-c \"git commit -n\"'" + W: _POSIX_TOO + " (`\\-c` is `-c` there)",
+    "Start-Process $null-FilePath:git 'commit -n'" + W:
+        "the reader takes `$null` for nothing, so the rest is read as `-FilePath:git`; "
+        "PowerShell started nothing",
 }
 
 

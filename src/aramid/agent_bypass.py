@@ -993,10 +993,10 @@ def _from_started(command: str, depth: int) -> Bypass | None:
     quote, as only the POSIX reading does, and a backslash outside quotes for
     itself, as neither does (`\\'git commit -n'` commits). Only Git Bash is
     measured, the bash PowerShell finds first here; WSL's is not.
-    `depth` counts the shells handed a string, as `_from_handed`."""
-    low = command.lower()
-    if "start" not in low and "saps" not in low:
-        return None
+    `depth` counts the shells handed a string, as `_from_handed`. No test of
+    the text comes first: PowerShell makes the cmdlet's name out of more than
+    one follows (`& "St`u{61}rt-Process" git 'commit -n'` commits; FN-55
+    b996c0)."""
     from aramid import agent_bypass_powershell
     for program, line in agent_bypass_powershell.started(command):
         from aramid import agent_bypass_cmd
@@ -1050,7 +1050,10 @@ def _may_name_a_program(command: str) -> bool:
     A PowerShell call is never asked here: it is always read. PowerShell
     makes a name out of more than a cheap test can follow (`` `u{67}it ``,
     `& g$('i')t`, `& ("g" + "it")`), and a call cut off by the depth cap is
-    refused without asking (`find_bypass`)."""
+    refused without asking (`find_bypass`). With no shell named, a no from
+    here leaves out the POSIX readings alone: what PowerShell hands, pipes
+    and starts is read all the same (`saps "g`u{69}t" 'commit -n'` commits;
+    FN-55 e623dc)."""
     low = command.lower().translate(_MARKS)
     return "git" in low or "aramid" in low
 
@@ -1108,7 +1111,7 @@ def find_bypass(command, shell: str | None = None, _depth: int = 0) -> Bypass | 
             return Bypass("too-deep", "", str(agent_bypass_powershell._DEPTH))
         return found
     if not (_may_name_a_program(command) or _may_hand_a_string(command)):
-        return None
+        return None if shell == POSIX else _from_powershell(command, _depth)
     posix, posix_whole = _tokens(command, False)
     if shell == POSIX:
         segments = _segments(posix)
@@ -1122,8 +1125,15 @@ def find_bypass(command, shell: str | None = None, _depth: int = 0) -> Bypass | 
         found = _first(_segments(tokens), not backtick, False)
         if found is not None:
             return found
+    return (_from_handed(_segments(posix), _depth, POSIX) or _from_stdin(posix, _depth)
+            or _from_powershell(command, _depth))
+
+
+def _from_powershell(command: str, depth: int) -> Bypass | None:
+    """What a call no shell is named for hands, pipes and starts, read the
+    PowerShell way (FN-55 d57bcd, 0110f7), also when the cheap test said no
+    (e623dc)."""
     from aramid import agent_bypass_powershell
     done, _end = agent_bypass_powershell.reading(command)
-    return (_from_handed(_segments(posix), _depth, POSIX) or _from_stdin(posix, _depth)
-            or _from_handed(done, _depth, POWERSHELL) or _from_stdin_powershell(command, _depth)
-            or _from_started(command, _depth))
+    return (_from_handed(done, depth, POWERSHELL) or _from_stdin_powershell(command, depth)
+            or _from_started(command, depth))

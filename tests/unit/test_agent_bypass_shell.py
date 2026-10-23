@@ -244,6 +244,9 @@ def test_a_bash_call_does_not_load_the_powershell_reader(monkeypatch):
     assert find_bypass("git commit -n", POSIX) == DASH_N
     assert find_bypass("git commit -n") == DASH_N
     assert find_bypass("bash -c 'git commit -n'", POSIX) == DASH_N
+    # a Bash call that names nothing either: what PowerShell starts is read
+    # for a call no shell is named for alone (FN-55 e623dc)
+    assert find_bypass("ls -la", POSIX) is None
     assert "aramid.agent_bypass_powershell" not in sys.modules
     # a string a Bash call hands to PowerShell is read by PowerShell's rules (FN-55)
     assert find_bypass("pwsh -c 'git commit -n'", POSIX) == DASH_N

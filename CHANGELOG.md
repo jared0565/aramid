@@ -138,7 +138,10 @@ to publish a tag that disagrees with it.
   handed a string. A POSIX shell's line is read as Git Bash's runtime makes
   its words, measured word by word (a backslash outside quotes stays, and a
   quote after it still opens: `Start-Process bash '-c \''git commit -n'''`
-  commits), and the POSIX way as well. Not read: a program or an argument that comes from a
+  commits), and the POSIX way as well. The cmdlet's name and the program's
+  are read as PowerShell builds them (`& "St`u{61}rt-Process" git 'commit
+  -n'`, `saps "g`u{69}t" 'commit -n'`), and so is a call from a tool that
+  names no shell. Not read: a program or an argument that comes from a
   variable or an expression (`Start-Process git $a`). A call that starts
   nothing, such as one with a parameter PowerShell does not know, or
   `-WhatIf:$true`, is read as if it ran.

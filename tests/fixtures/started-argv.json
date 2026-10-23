@@ -1849,6 +1849,113 @@
      "a\\b c"
     ]
    ]
+  },
+  {
+   "command": "S`tart-Process git 'commit -n' -NoNewWindow -Wait",
+   "status": "ran",
+   "argv": []
+  },
+  {
+   "command": "& \"St`u{61}rt-Process\" git 'commit -n' -NoNewWindow -Wait",
+   "status": "ran",
+   "argv": [
+    [
+     "git",
+     "commit",
+     "-n"
+    ]
+   ]
+  },
+  {
+   "command": "saps \"g`u{69}t\" 'commit -n' -NoNewWindow -Wait",
+   "status": "ran",
+   "argv": [
+    [
+     "git",
+     "commit",
+     "-n"
+    ]
+   ]
+  },
+  {
+   "command": "S`tart-Process \"g`u{69}t\" 'commit -n' -NoNewWindow -Wait",
+   "status": "ran",
+   "argv": []
+  },
+  {
+   "command": "Start-Pr`ocess git 'commit -n' -NoNewWindow -Wait",
+   "status": "ran",
+   "argv": [
+    [
+     "git",
+     "commit",
+     "-n"
+    ]
+   ]
+  },
+  {
+   "command": "Start-Pr`ocess \"g`u{69}t\" 'commit -n' -NoNewWindow -Wait",
+   "status": "ran",
+   "argv": [
+    [
+     "git",
+     "commit",
+     "-n"
+    ]
+   ]
+  },
+  {
+   "command": "Start-Process -FilePath \"g`u{69}t\" -ArgumentList 'commit -n' -NoNewWindow -Wait",
+   "status": "ran",
+   "argv": [
+    [
+     "git",
+     "commit",
+     "-n"
+    ]
+   ]
+  },
+  {
+   "command": "Start-Process `-FilePath:git 'commit -n' -NoNewWindow -Wait",
+   "status": "ran",
+   "argv": []
+  },
+  {
+   "command": "Start-Process git `-ArgumentList:'commit -n' -NoNewWindow -Wait",
+   "status": "ran",
+   "argv": [
+    [
+     "git",
+     "-ArgumentList:commit",
+     "-n"
+    ]
+   ]
+  },
+  {
+   "command": "Start-Process `-FilePath git 'commit -n' -NoNewWindow -Wait",
+   "status": "ran",
+   "argv": []
+  },
+  {
+   "command": "Start-Process -`FilePath:git 'commit -n' -NoNewWindow -Wait",
+   "status": "ran",
+   "argv": []
+  },
+  {
+   "command": "Start-Process git \"-ArgumentList:commit -n\" -NoNewWindow -Wait",
+   "status": "ran",
+   "argv": [
+    [
+     "git",
+     "-ArgumentList:commit",
+     "-n"
+    ]
+   ]
+  },
+  {
+   "command": "Start-Process $null-FilePath:git 'commit -n' -NoNewWindow -Wait",
+   "status": "ran",
+   "argv": []
   }
  ]
 }
