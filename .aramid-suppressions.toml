@@ -486,3 +486,15 @@ tool = "ruff-inline"
 rule = "inline-suppressed-block"
 path = "tests/unit/test_runner_gitleaks.py"
 reason = "An assertion: the `secret` read back from a gitleaks report is compared with this literal in test_run_reads_back_the_report_file_gitleaks_wrote. The value is the example key ID from AWS's own documentation (it ends in EXAMPLE). Hidden by `per-file-ignores` for `tests/**` in pyproject.toml, which stays: ruff fires on the name, and the name is the field under test."
+
+# --- Dependency advisories ---------------------------------------------------
+# One is suppressed only when no fixed version can be installed and aramid
+# cannot reach the vulnerable code. Re-check it when the package that pins the
+# vulnerable version moves.
+
+[[suppress]]
+id = "e2ceb3357d7fc18179387723c2e899adb28058b4994dd7dd81de29b930e0a365"
+tool = "pip-audit"
+rule = "CVE-2026-114603"
+path = "pyproject.toml"
+reason = "opentelemetry-api 1.37.0 comes in only through semgrep, which pins opentelemetry-api~=1.37.0 in every release up to 1.182.1 (PyPI, 2026-10-22); the fix, 1.45.1, is outside that pin. The advisory is a quadratic parse in TraceState.from_header, which runs only on an inbound tracestate header. semgrep's one propagate.extract call (semgrep/telemetry.py, Telemetry.extract) passes a carrier holding traceparent alone, built from two SEMGREP_TRACE_PARENT_* environment variables, and aramid's own source imports no opentelemetry. Verified 2026-10-23 against semgrep 1.178.0; suppressed on the operator's decision the same day. Re-check when semgrep moves its opentelemetry pin."
