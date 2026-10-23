@@ -33,7 +33,7 @@ import pytest
 
 from aramid import agent_bypass as ab
 from aramid.agent_bypass import POWERSHELL, Bypass, find_bypass
-from aramid.agent_bypass_powershell import _DEPTH, commands, reading
+from aramid.agent_bypass_powershell import _DEPTH, _variable, commands, reading
 
 FIXTURE = Path(__file__).parent.parent / "fixtures" / "powershell-argv.json"
 RECORD = {case["command"]: (case["status"], case["argv"])
@@ -965,3 +965,20 @@ def test_the_shortest_texts_are_read_without_an_error(text):
     words, whole = commands(text)
     assert isinstance(words, list) and isinstance(whole, bool)
     assert find_bypass(text, POWERSHELL) is None
+
+
+@pytest.mark.parametrize("text,i,answer", [
+    # out of contract: no `$` there that `_value_starts` accepts, so it is
+    # read as a `$` that stands for itself, one character and not `$null`
+    ("0", 2**63, (2**63 + 1, False)), ("0", -2**63, (-2**63 + 1, False)),
+    ("$", 0, (1, False)), ("a$x", 2, (3, False)), ("a$x", 3, (4, False)),
+    ("a$x", 9, (10, False)), ("$x", -1, (0, False)), ("$x", -3, (-2, False)),
+    # in contract, and the guard must not change them
+    ("$x", 0, (2, False)), ("a$x", 1, (3, False)), ("$null", 0, (5, True)),
+    ("${null}", 0, (7, True)), ("$$", 0, (2, False)), ("$env:PATH", 0, (9, False))])
+def test_the_variable_reader_never_raises_on_an_out_of_contract_index(text, i, answer):
+    # find_bypass fails open (agent_hook.cmd_agent_hook catches every exception
+    # and allows the call), so a reader that raises is a silent bypass. Every
+    # caller asks `_value_starts` first, but the drain's fuzzer calls it
+    # directly: keep it total (FN-55 7e8088).
+    assert _variable(text, i) == answer

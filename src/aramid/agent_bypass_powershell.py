@@ -417,7 +417,13 @@ def _value_starts(text: str, i: int) -> bool:
 
 def _variable(text: str, i: int) -> tuple[int, bool]:
     """The variable at text[i], a `$` that `_value_starts` accepted and that
-    opens no `$( )`: the index after its name, and whether it is `$null`."""
+    opens no `$( )`: the index after its name, and whether it is `$null`.
+
+    Every caller asks `_value_starts` first; asked here all the same because
+    the hook fails open, so a reader that raised would let the call through
+    (FN-55 7e8088). Anything else is a `$` that stands for itself."""
+    if i < 0 or not _value_starts(text, i):
+        return i + 1, False
     n = len(text)
     nxt = text[i + 1]
     if nxt == "{":
