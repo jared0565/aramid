@@ -119,7 +119,13 @@ to publish a tag that disagrees with it.
   the rules of the shell it is handed to, as a command of its own: bash's
   options in front of `-c` (`-lc`, `-o pipefail`), any start of
   PowerShell's `-Command`, and the words after it joined into one
-  command, each as measured with real shells and real git. A command
+  command, each as measured with real shells and real git. pwsh and
+  Windows PowerShell also take an en dash, an em dash or a horizontal bar
+  for the dash of their own switches, one or two of a kind (`pwsh –Command
+  'git commit -n'` commits), and these are read too. What pwsh runs nothing
+  for is no longer read as a switch: more dashes (`---Command`), two kinds
+  (`–-Command`, `/-c`), and in front of standard input a lone `--` or `/`,
+  where only a lone `-` reads it. A command
   handed on through more than eight shells is refused. Not read: an
   encoded command, and an argument the string is given when it runs.
   In a call from a tool the hook does not know, a string handed on, and a
@@ -141,10 +147,10 @@ to publish a tag that disagrees with it.
   commits), and the POSIX way as well. The cmdlet's name and the program's
   are read as PowerShell builds them (`& "St`u{61}rt-Process" git 'commit
   -n'`, `saps "g`u{69}t" 'commit -n'`), and so is a call from a tool that
-  names no shell. Not read: a program or an argument that comes from a
-  variable or an expression (`Start-Process git $a`), or a parameter
-  written with an en dash, which PowerShell takes for its dash
-  (`Start-Process –ArgumentList 'commit -n' git` commits). A call that starts
+  names no shell. A parameter's dash is read as PowerShell takes it: `-`,
+  an en dash, an em dash or a horizontal bar (`Start-Process –ArgumentList
+  'commit -n' git` commits). Not read: a program or an argument that comes
+  from a variable or an expression (`Start-Process git $a`). A call that starts
   nothing, such as one with a parameter PowerShell does not know, or
   `-WhatIf:$true`, is read as if it ran.
 

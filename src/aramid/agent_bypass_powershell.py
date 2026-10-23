@@ -64,6 +64,10 @@ from __future__ import annotations
 
 _SINGLE = "'\u2018\u2019\u201a\u201b"
 _DOUBLE = "\"\u201c\u201d\u201e"
+# What PowerShell takes for the dash a parameter's name starts with: `-`, the en
+# dash, the em dash and the horizontal bar (tests/fixtures/started-argv.json;
+# FN-55 1a03cd). A native program is handed the dash as written.
+_DASHES = "-\u2013\u2014\u2015"
 _NEWLINE = "\r\n"
 # What a backtick makes of the letter after it. Any other character after a
 # backtick is that character.
@@ -342,7 +346,7 @@ def _commands(text: str, i: int, closer: str, done: list, depth: int) -> int:
                 if word is None:
                     word = []
                     nxt = text[i + 1:i + 2]
-                    named = ch == "-" and (nxt.isalpha() or nxt in ("_", "?"))
+                    named = ch in _DASHES and (nxt.isalpha() or nxt in ("_", "?"))
                     head = named
                 elif named and ch in ".[":
                     end_word()          # `-n.x` is `-n` and `.x`
@@ -492,11 +496,12 @@ def _start(cmd: dict, first: int) -> tuple[str, str] | None:
 
 def _is_parameter(word: str, plain: bool, head: bool) -> bool:
     """Whether a word is a parameter's name (`-Wait`, `-FilePath:git`) and not
-    a value: it began as `-name` written plainly (`head`), and it is plain
-    throughout or has its value after a colon (`-ArgumentList:'commit -n'`).
-    A word that begins with a quote is a value, whatever it holds: the record
-    hands git all of `'-C . commit -n -m a:b'`."""
-    return (head and word[:1] == "-" and (word[1:2].isalpha() or word[1:2] in ("_", "?"))
+    a value: it began as `-name` written plainly (`head`), with any dash of
+    `_DASHES` (`–ArgumentList`), and it is plain throughout or has its value
+    after a colon (`-ArgumentList:'commit -n'`). A word that begins with a
+    quote is a value, whatever it holds: the record hands git all of
+    `'-C . commit -n -m a:b'`."""
+    return (head and word[:1] in _DASHES and (word[1:2].isalpha() or word[1:2] in ("_", "?"))
             and (plain or ":" in word))
 
 

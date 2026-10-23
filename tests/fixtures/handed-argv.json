@@ -1,6 +1,6 @@
 {
  "what": "What git was handed when a command hands a string to another shell (FN-55), command by command. `argv` is every git started from outside git, in order, with its whole argv as git itself wrote it down (the trace2 start event, GIT_TRACE2_EVENT); an empty list: no git ran.",
- "how": "A `posix` case was written to a file and run as a script by Git Bash; a `powershell` case was run as a script block by PowerShell 7. Each in a scratch repository with no hooks and nothing staged, so nothing was committed.",
+ "how": "A `posix` case was written to a file and run as a script by Git Bash; a `powershell` case was run as a script block by PowerShell 7. Each in a scratch repository with no hooks and nothing staged, so nothing was committed. Cases added on 2026-10-23 (the dashes PowerShell takes for `-`, FN-55 1a03cd) were run as a .sh script by Git Bash and as a .ps1 file by PowerShell 7 (pwsh -NoProfile -NonInteractive -File), each twice with the same answer, after cases already in the record had come back the same that way.",
  "git": "git version 2.53.0.windows.1",
  "bash": "GNU bash, version 5.2.37(1)-release (x86_64-pc-msys)",
  "pwsh": "7.6.7",
@@ -2849,6 +2849,360 @@
   {
    "shell": "posix",
    "command": "cmd /c git commit -n",
+   "status": "ran",
+   "argv": []
+  },
+  {
+   "shell": "powershell",
+   "command": "pwsh \u2013NoProfile \u2013Command 'git commit -n'",
+   "status": "ran",
+   "argv": [
+    [
+     "git",
+     "commit",
+     "-n"
+    ]
+   ]
+  },
+  {
+   "shell": "powershell",
+   "command": "pwsh -NoProfile \u2014c 'git commit -n'",
+   "status": "ran",
+   "argv": [
+    [
+     "git",
+     "commit",
+     "-n"
+    ]
+   ]
+  },
+  {
+   "shell": "powershell",
+   "command": "powershell \u2013NoProfile \u2013Command 'git commit -n'",
+   "status": "ran",
+   "argv": [
+    [
+     "git",
+     "commit",
+     "-n"
+    ]
+   ]
+  },
+  {
+   "shell": "powershell",
+   "command": "pwsh \u2013c 'git commit -n'",
+   "status": "ran",
+   "argv": [
+    [
+     "git",
+     "commit",
+     "-n"
+    ]
+   ]
+  },
+  {
+   "shell": "powershell",
+   "command": "pwsh \u2015Command 'git commit -n'",
+   "status": "ran",
+   "argv": [
+    [
+     "git",
+     "commit",
+     "-n"
+    ]
+   ]
+  },
+  {
+   "shell": "powershell",
+   "command": "pwsh \u2013\u2013Command 'git commit -n'",
+   "status": "ran",
+   "argv": [
+    [
+     "git",
+     "commit",
+     "-n"
+    ]
+   ]
+  },
+  {
+   "shell": "powershell",
+   "command": "pwsh \u2013-Command 'git commit -n'",
+   "status": "ran",
+   "argv": []
+  },
+  {
+   "shell": "powershell",
+   "command": "pwsh -\u2013Command 'git commit -n'",
+   "status": "ran",
+   "argv": []
+  },
+  {
+   "shell": "powershell",
+   "command": "pwsh \u2014ExecutionPolicy Bypass \u2014Command 'git commit -n'",
+   "status": "ran",
+   "argv": [
+    [
+     "git",
+     "commit",
+     "-n"
+    ]
+   ]
+  },
+  {
+   "shell": "powershell",
+   "command": "pwsh -NoProfile \u2013cwa 'git commit -n'",
+   "status": "ran",
+   "argv": [
+    [
+     "git",
+     "commit",
+     "-n"
+    ]
+   ]
+  },
+  {
+   "shell": "powershell",
+   "command": "'git commit -n' | pwsh -NoProfile \u2013Command -",
+   "status": "ran",
+   "argv": [
+    [
+     "git",
+     "commit",
+     "-n"
+    ]
+   ]
+  },
+  {
+   "shell": "powershell",
+   "command": "'git commit -n' | pwsh -NoProfile \u2013",
+   "status": "ran",
+   "argv": []
+  },
+  {
+   "shell": "powershell",
+   "command": "powershell \u2014Command 'git commit -n'",
+   "status": "ran",
+   "argv": [
+    [
+     "git",
+     "commit",
+     "-n"
+    ]
+   ]
+  },
+  {
+   "shell": "powershell",
+   "command": "powershell -NoProfile \u2015c 'git commit -n'",
+   "status": "ran",
+   "argv": [
+    [
+     "git",
+     "commit",
+     "-n"
+    ]
+   ]
+  },
+  {
+   "shell": "powershell",
+   "command": "bash \u2013c 'git commit -n'",
+   "status": "ran",
+   "argv": []
+  },
+  {
+   "shell": "posix",
+   "command": "pwsh \u2013NoProfile \u2013Command 'git commit -n'",
+   "status": "ran",
+   "argv": [
+    [
+     "git",
+     "commit",
+     "-n"
+    ]
+   ]
+  },
+  {
+   "shell": "posix",
+   "command": "pwsh -NoProfile \u2014c 'git commit -n'",
+   "status": "ran",
+   "argv": [
+    [
+     "git",
+     "commit",
+     "-n"
+    ]
+   ]
+  },
+  {
+   "shell": "posix",
+   "command": "pwsh \u2013c 'git commit -n'",
+   "status": "ran",
+   "argv": [
+    [
+     "git",
+     "commit",
+     "-n"
+    ]
+   ]
+  },
+  {
+   "shell": "posix",
+   "command": "pwsh \u2015Command 'git commit -n'",
+   "status": "ran",
+   "argv": [
+    [
+     "git",
+     "commit",
+     "-n"
+    ]
+   ]
+  },
+  {
+   "shell": "posix",
+   "command": "pwsh \u2013\u2013Command 'git commit -n'",
+   "status": "ran",
+   "argv": [
+    [
+     "git",
+     "commit",
+     "-n"
+    ]
+   ]
+  },
+  {
+   "shell": "posix",
+   "command": "pwsh \u2013-Command 'git commit -n'",
+   "status": "ran",
+   "argv": []
+  },
+  {
+   "shell": "posix",
+   "command": "pwsh \u2014ExecutionPolicy Bypass \u2014Command 'git commit -n'",
+   "status": "ran",
+   "argv": [
+    [
+     "git",
+     "commit",
+     "-n"
+    ]
+   ]
+  },
+  {
+   "shell": "posix",
+   "command": "pwsh -NoProfile \u2013cwa 'git commit -n'",
+   "status": "ran",
+   "argv": [
+    [
+     "git",
+     "commit",
+     "-n"
+    ]
+   ]
+  },
+  {
+   "shell": "posix",
+   "command": "echo 'git commit -n' | pwsh -NoProfile \u2013Command -",
+   "status": "ran",
+   "argv": [
+    [
+     "git",
+     "commit",
+     "-n"
+    ]
+   ]
+  },
+  {
+   "shell": "posix",
+   "command": "echo 'git commit -n' | pwsh -NoProfile \u2013",
+   "status": "ran",
+   "argv": []
+  },
+  {
+   "shell": "posix",
+   "command": "powershell \u2013NoProfile \u2013Command 'git commit -n'",
+   "status": "ran",
+   "argv": [
+    [
+     "git",
+     "commit",
+     "-n"
+    ]
+   ]
+  },
+  {
+   "shell": "posix",
+   "command": "powershell \u2014Command 'git commit -n'",
+   "status": "ran",
+   "argv": [
+    [
+     "git",
+     "commit",
+     "-n"
+    ]
+   ]
+  },
+  {
+   "shell": "posix",
+   "command": "powershell -NoProfile \u2015c 'git commit -n'",
+   "status": "ran",
+   "argv": [
+    [
+     "git",
+     "commit",
+     "-n"
+    ]
+   ]
+  },
+  {
+   "shell": "posix",
+   "command": "bash \u2013c 'git commit -n'",
+   "status": "ran",
+   "argv": []
+  },
+  {
+   "shell": "powershell",
+   "command": "pwsh ---Command 'git commit -n'",
+   "status": "ran",
+   "argv": []
+  },
+  {
+   "shell": "powershell",
+   "command": "pwsh /-c 'git commit -n'",
+   "status": "ran",
+   "argv": []
+  },
+  {
+   "shell": "powershell",
+   "command": "'git commit -n' | pwsh -NoProfile -",
+   "status": "ran",
+   "argv": [
+    [
+     "git",
+     "commit",
+     "-n"
+    ]
+   ]
+  },
+  {
+   "shell": "powershell",
+   "command": "'git commit -n' | pwsh -NoProfile -Command 'echo hi' -",
+   "status": "ran",
+   "argv": []
+  },
+  {
+   "shell": "powershell",
+   "command": "'git commit -n' | pwsh /c 'echo hi' -",
+   "status": "ran",
+   "argv": []
+  },
+  {
+   "shell": "powershell",
+   "command": "'git commit -n' | pwsh -NoProfile --",
+   "status": "ran",
+   "argv": []
+  },
+  {
+   "shell": "powershell",
+   "command": "'git commit -n' | pwsh -NoProfile /",
    "status": "ran",
    "argv": []
   }

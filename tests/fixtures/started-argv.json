@@ -1956,6 +1956,212 @@
    "command": "Start-Process $null-FilePath:git 'commit -n' -NoNewWindow -Wait",
    "status": "ran",
    "argv": []
+  },
+  {
+   "command": "Start-Process \u2013ArgumentList 'commit -n' git -NoNewWindow -Wait",
+   "status": "ran",
+   "argv": [
+    [
+     "git",
+     "commit",
+     "-n"
+    ]
+   ]
+  },
+  {
+   "command": "Start-Process \u2013FilePath git \u2013ArgumentList 'commit -n' -NoNewWindow -Wait",
+   "status": "ran",
+   "argv": [
+    [
+     "git",
+     "commit",
+     "-n"
+    ]
+   ]
+  },
+  {
+   "command": "Start-Process \u2013FilePath:git \u2013ArgumentList:'commit -n' -NoNewWindow -Wait",
+   "status": "ran",
+   "argv": [
+    [
+     "git",
+     "commit",
+     "-n"
+    ]
+   ]
+  },
+  {
+   "command": "Start-Process git 'commit -n' \u2013WhatIf -NoNewWindow -Wait",
+   "status": "ran",
+   "argv": []
+  },
+  {
+   "command": "Start-Process git \u2013NoNewWindow \u2013Wait \u2013ArgumentList 'commit -n'",
+   "status": "ran",
+   "argv": [
+    [
+     "git",
+     "commit",
+     "-n"
+    ]
+   ]
+  },
+  {
+   "command": "Start-Process git '\u2013ArgumentList:commit -n' -NoNewWindow -Wait",
+   "status": "ran",
+   "argv": [
+    [
+     "git",
+     "\u2013ArgumentList:commit",
+     "-n"
+    ]
+   ]
+  },
+  {
+   "command": "Start-Process \u2014ArgumentList 'commit -n' git -NoNewWindow -Wait",
+   "status": "ran",
+   "argv": [
+    [
+     "git",
+     "commit",
+     "-n"
+    ]
+   ]
+  },
+  {
+   "command": "Start-Process \u2014FilePath git \u2014ArgumentList 'commit -n' -NoNewWindow -Wait",
+   "status": "ran",
+   "argv": [
+    [
+     "git",
+     "commit",
+     "-n"
+    ]
+   ]
+  },
+  {
+   "command": "Start-Process \u2014FilePath:git \u2014ArgumentList:'commit -n' -NoNewWindow -Wait",
+   "status": "ran",
+   "argv": [
+    [
+     "git",
+     "commit",
+     "-n"
+    ]
+   ]
+  },
+  {
+   "command": "Start-Process git 'commit -n' \u2014WhatIf -NoNewWindow -Wait",
+   "status": "ran",
+   "argv": []
+  },
+  {
+   "command": "Start-Process git \u2014NoNewWindow \u2014Wait \u2014ArgumentList 'commit -n'",
+   "status": "ran",
+   "argv": [
+    [
+     "git",
+     "commit",
+     "-n"
+    ]
+   ]
+  },
+  {
+   "command": "Start-Process git '\u2014ArgumentList:commit -n' -NoNewWindow -Wait",
+   "status": "ran",
+   "argv": [
+    [
+     "git",
+     "\u2014ArgumentList:commit",
+     "-n"
+    ]
+   ]
+  },
+  {
+   "command": "Start-Process \u2015ArgumentList 'commit -n' git -NoNewWindow -Wait",
+   "status": "ran",
+   "argv": [
+    [
+     "git",
+     "commit",
+     "-n"
+    ]
+   ]
+  },
+  {
+   "command": "Start-Process \u2015FilePath git \u2015ArgumentList 'commit -n' -NoNewWindow -Wait",
+   "status": "ran",
+   "argv": [
+    [
+     "git",
+     "commit",
+     "-n"
+    ]
+   ]
+  },
+  {
+   "command": "Start-Process \u2015FilePath:git \u2015ArgumentList:'commit -n' -NoNewWindow -Wait",
+   "status": "ran",
+   "argv": [
+    [
+     "git",
+     "commit",
+     "-n"
+    ]
+   ]
+  },
+  {
+   "command": "Start-Process git 'commit -n' \u2015WhatIf -NoNewWindow -Wait",
+   "status": "ran",
+   "argv": []
+  },
+  {
+   "command": "Start-Process git \u2015NoNewWindow \u2015Wait \u2015ArgumentList 'commit -n'",
+   "status": "ran",
+   "argv": [
+    [
+     "git",
+     "commit",
+     "-n"
+    ]
+   ]
+  },
+  {
+   "command": "Start-Process git '\u2015ArgumentList:commit -n' -NoNewWindow -Wait",
+   "status": "ran",
+   "argv": [
+    [
+     "git",
+     "\u2015ArgumentList:commit",
+     "-n"
+    ]
+   ]
+  },
+  {
+   "command": "Start-Process git -A:'commit -n' -NoNewWindow -Wait",
+   "status": "ran",
+   "argv": [
+    [
+     "git",
+     "commit",
+     "-n"
+    ]
+   ]
+  },
+  {
+   "command": "Start-Process -?x git 'commit -n' -NoNewWindow -Wait",
+   "status": "ran",
+   "argv": []
+  },
+  {
+   "command": "Start-Process git ('commit -n').Length -NoNewWindow -Wait",
+   "status": "ran",
+   "argv": [
+    [
+     "git",
+     "9"
+    ]
+   ]
   }
  ]
 }

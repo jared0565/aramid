@@ -66,6 +66,7 @@ _POSIX_TOO = ("a started POSIX shell's line is read the POSIX way as well as Git
 OVER = {
     "Start-Process git 'commit -n' -W -NoNewWindow": _REFUSED + " (`-W` names more than one)",
     "Start-Process git 'commit -n' -Bogus" + W: _REFUSED + " (no such parameter)",
+    "Start-Process -?x git 'commit -n'" + W: _REFUSED + " (no such parameter)",
     "Start-Process git -ArgumentList 'commit -n' -ArgumentList 'status'" + W:
         _REFUSED + " (a parameter given twice)",
     "Start-Process git 'commit -n' -Wait -NoNewWindow -RunAs": _REFUSED + " (no value)",

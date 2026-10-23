@@ -33,7 +33,8 @@ import pytest
 
 from aramid import agent_bypass as ab
 from aramid.agent_bypass import POWERSHELL, Bypass, find_bypass
-from aramid.agent_bypass_powershell import _DEPTH, _variable, commands, reading, simple_commands
+from aramid.agent_bypass_powershell import (_DASHES, _DEPTH, _variable, commands, reading,
+                                            simple_commands)
 
 FIXTURE = Path(__file__).parent.parent / "fixtures" / "powershell-argv.json"
 RECORD = {case["command"]: (case["status"], case["argv"])
@@ -991,6 +992,17 @@ def test_a_word_with_many_commas_is_read_in_time():
     assert commas < 10 * plain
 
 
+def test_a_command_cut_off_keeps_what_a_pipe_feeds_it_and_nothing_else():
+    # A command an open quote cuts off is read as far as it got (`_CutOff`), and
+    # a shell there reads what is piped into it: what a pipe puts in front of it
+    # comes with it, what a `;` puts there does not.
+    for joint, fed in (("|", True), (";", False)):
+        cmds, whole = simple_commands(f"'git commit -n'{joint} pwsh -c - 'x")
+        assert whole == "cut" and cmds[-1]["words"] == ["pwsh", "-c", "-"]
+        assert (cmds[-1]["upstream"] is cmds[0]) is fed
+        assert cmds[-1]["upstream"] is (cmds[0] if fed else None)
+
+
 def test_every_word_has_its_plain_mark():
     # agent_bypass reads `plains` beside `words` (a literal piped into a shell,
     # the parameters of Start-Process), so every word has its own mark: a group
@@ -1001,14 +1013,16 @@ def test_every_word_has_its_plain_mark():
         texts += [case["command"] for case in
                   json.loads((fixtures / name).read_text(encoding="ascii"))["cases"]]
     rng = random.Random(23)  # noqa: S311  -- seeded, reproducible, not crypto
-    alphabet = "`'\"$(){}@<>#;|&,.-:[]=%\\ \n\r\tgitx" + LDQ + RSQ
+    alphabet = "`'\"$(){}@<>#;|&,.-:[]=%\\ \n\r\tgitx" + LDQ + RSQ + "–—"
     texts += ["".join(rng.choice(alphabet) for _ in range(rng.randint(1, 24)))
               for _ in range(3000)]
     for text in texts:
         for cmd in simple_commands(text)[0]:
             assert len(cmd["plains"]) == len(cmd["words"]), text
-            assert len(cmd["heads"]) == len(cmd["words"]), text   # and whether it began `-name`
-            assert all(not head or word[:1] == "-" for word, head in zip(cmd["words"], cmd["heads"]))
+            assert len(cmd["heads"]) == len(cmd["words"]), text   # and whether it began `-name`,
+            # with any dash PowerShell takes for one (`–ArgumentList`; FN-55 1a03cd)
+            assert all(not head or word[:1] in _DASHES
+                       for word, head in zip(cmd["words"], cmd["heads"]))
 
 
 @pytest.mark.parametrize("text,i,answer", [

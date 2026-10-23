@@ -520,6 +520,20 @@ _PS_VALUES = ("executionpolicy", "workingdirectory", "inputformat", "outputforma
               "windowstyle", "configurationname", "configurationfile", "custompipename",
               "settingsfile", "version", "psconsolefile", "encodedarguments")
 _PS_SHORT_VALUES = ("ep", "ex", "wd", "if", "of", "o", "w", "v", "ea")
+# What pwsh and Windows PowerShell take for the dash of one of their own
+# switches: `-`, the en dash, the em dash and the horizontal bar, as well as a
+# `/` (tests/fixtures/handed-argv.json; FN-55 1a03cd).
+_PS_DASHES = "-–—―"
+
+
+def _ps_switch(word: str) -> str:
+    """The name, in lower case, of the switch `word` is to pwsh or powershell,
+    asked of a word that starts with a dash of `_PS_DASHES` or a `/`: the word
+    less that first character and a second of the same kind (`--Command`,
+    `––Command`, `//c`). A name left starting with a dash or a `/` names no
+    switch: pwsh ran nothing for `---Command`, `/-c` or `–-Command` (measured)."""
+    rest = word[1:]
+    return (rest[1:] if rest[:1] == word[:1] else rest).lower()
 
 
 def _program(token: str) -> str:
@@ -570,7 +584,8 @@ def _posix_string(seg: list[str], start: int) -> str | None:
 def _powershell_string(seg: list[str], start: int) -> str | None:
     """The command the PowerShell at seg[start] is handed, or None. As it was
     measured (tests/fixtures/handed-argv.json): a switch starts with `-`,
-    `--` or `/`, in any case, and any start of `command` is the command
+    `--` or `/`, or with an en dash, an em dash or a horizontal bar, one or two
+    of a kind (`_ps_switch`), in any case, and any start of `command` is the command
     switch (`-c`, `-co`, `-Command`); the words after it, joined with a
     space, are the command, and so is the word after `-cwa` or
     `-CommandWithArgs` (a shorter start of that name is no switch). A first
@@ -593,11 +608,11 @@ def _powershell_string(seg: list[str], start: int) -> str | None:
         if word.startswith("$") and not windows:
             i += 1
             continue
-        if word[:1] not in ("-", "/"):
+        if word[:1] not in _PS_DASHES and word[:1] != "/":
             return " ".join(seg[i:]) if windows else None
-        name = word.lstrip("-/").lower()
+        name = _ps_switch(word)
         if not name:
-            i += 1      # `-` alone: the command comes on standard input
+            i += 1      # a dash alone: `-` is standard input (_reads_stdin_powershell)
             continue
         if "command".startswith(name):
             return " ".join(seg[i + 1:])
@@ -774,14 +789,17 @@ def _reads_stdin_powershell(words: list[str], start: int) -> bool:
     a lone `-` reached before any command switch, OR the value of its
     command/script switch is itself a lone `-` (`pwsh -Command -`, `-c -`,
     `-File -` all read the command from stdin). A `-Command`/`-File` with any
-    other value is a string or a script file, read by `_handed`, not stdin."""
+    other value is a string or a script file, read by `_handed`, not stdin.
+    A switch may be written with any dash of `_PS_DASHES` (`–Command -`), but
+    only a lone `-` is standard input: pwsh read none for a lone `--`, `/` or
+    en dash (measured)."""
     i = start + 1
     while i < len(words):
         word = words[i]
-        if word[:1] in ("-", "/"):
-            name = word.lstrip("-/").lower()
-            if name == "":
-                return True              # `-` alone: the command is on stdin
+        if word == "-":
+            return True                  # `-` alone: the command is on stdin
+        if word[:1] in _PS_DASHES or word[:1] == "/":
+            name = _ps_switch(word)
             if (name and ("command".startswith(name) or "file".startswith(name))):
                 # a value-taking switch: stdin only when its value is `-`
                 return i + 1 < len(words) and words[i + 1] == "-"
