@@ -459,3 +459,69 @@ def test_the_cheap_test_says_yes_to_ansi_c_quoting():
 def test_the_line_a_started_shell_is_handed_is_not_read_for_ansi_c_quoting():
     # its quotes are the runtime's, not bash's (`_from_started`)
     assert ab._tokens("-c $'git'", False) == (["-c", "$git"], True)
+
+# ---- bash's locale quoting, $"..." ----
+
+# What git was handed for each command, read off real git (trace2) under Git Bash 5.2.37 on
+# 2026-10-24, each command run twice with the same answer: the operator's decision that day
+# was "Read it as "..."". With no translation installed bash hands on what `"..."` would; a
+# string it translates is out of reach. Written from the captures, as ANSI_C is.
+LOCALE = [
+    ('$"git" commit -n',
+     [['git', 'commit', '-n']]),
+    ('git commit $"--no-verify"',
+     [['git', 'commit', '--no-verify']]),
+    ('git commit $"-n"',
+     [['git', 'commit', '-n']]),
+    ('git $"commit" -n',
+     [['git', 'commit', '-n']]),
+    ('g$"it" commit -n',
+     [['git', 'commit', '-n']]),
+    ('$"g"it commit -n',
+     [['git', 'commit', '-n']]),
+    ('$""git commit -n',
+     [['git', 'commit', '-n']]),
+    ('$"git commit -n"',
+     []),
+    ('git commit -m $"a b" -n',
+     [['git', 'commit', '-m', 'a b', '-n']]),
+    ('git commit -m a$"b"c -n',
+     [['git', 'commit', '-m', 'abc', '-n']]),
+    ('git commit -m $"it\'s" -n',
+     [['git', 'commit', '-m', "it's", '-n']]),
+    ('git commit -m $"a\\"b" -n',
+     [['git', 'commit', '-m', 'a"b', '-n']]),
+    ('git commit -m $"a\\\\b" -n',
+     [['git', 'commit', '-m', 'a\\b', '-n']]),
+    ('git commit -m "$"x -n',
+     [['git', 'commit', '-m', '$x', '-n']]),
+    ('git commit -m \'$"x"\' -n',
+     [['git', 'commit', '-m', '$"x"', '-n']]),
+    ('git commit -m \\$"x" -n',
+     [['git', 'commit', '-m', '$x', '-n']]),
+    ('git commit $"--no-verify',
+     []),
+]
+
+
+@pytest.mark.parametrize("command,argvs", LOCALE)
+def test_the_reading_makes_the_words_bash_makes_of_locale_quoting(command, argvs):
+    if argvs:
+        tokens, whole = ab._tokens(command, False, ansi_c=True)
+        assert whole and [t.translate(ab._PUT_BACK) for t in tokens] == argvs[0]
+
+
+@pytest.mark.parametrize("command,argvs", LOCALE)
+def test_a_command_in_locale_quoting_is_answered_as_what_git_was_handed(command, argvs):
+    for shell in (POSIX, None):
+        assert find_bypass(command, shell) == _judged(argvs), shell
+
+
+def test_a_locale_quote_that_never_closes_still_stops_the_reading():
+    # bash runs nothing (in the table); the words in front are read
+    assert ab._tokens('git commit $"--no-verify', False, ansi_c=True) == (["git", "commit"], False)
+
+
+def test_the_line_a_started_shell_is_handed_is_not_read_for_locale_quoting():
+    # its quotes are the runtime's, not bash's (`_from_started`)
+    assert ab._tokens('-c $"git"', False) == (["-c", "$git"], True)

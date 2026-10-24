@@ -37,8 +37,12 @@ to publish a tag that disagrees with it.
   escape is now read the way Git Bash was measured to read it, a `\0` that
   cuts the rest of the quote off included (`$'--no-verify\0x'`), so these are
   refused. A reason written `--reason $'it\'s' --red-proof` no longer draws a
-  warning. Not read: bash's locale quoting, `$"..."` (`$"git" commit -n` is
-  git).
+  warning.
+- **bash's locale quoting, `$"..."`, is read too (FN-55).** `$"git" commit -n`
+  and `git commit $"--no-verify"` commit in bash, and the hook let them
+  through, as it did `c$"m"d //c 'g^it commit -n'`. With no translation
+  installed bash hands on what `"..."` would, as Git Bash was measured, and
+  that is how it is read now. A string bash translates is not read.
 - **A command piped into cmd is read (FN-55).** `echo 'git commit -n' | cmd`
   commits, from Git Bash and from PowerShell, and the hook let it through.
   cmd reads its input a line at a time unless it is handed a `/c` or `/r`

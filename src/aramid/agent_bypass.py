@@ -159,8 +159,10 @@ What this leaves, for every rule. The quoting is POSIX quoting: where
 PowerShell differs otherwise (a backslash escapes nothing there, a quote is
 doubled inside single quotes, `<# #>` is a comment) a command whose shell
 was not named is read by the POSIX rule. bash's `$'...'` is read as bash
-makes it (`_ansi_c`; FN-55 43dd71), but not its locale quoting, `$"..."`,
-nor a heredoc body: its lines are read as commands. And a command that is built when it runs
+makes it (`_ansi_c`; FN-55 43dd71), and its locale quoting, `$"..."`, as
+the `"..."` it is when no translation is installed (a string bash translates
+is out of reach). A heredoc body is not: its lines are read as commands. And
+a command that is built when it runs
 (backticks, a variable, `eval`, the output of `$( )`) is read as written,
 not as built.
 """
@@ -223,7 +225,7 @@ CMD = "cmd"
 _HANDED_DEPTH = 8
 # What the POSIX reading takes out of a word on its way to being a program's
 # name: the quotes, the backslash, and a line end (a backslash in front of one
-# joins two lines). For `_may_name_a_program`.
+# joins two lines). For `_plain`.
 _MARKS = {ord(ch): None for ch in "'\"\\\r\n"}
 # bash's ANSI-C quoting, `$'...'`, as Git Bash 5.2.37 was measured (FN-55
 # 43dd71; tests/unit/test_agent_bypass_shell.py): the escapes that are one
@@ -326,7 +328,9 @@ def _shell_text(command: str, backtick: bool, ansi_c: bool = False) -> str:
 
     `ansi_c` is for bash's text: a `$'...'` there is handed over as the text
     bash makes of it (`_ansi_c`), each character escaped, and one that never
-    closes ends the text, so the lexer stops at it as at any open quote.
+    closes ends the text, so the lexer stops at it as at any open quote. A
+    `$"..."` there, bash's locale quoting, is read as the `"..."` it is when no
+    translation is installed, as Git Bash was measured.
 
     shlex has a comment rule of its own, and it is not the shell's: it ends
     the line at a `#` in the middle of a word, and it takes the newline with
@@ -362,6 +366,9 @@ def _shell_text(command: str, backtick: bool, ansi_c: bool = False) -> str:
             text, i = made
             out.append("''" + "".join("\\" + c.translate(_STAND_IN) for c in text))
             fresh = False
+            continue
+        if ansi_c and ch == "$" and command.startswith('"', i + 1):
+            i += 1      # bash's locale quoting, `$"..."`: the quotes alone are left
             continue
         if ch == "#" and fresh:
             # a comment: to the end of its line, the newline not included
@@ -1197,8 +1204,15 @@ def _may_hand_a_string(command: str) -> bool:
     `_may_name_a_program`, a wrong yes costs one reading; it is asked of a call
     whose own text need not spell git (`pwsh -c 'g`u{69}t commit -n'`,
     `cmd /c 'g^it commit -n'`)."""
-    low = command.lower().translate(_MARKS)
+    low = _plain(command)
     return "sh" in low or "cmd" in low
+
+
+def _plain(command: str) -> str:
+    """`command` lowered, with what the POSIX reading takes out of a word
+    taken out: the quotes, the backslash and a line end (`_MARKS`), and the
+    `$` of bash's locale quoting (`c$"m"d` is cmd)."""
+    return command.replace('$"', '"').lower().translate(_MARKS)
 
 
 def _may_name_a_program(command: str) -> bool:
@@ -1219,8 +1233,9 @@ def _may_name_a_program(command: str) -> bool:
     here leaves out the POSIX readings alone: what PowerShell hands, pipes
     and starts is read all the same (`saps "g`u{69}t" 'commit -n'` commits;
     FN-55 e623dc). Any `$'` is a yes: bash's ANSI-C quoting spells a name
-    in escapes (`$'\\x67it'`; FN-55 43dd71)."""
-    low = command.lower().translate(_MARKS)
+    in escapes (`$'\\x67it'`; FN-55 43dd71), and its locale quoting's `$` is
+    taken out with the quotes (`g$"it"`; `_plain`)."""
+    low = _plain(command)
     return "$'" in command or "git" in low or "aramid" in low
 
 
