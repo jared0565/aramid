@@ -433,13 +433,119 @@ def test_a_string_handed_to_cmd_counts_against_the_cap_on_shells_within_shells()
         assert find_bypass(command, shell, _depth=ab._HANDED_DEPTH) == TOO_MANY
 
 
-def test_cmd_is_not_a_shell_that_is_fed_on_standard_input():
-    # _shell_launched hands the words of a shell to the readers of a command on its
-    # standard input, which read the POSIX and the PowerShell grammars; cmd's is
-    # neither. A command piped into cmd is a residual (NOT_SEEN in
-    # test_agent_bypass_handed.py).
+# A command piped into cmd on standard input (row 7968ab; the operator's decision of
+# 2026-10-23, "Build a cmd-stdin reader"). Each command was run with real cmd and git
+# (trace2), twice with the same answer, in the shell named: cmd reads a line at a time
+# and runs each as it runs a `/c` string, unless the line it is handed has a `/c` or
+# `/r` switch (`/k` runs its string, then reads them too). Git Bash makes a lone `/c`
+# (or `/d /c`, quoted or not) a path, and cmd then reads its input; a `//c`, or a
+# switch in a word with a blank in it, reaches cmd as one.
+CMD_STDIN = [
+    (POSIX, "echo 'git commit -n' | cmd.exe", DASH_N),
+    (POSIX, "echo 'git commit -n' | CMD", DASH_N),
+    (POSIX, "cmd <<< 'git commit -n'", DASH_N),
+    (POSIX, "echo 'echo a & git commit -n' | cmd", DASH_N),
+    (POSIX, "echo 'g^it commit -n' | cmd", DASH_N),
+    (POSIX, "echo '@git commit -n' | cmd", DASH_N),
+    (POSIX, "echo 'git commit \"-n\"' | cmd", DASH_N),
+    (POSIX, "echo 'git commit -n' | cmd /c echo hi", DASH_N),
+    (POSIX, "echo 'git commit -n' | cmd /d /c echo hi", DASH_N),
+    (POSIX, "echo 'git commit -n' | cmd '/c' echo hi", DASH_N),
+    (POSIX, "echo 'git commit -n' | cmd //k echo hi", DASH_N),
+    (POSIX, "echo 'git commit -n' | cmd //q", DASH_N),
+    (POSIX, "echo 'git commit -n' | cmd x", DASH_N),
+    (POSIX, "echo 'git commit -n' | cmd //c cmd", DASH_N),      # the cmd it runs reads it
+    (POSIX, "echo 'git commit -n' | cmd //c bash", DASH_N),
+    (POSIX, "echo 'rem git commit -n' | cmd", None),
+    (POSIX, "echo ':: git commit -n' | cmd", None),
+    (POSIX, "echo 'git commit -n' | cmd //c echo hi", None),
+    (POSIX, "echo 'git commit -n' | cmd //c", None),
+    (POSIX, "echo 'git commit -n' | cmd //r echo hi", None),
+    (POSIX, "echo 'git commit -n' | cmd //d/c echo hi", None),
+    (POSIX, "echo 'git commit -n' | cmd \"/c echo hi\"", None),
+    (POWERSHELL, "echo 'git commit -n' | cmd", DASH_N),
+    (POWERSHELL, "Write-Output 'git commit -n' | cmd.exe", DASH_N),
+    (POWERSHELL, '"git commit -n" | cmd', DASH_N),
+    (POWERSHELL, "'git commit -n' | cmd /q", DASH_N),
+    (POWERSHELL, "'git commit -n' | cmd /d /q", DASH_N),
+    (POWERSHELL, "'git commit -n' | cmd /k echo hi", DASH_N),
+    (POWERSHELL, "'git commit -n' | cmd -q", DASH_N),
+    (POWERSHELL, "'echo a & git commit -n' | cmd", DASH_N),
+    (POWERSHELL, "'g^it commit -n' | cmd", DASH_N),
+    (POWERSHELL, '"echo a`ngit commit -n" | cmd', DASH_N),
+    (POWERSHELL, "echo 'git commit -n' | cmd //c echo hi", DASH_N),
+    (POWERSHELL, "echo 'git commit -n' | cmd //r echo hi", DASH_N),
+    (POWERSHELL, "'git commit -n' | cmd //c echo hi", DASH_N),
+    (POWERSHELL, "'git commit -n' | cmd /c echo hi", None),
+    (POWERSHELL, "'git commit -n' | cmd /c", None),
+    (POWERSHELL, "echo 'git commit -n' | cmd /c echo hi", None),
+    (POWERSHELL, "'rem git commit -n' | cmd", None),
+]
+# Told no shell, the hook reads a call both ways, and these two ways differ: PowerShell
+# hands cmd a `//c` as it is, no switch, and Git Bash makes a lone `/c` a path; cmd
+# reads its input in either case.
+NOT_TOLD = {
+    (POSIX, "echo 'git commit -n' | cmd //c echo hi"): DASH_N,
+    (POSIX, "echo 'git commit -n' | cmd //c"): DASH_N,
+    (POSIX, "echo 'git commit -n' | cmd //r echo hi"): DASH_N,
+    (POWERSHELL, "echo 'git commit -n' | cmd /c echo hi"): DASH_N,
+}
+
+
+@pytest.mark.parametrize("shell,command,answer", CMD_STDIN, ids=[c for _, c, _ in CMD_STDIN])
+def test_a_command_piped_into_cmd_is_answered_as_git_was_handed_it(shell, command, answer):
+    assert find_bypass(command, shell) == answer
+    assert find_bypass(command, None) == NOT_TOLD.get((shell, command), answer)
+
+
+@pytest.mark.parametrize("command", [
+    "@('echo a', 'git commit -n') | cmd", "'echo a', 'git commit -n' | cmd",
+    "echo 'echo a' 'git commit -n' | cmd",
+])
+def test_items_piped_as_lines_of_their_own_are_a_documented_residual(command):
+    # PowerShell sends each item it pipes as a line of its own, and cmd ran the git one
+    # (the record); the reader reads a pipe from one quoted literal or an echo of one. A
+    # residual, named in agent_bypass's module docstring: if it is ever read, drop these
+    # from the lists of test_agent_bypass_handed.py too.
+    assert find_bypass(command, POWERSHELL) is None
+
+
+@pytest.mark.parametrize("line,switch", [
+    ("", None), ("x", None), ("/q", None), ("/d /q", None), ("-c x", None), ("//c x", None),
+    ("/c x", "c"), ("/C x", "c"), ("/k x", "k"), ("/K x", "k"), ("/r x", "r"), ("/R x", "r"),
+    ("/d/c x", "c"), ("foo/c x", "c"), ('"/c x"', "c"),
+])
+def test_the_switch_cmd_takes_is_the_one_string_to_run_takes(line, switch):
+    assert cmd.switch(line) == switch
+    assert (cmd.string_to_run(line) is None) == (switch is None)
+
+
+@pytest.mark.parametrize("start", [-1, 1, 2, 99])
+def test_the_cmd_stdin_test_never_raises_on_an_out_of_contract_index(start):
+    # the hook fails open: a reader that raised would let the call through
+    assert ab._reads_stdin_cmd(["cmd"], start, POSIX) is False
+    assert ab._reads_stdin_cmd(["cmd"], start, POWERSHELL) is False
+    assert ab._reads_stdin_cmd(["cmd"], 0, POSIX) is True    # in contract: it reads
+
+
+def test_a_command_piped_into_cmd_counts_against_the_cap_on_shells_within_shells():
+    for command, shell in (("echo 'git commit -n' | cmd", POSIX),
+                           ("'git commit -n' | cmd", POWERSHELL)):
+        assert find_bypass(command, shell, _depth=ab._HANDED_DEPTH - 1) == DASH_N
+        assert find_bypass(command, shell, _depth=ab._HANDED_DEPTH) == TOO_MANY
+    # the cmd that reads a line is one shell more, and the cmd the line hands a string
+    # one more again
+    command = "echo 'cmd /c \"git commit -n\"' | cmd"
+    assert find_bypass(command, POSIX, _depth=ab._HANDED_DEPTH - 2) == DASH_N
+    assert find_bypass(command, POSIX, _depth=ab._HANDED_DEPTH - 1) == TOO_MANY
+
+
+def test_cmd_is_found_beside_the_shells_that_are_fed_on_standard_input_not_among_them():
+    # `_shell_launched` gives the first POSIX or PowerShell shell of a command, and cmd
+    # is not one: `cmd //c bash` hands its input to the bash it runs, which would be
+    # hidden behind the cmd. A cmd is looked for on its own, every one of them.
     assert ab._shell_launched(["cmd", "/c", "x"]) == (None, None)
-    assert ab._shell_launched(["echo", "x", "|", "cmd"]) == (None, None)
+    assert ab._shell_launched(["cmd", "//c", "bash"]) == (2, POSIX)
 
 
 def test_a_long_run_of_groups_and_commands_neither_raises_nor_takes_long():

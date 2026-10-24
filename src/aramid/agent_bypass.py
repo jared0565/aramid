@@ -49,15 +49,19 @@ CALL pipes stdin the same way (`_from_stdin_powershell`): a bare quoted string
 (`'git commit -n' | bash`) or an `echo`/`Write-Output` of one, into a shell
 that reads stdin -- a POSIX shell with no `-c`/script, `pwsh -`, or
 `pwsh -Command -`/`-c -`/`-File -`; the call operator keeps the pipe
-(`'git commit -n' | & bash`). Not read: a command piped into `cmd` (cmd is
-not a shell `_shell_launched` names, whose standard input is read by the POSIX
-or the PowerShell grammar), a name cmd puts together from `%VAR%`, an
+(`'git commit -n' | & bash`). The same text piped into `cmd` is read a line
+at a time by cmd's rules (`_from_cmd_lines`, FN-55 7968ab), unless the line
+cmd is handed, built as for its string, has a `/c` or `/r` switch
+(`_reads_stdin_cmd`): Git Bash makes a lone `/c` a path, and cmd then reads
+its input. cmd does not run a last line that has no line end; it is read all
+the same. Not read: a name cmd puts together from `%VAR%`, an
 encoded command (`-EncodedCommand`), a `fish -c` string (fish's option grammar
 is its own), a command handed through `su`, `script` or `flock -c`, a here-DOC
 body or a non-echo/printf pipe upstream (`cat f | bash`), a PowerShell pipe
-upstream that is unquoted (a command PowerShell RUNS) or more than one word (an
-`echo` of several arguments lands one per line), a stdin handoff nested in a
-group, and the arguments a string is given when it runs
+upstream that is unquoted (a command PowerShell RUNS), more than one word (an
+`echo` of several arguments lands one per line) or a list of items
+(`'a', 'b' | cmd`, `@('a', 'b')`, each its own line), a stdin handoff nested
+in a group, and the arguments a string is given when it runs
 (`bash -c 'git commit "$@"' x -n`).
 
 WHICH SHELL (FN-45). `find_bypass` takes the shell the hook was told runs
@@ -908,6 +912,46 @@ def _reads_stdin_powershell(words: list[str], start: int) -> bool:
     return False
 
 
+def _reads_stdin_cmd(words: list[str], start: int, outer: str) -> bool:
+    """The cmd at words[start] reads its commands from standard input: the
+    line it is handed, which `outer` builds as for `_cmd_string`, has no `/c`
+    or `/r` switch (`/k` runs its string, then reads them too). Git Bash makes
+    a lone `/c` (or `/r`, or `/d /c`, quoted or not) a path, and cmd then reads
+    its input (measured, FN-55 7968ab): there only a switch in a word Git Bash
+    leaves alone stops the reading, one led by `//` or holding a blank, and any
+    other is taken to read it, the side that reads more. `start` is guarded as
+    in `_reads_stdin_posix`."""
+    if not 0 <= start < len(words):
+        return False
+    from aramid import agent_bypass_cmd
+    args = words[start + 1:]
+    if outer == POSIX:
+        args = [arg for arg in args if arg.startswith("//") or any(ch in arg for ch in " \t\n")]
+    style = agent_bypass_cmd.MSYS if outer == POSIX else agent_bypass_cmd.POWERSHELL
+    return agent_bypass_cmd.switch(agent_bypass_cmd.command_line(args, style)) not in ("c", "r")
+
+
+def _cmd_reads_stdin(words: list[str], outer: str) -> bool:
+    """A cmd in `words` reads its commands from standard input
+    (`_reads_stdin_cmd`), any of them: `cmd //c cmd` hands its input to the cmd
+    it runs (measured). cmd is not one of `_shell_launched`'s shells, which
+    gives the first only: `cmd //c bash` hands its input to the bash."""
+    return any(_program(word) == CMD and _reads_stdin_cmd(words, i, outer)
+               for i, word in enumerate(words))
+
+
+def _from_cmd_lines(text: str, depth: int) -> Bypass | None:
+    """A match in `text` piped into cmd, which reads it a line at a time and
+    runs each line as it runs a `/c` string (FN-55 7968ab, measured). A last
+    line with no line end is not run (`echo -n`, a `printf` with none), and is
+    read all the same."""
+    for line in text.split("\n"):
+        found = find_bypass(line, CMD, _depth=depth + 1)
+        if found is not None:
+            return found
+    return None
+
+
 def _echoed(words: list[str]) -> str | None:
     """The command an `echo` or `printf` writes to its stdout, for a shell on
     the far end of a pipe, or None if `words` is not a bare echo/printf of a
@@ -926,16 +970,16 @@ def _from_stdin(tokens: list[str], depth: int) -> Bypass | None:
     """A match in a command a shell is fed on standard input (FN-55 fb16940),
     read by the receiving shell's rules: a here-string target
     (`bash <<< 'git commit -n'`), or the literal echoed or printed into a pipe
-    (`echo 'git commit -n' | bash`, `... | pwsh -`). `depth` as in
+    (`echo 'git commit -n' | bash`, `... | pwsh -`), and by cmd's a line at a
+    time when a cmd reads it (`_cmd_reads_stdin`; FN-55 7968ab). `depth` as in
     `_from_handed`: a command on stdin is one more shell handed a string."""
     cmds = _simple_commands(tokens)
     for idx, cmd in enumerate(cmds):
         start, shell = _shell_launched(cmd["words"])
-        if start is None:
-            continue
-        reads = (_reads_stdin_posix(cmd["words"], start) if shell == POSIX
-                 else _reads_stdin_powershell(cmd["words"], start))
-        if not reads:
+        reads = start is not None and (_reads_stdin_posix(cmd["words"], start) if shell == POSIX
+                                       else _reads_stdin_powershell(cmd["words"], start))
+        cmd_reads = _cmd_reads_stdin(cmd["words"], POSIX)
+        if not (reads or cmd_reads):
             continue
         if cmd["here"] is not None:
             text = cmd["here"]
@@ -947,7 +991,8 @@ def _from_stdin(tokens: list[str], depth: int) -> Bypass | None:
             continue
         if depth >= _HANDED_DEPTH:
             return Bypass("too-deep", "shells", str(_HANDED_DEPTH))
-        found = find_bypass(text, shell, _depth=depth + 1)
+        found = ((find_bypass(text, shell, _depth=depth + 1) if reads else None)
+                 or (_from_cmd_lines(text, depth) if cmd_reads else None))
         if found is not None:
             return found
     return None
@@ -983,25 +1028,26 @@ def _from_stdin_powershell(command: str, depth: int) -> Bypass | None:
     `echo 'git commit -n' | bash`, `... | pwsh -`. The PowerShell tokenizer
     keeps each command's pipe `upstream`; a shell on the far end that reads its
     commands from stdin is handed the upstream's literal, read by that shell's
-    rules. `depth` counts the shells handed a string, as `_from_handed`."""
+    rules, and a cmd that reads it by cmd's, a line at a time (FN-55 7968ab).
+    `depth` counts the shells handed a string, as `_from_handed`."""
     from aramid import agent_bypass_powershell
     cmds, _end = agent_bypass_powershell.simple_commands(command)
     for cmd in cmds:
         if cmd["upstream"] is None:
             continue
         start, shell = _shell_launched(cmd["words"])
-        if start is None:
-            continue
-        reads = (_reads_stdin_posix(cmd["words"], start) if shell == POSIX
-                 else _reads_stdin_powershell(cmd["words"], start))
-        if not reads:
+        reads = start is not None and (_reads_stdin_posix(cmd["words"], start) if shell == POSIX
+                                       else _reads_stdin_powershell(cmd["words"], start))
+        cmd_reads = _cmd_reads_stdin(cmd["words"], POWERSHELL)
+        if not (reads or cmd_reads):
             continue
         text = _ps_piped_text(cmd["upstream"])
         if text is None:
             continue
         if depth >= _HANDED_DEPTH:
             return Bypass("too-deep", "shells", str(_HANDED_DEPTH))
-        found = find_bypass(text, shell, _depth=depth + 1)
+        found = ((find_bypass(text, shell, _depth=depth + 1) if reads else None)
+                 or (_from_cmd_lines(text, depth) if cmd_reads else None))
         if found is not None:
             return found
     return None

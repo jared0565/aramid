@@ -18,6 +18,9 @@ Three lists, each checked against the record on every run:
   ANSWERED  a bypass git was handed that the hook answers in another way;
   OVER      no bypass reached git and the hook answers all the same.
 
+Two more hold for one way of asking only: NOT_SEEN_TOLD when the hook is told
+the shell, OVER_NOT_TOLD when it is told none.
+
 A command of the record in none of them is answered exactly as git's own
 argv is judged, or let through when git was handed no bypass."""
 import json
@@ -63,8 +66,9 @@ _ENCODED = "an encoded command, which the decision does not name: put to the ope
 _BUILT = "cmd works the name out when it runs the line: it expands %VAR% first, and the reader does not"
 _JUNK = ("cmd skips ; , = and @ in front of the command that follows `if` or `do`; the reader "
          "does so at the start of a command only")
-_ON_STDIN = ("a command piped into cmd on standard input: cmd is not read as a shell that is fed "
-             "so (tests/unit/test_agent_bypass_cmd.py)")
+_ITEMS = ("PowerShell sends each item it pipes as a line of its own; the reader reads a pipe from"
+          " one quoted literal or an echo of one (test_agent_bypass_cmd.py, test_items_piped_as_"
+          "lines_of_their_own_are_a_documented_residual)")
 NOT_SEEN = {
     ("posix", "bash -c 'git commit \"$@\"' x -n"): _RUN_TIME,
     ("posix", "bash -c 'git commit $0' -n"): _RUN_TIME,
@@ -79,8 +83,8 @@ NOT_SEEN = {
     ("posix", "cmd //c 'g%PATH:~0,0%it commit -n'"): _BUILT,
     ("powershell", 'cmd /c "if 1==1 ;git commit -n"'): _JUNK,
     ("posix", 'cmd //c "if 1==1 ;git commit -n"'): _JUNK,
-    ("powershell", "'git commit -n' | cmd"): _ON_STDIN,
-    ("posix", "echo 'git commit -n' | cmd"): _ON_STDIN,
+    ("powershell", "@('echo a', 'git commit -n') | cmd"): _ITEMS,
+    ("powershell", "'echo a', 'git commit -n' | cmd"): _ITEMS,
 }
 # A bypass git was handed, answered in another way than git's argv is judged.
 HOOKS_DEV_NULL = Bypass("hooks-path", "commit", "core.hooksPath=/dev/null")
@@ -114,6 +118,24 @@ OVER = {
         " holds git, and a word named git starts a scan",
     ("posix", f"pwsh -c '{H41}'"):
         "too deep to read: refused whatever it names (the operator's decision, 2026-10-14)",
+    ("posix", "echo -n 'git commit -n' | cmd"):
+        "cmd does not run a last line that has no line end; the reader reads it",
+}
+# Told the shell, the hook reads a call that shell's way only; told none, it reads it
+# both ways (find_bypass's docstring; FN-55 d57bcd). On these the two readings differ.
+_PS_CMD_READS = ("PowerShell hands cmd a `//c` as it is, no switch to cmd, which then reads its"
+                 " input: git ran when PowerShell 7 ran the call; told no shell, it is read so")
+_BASH_CMD_READS = ("Git Bash makes a lone `/c` a path, and cmd then reads its input: git ran when"
+                   " Git Bash ran the call; told no shell, it is read so")
+NOT_SEEN_TOLD = {
+    ("powershell", "echo 'echo a' 'git commit -n' | cmd"):
+        _ITEMS + "; told no shell, the POSIX reading makes the words one line that names git",
+}
+OVER_NOT_TOLD = {
+    ("posix", "echo 'git commit -n' | cmd //c echo hi"): _PS_CMD_READS,
+    ("posix", "echo 'git commit -n' | cmd //c"): _PS_CMD_READS,
+    ("posix", "echo 'git commit -n' | cmd //r echo hi"): _PS_CMD_READS,
+    ("powershell", "echo 'git commit -n' | cmd /c echo hi"): _BASH_CMD_READS,
 }
 
 
@@ -133,16 +155,17 @@ def test_the_record_is_the_one_a_run_made():
 
 
 def test_the_lists_name_commands_of_the_record():
-    for listed in (NOT_SEEN, ANSWERED, OVER):
+    for listed in (NOT_SEEN, ANSWERED, OVER, NOT_SEEN_TOLD, OVER_NOT_TOLD):
         assert set(listed) <= set(RECORD)
-    assert all(_judged(RECORD[case][1]) for case in NOT_SEEN | ANSWERED)
-    assert not any(_judged(RECORD[case][1]) for case in OVER)
+    assert all(_judged(RECORD[case][1]) for case in NOT_SEEN | ANSWERED | NOT_SEEN_TOLD)
+    assert not any(_judged(RECORD[case][1]) for case in OVER | OVER_NOT_TOLD)
 
 
 # Each whole-record test is asked twice: told the shell that ran the call, and
 # told none, as the hook is for a tool it does not know (agent_hook). A string
 # handed on is read by the rules of every shell that could have run the call,
-# so the lists hold for both (find_bypass's docstring; FN-55 d57bcd).
+# so the lists hold for both (find_bypass's docstring; FN-55 d57bcd), save the
+# two that name the calls on which the two readings differ.
 TOLD = pytest.mark.parametrize("told", [True, False], ids=["told", "not-told"])
 
 
@@ -150,18 +173,22 @@ def _answer(case, told):
     return find_bypass(case[1], _case(case[0]) if told else None)
 
 
+def _not_seen(told):
+    return set(NOT_SEEN) | (set(NOT_SEEN_TOLD) if told else set())
+
+
 @TOLD
 def test_nothing_a_shell_handed_git_as_a_bypass_is_let_through(told):
     missed = {case for case, (_, argvs) in RECORD.items()
               if _judged(argvs) and _answer(case, told) is None}
-    assert missed == set(NOT_SEEN)
+    assert missed == _not_seen(told)
 
 
 @TOLD
 def test_every_bypass_the_record_holds_is_answered_as_git_was_handed_it(told):
     wrong = {case: _answer(case, told)
              for case, (_, argvs) in RECORD.items()
-             if _judged(argvs) and case not in NOT_SEEN
+             if _judged(argvs) and case not in _not_seen(told)
              and _answer(case, told) != ANSWERED.get(case, _judged(argvs))}
     assert wrong == {}
 
@@ -170,7 +197,7 @@ def test_every_bypass_the_record_holds_is_answered_as_git_was_handed_it(told):
 def test_what_reached_git_as_no_bypass_is_answered_only_where_listed(told):
     over = {case for case, (_, argvs) in RECORD.items()
             if not _judged(argvs) and _answer(case, told) is not None}
-    assert over == set(OVER)
+    assert over == set(OVER) | (set() if told else set(OVER_NOT_TOLD))
 
 
 # ---- the parts the record shows, one at a time ----
@@ -314,6 +341,9 @@ def test_fish_c_is_a_documented_residual():
     ("bash << EOF", None),                             # a here-DOC delimiter is not the command
     ("echo 'git commit -n' || bash", None),            # `||` is logical-or, not a pipe: no stdin
     ("echo 'git commit -n' && bash", None),            # `&&` is and-then, not a pipe: no stdin
+    # a pipe in front of everything: bash refuses the line and runs none of it (measured,
+    # 2026-10-24), and no command before the first is the pipe's upstream
+    ("| bash ; echo 'git commit -n'", None),
 ])
 def test_the_stdin_fed_reader_edges(command, want):
     # The main stdin forms (echo|shell, bash <<< ..., ... | pwsh -) are pinned by

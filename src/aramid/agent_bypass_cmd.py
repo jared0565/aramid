@@ -26,13 +26,15 @@ Every rule here was read off the real cmd.exe, not written from memory.
 
 Pure stdlib, no aramid imports, no I/O, and it cannot raise: it runs inside the
 agent hook, which fails open, so a raise here would let a command through unread.
-A call imports it only when a command hands cmd a string (or is cmd's own), or
-starts a program with Start-Process, whose line `_argv` reads (FN-55 0110f7).
+A call imports it only when a command has a word named cmd (or the call is cmd's
+own), or starts a program with Start-Process, whose line `_argv` reads (FN-55
+0110f7). What is
+piped into cmd is read here a line at a time (`agent_bypass._from_cmd_lines`).
 
 WHAT IS NOT KNOWN HERE. cmd expands `%VAR%` (and `!VAR!` when delayed expansion
 is on) before it reads the line, so a name put together from variables
-(`g%PATH:~0,0%it`, `set X=git && call %X%`) is out of reach, as is a command piped
-into cmd on standard input. After `if` and `do` cmd skips a `;`, `,`, `=` or `@`
+(`g%PATH:~0,0%it`, `set X=git && call %X%`) is out of reach. After `if` and `do`
+cmd skips a `;`, `,`, `=` or `@`
 in front of the command; here that is done at the start of a command and right
 after a first word `call` or `start` (those take no `@`), not after the condition
 of an `if`, the `do` of a `for`, a second `call` or the options of a `start`.
@@ -50,7 +52,8 @@ which changes no answer: that is no subcommand. And a line cmd refuses (a lone
 the same, as is any word named git, wherever it stands.
 
 Git Bash makes a lone `/c` a path (`C:/`), and then cmd runs nothing; it is read
-as the switch all the same, as the PowerShell reader reads `pwsh /c`. Windows
+as the switch all the same, as the PowerShell reader reads `pwsh /c`. cmd then
+reads its input instead, and that is read too (`agent_bypass._reads_stdin_cmd`). Windows
 PowerShell 5.1 builds the line like PowerShell 7 but for the backslashes at the end
 of a quoted word, which 7 doubles and 5.1 leaves; the reader does as 7 does.
 
@@ -139,12 +142,27 @@ def string_to_run(line: str) -> str | None:
     switch and what follows it is the string; any other character is stepped
     over with the slash. So `/d/c x` and `foo/c x` run `x` and `//c x`, `-c x`
     and `/dc x` run nothing."""
+    at = _switch_at(line)
+    return None if at is None else line[at + 2:]
+
+
+def switch(line: str) -> str | None:
+    """The switch cmd takes from the command line `line`, as `string_to_run`
+    finds it: `c`, `k` or `r` in lower case, or None. With `c` or `r` cmd runs
+    its string and stops; with `k`, or none, it reads its commands from
+    standard input (FN-55 7968ab, measured)."""
+    at = _switch_at(line)
+    return None if at is None else line[at + 1].lower()
+
+
+def _switch_at(line: str) -> int | None:
+    """Where the `/` of cmd's switch stands in `line`, or None."""
     i, n = 0, len(line)
     while i < n:
         if line[i] != "/":
             i += 1
         elif line[i + 1:i + 2].lower() in ("c", "k", "r"):
-            return line[i + 2:]
+            return i
         else:
             i += 2
     return None
