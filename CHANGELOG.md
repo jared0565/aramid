@@ -12,6 +12,8 @@ to publish a tag that disagrees with it.
 
 ## [Unreleased]
 
+## [0.20.10] — 2026-10-24
+
 ### Security
 
 - **The agent hook reads a PowerShell command by PowerShell's rules
@@ -191,9 +193,8 @@ to publish a tag that disagrees with it.
   flags. cmd scans that line for its switch, reads the string (quotes,
   carets, `&` `&&` `||` `|`, parentheses, redirections, `rem` and labels, a
   line that ends at a newline), and git reads what is left by the C
-  runtime's rules. Not read: a name cmd puts together from `%VAR%`, a
-  command piped into cmd, a `;`, `,`, `=` or `@` that cmd skips after an
-  `if` or a `do`, and `for /f`. A lone `/c` from Git Bash, which Git Bash
+  runtime's rules. Not read: a name cmd puts together from `%VAR%`, a `;`,
+  `,`, `=` or `@` that cmd skips after an `if` or a `do`, and `for /f`. A lone `/c` from Git Bash, which Git Bash
   makes a path so that cmd runs nothing, is read as the switch.
 
 ### Fixed
@@ -252,6 +253,8 @@ to publish a tag that disagrees with it.
   names what does work: for post-commit, install aramid before the other
   tool (move its hook aside, run `aramid init .`, then re-run its
   installer). Reported by a consumer on 0.20.9 (channel round 322).
+  **If `aramid init` printed `hooks armed: NO` in a repo where another tool
+  manages `post-commit`, re-run `aramid init .` after upgrading.**
 - **A pre-commit or pre-push gate that another tool's hook runs is called
   armed, but its blocking unconfirmed.** When another managing tool holds a
   gate's slot and runs aramid's shim from a file beside it, the hook
@@ -6379,7 +6382,8 @@ Stated plainly because each one changes how you should deploy this:
 - **PyPI publishing is not set up.** Install from a GitHub Release artifact or
   from git; `pip install aramid` does not work.
 
-[Unreleased]: https://github.com/jared0565/aramid/compare/v0.20.9...HEAD
+[Unreleased]: https://github.com/jared0565/aramid/compare/v0.20.10...HEAD
+[0.20.10]: https://github.com/jared0565/aramid/releases/tag/v0.20.10
 [0.20.9]: https://github.com/jared0565/aramid/releases/tag/v0.20.9
 [0.20.8]: https://github.com/jared0565/aramid/releases/tag/v0.20.8
 [0.20.7]: https://github.com/jared0565/aramid/releases/tag/v0.20.7
