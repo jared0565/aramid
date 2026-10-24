@@ -458,6 +458,90 @@ def test_install_writes_no_triage_shim_unless_one_free_sibling_is_named(
     assert "NOT installed" in capsys.readouterr().err
 
 
+# Row 21a592 (the operator's decision of 2026-10-23, "skip comment lines"): a
+# name the trampoline only mentions in a comment is not a sibling it runs. A
+# line is a comment when the first character on it that is not a space or a
+# tab is `#`: measured, Git's sh and Ubuntu's dash both read those two so, and
+# a form feed, a vertical tab or a no-break space before the `#` as a word.
+COMMENT_LINES = [b"# chains post-commit.old when there is one\n",
+                 b'    # was "$DIR/post-commit.old"\n',
+                 b"\t#post-commit.old\n",
+                 b" \t # post-commit.old\n"]
+COMMENT_IDS = ["hash-first", "spaces-first", "tab-first", "both-first"]
+
+
+@pytest.mark.parametrize("comment", COMMENT_LINES, ids=COMMENT_IDS)
+def test_a_name_on_a_comment_line_is_not_a_sibling_the_trampoline_runs(
+        tmp_path, capsys, comment):
+    r = _repo(tmp_path)
+    hdir = r / ".git" / "hooks"
+    hdir.mkdir(exist_ok=True)
+    trampoline = GRAPHITE_POST_COMMIT.replace(b"CHAINED=", comment + b"CHAINED=")
+    (hdir / "post-commit").write_bytes(trampoline)
+    interp = Path("C:/py/python.exe")
+
+    install(r, interp)
+
+    assert _siblings(hdir, "post-commit") == ["post-commit.local"]
+    assert (hdir / "post-commit.local").read_bytes() == render_triage_shim(interp)
+    assert "INSTALLED" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize("comment", COMMENT_LINES, ids=COMMENT_IDS)
+def test_a_trampoline_that_names_a_sibling_only_in_a_comment_gets_no_shim(
+        tmp_path, capsys, comment):
+    # The false mention: the shim went where nothing runs it, install said it
+    # runs via the chain, and doctor's relocated-shim check found it and said
+    # nothing (measured at 7b1093e).
+    r = _repo(tmp_path)
+    hdir = r / ".git" / "hooks"
+    hdir.mkdir(exist_ok=True)
+    trampoline = (b"#!/bin/sh\n# >>> graphite managed >>>\n" + comment
+                  + b"echo gt\n# <<< graphite managed <<<\nexit 0\n")
+    (hdir / "post-commit").write_bytes(trampoline)
+
+    install(r, Path("C:/py/python.exe"))
+
+    assert (hdir / "post-commit").read_bytes() == trampoline
+    assert _siblings(hdir, "post-commit") == []
+    assert "NOT installed" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize("line", [
+    b'echo "see post-commit.old"\n',
+    b"echo gt  # post-commit.old\n",
+    b"if false; then post-commit.old; fi\n",
+    b"\f# post-commit.old\n",
+    b"\v# post-commit.old\n",
+    b"\xc2\xa0# post-commit.old\n",
+], ids=["an-echo", "a-trailing-comment", "a-dead-branch", "formfeed-first", "vtab-first",
+        "no-break-space-first"])
+def test_a_name_on_a_line_that_is_not_a_comment_still_counts(tmp_path, capsys, line):
+    # Not shell-read: a name on any line that is not a comment line counts, so
+    # with the real one that makes two, and two give no guess.
+    r = _repo(tmp_path)
+    hdir = r / ".git" / "hooks"
+    hdir.mkdir(exist_ok=True)
+    (hdir / "post-commit").write_bytes(
+        GRAPHITE_POST_COMMIT.replace(b"CHAINED=", line + b"CHAINED="))
+
+    install(r, Path("C:/py/python.exe"))
+
+    assert _siblings(hdir, "post-commit") == []
+    assert "NOT installed" in capsys.readouterr().err
+
+
+def test_a_trampoline_with_crlf_line_ends_still_names_its_sibling(tmp_path):
+    r = _repo(tmp_path)
+    hdir = r / ".git" / "hooks"
+    hdir.mkdir(exist_ok=True)
+    (hdir / "post-commit").write_bytes(GRAPHITE_POST_COMMIT.replace(b"\n", b"\r\n"))
+
+    install(r, Path("C:/py/python.exe"))
+
+    assert _siblings(hdir, "post-commit") == ["post-commit.local"]
+
+
 def test_install_never_puts_a_gate_where_a_foreign_trampoline_runs_it(tmp_path, capsys):
     # graphite runs its sibling `|| true`: a pre-commit gate there could never
     # block, and doctor would call it armed. Only the triage hook, which

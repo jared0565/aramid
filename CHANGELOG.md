@@ -221,8 +221,11 @@ to publish a tag that disagrees with it.
   tool's hook names exactly one file beside it (graphite's names
   `post-commit.local`, and runs it), aramid now puts its triage there, so the
   end state is the same whichever tool came first; `aramid uninstall` removes
-  it again. aramid takes that name from the hook's text and does not check
-  that the hook runs it.
+  it again. aramid takes that name from the hook's text, from its lines
+  that are not comments (a comment line is one whose first character other
+  than a space or a tab is `#`), and does not check that the hook runs it:
+  a name in an `echo`, a trailing comment or a branch that never runs still
+  counts.
   A pre-commit or pre-push gate is never put in another tool's chain: a
   trampoline may run that file and ignore its exit, as graphite's runs
   `post-commit.local` (`|| true`), and a gate there would never block.

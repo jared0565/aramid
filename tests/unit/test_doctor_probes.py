@@ -386,6 +386,19 @@ def test_relocated_probe_names_the_order_that_works_when_init_cannot(tmp_path):
         f"`aramid init .`, then re-run 'graphite's installer"]
 
 
+def test_relocated_probe_does_not_send_init_to_a_name_only_a_comment_mentions(tmp_path):
+    # Row 21a592: `aramid init .` would put the shim where nothing runs it.
+    r = _repo(tmp_path)
+    hdir = _relocated(r, hook="post-commit")
+    (hdir / "post-commit").write_bytes(b"#!/bin/sh\n# >>> graphite managed >>>\n"
+                                       b"# runs post-commit.local when there is one\nexit 0\n")
+    assert doctor.probe_relocated_shims(r) == [
+        f"hooks: post-commit is managed by 'graphite' and no relocated aramid shim survives "
+        f"beside it in {hdir} -- aramid's post-commit gate is NOT running here, and "
+        f"`aramid init .` cannot install it: move 'graphite's post-commit aside, run "
+        f"`aramid init .`, then re-run 'graphite's installer"]
+
+
 def test_relocated_probe_is_silent_for_a_current_relocated_shim(tmp_path):
     r = _repo(tmp_path)
     _relocated(r, body=_current(r))

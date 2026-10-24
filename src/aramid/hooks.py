@@ -384,7 +384,10 @@ def _chain_target(slot: Path, hook: str) -> Path | None:
     (graphite's runs `"$DIR/post-commit.local"`): that sibling, when the
     trampoline names exactly one and nothing is there yet (FN-57, channel
     round 322, the operator's decision of 2026-10-23). Read off the
-    trampoline, so no other tool's suffix is built in here.
+    trampoline, so no other tool's suffix is built in here: off its lines
+    that are not comments (a comment line's first character other than a
+    space or a tab is `#`; row 21a592). Not shell-read past that: a name in
+    an echo, a trailing comment or a dead branch counts.
 
     Only for the triage hook. graphite runs its sibling `|| true`: a
     post-commit triage shim swallows its own exit anyway, but a gate there
@@ -400,7 +403,9 @@ def _chain_target(slot: Path, hook: str) -> Path | None:
         data = slot.read_bytes()
     except OSError:
         return None
-    names = set(re.findall(rb"(?<![\w.-])" + re.escape(hook.encode()) + rb"\.[\w-]+", data))
+    code = b"\n".join(line for line in data.split(b"\n")
+                      if not line.lstrip(b" \t").startswith(b"#"))
+    names = set(re.findall(rb"(?<![\w.-])" + re.escape(hook.encode()) + rb"\.[\w-]+", code))
     names.discard(f"{hook}{CHAINED_SUFFIX}".encode())
     if len(names) != 1:
         return None

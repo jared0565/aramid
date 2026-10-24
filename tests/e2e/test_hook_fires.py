@@ -32,6 +32,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+
 from aramid import hooks
 
 
@@ -167,14 +169,17 @@ def test_chained_foreign_pre_commit_hook_runs_through_real_git_dispatch(tmp_path
     assert marker.exists(), "chained foreign hook must actually run through real git dispatch"
 
 
-def test_a_triage_shim_put_in_a_foreign_chain_runs_through_real_git_dispatch(tmp_path):
+@pytest.mark.parametrize("comment", [b"", b"  # it ran post-commit.old before\n"],
+                         ids=["as-graphite-writes-it", "a-comment-names-another"])
+def test_a_triage_shim_put_in_a_foreign_chain_runs_through_real_git_dispatch(tmp_path, comment):
     # FN-57 (channel round 322): another tool's managed post-commit trampoline
     # took the slot first and runs the sibling it names. install() puts
-    # aramid's triage shim there, and a real commit reaches it once.
+    # aramid's triage shim there, and a real commit reaches it once. A name
+    # only a comment line mentions is not one it runs (row 21a592).
     r = _repo(tmp_path)
     hdir = r / ".git" / "hooks"
     hdir.mkdir(exist_ok=True)
-    trampoline = (b'#!/bin/sh\n# >>> graphite managed >>>\n'
+    trampoline = (b'#!/bin/sh\n# >>> graphite managed >>>\n' + comment +
                   b'DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)\n'
                   b'CHAINED="$DIR/post-commit.local"\n'
                   b'if [ -f "$CHAINED" ]; then\n    "$CHAINED" "$@" || true\nfi\n'
