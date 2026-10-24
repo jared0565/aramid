@@ -233,6 +233,16 @@ to publish a tag that disagrees with it.
   names what does work: for post-commit, install aramid before the other
   tool (move its hook aside, run `aramid init .`, then re-run its
   installer). Reported by a consumer on 0.20.9 (channel round 322).
+- **A pre-commit or pre-push gate that another tool's hook runs is called
+  armed, but its blocking unconfirmed.** When another managing tool holds a
+  gate's slot and runs aramid's shim from a file beside it, the hook
+  install, `aramid init` and `aramid doctor` called the gate armed, whatever
+  that tool's hook does with the gate's exit. aramid does not read the
+  other tool's hook (graphite runs its `post-commit.local` with `|| true`),
+  so each now says the gate runs there with its blocking unconfirmed and
+  names the hook to check: `init` prints a warning and `hooks armed: yes,
+  blocking unconfirmed`, `doctor` a note. A warning: no exit code changes.
+  The post-commit triage, which blocks nothing, is unchanged.
 
 ## [0.20.9] — 2026-10-12
 

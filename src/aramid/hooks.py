@@ -496,6 +496,32 @@ def _foreign_slot_remedy(hook: str, foreign_tool: str) -> str:
     return f"no aramid command can install it while '{foreign_tool}' holds the slot"
 
 
+def _unconfirmed_gate_text(hook: str, foreign_tool: str, relocated: Path) -> str:
+    """What install, init and doctor each say of a gate shim another tool's
+    managed hook runs (row e46090, the operator's decision of 2026-10-23,
+    "warn: blocking unconfirmed"). aramid does not read that hook, so it
+    cannot say whether a failing gate still stops the commit or push there:
+    graphite runs its post-commit sibling `|| true`. One string, so the
+    three cannot drift."""
+    return (f"'{foreign_tool}' runs aramid's {hook} gate via {relocated.name}; blocking "
+            f"unconfirmed -- aramid does not read '{foreign_tool}'s hook: check that "
+            f"{relocated.parent / hook} passes the gate's exit on")
+
+
+def _relocated_gates(root: Path) -> list[tuple[str, str, Path]]:
+    """Each gate whose slot another tool's managed hook holds, with aramid's
+    own shim beside it (`_find_chained_aramid_shim`): (hook, tool, shim).
+    The gates only: the triage swallows its own exit anyway."""
+    hdir = hooks_dir(root)
+    found = []
+    for gate in GATES:
+        tool = _foreign_managed_tool(hdir / gate.value)     # None for a slot not there
+        relocated = None if tool is None else _find_chained_aramid_shim(hdir, gate.value)
+        if relocated is not None:
+            found.append((gate.value, tool, relocated))
+    return found
+
+
 def _warn_foreign_managed_conflict(
     hook: str, foreign_tool: str, chained_via: Path | None = None,
     state: str = "skipped",
@@ -510,6 +536,8 @@ def _warn_foreign_managed_conflict(
               file=sys.stderr)
         return
     if chained_via is not None:
+        unconfirmed = ("" if hook == TRIAGE_HOOK else
+                       " " + _unconfirmed_gate_text(hook, foreign_tool, chained_via) + ".")
         print(f"aramid: install: {hook}: already managed by '{foreign_tool}' -- "
               f"refusing to chain another tool's managed hook (chaining it would "
               f"silently double-run both tools' gates on every {hook}). aramid's "
@@ -517,7 +545,7 @@ def _warn_foreign_managed_conflict(
               f"via '{foreign_tool}'s chain -- "
               + _RELOCATED_STATE_TEXT.get(state, "left as-is")
               + f"; this slot itself stays untouched until '{foreign_tool}' "
-              f"no longer occupies it.", file=sys.stderr)
+              f"no longer occupies it." + unconfirmed, file=sys.stderr)
         return
     print(f"aramid: install: {hook}: already managed by '{foreign_tool}' -- "
           f"refusing to chain another tool's managed hook (chaining it would "

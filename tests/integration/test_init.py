@@ -574,6 +574,44 @@ def test_init_after_a_tool_whose_trampoline_runs_a_sibling_arms_the_triage(
     assert doctor.probe_relocated_shims(r) == []
 
 
+def test_init_calls_a_relocated_gate_armed_but_blocking_unconfirmed(
+        tmp_path, monkeypatch, capsys):
+    # Row e46090 (the operator's "warn: blocking unconfirmed", 2026-10-23):
+    # aramid does not read what the other tool's hook does with the gate's
+    # exit. A warning, so the exit stays 0.
+    monkeypatch.setattr(doctor, "probe_toolchain", _fake_present)
+    r = _repo(tmp_path)
+    assert init.cmd_init(r) == 0
+    hdir = hooks.hooks_dir(r)
+    slot = hdir / "pre-commit"
+    (hdir / "pre-commit.local").write_bytes(slot.read_bytes())
+    slot.write_bytes(b"#!/bin/sh\n# >>> graphite managed >>>\nexit 0\n")
+    capsys.readouterr()
+
+    assert init.cmd_init(r) == 0
+
+    captured = capsys.readouterr()
+    assert ("  hooks armed:       yes, blocking unconfirmed -- see warning above"
+            in captured.out.splitlines())
+    assert (f"aramid: init: WARNING -- pre-commit: 'graphite' runs aramid's pre-commit gate "
+            f"via pre-commit.local; blocking unconfirmed -- aramid does not read 'graphite's "
+            f"hook: check that {slot} passes the gate's exit on") in captured.err.splitlines()
+
+
+def test_init_calls_a_relocated_triage_armed_with_no_caveat(tmp_path, monkeypatch, capsys):
+    monkeypatch.setattr(doctor, "probe_toolchain", _fake_present)
+    r = _repo(tmp_path)
+    hdir = hooks.hooks_dir(r)
+    hdir.mkdir(parents=True, exist_ok=True)
+    (hdir / hooks.TRIAGE_HOOK).write_bytes(_TRAMPOLINE)
+
+    assert init.cmd_init(r) == 0
+
+    captured = capsys.readouterr()
+    assert "  hooks armed:       yes" in captured.out.splitlines()
+    assert "unconfirmed" not in captured.out + captured.err
+
+
 def test_init_that_cannot_arm_the_hooks_says_so_and_exits_3(tmp_path, monkeypatch, capsys):
     # Round 322: init printed `hooks armed: NO` and exited 0, so nothing that
     # ran it could tell. The trampoline here names no sibling it runs.

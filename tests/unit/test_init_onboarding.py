@@ -399,6 +399,51 @@ def test_init_one_reports_unarmed_hooks_in_the_summary(tmp_path, capsys, onboard
     assert "aramid: init: done, but the hooks are NOT armed -- see the warning above.\n" in err
 
 
+def _gate_moved_behind_another_tool(r, hook):
+    hdir = _shims(r)
+    (hdir / hook).rename(hdir / f"{hook}.local")
+    (hdir / hook).write_bytes(
+        f"#!/bin/sh\n# >>> graphite managed >>>\nexec .git/hooks/{hook}.local\n".encode())
+    return hdir
+
+
+def _unconfirmed(hdir, hook):
+    return (f"aramid: init: WARNING -- {hook}: 'graphite' runs aramid's {hook} gate via "
+            f"{hook}.local; blocking unconfirmed -- aramid does not read 'graphite's hook: "
+            f"check that {hdir / hook} passes the gate's exit on\n")
+
+
+def test_init_one_calls_a_gate_another_tools_hook_runs_armed_blocking_unconfirmed(
+        tmp_path, capsys, onboard):
+    # Row e46090 (the operator's "warn: blocking unconfirmed", 2026-10-23):
+    # aramid does not read what that hook does with the gate's exit. A
+    # warning: the exit stays 0.
+    r = _repo(tmp_path)
+    assert init._init_one(r) == 0
+    hdir = _gate_moved_behind_another_tool(r, "pre-push")
+    capsys.readouterr()
+
+    assert init._init_one(r) == 0
+    out, err = capsys.readouterr()
+    assert "  hooks armed:       yes, blocking unconfirmed -- see warning above\n" in _summary(out)
+    assert _unconfirmed(hdir, "pre-push") in err
+    assert "aramid: init: done. Run `aramid status`" in out
+
+
+def test_init_one_says_not_armed_over_blocking_unconfirmed(tmp_path, capsys, onboard,
+                                                          monkeypatch):
+    r = _repo(tmp_path)
+    assert init._init_one(r) == 0
+    hdir = _gate_moved_behind_another_tool(r, "pre-commit")
+    monkeypatch.setattr(init, "_validate_hook_shim", lambda root: False)
+    capsys.readouterr()
+
+    assert init._init_one(r) == 3
+    out, err = capsys.readouterr()
+    assert "  hooks armed:       NO -- see warning above\n" in _summary(out)
+    assert _unconfirmed(hdir, "pre-commit") in err
+
+
 # ------------------------------------------------------------- discovery --
 
 def test_skip_discover_dir_names_and_globs():

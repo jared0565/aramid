@@ -399,6 +399,28 @@ def test_relocated_probe_does_not_send_init_to_a_name_only_a_comment_mentions(tm
         f"`aramid init .`, then re-run 'graphite's installer"]
 
 
+def test_a_relocated_gate_is_a_note_that_blocking_is_unconfirmed(tmp_path):
+    # Row e46090: a note, not a failure -- doctor's exit reads only
+    # `probe_relocated_shims`, which stays silent for a current shim.
+    r = _repo(tmp_path)
+    hdir = _relocated(r, body=_current(r))
+    assert doctor.relocated_gate_notes(r) == [
+        f"hooks: pre-commit: 'graphite' runs aramid's pre-commit gate via pre-commit.local; "
+        f"blocking unconfirmed -- aramid does not read 'graphite's hook: check that "
+        f"{hdir / 'pre-commit'} passes the gate's exit on"]
+    assert doctor.probe_relocated_shims(r) == []
+
+
+def test_the_relocated_gate_note_is_silent_for_the_triage_and_off_an_aramid_repo(tmp_path):
+    r = _repo(tmp_path)
+    _relocated(r, hook="post-commit",
+               body=hooks_mod.render_triage_shim(Path(sys.executable)))
+    assert doctor.relocated_gate_notes(r) == []
+    plain = _repo(tmp_path, onboarded=False, name="plain")
+    _relocated(plain, body=_current(plain))
+    assert doctor.relocated_gate_notes(plain) == []
+
+
 def test_relocated_probe_is_silent_for_a_current_relocated_shim(tmp_path):
     r = _repo(tmp_path)
     _relocated(r, body=_current(r))
@@ -463,6 +485,15 @@ def test_doctor_is_clean_and_exits_0_when_everything_is_present(tmp_path, capsys
     out, err = capsys.readouterr()
     assert err == ""
     assert out.startswith("aramid doctor:\n  OK       gitleaks     8.21.2\n")
+    assert out.endswith("aramid: doctor: all BLOCK-tier tools present.\n")
+
+
+def test_doctor_prints_a_relocated_gate_note_and_still_exits_0(tmp_path, capsys, quiet):
+    # Row e46090: "blocking unconfirmed" is a warning; it never fails doctor.
+    quiet.setattr(doctor, "relocated_gate_notes", lambda root: ["hooks: pre-commit: a note"])
+    assert _run(tmp_path) == 0
+    out, err = capsys.readouterr()
+    assert err == "aramid: doctor: hooks: pre-commit: a note\n"
     assert out.endswith("aramid: doctor: all BLOCK-tier tools present.\n")
 
 

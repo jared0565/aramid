@@ -600,7 +600,15 @@ def _init_one(target: Path) -> int:
     # accepted, in exchange for a single shared string that cannot drift.
     for notice in unrooted_stack_notices(root):
         print(notice, file=sys.stderr)
-    print(f"  hooks armed:       {'yes' if shim_ok else 'NO -- see warning above'}")
+    # Row e46090: armed, but whether a gate another tool's hook runs still
+    # blocks is that hook's doing. A warning: the exit is unchanged.
+    unconfirmed = hooks._relocated_gates(root)
+    for hook, tool, relocated in unconfirmed:
+        print(f"aramid: init: WARNING -- {hook}: "
+              + hooks._unconfirmed_gate_text(hook, tool, relocated), file=sys.stderr)
+    armed = ("NO -- see warning above" if not shim_ok else
+             "yes, blocking unconfirmed -- see warning above" if unconfirmed else "yes")
+    print(f"  hooks armed:       {armed}")
     print(f"  baseline findings: {baseline_count}")
     print(f"  historical secrets:{historical_count}")
     if not shim_ok:

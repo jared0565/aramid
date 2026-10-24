@@ -1098,6 +1098,22 @@ def probe_relocated_shims(root: Path) -> list[str]:
         return []                   # fail open: never break doctor
 
 
+def relocated_gate_notes(root: Path) -> list[str]:
+    """A gate shim another tool's managed hook runs: armed, but whether a
+    failing gate there still blocks is that hook's doing, and aramid does not
+    read it (row e46090, the operator's "warn: blocking unconfirmed",
+    2026-10-23). Notes, never failures: `cmd_doctor`'s exit reads
+    `probe_relocated_shims`, not these. Never raises."""
+    try:
+        if not (root / "aramid.toml").exists():
+            return []
+        from aramid import hooks as hooks_mod
+        return [f"hooks: {hook}: " + hooks_mod._unconfirmed_gate_text(hook, tool, relocated)
+                for hook, tool, relocated in hooks_mod._relocated_gates(root)]
+    except Exception:
+        return []                   # fail open: never break doctor
+
+
 def cmd_doctor(root: Path, fix: bool = False, during_init: bool = False) -> int:
     """Probe the toolchain (and shim interpreter); when `fix`, repair
     what's missing/owned and re-probe. Returns 0 if both BLOCK-tier tools
@@ -1229,6 +1245,8 @@ def cmd_doctor(root: Path, fix: bool = False, during_init: bool = False) -> int:
         print(f"aramid: doctor: {unenforced}", file=sys.stderr)
     relocated_gate = probe_relocated_shims(root)
     for line in relocated_gate:
+        print(f"aramid: doctor: {line}", file=sys.stderr)
+    for line in relocated_gate_notes(root):
         print(f"aramid: doctor: {line}", file=sys.stderr)
 
     from aramid import registry as registry_mod

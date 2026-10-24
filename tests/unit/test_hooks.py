@@ -384,6 +384,57 @@ def test_install_softens_warning_for_post_commit_when_local_shim_survives(tmp_pa
     assert "graphite" in err
     assert "resolve manually" not in err.lower() and "resolved manually" not in err.lower()
     assert "post-commit.local" in err
+    assert "unconfirmed" not in err     # row e46090 is for the gates only
+
+
+# Row e46090 (the operator's decision of 2026-10-23, "warn: blocking
+# unconfirmed"): a gate shim another tool moved behind its own hook runs as
+# that hook runs it, and aramid does not read what the hook does with its exit
+# (graphite runs its post-commit sibling `|| true`). The gates only: the triage
+# swallows its own exit anyway.
+FOREIGN_SLOT = b"#!/bin/sh\n# >>> graphite managed >>>\nexit 0\n"
+
+
+def _gate_relocated_behind(r, gate):
+    hdir = r / ".git" / "hooks"
+    hdir.mkdir(exist_ok=True)
+    (hdir / gate.value).write_bytes(FOREIGN_SLOT)
+    (hdir / f"{gate.value}.local").write_bytes(render_shim(gate, Path("C:/py/python.exe")))
+    return hdir
+
+
+@pytest.mark.parametrize("gate", [Gate.PRE_COMMIT, Gate.PRE_PUSH], ids=lambda g: g.value)
+def test_install_says_a_relocated_gate_is_not_confirmed_to_block(tmp_path, capsys, gate):
+    r = _repo(tmp_path)
+    hdir = _gate_relocated_behind(r, gate)
+    hook = gate.value
+
+    install(r, Path("C:/py/python.exe"))
+
+    assert (hdir / hook).read_bytes() == FOREIGN_SLOT
+    lines = capsys.readouterr().err.splitlines()
+    assert [line for line in lines if line.startswith(f"aramid: install: {hook}:")] == [
+        f"aramid: install: {hook}: already managed by 'graphite' -- refusing to chain another "
+        f"tool's managed hook (chaining it would silently double-run both tools' gates on "
+        f"every {hook}). aramid's own {hook} shim survives at '{hook}.local' and still runs "
+        f"via 'graphite's chain -- already current; this slot itself stays untouched until "
+        f"'graphite' no longer occupies it. 'graphite' runs aramid's {hook} gate via "
+        f"{hook}.local; blocking unconfirmed -- aramid does not read 'graphite's hook: check "
+        f"that {hdir / hook} passes the gate's exit on."]
+
+
+def test_relocated_gates_are_the_gates_another_tools_hook_runs(tmp_path):
+    from aramid.hooks import _relocated_gates
+    r = _repo(tmp_path)
+    assert _relocated_gates(r) == []                    # no hooks dir yet
+    hdir = _gate_relocated_behind(r, Gate.PRE_PUSH)
+    (hdir / "post-commit").write_bytes(FOREIGN_SLOT)    # the triage is not a gate
+    (hdir / "post-commit.local").write_bytes(render_triage_shim(Path("C:/py/python.exe")))
+    (hdir / "pre-commit").write_bytes(FOREIGN_SLOT)     # nothing of aramid's beside it
+
+    assert _relocated_gates(r) == [("pre-push", "graphite", hdir / "pre-push.local")]
+    install(r, Path("C:/py/python.exe"))
+    assert _relocated_gates(r) == [("pre-push", "graphite", hdir / "pre-push.local")]
 
 
 # FN-57 (channel round 322; the operator's decision of 2026-10-23, "install at
