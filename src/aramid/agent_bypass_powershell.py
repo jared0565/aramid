@@ -31,6 +31,13 @@ as the words a program would get, so each word keeps the commas that make it
 a list (`parts`), and a `( )` among the words keeps the commands it holds
 (`groups`); the words themselves are what they were.
 
+A PIPE. `sent` hands back the strings a command sends down a pipe when its
+words say what they are (the operator's decision of 2026-10-24, "Read one
+line per item"): every element of every argument of an echo/Write-Output,
+and a list of strings, read with the same `parts` and `groups`. A `( )` that
+is all of a pipeline's first command is handed to the command after the
+pipe as `items`.
+
 WHAT IS NOT KNOWN HERE. A variable, a `$( )`, a `( )` or a `{ }` stands for
 a value only the run will show. As a whole word it stays one word, written
 `$`, which the flag rules step over or take as a value. Inside a longer
@@ -157,6 +164,7 @@ def _commands(text: str, i: int, closer: str, done: list, depth: int) -> int:
     seps: list[int] = []            # in `word`: the commas that make a list
     gaps: list[int] = []            # in `word`: the line ends after one of them
     groups: dict[int, list] = {}    # a `( )` among the words, by its place: its commands
+    lead: list | None = None        # a `( )` that is all of the command so far: its commands
 
     def end_word() -> bool:
         """Close the word being read. True when it was the stop-parsing token,
@@ -194,9 +202,20 @@ def _commands(text: str, i: int, closer: str, done: list, depth: int) -> int:
         command keeps its pipe UPSTREAM (the previous command at this level,
         when a single `|` joined them) so a shell fed on stdin can be read
         (agent_bypass._from_stdin). `||`/`&&` are one operator, not a pipe; `|
-        &` (the call operator straight after a pipe) keeps the pipe."""
-        nonlocal words, plains, heads, parts, groups, target, comma, prev, prev_op
+        &` (the call operator straight after a pipe) keeps the pipe. A `( )` that
+        is all of a pipeline's first command is what a pipe after it is fed: its
+        commands, as `items` (they are in `done` already, where they were read).
+        PowerShell refuses one after a pipe."""
+        nonlocal words, plains, heads, parts, groups, target, comma, prev, prev_op, lead
         end_word()
+        if lead is not None and not words and prev_op != "|":
+            prev = {"words": [], "plains": [], "heads": [], "upstream": None, "parts": [],
+                    "groups": {}, "items": lead}
+            prev_op, lead = op, None
+            plains, heads, parts, groups = [], [], [], {}
+            target, comma = False, False
+            return
+        lead = None
         if op in ("|", "&") and not words:
             if prev_op == op:            # `||` / `&&`: one operator, not a pipe
                 prev_op = prev_op + op
@@ -303,6 +322,7 @@ def _commands(text: str, i: int, closer: str, done: list, depth: int) -> int:
                     i = verbatim(i)
                     continue
                 place = None
+                start = not words and not target
                 if target:
                     target = False
                 elif words:
@@ -317,6 +337,7 @@ def _commands(text: str, i: int, closer: str, done: list, depth: int) -> int:
                 after = _members(text, i, done, depth)  # `(a).Length` is one value
                 if place is not None and ch == "(" and after == i:
                     groups[place] = done[before:]
+                lead = done[before:] if start and ch == "(" and after == i else None
                 i = after
             elif ch in ")}" or (ch == "]" and closer == "]"):
                 end_command(")")
@@ -555,6 +576,30 @@ def _listed(entries: list) -> list[str] | None:
             return None
         out.extend(args[0][2])
     return out or None
+
+
+# PowerShell echo/Write-Output (the alias and the cmdlet, case-insensitive).
+_ECHOERS = ("echo", "write-output", "write")
+
+
+def sent(cmd: dict) -> list[str] | None:
+    """The strings the simple command `cmd` sends down a pipe, an item to a
+    string, when its words say what they are (the operator's decision of
+    2026-10-24, "Read one line per item"; measured): every element of every
+    argument of an echo/Write-Output, a word not quoted included (`echo x,'y'`
+    sends `x` and `y`), or a command that is nothing but strings and the commas
+    between them (`'a', 'b'`, `'a','b'`, `,'a'`; a comma with nothing in front
+    adds an empty string, a line that runs nothing). None for anything else: a
+    command or a value only the run shows, and a list that starts bare
+    (`x,'y'`), a call PowerShell cannot make, which sends nothing. A quote that
+    ends before a comma ends its word (`'a','b'` is `a` and `,b`), so a comma
+    after something else in one word is after a bare start."""
+    words = cmd["words"]
+    if words and words[0].lower() in _ECHOERS:
+        return [item for arg in _arguments(cmd, 1) for item in arg[2]] or None
+    if any(len(pieces) > 1 and pieces[0] for pieces in cmd["parts"]):
+        return None
+    return _listed([cmd])
 
 
 def _escape(text: str, i: int) -> tuple[str, int]:

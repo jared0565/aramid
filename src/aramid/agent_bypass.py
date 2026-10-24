@@ -49,7 +49,14 @@ CALL pipes stdin the same way (`_from_stdin_powershell`): a bare quoted string
 (`'git commit -n' | bash`) or an `echo`/`Write-Output` of one, into a shell
 that reads stdin -- a POSIX shell with no `-c`/script, `pwsh -`, or
 `pwsh -Command -`/`-c -`/`-File -`; the call operator keeps the pipe
-(`'git commit -n' | & bash`). The same text piped into `cmd` is read a line
+(`'git commit -n' | & bash`). PowerShell sends each item it pipes as a line
+of its own, and several are read so (`_ps_piped_text`,
+`agent_bypass_powershell.sent`, the operator's decision of 2026-10-24): an
+echo's every argument, a word not quoted too, and each element of a list in
+one (`echo x,'git commit -n'`); a comma list of strings, with a blank after
+a comma or none (`'echo a','git commit -n' | bash`); and a `( )` or `@( )`
+of those that is the pipeline's first command. The same
+text piped into `cmd` is read a line
 at a time by cmd's rules (`_from_cmd_lines`, FN-55 7968ab), unless the line
 cmd is handed, built as for its string, has a `/c` or `/r` switch
 (`_reads_stdin_cmd`): Git Bash makes a lone `/c` a path, and cmd then reads
@@ -58,11 +65,9 @@ the same. Not read: a name cmd puts together from `%VAR%`, an
 encoded command (`-EncodedCommand`), a `fish -c` string (fish's option grammar
 is its own), a command handed through `su`, `script` or `flock -c`, a here-DOC
 body or a non-echo/printf pipe upstream (`cat f | bash`), a PowerShell pipe
-upstream that is unquoted (a command PowerShell RUNS), more than one word (an
-`echo` of several arguments lands one per line) or a list of items
-(`'a', 'b' | cmd`, `@('a', 'b')`, each its own line), a stdin handoff nested
-in a group, and the arguments a string is given when it runs
-(`bash -c 'git commit "$@"' x -n`).
+upstream that is unquoted (a command PowerShell RUNS), a group that also runs
+a command, a `$( )`, a stdin handoff nested in a group, and the arguments a
+string is given when it runs (`bash -c 'git commit "$@"' x -n`).
 
 WHICH SHELL (FN-45). `find_bypass` takes the shell the hook was told runs
 the command. A PowerShell call is cut up by `agent_bypass_powershell`, by
@@ -1005,28 +1010,24 @@ def _from_stdin(tokens: list[str], depth: int) -> Bypass | None:
     return None
 
 
-# PowerShell echo/Write-Output (the alias and the cmdlet, case-insensitive).
-_PS_ECHOERS = ("echo", "write-output", "write")
-
-
 def _ps_piped_text(upstream: dict) -> str | None:
-    """The text a PowerShell pipe UPSTREAM writes to the next command's stdin:
-    the one literal an `echo`/`Write-Output` emits, or a bare single quoted
-    string that PowerShell sends down the pipeline (`'git commit -n' | bash`).
-    A word PowerShell would RUN (unquoted, so a command/value) or more than one
-    is not stdin text -- it is a documented residual, the safe-negative side.
-    Multiple echo arguments each land on their own line (so joined they are not
-    one command); that too is left a residual."""
-    words, plains = upstream["words"], upstream["plains"]
-    if words and words[0].lower() in _PS_ECHOERS:
-        # echo/Write-Output of exactly ONE quoted literal argument
-        if len(words) == 2 and len(plains) >= 2 and not plains[1]:
-            return words[1]
-        return None
-    # a bare string expression emitted to the pipeline: one quoted word
-    if len(words) == 1 and plains and not plains[0]:
-        return words[0]
-    return None
+    """The text a PowerShell pipe UPSTREAM writes to the next command's stdin,
+    a line per item it sends (the operator's decision of 2026-10-24, "Read one
+    line per item"; measured): what `agent_bypass_powershell.sent` says an
+    echo/Write-Output, a string or a comma list of strings sends
+    (`'echo a', 'git commit -n' | bash`), and what a `( )` or `@( )` that is
+    the pipeline's first command sends when each command it holds is one of
+    those (`items`). A command PowerShell RUNS, a group holding one, and a
+    `$( )` are not stdin text -- a documented residual, the safe-negative
+    side."""
+    from aramid import agent_bypass_powershell
+    if "items" in upstream:
+        lines = [_ps_piped_text(cmd) for cmd in upstream["items"]]
+        if not lines or None in lines or any(cmd["upstream"] for cmd in upstream["items"]):
+            return None
+        return "\n".join(lines)
+    items = agent_bypass_powershell.sent(upstream)
+    return None if items is None else "\n".join(items)
 
 
 def _from_stdin_powershell(command: str, depth: int) -> Bypass | None:

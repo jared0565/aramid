@@ -34,7 +34,7 @@ import pytest
 from aramid import agent_bypass as ab
 from aramid.agent_bypass import POWERSHELL, Bypass, find_bypass
 from aramid.agent_bypass_powershell import (_DASHES, _DEPTH, _here_string_starts, _variable,
-                                            commands, reading, simple_commands)
+                                            commands, reading, sent, simple_commands)
 
 FIXTURE = Path(__file__).parent.parent / "fixtures" / "powershell-argv.json"
 RECORD = {case["command"]: (case["status"], case["argv"])
@@ -1001,6 +1001,53 @@ def test_a_command_cut_off_keeps_what_a_pipe_feeds_it_and_nothing_else():
         assert whole == "cut" and cmds[-1]["words"] == ["pwsh", "-c", "-"]
         assert (cmds[-1]["upstream"] is cmds[0]) is fed
         assert cmds[-1]["upstream"] is (cmds[0] if fed else None)
+
+
+def test_a_group_that_begins_a_pipeline_is_what_its_pipe_feeds():
+    # What a `( )` or `@( )` that is a pipeline's first command sends goes down the pipe
+    # (the operator's decision of 2026-10-24, "Read one line per item"): the next
+    # command's upstream holds the group's commands, as `items`, and the commands are
+    # read once, where they were. PowerShell refuses a group after a pipe (measured:
+    # `'x' | ('git commit -n') | bash` runs nothing), a member makes it a value
+    # (`('git commit -n').Length` sends 13), a `;` feeds nothing, and a group that is
+    # where a redirection goes is not the command (measured: `> ('git commit -n') | cmd`
+    # runs nothing).
+    cmds, end = simple_commands("@('a', 'b'; 'c') | cmd")
+    assert end == "end" and [c["words"] for c in cmds] == [["a", ",", "b"], ["c"], ["cmd"]]
+    assert cmds[-1]["upstream"]["items"] == cmds[:2]
+    assert simple_commands("('a') | cmd")[0][-1]["upstream"]["items"][0]["words"] == ["a"]
+    for text in ("'x' | ('a') | cmd", "('a').Length | cmd", "('a'); cmd", "('a') x | cmd",
+                 "{ 'a' } | cmd", "> ('a') | cmd"):
+        upstream = simple_commands(text)[0][-1]["upstream"]
+        assert upstream is None or "items" not in upstream, text
+
+
+@pytest.mark.parametrize(("text", "items"), [
+    # an echo sends every element of every argument, a word not quoted too
+    # (measured: `echo 'git commit -n' x | cmd`, `echo x,'git commit -n' | bash` ran git)
+    ("echo 'a' x -Foo", ["a", "x", "-Foo"]),
+    ("Write-Output 'a','b' 'c'", ["a", "b", "c"]),
+    ("echo x,'a'", ["x", "a"]),
+    ("echo", None),
+    # strings and the commas between them, a blank after a comma or none
+    ("'a'", ["a"]),
+    ("'a', 'b', 'c'", ["a", "b", "c"]),
+    ("'a','b'", ["a", "b"]),
+    (",'a'", ["", "a"]),            # the unary comma: an empty line, which runs nothing
+    # a list that starts bare is a call PowerShell cannot make (measured:
+    # `x,'git commit -n' | cmd` and `x, 'git commit -n' | cmd` ran nothing), two
+    # strings with no comma between are refused (measured: `'git commit -n' 'x' | cmd`),
+    # and a command is run, not sent
+    ("x,'a'", None),
+    ("x, 'a'", None),
+    ("'a' 'b'", None),
+    ("foo", None),
+    ("foo 'a'", None),
+])
+def test_what_a_command_sends_down_a_pipe(text, items):
+    cmds, end = simple_commands(text)
+    assert end == "end" and len(cmds) == 1
+    assert sent(cmds[0]) == items
 
 
 def test_every_word_has_its_plain_mark():

@@ -480,6 +480,40 @@ CMD_STDIN = [
     (POWERSHELL, "'git commit -n' | cmd /c", None),
     (POWERSHELL, "echo 'git commit -n' | cmd /c echo hi", None),
     (POWERSHELL, "'rem git commit -n' | cmd", None),
+    # PowerShell sends each item it pipes as a line of its own (the operator's decision
+    # of 2026-10-24, "Read one line per item"): a list, an echo of several, and a `( )`
+    # or `@( )` of quoted literals that is the first command of the pipeline
+    (POWERSHELL, "'echo a', 'git commit -n' | cmd", DASH_N),
+    (POWERSHELL, "@('echo a', 'git commit -n') | cmd", DASH_N),
+    (POWERSHELL, "echo 'echo a' 'git commit -n' | cmd", DASH_N),
+    (POWERSHELL, "Write-Output 'echo a' 'git commit -n' | cmd", DASH_N),
+    (POWERSHELL, "('echo a', 'git commit -n') | cmd", DASH_N),
+    (POWERSHELL, "@('echo a'; 'git commit -n') | cmd", DASH_N),
+    (POWERSHELL, "'echo a' , \"git commit -n\" | cmd", DASH_N),
+    (POWERSHELL, "'git commit -n', 'echo a' | cmd", DASH_N),
+    (POWERSHELL, ",'git commit -n' | cmd", DASH_N),
+    (POWERSHELL, "@('git commit -n') | cmd", DASH_N),
+    (POWERSHELL, "'echo a', 'echo b', 'git commit -n' | cmd", DASH_N),
+    # an echo sends a word that is not quoted as it stands, a parameter's name it
+    # does not have too
+    (POWERSHELL, "echo 'git commit -n' x | cmd", DASH_N),
+    (POWERSHELL, "echo 'git commit -n' -Foo | cmd", DASH_N),
+    # PowerShell's `-n` is Write-Output's -NoEnumerate: the string goes with its line end
+    (POWERSHELL, "echo -n 'git commit -n' | cmd", DASH_N),
+    # a comma makes a list whether a blank follows it or not, in an echo's
+    # argument too, where a word not quoted is a string
+    (POWERSHELL, "'echo a','git commit -n' | cmd", DASH_N),
+    (POWERSHELL, "echo 'echo a','git commit -n' | cmd", DASH_N),
+    (POWERSHELL, "echo 'echo a', 'git commit -n' | cmd", DASH_N),
+    (POWERSHELL, "echo x,'git commit -n' | cmd", DASH_N),
+    (POWERSHELL, "x,'git commit -n' | cmd", None),              # a call PowerShell cannot make
+    (POWERSHELL, "@(x,'git commit -n') | cmd", None),
+    (POWERSHELL, "'git', 'commit -n' | cmd", None),             # git alone, then `commit -n`
+    (POWERSHELL, "'x' | ('git commit -n') | cmd", None),        # PowerShell refuses the line
+    (POWERSHELL, "('git commit -n').Length | cmd", None),       # it sends 13
+    (POWERSHELL, "@('git commit -n' | Out-Null) | cmd", None),  # nothing leaves the group
+    (POWERSHELL, "@('git commit -n' | 'x') | cmd", None),       # PowerShell refuses the line
+    (POWERSHELL, "@() | cmd", None),
 ]
 # Told no shell, the hook reads a call both ways, and these two ways differ: PowerShell
 # hands cmd a `//c` as it is, no switch, and Git Bash makes a lone `/c` a path; cmd
@@ -496,18 +530,6 @@ NOT_TOLD = {
 def test_a_command_piped_into_cmd_is_answered_as_git_was_handed_it(shell, command, answer):
     assert find_bypass(command, shell) == answer
     assert find_bypass(command, None) == NOT_TOLD.get((shell, command), answer)
-
-
-@pytest.mark.parametrize("command", [
-    "@('echo a', 'git commit -n') | cmd", "'echo a', 'git commit -n' | cmd",
-    "echo 'echo a' 'git commit -n' | cmd",
-])
-def test_items_piped_as_lines_of_their_own_are_a_documented_residual(command):
-    # PowerShell sends each item it pipes as a line of its own, and cmd ran the git one
-    # (the record); the reader reads a pipe from one quoted literal or an echo of one. A
-    # residual, named in agent_bypass's module docstring: if it is ever read, drop these
-    # from the lists of test_agent_bypass_handed.py too.
-    assert find_bypass(command, POWERSHELL) is None
 
 
 @pytest.mark.parametrize("line,switch", [

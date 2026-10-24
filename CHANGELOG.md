@@ -49,9 +49,15 @@ to publish a tag that disagrees with it.
   switch, and each line is now read as cmd reads a `/c` string. Git Bash
   makes a lone `/c` a path, and cmd then reads its input; that is read too. A
   last line with no line end, which cmd does not run, is read all the same.
-  Not read: a PowerShell pipe that sends several items or an echo of several
-  words, each as a line of its own (`'echo a', 'git commit -n' | cmd`); a
-  PowerShell call of that shape is let through.
+- **A PowerShell pipe of several items is read a line per item (FN-55).**
+  `'echo a','git commit -n' | cmd` commits, and so does the same list piped
+  into `bash` or `pwsh -`: PowerShell sends each item as a line of its own,
+  as it was measured to. The hook let a list, an `echo` of several words and
+  a `( )` or `@( )` of them through; each is now read a line per item, an
+  echo's word that is not quoted and a list inside its argument
+  (`echo x,'git commit -n'`) included, and so is a lone comma in front of a
+  string (`,'git commit -n' | bash`). Not read: a group that also runs a
+  command, and what a `$( )` sends.
 - **A word that starts with `$` in front of git's subcommand is stepped
   over.** `git $(true) commit -n` commits, and in a Bash or PowerShell call
   it is now refused (finding 4ce6a085).
