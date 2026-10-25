@@ -156,6 +156,26 @@ def test_refs_under_the_marker_reach_the_gate(tmp_path, monkeypatch):
     assert started["refs"] and started["refs"][0]["local_sha"] == sha
 
 
+def test_the_remote_the_hook_names_rides_on_every_certified_ref(tmp_path, monkeypatch):
+    # git hands the pre-push hook the remote's name as $1 and the shim
+    # exports it; each certified ref carries it to the departure reader,
+    # which then judges against THAT remote (llm-review 6ddc2128b981).
+    root, sha, calls = _arm(tmp_path, monkeypatch)
+    certified = []
+    certify = pushrefs.certify
+
+    def spy(*a, **k):
+        certified.append(certify(*a, **k))
+        return certified[-1]
+    monkeypatch.setattr(pushrefs, "certify", spy)
+    _hook_stdin(monkeypatch, sha)
+    monkeypatch.setenv(pushrefs.REMOTE_ENV, "fork")
+
+    assert cmd_check(root, Gate.PRE_PUSH, "range") == 0
+    assert calls == ["ran"]
+    assert [(r.local_sha, r.remote) for r in certified[-1].refs] == [(sha, "fork")]
+
+
 def test_strict_turns_a_degraded_gate_into_a_failure(tmp_path, monkeypatch):
     # A missing tool degrades the gate to exit 2; `--strict` (what CI runs)
     # must make that a 1, and a non-strict run must leave it a 2. Both arms

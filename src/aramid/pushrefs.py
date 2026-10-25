@@ -19,6 +19,10 @@ runners and `pipeline.run_gate` calls `drift` after the last one.
 Stdin is read ONLY under `ARAMID_HOOK` (the managed shim exports it).
 By hand and in CI the process may have an empty non-tty stdin too, and
 reading it there would turn CI's pre-push-tier run into "nothing to push".
+So is `ARAMID_PUSH_REMOTE`, the remote's name git hands the hook as `$1`,
+which the pre-push shim exports beside it: the departure reader judges
+against THAT remote (llm-review 6ddc2128b981). A shim generated before it
+exports nothing, and the reader guesses origin, as it did.
 """
 from __future__ import annotations
 
@@ -30,6 +34,7 @@ from pathlib import Path
 from aramid import gitutil
 
 HOOK_ENV = "ARAMID_HOOK"
+REMOTE_ENV = "ARAMID_PUSH_REMOTE"
 _ZERO = "0" * 40
 _DELETE = "(delete)"
 
@@ -40,6 +45,7 @@ class PushRef:
     local_sha: str
     remote_ref: str
     remote_sha: str
+    remote: str | None = None   # the remote's name, when the hook said; None: unknown
 
 
 @dataclass(frozen=True)
@@ -56,11 +62,11 @@ class Moved:
     after: str | None   # None: the ref no longer resolves -- also not certified
 
 
-def parse_push_lines(text: str) -> list[PushRef]:
-    """One `PushRef` per well-formed stdin line. A malformed line is skipped
-    rather than raised on -- this runs inside a gate -- and a deletion
-    (`(delete)` / all-zero local sha) is dropped: nothing ships, nothing to
-    certify."""
+def parse_push_lines(text: str, remote: str | None = None) -> list[PushRef]:
+    """One `PushRef` per well-formed stdin line, each going to `remote`. A
+    malformed line is skipped rather than raised on -- this runs inside a
+    gate -- and a deletion (`(delete)` / all-zero local sha) is dropped:
+    nothing ships, nothing to certify."""
     out: list[PushRef] = []
     for line in (text or "").splitlines():
         parts = line.split()
@@ -69,7 +75,7 @@ def parse_push_lines(text: str) -> list[PushRef]:
         local_ref, local_sha, remote_ref, remote_sha = parts
         if local_ref == _DELETE or local_sha == _ZERO:
             continue
-        out.append(PushRef(local_ref, local_sha, remote_ref, remote_sha))
+        out.append(PushRef(local_ref, local_sha, remote_ref, remote_sha, remote))
     return out
 
 
@@ -89,6 +95,14 @@ def read_hook_stdin() -> str | None:
         return stream.read()
     except (OSError, ValueError, AttributeError):
         return None
+
+
+def read_hook_remote() -> str | None:
+    """The remote's name the pre-push shim exported, under the same marker
+    as stdin; None by hand, or when the shim exported none or an empty one."""
+    if not os.environ.get(HOOK_ENV):
+        return None
+    return os.environ.get(REMOTE_ENV) or None
 
 
 def _rev_parse(root: Path, spec: str) -> str | None:

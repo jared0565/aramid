@@ -196,7 +196,7 @@ def cmd_check(root, gate: Gate, mode: str, strict: bool = False, as_json: bool =
         certified = None
         if gate is Gate.PRE_PUSH:
             hook_text = pushrefs.read_hook_stdin()      # None unless ARAMID_HOOK is set
-            refs = pushrefs.parse_push_lines(hook_text or "")
+            refs = pushrefs.parse_push_lines(hook_text or "", pushrefs.read_hook_remote())
             if hook_text is not None and not refs:
                 # git's "Everything up-to-date", or a push that only deletes:
                 # nothing ships, so there is nothing to certify -- and no run

@@ -30,26 +30,45 @@ to publish a tag that disagrees with it.
   holds it; a copy a branch merely inherited from shared history (a merged
   branch kept, a dependabot branch) does not count. A branch's own commits
   are told apart against the remote default branch as the push leaves it
-  (the branch `origin/HEAD` names, or the commit the push hands it), so
+  (the branch `<remote>/HEAD` names, or the commit the push hands it), so
   pushing a branch cut from another, unmerged one does not clear the other's
-  rows, and the remote-tracking refs the push replaces are left out. A file
-  deleted, or a line edited, and not committed no longer clears anything. A
-  file no certified revision tracks keeps its rows open while the working
-  tree still has the content, and a path inside a submodule is never
-  cleared. With no remote HEAD (a remote added by hand; `git remote set-head
-  origin --auto` sets one), each pushed revision stands in for the default
-  branch: a stacked branch's push then still clears its parent's rows, and
-  rows on a commit pushed and then rewritten away stay open until the
-  force-push lands. A remote HEAD left naming an old branch (after a
-  master-to-main rename) keeps rows open until it is set again; at
-  pre-commit, unpushed merges on main keep rows open until main is pushed;
-  and an orphan branch (a gh-pages) that holds the same path keeps its rows
-  open while it exists. The hook is not told which remote it pushes to, so
-  a push to another remote's default branch is read as moving origin's. Rows the old rule cleared are not reopened by this
-  release; a run that detects them again reopens them, as before. Content
-  absent from everything certified costs up to two git processes to find
-  the default branch, then one `ls-tree` and one merge base per unmerged branch
-  tip, in each resolver that meets it.
+  rows. Content that default branch still holds keeps its rows open whatever
+  branch is pushed: a branch that drops it fixes nothing the default branch
+  ships yet, and pushing one no longer clears the rows raised on it.
+  The remote-tracking refs a fast-forward replaces are left out; a
+  force-push's old commit still counts until the force-push lands, since the
+  server may refuse it. A file deleted, or a line edited, and not committed
+  no longer clears anything. A file no certified revision tracks keeps its
+  rows open while the working tree still has the content, and a path inside
+  a submodule is never cleared.
+- **The pre-push hook tells the gate which remote it pushes to.** git hands
+  a pre-push hook the remote's name as its first argument; the shim
+  `aramid init` writes, and the global template shim, now pass it on as
+  `ARAMID_PUSH_REMOTE`, and the gate above judges against that remote's
+  default branch and replaces that remote's tracking refs. A hook written
+  by an earlier aramid does not pass it: the gate then guesses origin (else
+  the only remote with a default branch), so a push to another remote is
+  read as a push to origin and origin's tracking ref for the branch is left
+  out. Re-run `aramid init` to regenerate the hook; until you do, `aramid
+  doctor` reports a relocated pre-push shim (one another tool's hook runs)
+  as stale. The pre-commit shim is unchanged.
+- **Where the gate above stays open longer, and where it does not.** With
+  no remote HEAD at all (a remote added by hand whose HEAD was never fetched
+  or set; `git remote set-head origin --auto` sets one), each pushed
+  revision stands in for the default branch, and a stacked branch's push
+  still clears its parent's rows. A remote the push goes to that has no
+  HEAD is judged against origin's default branch as it stands. A remote
+  HEAD left naming an old branch (after a master-to-main rename) keeps rows
+  open until it is set again; at pre-commit the default branch is the
+  remote's as it stands, so content a local commit on main drops, and what
+  unpushed merges on main brought, keep their rows open until main is
+  pushed; and an orphan branch (a gh-pages) that holds the same path keeps
+  its rows open while it exists. Rows the old rule cleared are not reopened
+  by this release; a run that detects them again reopens them, as before.
+  Content absent from everything certified costs up to two git processes,
+  plus one per pushed branch, to find the default branch, one `ls-tree` of
+  it, then one `ls-tree` and one merge base per unmerged branch tip, in each
+  resolver that meets it.
 - **`scripts/promote_live.py` says when `gh` failed, instead of calling the
   release unpublished.** Promoting 0.20.10 from a shell with `gh` but no
   `git` on PATH, `gh release view` exited 1 ("unable to find git executable

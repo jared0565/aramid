@@ -1,3 +1,4 @@
+import shutil
 import subprocess
 import sys
 from pathlib import Path, PureWindowsPath
@@ -786,6 +787,49 @@ def test_shim_tells_the_gate_that_git_is_on_stdin():
     tmpl = render_template_shim(Gate.PRE_PUSH, Path("C:/py/python.exe")).decode()
     assert 'ARAMID_HOOK=pre-push "$INTERP" -P -m aramid check --gate pre-push' in tmpl
     assert "ARAMID_HOOK=pre-push py -3 -P -m aramid check --gate pre-push" in tmpl
+
+
+def test_every_pre_push_arm_exports_the_remote_and_no_pre_commit_arm_does():
+    """The py-launcher arm cannot run here; what both arms of both renderers say can be read.
+    The pre-commit shim is unchanged: git hands that hook no arguments."""
+    from aramid.hooks import render_template_shim
+    remote = 'ARAMID_PUSH_REMOTE="$1" ARAMID_HOOK=pre-push '
+    for data in (render_shim(Gate.PRE_PUSH, Path("C:/py/python.exe")).decode(),
+                 render_shim(Gate.PRE_PUSH, Path("C:/py/python.exe"), match_ci=True).decode(),
+                 render_template_shim(Gate.PRE_PUSH, Path("C:/py/python.exe")).decode()):
+        assert data.count(remote + '"$INTERP" -P -m aramid check --gate pre-push') == 1
+        assert data.count(remote + "py -3 -P -m aramid check --gate pre-push") == 1
+    for data in (render_shim(Gate.PRE_COMMIT, Path("C:/py/python.exe")).decode(),
+                 render_template_shim(Gate.PRE_COMMIT, Path("C:/py/python.exe")).decode()):
+        assert "ARAMID_PUSH_REMOTE" not in data
+
+
+@pytest.mark.skipif(shutil.which("sh") is None, reason="needs `sh` to run a hook")
+@pytest.mark.parametrize("template", [False, True])
+def test_the_pre_push_shim_hands_the_gate_the_remote_git_names(tmp_path, template):
+    """git runs a pre-push hook as `pre-push <remote name> <url>`. On a real push, the shim
+    exports that name beside the marker, so the gate judges against the remote the push goes
+    to rather than guessing origin (llm-review 6ddc2128b981)."""
+    from aramid.hooks import render_template_shim
+    r = _repo(tmp_path)
+    hooks, empty = tmp_path / "hooks", tmp_path / "no-template"
+    hooks.mkdir()
+    empty.mkdir()
+    _git(r, "config", "core.hooksPath", str(hooks))          # this test's hooks only
+    _git(r, "commit", "-q", "--allow-empty", "-m", "c0")
+    (r / "aramid.toml").write_text("[tool]\n", encoding="utf-8")    # the template's guard
+    seen = tmp_path / "seen.txt"
+    interp = tmp_path / "fake_interp.sh"
+    interp.write_bytes(b'#!/bin/sh\ncat >/dev/null\nprintf "%s|%s" "$ARAMID_PUSH_REMOTE" '
+                       b'"$ARAMID_HOOK" > "' + win_sh_path(seen).encode() + b'"\n')
+    interp.chmod(0o755)
+    shim = hooks / "pre-push"
+    shim.write_bytes((render_template_shim if template else render_shim)(Gate.PRE_PUSH, interp))
+    shim.chmod(0o755)
+    _git(tmp_path, "init", "-q", "--bare", f"--template={empty}", "fork.git")
+    _git(r, "remote", "add", "fork", str(tmp_path / "fork.git"))
+    _git(r, "push", "-q", "fork", "main")
+    assert seen.read_text(encoding="utf-8") == "fork|pre-push"
 
 
 def test_match_ci_stops_swallowing_a_degraded_run():

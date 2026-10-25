@@ -140,6 +140,22 @@ def _check_args(gate: Gate, match_ci: bool) -> str:
     return f"--gate {hook}"
 
 
+def _hook_env(gate: Gate) -> str:
+    """What the gate reads from its environment, as the shim sets it before
+    the interpreter. ARAMID_HOOK=<gate>: the gate reads the pre-push ref lines
+    git writes to this hook's stdin ONLY under this marker -- by hand and in
+    CI the process has an empty non-tty stdin too, and reading it there would
+    turn CI's pre-push-tier run into "nothing to push" (interop round 176;
+    pushrefs.read_hook_stdin). ARAMID_PUSH_REMOTE: the remote's name, which
+    git hands a pre-push hook as `$1` (a pre-commit hook gets no arguments),
+    so the departure reader judges against the remote the push goes to
+    (llm-review 6ddc2128b981)."""
+    hook = gate.value
+    if gate is Gate.PRE_PUSH:
+        return f'ARAMID_PUSH_REMOTE="$1" ARAMID_HOOK={hook}'
+    return f"ARAMID_HOOK={hook}"
+
+
 def render_shim(gate: Gate, interpreter: Path, match_ci: bool = False) -> bytes:
     """Render the `sh` shim for `gate`. Returns BYTES with `\n` line
     endings ONLY -- never route this through a text-mode write on Windows.
@@ -165,15 +181,10 @@ def render_shim(gate: Gate, interpreter: Path, match_ci: bool = False) -> bytes:
         "",
         f'INTERP="{interp_sh}"',
         'if [ -x "$INTERP" ]; then',
-        # ARAMID_HOOK=<gate>: the gate reads the pre-push ref lines git
-        # writes to this hook's stdin ONLY under this marker -- by hand and
-        # in CI the process has an empty non-tty stdin too, and reading it
-        # there would turn CI's pre-push-tier run into "nothing to push"
-        # (interop round 176; pushrefs.read_hook_stdin).
-        f'    ARAMID_HOOK={hook} "$INTERP" -P -m aramid check {_check_args(gate, match_ci)}',
+        f'    {_hook_env(gate)} "$INTERP" -P -m aramid check {_check_args(gate, match_ci)}',
         "    status=$?",
         "elif command -v py >/dev/null 2>&1; then",
-        f"    ARAMID_HOOK={hook} py -3 -P -m aramid check {_check_args(gate, match_ci)}",
+        f"    {_hook_env(gate)} py -3 -P -m aramid check {_check_args(gate, match_ci)}",
         "    status=$?",
         "else",
         '    echo "aramid: no usable python interpreter (tried $INTERP and py -3)" >&2',
@@ -191,8 +202,9 @@ def render_template_shim(gate: Gate, interpreter: Path) -> bytes:
     """Render the GLOBAL-TEMPLATE variant of `gate`'s shim, for git's
     `init.templateDir`. Deliberately a mirror of `render_shim` rather than a
     parameterization of it: the two have different safety contracts and the
-    exit-code mapping must stay byte-identical between them, so they share
-    `_exit_case_lines` and nothing else.
+    exit-code mapping must stay byte-identical between them, as must what the
+    gate reads from its environment, so they share `_exit_case_lines` and
+    `_hook_env` and nothing else.
 
     The difference is the opt-in guard. Git copies templateDir hooks into
     EVERY new `git init`/`git clone`, including repos nobody onboarded, so
@@ -229,11 +241,10 @@ def render_template_shim(gate: Gate, interpreter: Path) -> bytes:
         "",
         f'INTERP="{interp_sh}"',
         'if [ -x "$INTERP" ]; then',
-        # Same marker as the managed shim (see render_shim): git is on stdin.
-        f'    ARAMID_HOOK={hook} "$INTERP" -P -m aramid check --gate {hook}',
+        f'    {_hook_env(gate)} "$INTERP" -P -m aramid check --gate {hook}',
         "    status=$?",
         "elif command -v py >/dev/null 2>&1; then",
-        f"    ARAMID_HOOK={hook} py -3 -P -m aramid check --gate {hook}",
+        f"    {_hook_env(gate)} py -3 -P -m aramid check --gate {hook}",
         "    status=$?",
         "else",
         '    echo "aramid: no usable python interpreter (tried $INTERP and py -3)" >&2',

@@ -29,9 +29,12 @@ THE LINE (the operator's decision of 2026-10-25, "INTEG-P", llm-review 8cdf845ab
 remote HEAD, a branch's own commits are told apart against the remote default branch as the
 push leaves it, not against the certified revision, and the tracking refs the push replaces
 are left out. A branch C cut from an unmerged A that deletes A's file no longer clears A's
-rows, and `rewritten_pushed_before` clears with the force-push itself. The tests after the
-table pin it, its fallback (no remote HEAD: the rule above) and its residual (a stale remote
-HEAD keeps rows open).
+rows. Three refinements the same day, each the operator's decision on a review row: only a
+FAST-FORWARD's old tip is left out, since a server can refuse a force-push (6b3e7686eb2d);
+content the line itself holds stays open, since main still ships it (cc6ba8341094); and the
+remote is the one the hook names, git's `$1` (6ddc2128b981). The tests after the table pin
+them, the fallback (no remote HEAD: the rule above) and a residual (a stale remote HEAD keeps
+rows open).
 """
 import subprocess
 from datetime import datetime, timezone
@@ -292,6 +295,17 @@ def test_a_file_in_no_commit_is_not_gone_while_the_disk_has_it(tmp_path):
     assert Departure(tmp_path, (a1p,)).gone("tests/test_a.py") is True    # the control
 
 
+def test_a_path_that_cannot_name_a_file_in_the_repository_is_never_gone(tmp_path):
+    """Absolute, on a drive, or climbing out with `..`: such a path was never inside, so it
+    never departs, however many revisions there are to read. The control, a repo-relative
+    path no revision and no branch holds, is gone."""
+    from aramid.departure import Departure
+    _Repo(tmp_path)
+    for path in ("/etc/passwd", "C:/x.py", "../x.py", "src/../../x.py"):
+        assert Departure(tmp_path).gone(path) is False, path
+    assert Departure(tmp_path).gone("nowhere.py") is True
+
+
 def test_a_root_that_is_not_a_repository_resolves_nothing(tmp_path):
     """No revision can be read, so nothing can be shown gone: the safe direction. Before
     FN-58 this asked the disk, where every path of a non-repo is 'absent'."""
@@ -364,17 +378,17 @@ def _pushed(case, r, revs):
 
 
 @pytest.mark.parametrize("case", list(CASES))
-def test_against_the_remote_default_branch_the_table_holds_and_a_force_push_clears_at_once(
-        tmp_path, case):
-    """With a remote default branch every case answers as before but one: rows on a commit
-    pushed and then rewritten away clear with the force-push itself, since origin/A is the
-    ref that push replaces. `snapshot` pushes main while origin/main lags at the base, and
-    the line is the commit the push hands main, not the lagging one."""
+def test_against_the_remote_default_branch_the_table_holds(tmp_path, case):
+    """With a remote default branch every case answers as the table does. `snapshot` pushes
+    main while origin/main lags at the base, and the line is the commit the push hands main,
+    not the lagging one. `rewritten_pushed_before` stays open until the force-push lands
+    (llm-review 6b3e7686eb2d, the operator's "Fast-forwards only"): a server can refuse a
+    force-push, so the tracking ref it would replace is read like any branch, and only a
+    fast-forward's old tip is left out."""
     build, want = CASES[case]
     r = _Repo(tmp_path)
     _publish(r)
     gate, revs = build(r)
-    want = "fixed" if case == "rewritten_pushed_before" else want
     assert _run_resolvers(tmp_path, gate, revs, _pushed(case, r, revs)) \
         == dict.fromkeys(ROWS, want)
 
@@ -399,15 +413,26 @@ def test_a_branch_cut_from_an_unmerged_one_does_not_clear_its_rows(tmp_path, a_p
     assert _run_resolvers(tmp_path, "pre-push", revs, pushed) == dict.fromkeys(ROWS, "open")
 
 
-def test_once_the_unmerged_branch_is_merged_and_pushed_the_stacked_delete_clears(tmp_path):
+@pytest.mark.parametrize("c_merged", [False, True])
+def test_once_the_unmerged_branch_is_merged_its_rows_stay_open_while_main_ships_it(
+        tmp_path, c_merged):
+    """A is merged into main and pushed, then C (cut from A, deleting A's file) is pushed:
+    main still ships the content, and the rows stay open (llm-review cc6ba8341094, the
+    operator's "Keep open while main has it"). They clear when main loses it: C merged into
+    main, and main pushed."""
     r = _Repo(tmp_path)
     r.git("update-ref", "refs/remotes/origin/A", r.a1)
     revs, pushed = _stacked(r)
     r.git("checkout", "-q", "main")
     r.git("merge", "-q", "--ff-only", "A")
     _publish(r, at=r.a1)
-    r.git("checkout", "-q", "C")
-    assert _run_resolvers(tmp_path, "pre-push", revs, pushed) == dict.fromkeys(ROWS, "fixed")
+    if c_merged:
+        r.git("merge", "-q", "--ff-only", "C")
+        revs, pushed = (revs[0], revs[0]), (_push("main", revs[0], r.a1),)
+    else:
+        r.git("checkout", "-q", "C")
+    assert _run_resolvers(tmp_path, "pre-push", revs, pushed) \
+        == dict.fromkeys(ROWS, "fixed" if c_merged else "open")
 
 
 @pytest.mark.parametrize("head", [None, "refs/remotes/origin/master"])
@@ -424,46 +449,71 @@ def test_without_a_remote_default_branch_a_stacked_push_still_clears_the_rows(tm
     assert _run_resolvers(tmp_path, "pre-push", revs, pushed) == dict.fromkeys(ROWS, "fixed")
 
 
-@pytest.mark.parametrize("stale", [False, True])
-def test_a_feature_push_that_deletes_main_s_content_clears_unless_the_remote_head_is_stale(
-        tmp_path, stale):
-    """main has the content, pushed; F, cut from main, deletes it and is pushed: main's copy
-    is history F moved past, and the rows clear. The line's residual, in the safe direction:
-    a clone keeps origin/HEAD naming origin/master after a master->main rename until
-    `git remote set-head`, and judged against that older commit main's own content looks
-    like every branch's own, so nothing clears."""
+def test_a_feature_push_that_deletes_main_s_content_keeps_its_rows_while_main_ships_it(
+        tmp_path):
+    """main has the content, pushed; F, cut from main, deletes it and is pushed. main still
+    ships it, so the rows stay open (llm-review cc6ba8341094: pushing a throwaway branch that
+    drops the content used to clear main's rows, an armed block among them)."""
     r = _Repo(tmp_path)
     r.git("checkout", "-q", "main")
     r.git("merge", "-q", "--ff-only", "A")
     r.git("branch", "-q", "-D", "A")
     _publish(r, at=r.a1)
-    if stale:
-        r.git("update-ref", "refs/remotes/origin/master", r.main)
-        r.git("symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/master")
     r.git("checkout", "-q", "-b", "F")
     f1 = r.delete_and_edit()
     got = _run_resolvers(tmp_path, "pre-push", (f1, f1), (_push("F", f1),))
+    assert got == dict.fromkeys(ROWS, "open")
+
+
+@pytest.mark.parametrize("stale", [False, True])
+def test_a_main_push_that_clears_the_snapshot_rows_keeps_them_under_a_stale_remote_head(
+        tmp_path, stale):
+    """The line's residual, in the safe direction: a clone keeps origin/HEAD naming
+    origin/master after a master->main rename until `git remote set-head`. A push of main
+    then does not move the line, and judged against that older commit the content main's own
+    commits brought looks like every branch's own, so the `snapshot` push clears nothing."""
+    r = _Repo(tmp_path)
+    _publish(r)
+    if stale:
+        r.git("update-ref", "refs/remotes/origin/master", r.main)
+        r.git("symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/master")
+    gate, revs = _snapshot(r)
+    got = _run_resolvers(tmp_path, gate, revs, _pushed("snapshot", r, revs))
     assert got == dict.fromkeys(ROWS, "open" if stale else "fixed")
 
 
 def test_the_ref_a_push_replaces_is_left_out_by_name_a_local_branch_at_its_commit_is_not(
         tmp_path):
-    """`rewritten_pushed_before` clears with the force-push because origin/A is the ref the
-    push replaces. A local branch left at the old commit is another branch, whose own commits
-    still carry the content."""
+    """`deleted_pushed_before` clears because origin/A is the ref the fast-forward replaces.
+    A local branch left at the old commit is another branch, whose own commits still carry
+    the content."""
     r = _Repo(tmp_path)
     _publish(r)
     r.git("update-ref", "refs/remotes/origin/A", r.a1)
     r.git("branch", "A-backup", r.a1)
-    a1p = r.rewrite_away()
-    got = _run_resolvers(tmp_path, "pre-push", (a1p, a1p), (_push("A", a1p, r.a1),))
+    a2 = r.delete_and_edit()
+    got = _run_resolvers(tmp_path, "pre-push", (a2, a2), (_push("A", a2, r.a1),))
     assert got == dict.fromkeys(ROWS, "open")
 
 
-def test_a_force_push_of_the_default_branch_leaves_its_old_commit_out_under_every_name(
-        tmp_path):
-    """origin/HEAD is a symbolic ref to origin/main: it names the commit the push replaces
-    too, and read as a branch of its own it would keep the rows open."""
+def test_a_symbolic_ref_to_the_ref_a_push_replaces_is_not_a_branch_of_its_own(tmp_path):
+    """A symbolic ref names a ref listed under its own name: origin/HEAD the default branch,
+    an alias someone made whatever it points at. Read as a branch, an alias of origin/A would
+    keep `deleted_pushed_before` open after the fast-forward that replaces origin/A."""
+    r = _Repo(tmp_path)
+    _publish(r)
+    r.git("update-ref", "refs/remotes/origin/A", r.a1)
+    r.git("symbolic-ref", "refs/remotes/origin/alias", "refs/remotes/origin/A")
+    a2 = r.delete_and_edit()
+    got = _run_resolvers(tmp_path, "pre-push", (a2, a2), (_push("A", a2, r.a1),))
+    assert got == dict.fromkeys(ROWS, "fixed")
+
+
+def test_a_force_push_of_the_default_branch_keeps_the_rows_its_old_commit_holds(tmp_path):
+    """The force-push may be refused (branch protection, a pre-receive hook), and until it
+    lands origin/main still ships the content: its old commit is read like any branch
+    (llm-review 6b3e7686eb2d). The next run, after it lands, clears them
+    (`rewritten_after_force_push`)."""
     r = _Repo(tmp_path)
     r.git("checkout", "-q", "main")
     r.git("merge", "-q", "--ff-only", "A")
@@ -471,7 +521,7 @@ def test_a_force_push_of_the_default_branch_leaves_its_old_commit_out_under_ever
     _publish(r, at=r.a1)
     m1p = r.rewrite_away()
     got = _run_resolvers(tmp_path, "pre-push", (m1p, m1p), (_push("main", m1p, r.a1),))
-    assert got == dict.fromkeys(ROWS, "fixed")
+    assert got == dict.fromkeys(ROWS, "open")
 
 
 def test_the_line_moves_with_the_ref_that_pushes_the_default_branch_not_the_first_one(
@@ -511,10 +561,60 @@ def test_a_lone_remote_not_named_origin_gives_the_line(tmp_path):
 
 def test_with_several_remotes_origin_gives_the_line(tmp_path):
     """fork has merged A and origin has not. Judged against fork, A's copy is history and
-    the stacked push would clear it; against origin it is live work."""
+    the stacked push would clear it; against origin it is live work. This is the guess made
+    for a hook that does not name the remote (one generated before llm-review
+    6ddc2128b981)."""
     r = _Repo(tmp_path)
     _publish(r)
     r.git("update-ref", "refs/remotes/fork/main", r.a1)
     r.git("symbolic-ref", "refs/remotes/fork/HEAD", "refs/remotes/fork/main")
     revs, pushed = _stacked(r)
     assert _run_resolvers(tmp_path, "pre-push", revs, pushed) == dict.fromkeys(ROWS, "open")
+
+
+def _to(remote, ref):
+    """The same pushed ref, sent to `remote` as the hook names it (git's `$1`)."""
+    return PushRef(ref.local_ref, ref.local_sha, ref.remote_ref, ref.remote_sha, remote)
+
+
+@pytest.mark.parametrize("remote, want", [("fork", "open"), ("origin", "fixed"),
+                                          (None, "fixed")])
+def test_the_remote_the_push_goes_to_decides_which_tracking_refs_it_replaces(
+        tmp_path, remote, want):
+    """llm-review 6ddc2128b981. A was pushed to origin; A2 deletes and edits and is pushed to
+    fork. origin/A still holds A's content, and the push does not replace it: open. Pushed
+    to origin it is `deleted_pushed_before`, fixed. A hook that names no remote (generated
+    before the change) is read as pushing to origin, as before: fixed, the residual a
+    re-init removes."""
+    r = _Repo(tmp_path)
+    _publish(r)
+    r.git("update-ref", "refs/remotes/fork/main", r.main)
+    r.git("symbolic-ref", "refs/remotes/fork/HEAD", "refs/remotes/fork/main")
+    r.git("update-ref", "refs/remotes/origin/A", r.a1)
+    a2 = r.delete_and_edit()
+    pushed = (_to(remote, _push("A", a2, r.a1 if remote != "fork" else ZERO)),)
+    assert _run_resolvers(tmp_path, "pre-push", (a2, a2), pushed) == dict.fromkeys(ROWS, want)
+
+
+@pytest.mark.parametrize("branch", ["A", "main"])
+def test_a_push_to_a_remote_with_no_head_is_judged_against_the_default_branch_it_leaves(
+        tmp_path, branch):
+    """fork has no remote HEAD (a remote added by hand whose HEAD was never fetched or set).
+    The line is then origin's default branch as it stands, since the push does
+    not move it; and fork's tracking refs, not origin's, are the ones it replaces. Pushing A2
+    to fork leaves origin/A's copy live work; pushing main, with A merged and then deleted,
+    to fork leaves origin/main shipping the content. Both stay open."""
+    r = _Repo(tmp_path)
+    r.git("update-ref", "refs/remotes/fork/main", r.main)
+    if branch == "main":
+        r.git("checkout", "-q", "main")
+        r.git("merge", "-q", "--ff-only", "A")
+        r.git("branch", "-q", "-D", "A")
+        _publish(r, at=r.a1)
+    else:
+        _publish(r)
+        r.git("update-ref", "refs/remotes/origin/A", r.a1)
+    tip = r.delete_and_edit()
+    pushed = (_to("fork", _push(branch, tip, r.main if branch == "main" else ZERO)),)
+    assert _run_resolvers(tmp_path, "pre-push", (tip, tip), pushed) \
+        == dict.fromkeys(ROWS, "open")

@@ -43,6 +43,14 @@ def test_parse_drops_a_deletion_nothing_ships():
     assert pushrefs.parse_push_lines(f"(delete) {ZERO} refs/heads/gone {'c' * 40}\n") == []
 
 
+def test_either_deletion_marker_alone_drops_the_line():
+    # git writes both for a deletion; either one means nothing ships, so
+    # neither is needed beside the other (`or -> and` kept these lines).
+    a = "a" * 40
+    assert pushrefs.parse_push_lines(f"(delete) {a} refs/heads/gone {a}\n") == []
+    assert pushrefs.parse_push_lines(f"refs/heads/gone {ZERO} refs/heads/gone {a}\n") == []
+
+
 def test_parse_skips_a_malformed_line_and_keeps_the_rest():
     a = "a" * 40
     text = f"garbage\nrefs/heads/main {a} refs/heads/main {ZERO}\n\n"
@@ -62,6 +70,28 @@ def test_stdin_is_read_only_under_the_marker(monkeypatch):
     monkeypatch.setenv(pushrefs.HOOK_ENV, "pre-push")
     monkeypatch.setattr("sys.stdin", io.StringIO("refs/heads/main x refs/heads/main y\n"))
     assert pushrefs.read_hook_stdin() == "refs/heads/main x refs/heads/main y\n"
+
+
+def test_the_remote_is_read_only_under_the_marker_and_never_empty(monkeypatch):
+    """git hands a pre-push hook the remote's name as `$1`; the shim exports it beside the
+    marker (llm-review 6ddc2128b981). By hand there is no push and no remote; a shim that
+    forwards nothing (a pre-commit hook has no `$1`) exports an empty one, which is none."""
+    monkeypatch.setenv(pushrefs.REMOTE_ENV, "fork")
+    monkeypatch.delenv(pushrefs.HOOK_ENV, raising=False)
+    assert pushrefs.read_hook_remote() is None
+    monkeypatch.setenv(pushrefs.HOOK_ENV, "pre-push")
+    assert pushrefs.read_hook_remote() == "fork"
+    monkeypatch.setenv(pushrefs.REMOTE_ENV, "")
+    assert pushrefs.read_hook_remote() is None
+    monkeypatch.delenv(pushrefs.REMOTE_ENV)
+    assert pushrefs.read_hook_remote() is None
+
+
+def test_every_parsed_ref_carries_the_remote_it_goes_to():
+    a, b = "a" * 40, "b" * 40
+    text = f"refs/heads/main {a} refs/heads/main {b}\nrefs/heads/x {b} refs/heads/x {ZERO}\n"
+    assert {r.remote for r in pushrefs.parse_push_lines(text, "fork")} == {"fork"}
+    assert {r.remote for r in pushrefs.parse_push_lines(text)} == {None}
 
 
 def test_a_tty_is_never_read_even_under_the_marker(monkeypatch):
