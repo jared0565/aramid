@@ -36,6 +36,14 @@ to publish a tag that disagrees with it.
   by this release; a run that detects them again reopens them, as before.
   Content absent from everything certified costs one `ls-tree` and one merge
   base per unmerged branch tip in each resolver that meets it.
+- **`scripts/promote_live.py` says when `gh` failed, instead of calling the
+  release unpublished.** Promoting 0.20.10 from a shell with `gh` but no
+  `git` on PATH, `gh release view` exited 1 ("unable to find git executable
+  in PATH") and the script refused with "no sha256 ... cut and publish the
+  release first" for a release that was published; with no `gh` on PATH it
+  stopped on a traceback. Both now refuse (exit 3) naming the gh failure and
+  gh's own last line. A release that really has no digest for the wheel is
+  refused as before.
 
 ## [0.20.10] — 2026-10-24
 

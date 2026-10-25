@@ -155,6 +155,11 @@ Without `--confirm` it resolves the release, downloads the wheel and verifies
 its sha256 against the digest GitHub recorded, then stops without installing —
 so the rehearsal exercises the part that can actually be wrong.
 
+It reads the release with `gh`, which needs `git` on PATH as well as itself (a
+Git Bash with neither on PATH is common). A `gh` that cannot start or exits
+non-zero is reported as that, with gh's own last line, and exit 3; only a
+release that really has no digest for the wheel is called one.
+
 **It promotes aramid, not its dependencies.** aramid itself is reinstalled
 with `--no-deps`. Before installing, the script asks pip
 (`--dry-run --report`) which installed dependency versions a plain install

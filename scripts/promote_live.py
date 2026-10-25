@@ -249,15 +249,30 @@ def _pip_check() -> set[str] | None:
             if line.strip() and not line.startswith("No broken requirements")}
 
 
+class GhFailed(Exception):
+    """gh did not answer: it could not be started, or it exited non-zero."""
+
+
 def _release_digest(tag: str, asset: str) -> str | None:
-    """The sha256 GitHub recorded for the asset, or None."""
-    r = _run(["gh", "release", "view", tag, "--json", "assets"])
+    """The sha256 GitHub recorded for the asset, or None when the release has
+    no such asset or no digest for it.
+
+    A gh that FAILED raises `GhFailed` instead, with gh's own last line: it
+    is not a release without a digest. Measured 2026-10-24, promoting 0.20.10
+    from a shell with gh but no git on PATH: gh exits 1 ("unable to find git
+    executable in PATH"), and this returned None, so the operator was told to
+    cut and publish a release that was already published."""
+    try:
+        r = _run(["gh", "release", "view", tag, "--json", "assets"])
+    except OSError as exc:
+        raise GhFailed(f"gh could not be started ({exc})") from None
     if r.returncode != 0:
-        return None
+        said = (r.stderr.strip().splitlines() or ["(nothing on stderr)"])[-1]
+        raise GhFailed(f"`gh release view {tag}` exited {r.returncode}: {said}")
     for entry in json.loads(r.stdout).get("assets", []):
         if entry.get("name") == asset:
             digest = entry.get("digest", "")
-            return digest.split("sha256:", 1)[-1] if "sha256:" in digest else None
+            return digest.removeprefix("sha256:") if digest.startswith("sha256:") else None
     return None
 
 
@@ -288,7 +303,13 @@ def main() -> int:
         print(f"\n{args.version} is live but NOT as a promoted wheel: {problem}.\n"
               f"  Reinstalling the released wheel over it.")
 
-    digest = _release_digest(tag, asset)
+    try:
+        digest = _release_digest(tag, asset)
+    except GhFailed as exc:
+        print(f"\nrefusing: could not read release {tag} from GitHub: {exc}\n"
+              f"  That is gh failing, not a release without a digest. gh needs git\n"
+              f"  on PATH as well as itself.", file=sys.stderr)
+        return 3
     if not digest:
         print(f"\nrefusing: no sha256 for {asset} on release {tag}.\n"
               f"  Promotion installs a RELEASED artifact, never a local build --\n"

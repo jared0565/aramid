@@ -213,6 +213,17 @@ def test_the_dry_run_shows_what_would_change_and_installs_nothing(
     assert "--confirm would refuse" in out
 
 
+def test_the_dry_run_says_no_dependency_changes_only_when_there_are_none(
+        pl, monkeypatch, tmp_path, capsys):
+    """`if not changes` decides the one line that tells the operator nothing
+    else moves; with it read the other way, a dry run that would change
+    semgrep says nothing changes."""
+    _promote(pl, monkeypatch, tmp_path, [])
+    assert "deps     : no installed dependency version changes" in capsys.readouterr().out
+    _promote(pl, monkeypatch, tmp_path, [], changes=[("semgrep", "1.178.0", "1.179.0")])
+    assert "no installed dependency version changes" not in capsys.readouterr().out
+
+
 def test_an_uncomputable_change_set_is_refused_not_guessed(
         pl, monkeypatch, tmp_path, capsys):
     rc, installs = _promote(pl, monkeypatch, tmp_path, ["--confirm"], changes=None)

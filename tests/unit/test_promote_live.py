@@ -190,3 +190,54 @@ def test_a_known_live_version_is_printed_not_a_placeholder(
     out = capsys.readouterr().out
     assert "live now : 0.4.1" in out
     assert _outside(tmp_path) in out
+
+
+# --- asking GitHub for the digest ---------------------------------------------
+#
+# Measured 2026-10-24, promoting 0.20.10 from a Git Bash with gh but no git on
+# PATH: gh exits 1, "unable to find git executable in PATH", and this script
+# said "no sha256 ... cut and publish the release first" of a release that had
+# one. A gh with no gh on PATH raised FileNotFoundError out of main.
+
+ASSET = "aramid-0.5.0-py3-none-any.whl"
+
+
+def _gh(rc, stdout="", stderr=""):
+    return lambda argv, **kw: subprocess.CompletedProcess(argv, rc, stdout, stderr)
+
+
+def test_the_digest_is_the_named_assets_and_none_when_it_has_none(pl, monkeypatch):
+    assets = ('{"assets": [{"name": "other.whl", "digest": "sha256:aaa"},'
+              f' {{"name": "{ASSET}", "digest": "sha256:bbb"}},'
+              ' {"name": "bare.whl", "digest": ""}]}')
+    monkeypatch.setattr(pl, "_run", _gh(0, assets))
+    assert pl._release_digest("v0.5.0", ASSET) == "bbb"
+    assert pl._release_digest("v0.5.0", "bare.whl") is None
+    assert pl._release_digest("v0.5.0", "absent.whl") is None
+
+
+def test_a_gh_that_fails_is_not_a_release_without_a_digest(pl, monkeypatch):
+    monkeypatch.setattr(pl, "_run", _gh(1, stderr="unable to find git executable in PATH\n"))
+    with pytest.raises(pl.GhFailed, match="exited 1: unable to find git executable in PATH"):
+        pl._release_digest("v0.5.0", ASSET)
+
+
+def test_a_gh_that_cannot_start_is_a_gh_failure_too(pl, monkeypatch):
+    def missing(argv, **kw):
+        raise FileNotFoundError(2, "No such file or directory", "gh")
+    monkeypatch.setattr(pl, "_run", missing)
+    with pytest.raises(pl.GhFailed, match="could not be started"):
+        pl._release_digest("v0.5.0", ASSET)
+
+
+def test_main_names_a_gh_failure_and_never_calls_it_a_missing_digest(
+        pl, monkeypatch, tmp_path, capsys):
+    monkeypatch.setattr(sys, "argv", ["promote_live.py", "0.5.0", "--confirm"])
+    monkeypatch.setattr(pl, "_live", lambda: ("0.4.1", _outside(tmp_path), False))
+    monkeypatch.setattr(pl, "_run", _gh(1, stderr="unable to find git executable in PATH\n"))
+    rc = pl.main()
+    err = capsys.readouterr().err
+    assert rc == 3
+    assert ("refusing: could not read release v0.5.0 from GitHub: `gh release view v0.5.0`"
+            " exited 1: unable to find git executable in PATH") in err, err
+    assert "no sha256" not in err
