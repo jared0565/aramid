@@ -11,10 +11,18 @@ a quote or line in it -- is gone only when
      path inside a submodule is never gone (llm-review 81b9d08db396). And
   2. no branch tip holds it whose OWN commits carry it: a tip under refs/heads or refs/remotes
      (never a tag: a release tag holds every file it ever shipped) that holds the content while
-     its merge base with a certified revision does not. A copy a branch merely INHERITED from
-     the history it shares with the certified line -- a merged branch never deleted, a
-     dependabot branch cut before the fix -- is history that line has moved past. A copy its
-     own commits brought is live work on another branch, and the row stays open for it.
+     its merge base with THE LINE does not. A copy a branch merely INHERITED from the history
+     it shares with the line -- a merged branch never deleted, a dependabot branch cut before
+     the fix -- is history that line has moved past. A copy its own commits brought is live
+     work on another branch, and the row stays open for it.
+
+THE LINE, the operator's decision of 2026-10-25 ("INTEG-P", llm-review 8cdf845ab278): the
+remote default branch as this push leaves it -- the commit refs/remotes/<remote>/HEAD names, or
+the commit a pushed ref hands that branch -- and the tracking refs the push replaces are left
+out by name, since what they hold is what the remote is about to lose. FN-58 first judged
+against each certified revision, and a branch that revision REACHES was never read: C, cut
+from an unmerged A, deleting A's file, cleared A's rows when C was pushed. With no remote HEAD
+there is no line, and each certified revision is judged as it was then.
 
 WHY. Each departure resolver asked "is it here?" of the wrong thing (round 325, reproduced in
 a scratch repo on 0.20.9 and 0.20.10): file_departed and record_run's departed clause asked
@@ -29,24 +37,36 @@ graphite's proposal -- departed only at a certified revision descending from the
 was raised at -- and a history rule (a reachable commit removed it) both leave a commit
 REWRITTEN AWAY open forever: the shape file_departed was built for (890d7493, a test file
 committed, the push blocked, the commit rewritten without it). Plain "does any branch hold
-it" keeps rows open behind every merged-and-kept or snapshot branch. This rule was wrong on
-one case: a commit pushed and THEN rewritten away keeps its rows open until the force-push
-lands, because the remote-tracking ref still carries it; the next run clears them.
+it" keeps rows open behind every merged-and-kept or snapshot branch. Judged against each
+certified revision, this rule was wrong on one case: a commit pushed and THEN rewritten away
+kept its rows open until the force-push landed, because the remote-tracking ref still carried
+it. The line was chosen against the same table and seven more cases (stacked branches, a
+lagging origin/main, a push of several refs, a stale and a missing remote HEAD): with a remote
+HEAD the force-push clears them itself, since that ref is what it replaces.
 
 SAFE DIRECTION, everywhere. No resolvable certified revision (no repo, no commits, git could
 not answer): nothing is gone. A path that is not repo-relative (absolute, a drive, or climbing
 out with `..`) cannot have left the repository: not gone. A branch whose content git cannot
 read, or whose history shares nothing with the certified line: it carries the content -- so an
 orphan branch (a gh-pages) that holds the same path keeps the row open while it exists, a
-residual the table did not have. A `GitTimeout` goes
+residual the table did not have. So does a stale line: a clone keeps origin/HEAD naming
+origin/master after a master->main rename until `git remote set-head`, and judged against that
+older commit, content main's own commits brought looks like every branch's own. So, for a
+while, does a lagging one: with no push (pre-commit) the line is origin/HEAD as it stands, and
+a branch cut from a local main with unpushed merges carries what they brought until main is
+pushed. Two residuals err the other way. The old rule's: with no remote HEAD (a remote added
+by hand and never `set-head`), a stacked branch's push still clears its parent's rows. And the
+hook does not say which remote it pushes to, so a push to another remote's default branch is
+read as moving origin's, whose tracking ref is then left out. A `GitTimeout` goes
 up (FN-17), and the reader then refuses every later question at once, so the first timeout
 is the only one paid.
 
 COST. One `ls-tree` per certified revision per reader, which answers the common question --
 the file is still there -- by set lookup. Branches are read only for content absent from
-every certified revision: one `for-each-ref --no-merged` per certified revision, which
-leaves out every tip that revision already reaches (merged or stale, it holds nothing the
-revision lacks), then per remaining tip one `ls-tree` and one merge base, however many paths
+every certified revision: one `for-each-ref` of the remote refs and one `rev-parse` find the
+line; then one `for-each-ref --no-merged` against it (against each certified revision without
+one), which leaves out every tip the line already reaches (merged or stale, it holds nothing
+the line lacks), then per remaining tip one `ls-tree` and one merge base, however many paths
 are asked about; a text is read only when the question is about text and the path is there.
 The first cut read every tip with a `git show` per path: 60 s on Windows for 10 deleted files
 and 50 stale branches (`tests/unit/test_departure_cost.py` counts the processes). Paid per
@@ -57,8 +77,12 @@ from __future__ import annotations
 import posixpath
 from collections.abc import Callable, Iterable
 from pathlib import Path, PurePosixPath, PureWindowsPath
+from typing import TYPE_CHECKING
 
 from aramid import gitutil
+
+if TYPE_CHECKING:
+    from aramid.pushrefs import PushRef
 
 Holds = Callable[[str], bool]
 
@@ -82,9 +106,14 @@ class Departure:
     `revs` are the revisions the run certifies, as `pipeline._certified_revs` gives them: the
     pushed refs' local shas, then HEAD; HEAD alone at pre-commit or for a hand-run gate."""
 
-    def __init__(self, root: Path | None, revs: Iterable[str] = ("HEAD",)):
+    def __init__(self, root: Path | None, revs: Iterable[str] = ("HEAD",),
+                 pushed: Iterable[PushRef] = ()):
         self.root = root
         self._wanted = tuple(revs) or ("HEAD",)
+        self._pushed = tuple(pushed)
+        self._line_read = False
+        self._line_sha: str | None = None
+        self._replaced: frozenset[str] = frozenset()
         self._revs: list[str] | None = None
         self._trees: dict[str, frozenset[str] | None] = {}
         self._blobs: dict[tuple[str, str], str | None] = {}
@@ -136,16 +165,55 @@ class Departure:
 
     def _branch_tips(self, rev: str) -> list[str] | None:
         """The commits at the branch tips, local and remote-tracking, that `rev` does not
-        reach, each once. Tags are not branches; a symbolic ref (origin/HEAD) names a commit a
-        branch listed here already names. A tip `rev` reaches is its own merge base with it
-        and holds nothing `rev` lacks, so it is never read. None when git could not list
-        them."""
+        reach, each once, leaving out the tracking refs the push replaces (`_line`). Tags are
+        not branches, and a symbolic ref (origin/HEAD) is not one either: it names the commit
+        of a branch listed under its own name, or one the push replaces. A tip `rev` reaches
+        is its own merge base with it and holds nothing `rev` lacks, so it is never read.
+        None when git could not list them."""
         if rev not in self._tips:
-            cp = self._git("for-each-ref", f"--no-merged={rev}", "--format=%(objectname)",
+            cp = self._git("for-each-ref", f"--no-merged={rev}",
+                           "--format=%(objectname) %(refname) %(symref)",
                            "refs/heads", "refs/remotes")
-            self._tips[rev] = list(dict.fromkeys(cp.stdout.split())) if cp.returncode == 0 \
-                else None
+            rows = [row.split() for row in cp.stdout.splitlines()]
+            self._tips[rev] = list(dict.fromkeys(
+                row[0] for row in rows if len(row) == 2 and row[1] not in self._replaced)) \
+                if cp.returncode == 0 else None
         return self._tips[rev]
+
+    def _line(self) -> str | None:
+        """The commit a branch's own commits are told apart against: the remote default
+        branch as this push leaves it (llm-review 8cdf845ab278). That is the commit
+        `refs/remotes/<remote>/HEAD` names -- origin's when several remotes have one, else the
+        only one -- or, when a pushed ref is that branch, the commit the push hands it. Also
+        notes, by name, the remote's tracking refs for the branches the push updates: what
+        they hold is what the remote is about to lose. None with no remote HEAD, or one that
+        names no commit (a branch since pruned); each certified revision is then the line, as
+        before."""
+        if not self._line_read:
+            self._line_read = True
+            cp = self._git("for-each-ref", "--format=%(refname) %(symref)", "refs/remotes")
+            heads = {}
+            for row in cp.stdout.splitlines() if cp.returncode == 0 else ():
+                name, _, target = row.partition(" ")
+                if target and name.endswith("/HEAD"):
+                    heads[name[len("refs/remotes/"):-len("/HEAD")]] = target
+            if "origin" in heads:
+                remote = "origin"
+            elif len(heads) == 1:
+                remote = next(iter(heads))
+            else:
+                return None
+            line, replaced = heads[remote], set()
+            for ref in self._pushed:
+                if ref.remote_ref.startswith("refs/heads/"):
+                    tracking = f"refs/remotes/{remote}/{ref.remote_ref[len('refs/heads/'):]}"
+                    replaced.add(tracking)
+                    if tracking == heads[remote]:
+                        line = ref.local_sha
+            cp = self._git("rev-parse", "--verify", "--quiet", f"{line}^{{commit}}")
+            if cp.returncode == 0:
+                self._line_sha, self._replaced = cp.stdout.strip(), frozenset(replaced)
+        return self._line_sha
 
     def _merge_base(self, ref: str, rev: str) -> str | None:
         """The merge base's sha, or None when the two share no history (git exits 1)."""
@@ -197,11 +265,13 @@ class Departure:
 
     def carried_by_a_branch(self, path: str, holds: Holds | None = None) -> bool:
         """Whether some branch tip's OWN commits carry the content: the tip holds it and its
-        merge base with some certified revision does not. Any doubt answers True."""
+        merge base with the line (`_line`) does not -- with no line, with some certified
+        revision. Any doubt answers True."""
         revs = self.revs()
         if not revs:
             return True
-        for rev in revs:
+        line = self._line()
+        for rev in (line,) if line else revs:
             tips = self._branch_tips(rev)
             if tips is None:
                 return True

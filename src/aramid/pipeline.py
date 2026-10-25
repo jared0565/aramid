@@ -951,6 +951,14 @@ def _certified_revs(certified) -> tuple[str, ...]:
     return tuple(dict.fromkeys(revs)) or ("HEAD",)
 
 
+def _certified_pushes(certified) -> tuple:
+    """The refs git handed the pre-push hook, each with what the remote had
+    there: where departure finds the remote default branch as the push leaves
+    it, and the tracking refs the push replaces (llm-review 8cdf845ab278).
+    Empty without a certification."""
+    return certified.refs if certified is not None else ()
+
+
 def run_gate(root: Path, gate: Gate, mode: str, cfg: config_mod.Config, ledger: Ledger,
              accept_degraded: str | None = None, *,
              clock: Callable[[], str] = _default_clock,
@@ -1173,7 +1181,8 @@ def run_gate(root: Path, gate: Gate, mode: str, cfg: config_mod.Config, ledger: 
                                 stalled=list(stalled),
                                 # What departure is asked of (FN-58): the
                                 # certified revisions, HEAD at pre-commit.
-                                revs=_certified_revs(certified))
+                                revs=_certified_revs(certified),
+                                pushed=_certified_pushes(certified))
 
     # record_run above can NEVER resolve a whole-suite finding: those carry the
     # synthetic `<test-suite>` marker, which is not a path and so is never in
@@ -1291,7 +1300,8 @@ def run_gate(root: Path, gate: Gate, mode: str, cfg: config_mod.Config, ledger: 
     # never block. The gate producers are appended AFTER the ratchet above, so
     # a disarmed (WARN) finding is ratchet-exempt and never auto-escalates.
     if gate is Gate.PRE_PUSH:
-        review_mod.auto_resolve_llm(root, ledger, run_id, at, revs=_certified_revs(certified))
+        review_mod.auto_resolve_llm(root, ledger, run_id, at, revs=_certified_revs(certified),
+                                    pushed=_certified_pushes(certified))
         # Departed-file resolution. Sits HERE and not in the `mode == "range"`
         # nest below for the same reason auto_resolve_llm does: the guards
         # there protect resolvers that read scope_files, and this one derives
@@ -1320,7 +1330,8 @@ def run_gate(root: Path, gate: Gate, mode: str, cfg: config_mod.Config, ledger: 
             ledger_mod.resolve_departed(ledger, run_id, at, root=root,
                                         tool=_producer,
                                         present_ids=_departed_present,
-                                        revs=_certified_revs(certified))
+                                        revs=_certified_revs(certified),
+                                        pushed=_certified_pushes(certified))
         # Departed-LINE resolution, mutation only, and here for the same
         # reason: whether a survivor's line is still in its file does not
         # depend on the push delta. A survivor is regenerated from (op,
@@ -1333,7 +1344,8 @@ def run_gate(root: Path, gate: Gate, mode: str, cfg: config_mod.Config, ledger: 
         # same pins the drift check uses -- and asks the re-test's own
         # question. See the resolver's docstring.
         mutation_gate.auto_resolve_line_departed(
-            ledger, run_id, at, root=root, revs=_certified_revs(certified))
+            ledger, run_id, at, root=root, revs=_certified_revs(certified),
+            pushed=_certified_pushes(certified))
         # ...and undo the parking no re-test can ever verify: a pending
         # survivor with more occurrences at HEAD than one drain item has room
         # for goes back to open (llm-review 88b420f9). After departed-line, so

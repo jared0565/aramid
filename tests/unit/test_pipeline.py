@@ -2139,6 +2139,41 @@ def test_every_departure_resolver_reads_the_certified_refs_not_head_alone(tmp_pa
     assert handed == [(c1, c2)]
 
 
+def test_every_departure_reader_gets_the_refs_the_push_handed_the_hook(tmp_path, monkeypatch):
+    """The other half of the wiring (llm-review 8cdf845ab278): a reader finds the remote
+    default branch as the push leaves it, and the tracking refs the push replaces, from the
+    refs git handed the hook -- so `run_gate` hands the certification's refs to the reader
+    each departure resolver builds, as it hands the revisions."""
+    import sys
+
+    from aramid import pushrefs
+    from aramid.departure import Departure
+    r = _mut_repo(tmp_path)
+    c1 = subprocess.run(["git", "rev-parse", "HEAD"], cwd=r, check=True,
+                        capture_output=True, text=True).stdout.strip()
+    monkeypatch.setattr(pipeline, "GATE_RUNNER_KEYS",
+                        {**pipeline.GATE_RUNNER_KEYS, Gate.PRE_PUSH: []})
+    cfg = config.load_config(r)
+    led = Ledger(r / ".aramid" / "ledger.db")
+    cert = pushrefs.Certification(
+        refs=(pushrefs.PushRef("refs/heads/feature", c1, "refs/heads/feature", "0" * 40),),
+        head_at_start=c1, hook=True)
+    built = []
+    init = Departure.__init__
+
+    def spy(self, root, revs=("HEAD",), pushed=()):
+        built.append((sys._getframe(1).f_code.co_name, tuple(pushed)))
+        init(self, root, revs, pushed)
+    monkeypatch.setattr(Departure, "__init__", spy)
+    try:
+        pipeline.run_gate(r, Gate.PRE_PUSH, "all", cfg, led, certified=cert)
+    finally:
+        led.close()
+    assert {name for name, _ in built} == {"record_run", "auto_resolve_llm",
+                                           "resolve_departed", "auto_resolve_line_departed"}
+    assert {pushed for _, pushed in built} == {cert.refs}
+
+
 def test_an_uncommitted_rewrite_does_not_clear_a_survivor_at_the_gate(tmp_path, monkeypatch):
     """The bypass 88a4fab2 named, at gate level: rewrite the line on disk,
     push, revert. HEAD still holds the line, so nothing resolves."""

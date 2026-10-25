@@ -275,7 +275,8 @@ def reopen_unretestable(ledger, run_id: str, at: str, *, root, cfg) -> list[str]
 
 
 def auto_resolve_line_departed(ledger, run_id: str, at: str, *, root,
-                               revs: tuple[str, ...] = ("HEAD",)) -> list[str]:
+                               revs: tuple[str, ...] = ("HEAD",),
+                               pushed=()) -> list[str]:
     """Resolve mutation survivors whose LINE has left the file: nothing in
     the file, at any revision in `revs`, fingerprints to the id any more.
 
@@ -325,9 +326,11 @@ def auto_resolve_line_departed(ledger, run_id: str, at: str, *, root,
     line another unmerged branch added to a file the certified line also
     has is absent from every certified revision, and was written `fixed` on
     every push of a sibling. `departure.Departure.carried_by_a_branch` keeps
-    it open while a branch tip holds the line and its merge base with a
-    certified revision does not; a copy inherited from shared history does
-    not count. Same hashes, asked of the branch's text.
+    it open while a branch tip holds the line and its merge base with the
+    remote default branch, as this push leaves it, does not (with no remote
+    HEAD, with a certified revision); a copy inherited from shared history
+    does not count. Same hashes, asked of the branch's text. `pushed` are
+    the refs git handed the hook, where the reader finds that branch.
 
     BY THE HASHES ALONE (llm-review ea21b2a8, same day). Departure is a
     statement about the line's CONTENT. The first cut asked
@@ -360,7 +363,7 @@ def auto_resolve_line_departed(ledger, run_id: str, at: str, *, root,
         return []
     from aramid.consumers.mutation import _survivor_lines     # circular at module level
     from aramid.mutation import OPS
-    departure = Departure(base, revs)
+    departure = Departure(base, revs, pushed)
     resolved: list[str] = []
     considered = 0
     skipped = 0

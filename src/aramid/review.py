@@ -448,7 +448,7 @@ def apply_refute(finding: dict, refuted: bool, reason: str) -> dict:
 
 
 def auto_resolve_llm(root: Path, ledger, run_id: str, at: str,
-                     revs: tuple[str, ...] = ("HEAD",)) -> list[str]:
+                     revs: tuple[str, ...] = ("HEAD",), pushed=()) -> list[str]:
     """Zero-token deterministic resolution (spec section 5): an OPEN LLM
     finding whose verbatim evidence quote no longer exists in its file at
     the revisions the run certifies (`revs`), and that no branch carries as
@@ -502,7 +502,7 @@ def auto_resolve_llm(root: Path, ledger, run_id: str, at: str,
     resolved = []
     skipped = 0
     considered = 0
-    departure = Departure(root, revs)
+    departure = Departure(root, revs, pushed)
     for fid, rec in ledger.open_findings().items():
         if rec.get("source") != "llm" or rec.get("status") != "open":
             continue

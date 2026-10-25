@@ -20,9 +20,18 @@ certified line has moved past; a copy its own commits brought is live work on an
 
 Chosen against a 12-case table (graphite's ancestry proposal, a history rule, and two simpler
 ref checks were scored too). Every case below is one of those rows. The one this rule gets
-wrong is pinned as well, `rewritten_pushed_before`: rows on a commit that was pushed and then
-rewritten away stay open until the force-push lands, because the remote-tracking ref still
-carries the old commit's content. The next push clears them (`rewritten_after_force_push`).
+wrong without a remote HEAD is pinned as well, `rewritten_pushed_before`: rows on a commit
+that was pushed and then rewritten away stay open until the force-push lands, because the
+remote-tracking ref still carries the old commit's content. The next push clears them
+(`rewritten_after_force_push`).
+
+THE LINE (the operator's decision of 2026-10-25, "INTEG-P", llm-review 8cdf845ab278): with a
+remote HEAD, a branch's own commits are told apart against the remote default branch as the
+push leaves it, not against the certified revision, and the tracking refs the push replaces
+are left out. A branch C cut from an unmerged A that deletes A's file no longer clears A's
+rows, and `rewritten_pushed_before` clears with the force-push itself. The tests after the
+table pin it, its fallback (no remote HEAD: the rule above) and its residual (a stale remote
+HEAD keeps rows open).
 """
 import subprocess
 from datetime import datetime, timezone
@@ -33,8 +42,9 @@ from aramid import mutation_gate, review
 from aramid.fingerprint import compute_fingerprint
 from aramid.ledger import Ledger, resolve_departed
 from aramid.models import Finding, Gate, Severity, Source, Verdict
+from aramid.pushrefs import PushRef
 
-NOW = datetime(2026, 10, 24, 23, 0, 0, tzinfo=timezone.utc).isoformat()
+NOW =datetime(2026, 10, 24, 23, 0, 0, tzinfo=timezone.utc).isoformat()
 
 TEST_A = "from src import f\n\n\ndef test_f():\n    assert f(2) is True\n"
 SRC_MAIN = "def f(x):\n    return x > 1\n"
@@ -206,19 +216,22 @@ CASES = {
 }
 
 
-def _run_resolvers(root, gate, revs):
+def _run_resolvers(root, gate, revs, pushed=()):
     """The departure resolvers, in run_gate's order, with what run_gate hands them: semgrep
-    and gitleaks ran OK; at pre-push the rest follow."""
+    and gitleaks ran OK; at pre-push the rest follow. `pushed` is the refs git handed the
+    hook."""
     led = Ledger(root / "l.db")
     try:
         led.record_run("r0", NOW, gate, set(), set(), list(ROWS.values()))
-        led.record_run("r1", NOW, gate, set(RUNNER_ROWS), set(), [], root=root, revs=revs)
+        led.record_run("r1", NOW, gate, set(RUNNER_ROWS), set(), [], root=root, revs=revs,
+                       pushed=pushed)
         if gate == "pre-push":
-            review.auto_resolve_llm(root, led, "r1", NOW, revs=revs)
+            review.auto_resolve_llm(root, led, "r1", NOW, revs=revs, pushed=pushed)
             for producer in ("red-proof", "tdd", "mutation"):
                 resolve_departed(led, "r1", NOW, root=root, tool=producer, present_ids=set(),
-                                 revs=revs)
-            mutation_gate.auto_resolve_line_departed(led, "r1", NOW, root=root, revs=revs)
+                                 revs=revs, pushed=pushed)
+            mutation_gate.auto_resolve_line_departed(led, "r1", NOW, root=root, revs=revs,
+                                                     pushed=pushed)
         state = led.open_findings()
         return {name: state[f.id]["status"] for name, f in ROWS.items()}
     finally:
@@ -305,3 +318,187 @@ def test_a_git_mv_still_keeps_the_llm_row_open_at_the_certified_revision(tmp_pat
         assert led.open_findings()[row.id]["status"] == "open"
     finally:
         led.close()
+
+
+ZERO = "0" * 40
+
+
+def _publish(r, at=None):
+    """The remote as a clone leaves it: origin/main at `at` (the base by default), and
+    origin/HEAD naming origin/main."""
+    r.git("update-ref", "refs/remotes/origin/main", at or r.main)
+    r.git("symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/main")
+
+
+def _push(branch, sha, had=ZERO):
+    """One line git hands the pre-push hook: the branch, its new commit, what the remote had."""
+    return PushRef(f"refs/heads/{branch}", sha, f"refs/heads/{branch}", had)
+
+
+def _pushed(case, r, revs):
+    """What each table case pushes, once there is a remote: the branch it names, and what
+    origin had there before."""
+    if revs == ("HEAD",):
+        return ()
+    branch = {"sibling": "B", "stale_merged": "main", "snapshot": "main"}.get(case, "A")
+    had = {"deleted_pushed_before": r.a1, "rewritten_pushed_before": r.a1,
+           "rewritten_after_force_push": revs[0], "stale_merged": r.main,
+           "snapshot": r.main}.get(case, ZERO)
+    return (_push(branch, revs[0], had),)
+
+
+@pytest.mark.parametrize("case", list(CASES))
+def test_against_the_remote_default_branch_the_table_holds_and_a_force_push_clears_at_once(
+        tmp_path, case):
+    """With a remote default branch every case answers as before but one: rows on a commit
+    pushed and then rewritten away clear with the force-push itself, since origin/A is the
+    ref that push replaces. `snapshot` pushes main while origin/main lags at the base, and
+    the line is the commit the push hands main, not the lagging one."""
+    build, want = CASES[case]
+    r = _Repo(tmp_path)
+    _publish(r)
+    gate, revs = build(r)
+    want = "fixed" if case == "rewritten_pushed_before" else want
+    assert _run_resolvers(tmp_path, gate, revs, _pushed(case, r, revs)) \
+        == dict.fromkeys(ROWS, want)
+
+
+def _stacked(r):
+    """C, cut from the unmerged A, deletes A's file and edits A's line; C is pushed, new."""
+    r.git("checkout", "-q", "-b", "C")
+    c1 = r.delete_and_edit()
+    return (c1, c1), (_push("C", c1),)
+
+
+@pytest.mark.parametrize("a_pushed", [False, True])
+def test_a_branch_cut_from_an_unmerged_one_does_not_clear_its_rows(tmp_path, a_pushed):
+    """llm-review 8cdf845ab278: C reaches A, so judged against C, A's copy looked inherited,
+    and pushing C cleared every row raised on A. Judged against the remote default branch,
+    A's commits are its own: live work, and the rows stay open."""
+    r = _Repo(tmp_path)
+    _publish(r)
+    if a_pushed:
+        r.git("update-ref", "refs/remotes/origin/A", r.a1)
+    revs, pushed = _stacked(r)
+    assert _run_resolvers(tmp_path, "pre-push", revs, pushed) == dict.fromkeys(ROWS, "open")
+
+
+def test_once_the_unmerged_branch_is_merged_and_pushed_the_stacked_delete_clears(tmp_path):
+    r = _Repo(tmp_path)
+    r.git("update-ref", "refs/remotes/origin/A", r.a1)
+    revs, pushed = _stacked(r)
+    r.git("checkout", "-q", "main")
+    r.git("merge", "-q", "--ff-only", "A")
+    _publish(r, at=r.a1)
+    r.git("checkout", "-q", "C")
+    assert _run_resolvers(tmp_path, "pre-push", revs, pushed) == dict.fromkeys(ROWS, "fixed")
+
+
+@pytest.mark.parametrize("head", [None, "refs/remotes/origin/master"])
+def test_without_a_remote_default_branch_a_stacked_push_still_clears_the_rows(tmp_path, head):
+    """The decided fallback, and what it costs: with no remote HEAD, or one naming a branch
+    that is gone, there is no line, and each certified revision is judged as before -- so the
+    stacked shape clears, as in 0.20.10. `git remote set-head origin --auto` gives a clone
+    made by hand its line."""
+    r = _Repo(tmp_path)
+    r.git("update-ref", "refs/remotes/origin/main", r.main)
+    if head:
+        r.git("symbolic-ref", "refs/remotes/origin/HEAD", head)
+    revs, pushed = _stacked(r)
+    assert _run_resolvers(tmp_path, "pre-push", revs, pushed) == dict.fromkeys(ROWS, "fixed")
+
+
+@pytest.mark.parametrize("stale", [False, True])
+def test_a_feature_push_that_deletes_main_s_content_clears_unless_the_remote_head_is_stale(
+        tmp_path, stale):
+    """main has the content, pushed; F, cut from main, deletes it and is pushed: main's copy
+    is history F moved past, and the rows clear. The line's residual, in the safe direction:
+    a clone keeps origin/HEAD naming origin/master after a master->main rename until
+    `git remote set-head`, and judged against that older commit main's own content looks
+    like every branch's own, so nothing clears."""
+    r = _Repo(tmp_path)
+    r.git("checkout", "-q", "main")
+    r.git("merge", "-q", "--ff-only", "A")
+    r.git("branch", "-q", "-D", "A")
+    _publish(r, at=r.a1)
+    if stale:
+        r.git("update-ref", "refs/remotes/origin/master", r.main)
+        r.git("symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/master")
+    r.git("checkout", "-q", "-b", "F")
+    f1 = r.delete_and_edit()
+    got = _run_resolvers(tmp_path, "pre-push", (f1, f1), (_push("F", f1),))
+    assert got == dict.fromkeys(ROWS, "open" if stale else "fixed")
+
+
+def test_the_ref_a_push_replaces_is_left_out_by_name_a_local_branch_at_its_commit_is_not(
+        tmp_path):
+    """`rewritten_pushed_before` clears with the force-push because origin/A is the ref the
+    push replaces. A local branch left at the old commit is another branch, whose own commits
+    still carry the content."""
+    r = _Repo(tmp_path)
+    _publish(r)
+    r.git("update-ref", "refs/remotes/origin/A", r.a1)
+    r.git("branch", "A-backup", r.a1)
+    a1p = r.rewrite_away()
+    got = _run_resolvers(tmp_path, "pre-push", (a1p, a1p), (_push("A", a1p, r.a1),))
+    assert got == dict.fromkeys(ROWS, "open")
+
+
+def test_a_force_push_of_the_default_branch_leaves_its_old_commit_out_under_every_name(
+        tmp_path):
+    """origin/HEAD is a symbolic ref to origin/main: it names the commit the push replaces
+    too, and read as a branch of its own it would keep the rows open."""
+    r = _Repo(tmp_path)
+    r.git("checkout", "-q", "main")
+    r.git("merge", "-q", "--ff-only", "A")
+    r.git("branch", "-q", "-D", "A")
+    _publish(r, at=r.a1)
+    m1p = r.rewrite_away()
+    got = _run_resolvers(tmp_path, "pre-push", (m1p, m1p), (_push("main", m1p, r.a1),))
+    assert got == dict.fromkeys(ROWS, "fixed")
+
+
+def test_the_line_moves_with_the_ref_that_pushes_the_default_branch_not_the_first_one(
+        tmp_path):
+    """A push of two refs: X, new, then main, which deletes and edits while origin/main lags
+    at the base and a snapshot branch inherited the content from the local main. The line is
+    the commit main's ref hands it, wherever that ref falls in the push."""
+    r = _Repo(tmp_path)
+    _publish(r)
+    _gate, (m2, _) = _snapshot(r)
+    r.git("checkout", "-q", "-b", "X", r.main)
+    r.write("x.txt", "x\n")
+    x = r.commit("X: unrelated")
+    pushed = (_push("X", x), _push("main", m2, r.main))
+    assert _run_resolvers(tmp_path, "pre-push", (x, m2), pushed) \
+        == dict.fromkeys(ROWS, "fixed")
+
+
+def test_a_symbolic_ref_that_is_not_a_remote_s_head_gives_no_line(tmp_path):
+    """Only refs/remotes/<remote>/HEAD names a remote's default branch. Another symbolic ref
+    there (an alias someone made) is neither a line nor a branch, so with no remote HEAD the
+    stacked push clears as the fallback does."""
+    r = _Repo(tmp_path)
+    r.git("update-ref", "refs/remotes/origin/main", r.main)
+    r.git("symbolic-ref", "refs/remotes/origin/latest", "refs/remotes/origin/main")
+    revs, pushed = _stacked(r)
+    assert _run_resolvers(tmp_path, "pre-push", revs, pushed) == dict.fromkeys(ROWS, "fixed")
+
+
+def test_a_lone_remote_not_named_origin_gives_the_line(tmp_path):
+    r = _Repo(tmp_path)
+    r.git("update-ref", "refs/remotes/fork/main", r.main)
+    r.git("symbolic-ref", "refs/remotes/fork/HEAD", "refs/remotes/fork/main")
+    revs, pushed = _stacked(r)
+    assert _run_resolvers(tmp_path, "pre-push", revs, pushed) == dict.fromkeys(ROWS, "open")
+
+
+def test_with_several_remotes_origin_gives_the_line(tmp_path):
+    """fork has merged A and origin has not. Judged against fork, A's copy is history and
+    the stacked push would clear it; against origin it is live work."""
+    r = _Repo(tmp_path)
+    _publish(r)
+    r.git("update-ref", "refs/remotes/fork/main", r.a1)
+    r.git("symbolic-ref", "refs/remotes/fork/HEAD", "refs/remotes/fork/main")
+    revs, pushed = _stacked(r)
+    assert _run_resolvers(tmp_path, "pre-push", revs, pushed) == dict.fromkeys(ROWS, "open")

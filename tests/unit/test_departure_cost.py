@@ -80,3 +80,14 @@ def test_the_branch_walk_does_not_grow_with_the_paths_asked_about(tmp_path, monk
     one = _gone(tmp_path / "one", _repo(tmp_path / "one", deleted=1, unmerged=3), calls)
     ten = _gone(tmp_path / "ten", _repo(tmp_path / "ten", deleted=10, unmerged=3), calls)
     assert ten == one, calls
+
+
+def test_a_branch_and_its_tracking_ref_at_one_commit_are_read_once(tmp_path, monkeypatch):
+    """Every pushed branch is listed twice, local and remote-tracking, at one commit: the tips
+    are commits, each read once, not refs."""
+    calls = _counted(monkeypatch)
+    alone = _gone(tmp_path / "alone", _repo(tmp_path / "alone", deleted=1, unmerged=3), calls)
+    names = _repo(tmp_path / "pushed", deleted=1, unmerged=3)
+    for b in range(3):
+        _git(tmp_path / "pushed", "update-ref", f"refs/remotes/origin/snap{b}", f"snap{b}")
+    assert _gone(tmp_path / "pushed", names, calls) == alone, calls

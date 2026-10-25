@@ -239,7 +239,8 @@ def note_yield(ledger, run_id: str, at: str, *, resolver: str, tool: str,
 
 
 def resolve_departed(ledger, run_id: str, at: str, *, root, tool: str,
-                     present_ids, revs: tuple[str, ...] = ("HEAD",)) -> list[str]:
+                     present_ids, revs: tuple[str, ...] = ("HEAD",),
+                     pushed=()) -> list[str]:
     """Resolve one producer's open findings whose file has LEFT the repository.
 
     WHY PRODUCERS NEED THEIR OWN CALL. `record_run` already does this, but only
@@ -326,7 +327,7 @@ def resolve_departed(ledger, run_id: str, at: str, *, root, tool: str,
         note_yield(ledger, run_id, at, resolver="file_departed", tool=tool,
                    considered=0, resolved=0)
         return []                      # no repo to check -> clear nothing
-    departure = Departure(base, revs)
+    departure = Departure(base, revs, pushed)
     resolved: list[str] = []
     skipped = 0
     considered = 0
@@ -656,7 +657,7 @@ class Ledger:
                    degraded: dict[str, str] | None = None,
                    stalled: list[str] | None = None,
                    head: str | None = None,
-                   revs: tuple[str, ...] | None = None):
+                   revs: tuple[str, ...] | None = None, pushed=()):
         state, seen = _materialize(self.events())
         present = {f.id for f in findings}
         payload = {"gate": gate, "tools": sorted(scope_tools)}
@@ -721,7 +722,7 @@ class Ledger:
         successors = _successors(state, present, findings, new_ids)
         # The reader asks git nothing until a row needs it, so one per run costs
         # nothing up front (FN-58).
-        departure = Departure(root, revs or ("HEAD",)) if root is not None else None
+        departure = Departure(root, revs or ("HEAD",), pushed) if root is not None else None
         for fid, rec in state.items():
             if rec["status"] != "open" or fid in present:
                 continue
