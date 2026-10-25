@@ -135,8 +135,17 @@ def test_git_trace_in_the_environment_never_reads_as_a_clean_scan(tmp_path, monk
     r = _repo(tmp_path)
     rng = ("--log-opts", "HEAD~1..HEAD")
     assert _raw(r, tmp_path / "plain.json", *rng)[:2] == (1, ["github-pat"])
-    rc, rules, log = _raw(r, tmp_path / "traced.json", *rng, env={"GIT_TRACE": "1"})
-    assert (rc, rules) == (0, []) and "[git]" in log, "control: GIT_TRACE no longer blinds gitleaks"
+    # The control is a race: gitleaks 8.30.1 sends git's stderr error only when
+    # git exits, and returns on it without waiting for the file scans already
+    # running, so a run can still report the secret (CI 40214385369, one leg of
+    # four alike). Up to five runs, and one must be blinded.
+    for attempt in range(5):
+        rc, rules, log = _raw(r, tmp_path / f"traced{attempt}.json", *rng,
+                              env={"GIT_TRACE": "1"})
+        if (rc, rules) == (0, []) and "[git]" in log:
+            break
+    else:
+        pytest.fail("control: GIT_TRACE no longer blinds gitleaks in five runs")
 
     monkeypatch.setenv("GIT_TRACE", "1")
     ctx = RunContext(root=r, rng="HEAD~1..HEAD")
