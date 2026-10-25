@@ -29,7 +29,9 @@ to publish a tag that disagrees with it.
   keep a row open while a branch whose own commits carry the content still
   holds it; a copy a branch merely inherited from shared history (a merged
   branch kept, a dependabot branch) does not count. A file deleted, or a
-  line edited, and not committed no longer clears anything. Rows on a commit
+  line edited, and not committed no longer clears anything. A file no
+  certified revision tracks keeps its rows open while the working tree still
+  has the content, and a path inside a submodule is never cleared. Rows on a commit
   that was pushed and then rewritten away stay open until the force-push
   lands, and an orphan branch (a gh-pages) that holds the same path keeps
   its rows open while it exists. Rows the old rule cleared are not reopened

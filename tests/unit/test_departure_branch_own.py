@@ -234,6 +234,35 @@ def test_a_row_is_gone_only_when_no_certified_revision_and_no_own_branch_holds_i
     assert got == dict.fromkeys(ROWS, want)
 
 
+def test_content_in_no_commit_stays_open_while_the_working_tree_has_it(tmp_path):
+    """llm-review 81b9d08db396, measured on 62c0c17: a file that was never committed, still
+    on disk (a secret file unstaged after gitleaks blocked the commit), was written `fixed`
+    at the next commit; 0.20.10 kept it open by reading the disk. The disk is never evidence
+    that content is gone, but for a path no certified revision tracks it is the only copy
+    there is. A TRACKED file is still judged by committed content alone: the shared file's
+    uncommitted line clears its rows, as in 0.20.10."""
+    r = _Repo(tmp_path)
+    a1p = r.rewrite_away()                         # A1 is in no branch any more
+    r.write("tests/test_a.py", TEST_A)             # ...but its file is on disk, untracked
+    r.write("src.py", SRC_A)                       # ...and its line, uncommitted
+    want = {**dict.fromkeys(ROWS, "open"), "llm, A's line in a shared file": "fixed",
+            "mutation, A's line in a shared file": "fixed"}
+    assert _run_resolvers(tmp_path, "pre-push", (a1p, a1p)) == want
+
+
+def test_a_path_inside_a_submodule_is_never_gone(tmp_path):
+    """The other half of 81b9d08db396: `ls-tree -r` lists a submodule as one gitlink entry
+    and none of its files, so `sub/x.py` read as absent from every revision."""
+    from aramid.departure import Departure
+    r = _Repo(tmp_path)
+    r.git("checkout", "-q", "main")
+    r.git("update-index", "--add", "--cacheinfo", f"160000,{r.main},sub")
+    r.git("commit", "-q", "-m", "a submodule at sub")
+    assert not (tmp_path / "sub" / "x.py").exists()
+    assert Departure(tmp_path).gone("sub/x.py") is False
+    assert Departure(tmp_path).gone("subx.py") is True      # the control: not under `sub`
+
+
 def test_a_root_that_is_not_a_repository_resolves_nothing(tmp_path):
     """No revision can be read, so nothing can be shown gone: the safe direction. Before
     FN-58 this asked the disk, where every path of a non-repo is 'absent'."""

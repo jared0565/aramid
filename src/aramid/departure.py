@@ -3,9 +3,12 @@
 THE RULE, the operator's decision of 2026-10-24 ("Branch's own content"). Content -- a file, or
 a quote or line in it -- is gone only when
 
-  1. no revision the run certifies holds it. Committed content, read from git; never the disk,
-     so a file deleted or a line edited and not committed is still there (llm-review 88a4fab2
-     said this of line_departed; FN-58 makes it true of every departure resolver). And
+  1. no revision the run certifies holds it. Committed content, read from git; the disk is
+     never evidence that content is gone, so a file deleted or a line edited and not
+     committed is still there (llm-review 88a4fab2 said this of line_departed; FN-58 makes it
+     true of every departure resolver). For a path no certified revision tracks, the disk is
+     the only copy there is: while it has the content the row stays open, as in 0.20.10, and a
+     path inside a submodule is never gone (llm-review 81b9d08db396). And
   2. no branch tip holds it whose OWN commits carry it: a tip under refs/heads or refs/remotes
      (never a tag: a release tag holds every file it ever shipped) that holds the content while
      its merge base with a certified revision does not. A copy a branch merely INHERITED from
@@ -211,14 +214,41 @@ class Departure:
                     return True
         return False
 
+    def _under_a_gitlink(self, path: str) -> bool:
+        """Whether a leading part of `path` is an entry of a certified tree. `ls-tree -r` lists
+        blobs and gitlinks, never directories, so such an entry is a submodule, whose own
+        files git does not list here."""
+        parts = path.split("/")
+        heads = ["/".join(parts[:n]) for n in range(1, len(parts))]
+        return any(head in (self._tree(rev) or ()) for rev in self.revs() for head in heads)
+
+    def _on_disk(self, path: str, holds: Holds | None) -> bool:
+        """Whether the working tree has the content. Asked only of a path no certified revision
+        tracks, where the disk holds the only copy there is (0.20.10 read it there too). It
+        is never evidence that anything is gone."""
+        file = self.root / path if self.root is not None else None
+        if file is None or not file.is_file():
+            return False
+        if holds is None:
+            return True
+        try:
+            text = file.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            return True                    # it is there and cannot be read: doubt keeps it
+        return holds(text.replace("\r\n", "\n"))
+
     def gone(self, path: str | None, holds: Holds | None = None) -> bool:
         """The rule: no certified revision holds the content and no branch carries it as its
         own. `holds` tests a revision's text of `path`; None asks only whether the file is
         tracked there. Never True for a path outside the repository or when nothing
-        certified can be read."""
+        certified can be read; nor for a path no certified revision tracks while the working
+        tree has its content or a submodule covers it (llm-review 81b9d08db396)."""
         norm = repo_path(path) if path else None
         if norm is None or not self.revs():
             return False
         if self.at_certified(norm, holds) is not False:
+            return False
+        if not self.tracked_at_certified(norm) \
+                and (self._on_disk(norm, holds) or self._under_a_gitlink(norm)):
             return False
         return not self.carried_by_a_branch(norm, holds)
