@@ -276,6 +276,22 @@ def test_a_path_inside_a_submodule_is_never_gone(tmp_path):
     assert Departure(tmp_path).gone("subx.py") is True      # the control: not under `sub`
 
 
+def test_a_file_in_no_commit_is_not_gone_while_the_disk_has_it(tmp_path):
+    """The reader's half of 81b9d08db396, asked of `Departure` alone, so that it also runs
+    against the reader as the fix (e3badf7) left it: a path no certified revision tracks is
+    not gone while the working tree holds it, nor while it holds the quoted text, and is gone
+    once the disk loses it too. The first cut of FN-58 answered gone from the start."""
+    from aramid.departure import Departure
+    r = _Repo(tmp_path)
+    a1p = r.rewrite_away()                         # A1 is in no branch any more
+    r.write("tests/test_a.py", TEST_A)             # ...but its file is on disk, untracked
+    assert Departure(tmp_path, (a1p,)).gone("tests/test_a.py") is False
+    assert Departure(tmp_path, (a1p,)).gone(
+        "tests/test_a.py", lambda text: "assert f(2) is True" in text) is False
+    (tmp_path / "tests" / "test_a.py").unlink()
+    assert Departure(tmp_path, (a1p,)).gone("tests/test_a.py") is True    # the control
+
+
 def test_a_root_that_is_not_a_repository_resolves_nothing(tmp_path):
     """No revision can be read, so nothing can be shown gone: the safe direction. Before
     FN-58 this asked the disk, where every path of a non-repo is 'absent'."""
