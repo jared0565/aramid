@@ -12,6 +12,31 @@ to publish a tag that disagrees with it.
 
 ## [Unreleased]
 
+### Fixed
+
+- **A finding is cleared as gone only when what the push certifies has lost
+  it and no other branch still carries it (FN-58, channel round 325).** Four
+  resolvers judged that a file, a quoted line or a mutated line had gone by
+  looking at the wrong thing: `file_departed` (red-proof, tdd and mutation
+  rows) and the departed check for runner rows looked at the working tree,
+  `evidence_gone` (llm-review) at HEAD, and `line_departed` at the pushed
+  revisions but at no other branch. So pushing a sibling branch wrote
+  `fixed` on every row raised on the other, unmerged branch; for runner rows
+  such as gitleaks's, merely committing on the sibling did. Pushing a branch
+  from a checkout of another did the same to all but the mutated-line rows
+  of the pushed branch. All four now read committed content at the
+  revisions the push certifies (HEAD at pre-commit), never the disk, and
+  keep a row open while a branch whose own commits carry the content still
+  holds it; a copy a branch merely inherited from shared history (a merged
+  branch kept, a dependabot branch) does not count. A file deleted, or a
+  line edited, and not committed no longer clears anything. Rows on a commit
+  that was pushed and then rewritten away stay open until the force-push
+  lands, and an orphan branch (a gh-pages) that holds the same path keeps
+  its rows open while it exists. Rows the old rule cleared are not reopened
+  by this release; a run that detects them again reopens them, as before.
+  Content absent from everything certified costs one `ls-tree` and one merge
+  base per unmerged branch tip in each resolver that meets it.
+
 ## [0.20.10] — 2026-10-24
 
 ### Security

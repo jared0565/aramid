@@ -17,6 +17,7 @@ from pathlib import Path
 from typing import Callable
 
 from aramid import diagnostics, gitutil
+from aramid.departure import Departure
 from aramid.fingerprint import normalize_path
 from aramid.ledger import _resolved_root, note_yield
 from aramid.models import Event, EventType, Finding, Gate, Severity, Source, Verdict
@@ -320,6 +321,14 @@ def auto_resolve_line_departed(ledger, run_id: str, at: str, *, root,
     NO certified revision holds it; a file at none of them is skipped.
     Without a certification (a hand-run gate) `revs` is HEAD.
 
+    ...AND NO BRANCH CARRIES IT AS ITS OWN (FN-58, channel round 325). A
+    line another unmerged branch added to a file the certified line also
+    has is absent from every certified revision, and was written `fixed` on
+    every push of a sibling. `departure.Departure.carried_by_a_branch` keeps
+    it open while a branch tip holds the line and its merge base with a
+    certified revision does not; a copy inherited from shared history does
+    not count. Same hashes, asked of the branch's text.
+
     BY THE HASHES ALONE (llm-review ea21b2a8, same day). Departure is a
     statement about the line's CONTENT. The first cut asked
     `_survivor_mutants`, which reaches `generate_mutants`, which swallows
@@ -351,6 +360,7 @@ def auto_resolve_line_departed(ledger, run_id: str, at: str, *, root,
         return []
     from aramid.consumers.mutation import _survivor_lines     # circular at module level
     from aramid.mutation import OPS
+    departure = Departure(base, revs)
     resolved: list[str] = []
     considered = 0
     skipped = 0
@@ -376,6 +386,10 @@ def auto_resolve_line_departed(ledger, run_id: str, at: str, *, root,
             considered += 1
             if any(_survivor_lines(rel, fid, src.splitlines(), op) for src in known):
                 continue                       # still there, in some certified revision
+            if departure.carried_by_a_branch(
+                    rel, lambda text, rel=rel, fid=fid, op=op:
+                    bool(_survivor_lines(rel, fid, text.splitlines(), op))):
+                continue                       # another branch's own commits carry it (FN-58)
             ledger.append(Event(EventType.FINDING_RESOLVED, run_id, at, finding_id=fid,
                                 payload={"auto_resolved": "line_departed"}))
             resolved.append(fid)

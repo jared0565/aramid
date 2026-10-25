@@ -131,10 +131,29 @@ def test_a_tool_that_reports_no_examined_set_falls_back(tmp_path):
         led.close()
 
 
+def _departed_repo(root):
+    """bad.py committed, then deleted in the next commit: it has left the repo.
+    FN-58: departure is asked of git (here HEAD, and the branches), so a root
+    that is no repository departs nothing."""
+    import subprocess
+
+    def git(*args):
+        subprocess.run(["git", *args], cwd=root, check=True, capture_output=True)
+    git("init", "-q", "-b", "main")
+    git("config", "user.email", "t@t")
+    git("config", "user.name", "t")
+    (root / "bad.py").write_text("pass\n", encoding="utf-8")
+    git("add", "bad.py")
+    git("commit", "-q", "-m", "c1")
+    git("rm", "-q", "bad.py")
+    git("commit", "-q", "-m", "c2 deletes bad.py")
+
+
 def test_a_departed_file_still_resolves_even_though_nothing_examined_it(tmp_path):
     """The `_departed` clause must survive: a file that has LEFT the repo can
     never be examined by anyone, so requiring examination would make its
     findings immortal — exactly the regression this guards against."""
+    _departed_repo(tmp_path)
     led = Ledger(tmp_path / "l.db")
     try:
         _seed(led)

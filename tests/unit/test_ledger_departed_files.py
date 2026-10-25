@@ -49,6 +49,7 @@ platform, and "python" IS in scope_tools whenever aramid's own tests runner
 exits OK -- so `record_run` was already resolving BLOCK-tier suite findings
 without the `suite_completed` evidence `tests_gate` demands.
 """
+import subprocess
 from datetime import datetime, timezone
 
 from aramid.ledger import Ledger, resolve_departed
@@ -68,8 +69,32 @@ def _seed(led, *findings):
     led.record_run("r0", NOW.isoformat(), "pre-commit", set(), set(), list(findings))
 
 
+def _git(root, *args):
+    subprocess.run(["git", *args], cwd=root, check=True, capture_output=True)
+
+
+def _repo(root, *committed):
+    """A repository with one commit holding `committed` (each a path, written `x = 1`).
+
+    FN-58: departure is asked of git -- the certified revisions (here HEAD) and the branches
+    -- never of the disk. A path in no commit is gone; one in HEAD is not. Outside a
+    repository nothing can be shown gone, so a test that wants a row to resolve, or to prove
+    a guard keeps one open, needs a repository for the question to have an answer."""
+    _git(root, "init", "-q", "-b", "main")
+    _git(root, "config", "user.email", "t@t")
+    _git(root, "config", "user.name", "t")
+    for rel in (".keep", *committed):
+        p = root / rel
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text("x = 1\n", encoding="utf-8")
+    _git(root, "add", "-A")
+    _git(root, "commit", "-q", "-m", "c0")
+    return root
+
+
 def test_finding_on_a_departed_file_resolves_when_its_tool_ran(tmp_path):
     """The bug. `bad.py` is gone, ruff ran, so nothing will ever re-report it."""
+    _repo(tmp_path)
     led = Ledger(tmp_path / "l.db")
     try:
         _seed(led, _finding())
@@ -86,8 +111,8 @@ def test_finding_on_a_file_that_still_exists_stays_open(tmp_path):
     scope and simply was not re-scanned. It must stay open -- resolving it
     would clear findings merely for not having been looked at.
     """
+    _repo(tmp_path, "bad.py")                  # tracked at HEAD: present
     led = Ledger(tmp_path / "l.db")
-    (tmp_path / "bad.py").write_text("def f(x):\n    exec(x)\n", encoding="utf-8")
     try:
         _seed(led, _finding())
         led.record_run("r1", NOW.isoformat(), "pre-commit",
@@ -106,6 +131,7 @@ def test_departed_file_stays_open_when_its_tool_did_not_run(tmp_path):
     and `ledger.record_run` -- resolving here would reach producers whose
     stored `file` is not a path at all.
     """
+    _repo(tmp_path)                            # bad.py in no commit: departed
     led = Ledger(tmp_path / "l.db")
     try:
         _seed(led, _finding())
@@ -136,6 +162,7 @@ def test_a_producer_finding_on_a_departed_file_resolves(tmp_path):
     rewritten into `e2ef7f0` without that file. Open across every later run
     until it was closed by hand.
     """
+    _repo(tmp_path)
     led = Ledger(tmp_path / "l.db")
     try:
         _seed(led, _finding(tool="red-proof", file="tests/unit/test_gone.py"))
@@ -149,8 +176,8 @@ def test_a_producer_finding_on_a_departed_file_resolves(tmp_path):
 
 def test_resolve_departed_leaves_a_present_file_alone(tmp_path):
     """Opting in must not become "resolve this producer's findings"."""
+    _repo(tmp_path, "still_here.py")
     led = Ledger(tmp_path / "l.db")
-    (tmp_path / "still_here.py").write_text("x = 1\n", encoding="utf-8")
     try:
         _seed(led, _finding(tool="red-proof", file="still_here.py"))
         assert resolve_departed(led, "r1", NOW.isoformat(), root=tmp_path,
@@ -164,6 +191,7 @@ def test_resolve_departed_skips_a_finding_this_run_re_fired(tmp_path):
     """Same requirement as `auto_resolve_red_proof`: resolution runs AFTER
     `record_run`, so a finding the producer just re-raised is already open
     again and must not be resolved out from under itself."""
+    _repo(tmp_path)                            # departed: only present_ids keeps it
     led = Ledger(tmp_path / "l.db")
     try:
         _seed(led, _finding(tool="red-proof", file="tests/unit/test_gone.py"))
@@ -179,6 +207,7 @@ def test_resolve_departed_touches_only_the_named_producer(tmp_path):
     """`tool=` is a filter, not a hint. A `tdd` finding on the same missing
     file must survive a red-proof pass -- otherwise one producer opting in
     would silently opt in every other."""
+    _repo(tmp_path)
     led = Ledger(tmp_path / "l.db")
     try:
         _seed(led,
@@ -221,8 +250,10 @@ def test_a_dast_style_endpoint_is_never_treated_as_departed(tmp_path):
     an append-only audit trail. `dast` must never appear in a `resolve_departed`
     call; this pins the consequence so the reasoning is not merely a comment.
     """
+    from aramid.departure import Departure
     from aramid.ledger import _departed
-    assert _departed(tmp_path, "GET /login") is True, (
+    _repo(tmp_path)
+    assert _departed(Departure(tmp_path), "GET /login") is True, (
         "if this ever becomes False the note above is stale, but do NOT take "
         "it as licence to make departure global -- fix the reasoning first")
 
@@ -260,6 +291,7 @@ def test_a_synthetic_marker_is_never_departed(tmp_path):
     for free, and a real file honestly named `<x>` failing the check errs
     toward leaving a finding OPEN.
     """
+    _repo(tmp_path)                            # departure answerable; the guard decides
     led = Ledger(tmp_path / "l.db")
     try:
         _seed(led, _finding(tool="python", file="<test-suite>"))
@@ -299,6 +331,7 @@ def test_the_real_suite_marker_matches_the_synthetic_shape():
 
 def test_a_departed_file_in_a_subdirectory_still_resolves(tmp_path):
     """Containment must not cost the ordinary nested case."""
+    _repo(tmp_path)
     led = Ledger(tmp_path / "l.db")
     try:
         _seed(led, _finding(file="src/pkg/bad.py"))
@@ -326,6 +359,7 @@ def test_a_departed_file_in_a_subdirectory_still_resolves(tmp_path):
 def test_an_absolute_path_outside_the_repo_is_not_departed(tmp_path):
     outside = tmp_path.parent / "not_in_the_repo.py"     # absolute, outside root
     assert not outside.exists()                          # so the join escapes to nothing
+    _repo(tmp_path)
     led = Ledger(tmp_path / "l.db")
     try:
         _seed(led, _finding(file=str(outside)))
@@ -337,6 +371,7 @@ def test_an_absolute_path_outside_the_repo_is_not_departed(tmp_path):
 
 
 def test_a_traversing_path_is_not_departed(tmp_path):
+    _repo(tmp_path)
     led = Ledger(tmp_path / "l.db")
     try:
         _seed(led, _finding(file="../../etc/passwd"))
@@ -350,6 +385,7 @@ def test_a_traversing_path_is_not_departed(tmp_path):
 def test_traversal_that_lands_back_inside_the_repo_is_still_judged(tmp_path):
     """`src/../bad.py` IS `bad.py`. Containment rejects escapes, not every
     path that happens to contain a dot-dot segment."""
+    _repo(tmp_path)
     led = Ledger(tmp_path / "l.db")
     try:
         _seed(led, _finding(file="src/../bad.py"))
@@ -385,12 +421,13 @@ def test_a_row_whose_departure_cannot_be_checked_is_skipped_and_counted_once(
     from aramid import ledger as ledger_mod
     real = ledger_mod._departed
 
-    def departed(fingerprint, file, *, base):
+    def departed(departure, file):
         if file == "torn.py":
             raise OSError("cannot stat")
-        return real(fingerprint, file, base=base)
+        return real(departure, file)
     monkeypatch.setattr(ledger_mod, "_departed", departed)
 
+    _repo(tmp_path)
     led = Ledger(tmp_path / "l.db")
     try:
         _seed(led, _finding(fid="a" * 64, file="torn.py"), _finding(fid="b" * 64, file="gone.py"))
@@ -417,11 +454,11 @@ def test_resolve_departed_reports_what_it_walked_in_its_yield_event(tmp_path):
     declined: without a root it says 0 of 0; with two candidate rows, one of
     them departed, it says 1 of 2 -- every counter exact (the derive drew
     `considered = 0` -> 1 and `+= 1` -> 2 past the arms above)."""
+    _repo(tmp_path, "here.py")
     led = Ledger(tmp_path / "l.db")
     try:
         _seed(led, _finding(fid="a" * 64, file="gone.py"), _finding(fid="b" * 64, file="here.py"),
               _finding(fid="c" * 64, file="other.py", tool="semgrep"))
-        (tmp_path / "here.py").write_text("x = 1\n", encoding="utf-8")
         assert resolve_departed(led, "r1", NOW.isoformat(), root=None, tool="ruff",
                                 present_ids=set()) == []
         assert _yields(led) == [("file_departed", "ruff", 0, 0)]

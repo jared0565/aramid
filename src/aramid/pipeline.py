@@ -1170,7 +1170,10 @@ def run_gate(root: Path, gate: Gate, mode: str, cfg: config_mod.Config, ledger: 
                                 certified=certified, refs_moved=moved,
                                 head_at_exit=head_at_exit,
                                 degraded=degraded_reasons,
-                                stalled=list(stalled))
+                                stalled=list(stalled),
+                                # What departure is asked of (FN-58): the
+                                # certified revisions, HEAD at pre-commit.
+                                revs=_certified_revs(certified))
 
     # record_run above can NEVER resolve a whole-suite finding: those carry the
     # synthetic `<test-suite>` marker, which is not a path and so is never in
@@ -1288,13 +1291,13 @@ def run_gate(root: Path, gate: Gate, mode: str, cfg: config_mod.Config, ledger: 
     # never block. The gate producers are appended AFTER the ratchet above, so
     # a disarmed (WARN) finding is ratchet-exempt and never auto-escalates.
     if gate is Gate.PRE_PUSH:
-        review_mod.auto_resolve_llm(root, ledger, run_id, at)
+        review_mod.auto_resolve_llm(root, ledger, run_id, at, revs=_certified_revs(certified))
         # Departed-file resolution. Sits HERE and not in the `mode == "range"`
         # nest below for the same reason auto_resolve_llm does: the guards
         # there protect resolvers that read scope_files, and this one derives
-        # nothing from the range -- it asks only whether a path still exists,
-        # which is true or false identically under "all", "staged", and a
-        # rangeless "range".
+        # nothing from the range -- it asks only whether a file is still in a
+        # certified revision or on a branch as its own (FN-58), which is true
+        # or false identically under "all", "staged", and a rangeless "range".
         #
         # No listed producer's own rule can clear a finding whose FILE is gone:
         # red-proof needs a base-tree pytest run on it; tdd and mutation need
@@ -1316,7 +1319,8 @@ def run_gate(root: Path, gate: Gate, mode: str, cfg: config_mod.Config, ledger: 
         for _producer in ("red-proof", "tdd", "mutation"):
             ledger_mod.resolve_departed(ledger, run_id, at, root=root,
                                         tool=_producer,
-                                        present_ids=_departed_present)
+                                        present_ids=_departed_present,
+                                        revs=_certified_revs(certified))
         # Departed-LINE resolution, mutation only, and here for the same
         # reason: whether a survivor's line is still in its file does not
         # depend on the push delta. A survivor is regenerated from (op,

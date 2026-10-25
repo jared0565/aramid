@@ -26,6 +26,23 @@ def _finding(fid, *, source=Source.LLM, tool="llm-review", evidence="return db.g
                    gate=Gate.ALL, source=source, confirmed=None)
 
 
+def _repo(root):
+    """A repository whose one commit holds src/auth.py reading `_LIVE`. FN-58: the resolver
+    reads what the run certifies through git (here HEAD); it used to be stubbed through
+    `read_for_fingerprint`, which it no longer calls."""
+    import subprocess
+
+    def git(*args):
+        subprocess.run(["git", *args], cwd=root, check=True, capture_output=True)
+    git("init", "-q", "-b", "main")
+    git("config", "user.email", "t@t")
+    git("config", "user.name", "t")
+    (root / "src").mkdir()
+    (root / "src" / "auth.py").write_bytes(_LIVE.encode())
+    git("add", "-A")
+    git("commit", "-q", "-m", "c0")
+
+
 def _yield(led):
     rows = [e.payload for e in led.events()
             if e.type == EventType.RESOLVER_YIELD and e.payload.get("resolver") == "evidence_gone"]
@@ -33,8 +50,8 @@ def _yield(led):
     return rows[0]
 
 
-def test_only_open_llm_findings_are_walked_and_counted(tmp_path, monkeypatch):
-    monkeypatch.setattr(review.gitutil, "read_for_fingerprint", lambda root, ref, rel: _LIVE)
+def test_only_open_llm_findings_are_walked_and_counted(tmp_path):
+    _repo(tmp_path)
     led = Ledger(tmp_path / "l.db")
     try:
         led.record_run("r0", NOW, "drain", set(), set(), [
@@ -54,9 +71,8 @@ def test_only_open_llm_findings_are_walked_and_counted(tmp_path, monkeypatch):
     assert row["considered"] == 1 and row["resolved"] == 1
 
 
-def test_a_clean_walk_says_nothing_and_a_malformed_record_is_counted_once(tmp_path, monkeypatch,
-                                                                          capsys):
-    monkeypatch.setattr(review.gitutil, "read_for_fingerprint", lambda root, ref, rel: _LIVE)
+def test_a_clean_walk_says_nothing_and_a_malformed_record_is_counted_once(tmp_path, capsys):
+    _repo(tmp_path)
     led = Ledger(tmp_path / "l.db")
     try:
         led.record_run("r0", NOW, "drain", set(), set(), [_finding("a" * 64)])

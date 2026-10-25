@@ -96,10 +96,30 @@ def test_gate_skips_overridden(tmp_path):
     assert got == []
 
 
-def test_auto_resolve_when_evidence_gone(tmp_path, monkeypatch):
+def _repo(root, auth):
+    """A repository whose one commit holds src/auth.py reading `auth` (None: no such file).
+
+    FN-58: the quote is looked for in what the run certifies -- here HEAD -- and on the
+    branches, through git. These tests used to stub `read_for_fingerprint`, which the
+    resolver no longer reads."""
+    import subprocess
+
+    def git(*args):
+        subprocess.run(["git", *args], cwd=root, check=True, capture_output=True)
+    git("init", "-q", "-b", "main")
+    git("config", "user.email", "t@t")
+    git("config", "user.name", "t")
+    if auth is not None:
+        p = root / "src" / "auth.py"
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_bytes(auth.encode())
+    git("add", "-A")
+    git("commit", "-q", "--allow-empty", "-m", "c0")
+
+
+def test_auto_resolve_when_evidence_gone(tmp_path):
+    _repo(tmp_path, "return safe_get(order_id, user)\n")
     led = Ledger(tmp_path / "l.db")
-    monkeypatch.setattr(review.gitutil, "read_for_fingerprint",
-                        lambda root, ref, f: "return safe_get(order_id, user)\n")
     try:
         _seed(led, _llm_finding())
         resolved = review.auto_resolve_llm(tmp_path, led, "r1", NOW.isoformat())
@@ -110,10 +130,9 @@ def test_auto_resolve_when_evidence_gone(tmp_path, monkeypatch):
     assert state["f" * 64]["status"] == "fixed"
 
 
-def test_auto_resolve_keeps_live_finding(tmp_path, monkeypatch):
+def test_auto_resolve_keeps_live_finding(tmp_path):
+    _repo(tmp_path, "    return  db.get( order_id )\n")
     led = Ledger(tmp_path / "l.db")
-    monkeypatch.setattr(review.gitutil, "read_for_fingerprint",
-                        lambda root, ref, f: "    return  db.get( order_id )\n")
     try:
         _seed(led, _llm_finding())          # ws-normalized quote still present
         resolved = review.auto_resolve_llm(tmp_path, led, "r1", NOW.isoformat())
@@ -124,11 +143,9 @@ def test_auto_resolve_keeps_live_finding(tmp_path, monkeypatch):
     assert state["f" * 64]["status"] == "open"
 
 
-def test_auto_resolve_missing_file_counts_as_gone(tmp_path, monkeypatch):
-    def boom(root, ref, f):
-        raise RuntimeError("path does not exist at HEAD")
+def test_auto_resolve_missing_file_counts_as_gone(tmp_path):
+    _repo(tmp_path, None)
     led = Ledger(tmp_path / "l.db")
-    monkeypatch.setattr(review.gitutil, "read_for_fingerprint", boom)
     try:
         _seed(led, _llm_finding())
         resolved = review.auto_resolve_llm(tmp_path, led, "r1", NOW.isoformat())
@@ -137,13 +154,12 @@ def test_auto_resolve_missing_file_counts_as_gone(tmp_path, monkeypatch):
     assert resolved == ["f" * 64]
 
 
-def test_auto_resolve_skips_malformed_rec_without_raising(tmp_path, monkeypatch):
+def test_auto_resolve_skips_malformed_rec_without_raising(tmp_path):
     """A rec with evidence stored as null (`.get('evidence','')` -> None, not
     the default) must be SKIPPED -- never crash re.sub, never silently resolve
     it away. It stays open for manual triage."""
+    _repo(tmp_path, "some other content\n")
     led = Ledger(tmp_path / "l.db")
-    monkeypatch.setattr(review.gitutil, "read_for_fingerprint",
-                        lambda root, ref, f: "some other content\n")
     try:
         _seed_raw(led, "d" * 64, {"source": "llm", "file": "src/auth.py",
                                   "evidence": None, "line": 2,

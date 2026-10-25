@@ -38,8 +38,14 @@ def _llm_finding(fid, file):
 
 
 def test_a_git_timeout_resolves_no_llm_finding(tmp_path, monkeypatch):
+    # The seam is git itself: since FN-58 the resolver asks `departure.Departure`, which
+    # reads every revision through `gitutil._run`, not `read_for_fingerprint`.
     calls = []
-    monkeypatch.setattr(review.gitutil, "read_for_fingerprint", _timeout(calls))
+
+    def run(root, *args):
+        calls.append(args[0])
+        raise gitutil.GitTimeout(f"git {args[0]} timed out after 600 s and was killed")
+    monkeypatch.setattr(gitutil, "_run", run)
     led = Ledger(tmp_path / "l.db")
     try:
         led.record_run("r0", NOW.isoformat(), "drain", set(), set(),

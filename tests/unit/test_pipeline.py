@@ -1746,18 +1746,25 @@ def _mut_repo(tmp_path):
     (r / "src" / "real.py").write_text(MUT_FN, encoding="utf-8")
     subprocess.run(["git", "add", "."], cwd=r, check=True)
     subprocess.run(["git", "commit", "-q", "-m", "c1"], cwd=r, check=True)
-    # ghost.py EXISTS but is deliberately left UNTRACKED -- written after the
-    # commit and never `git add`ed. Both halves are load-bearing, and the file
-    # used to be simply ABSENT:
-    #   exists    -> ledger._departed is False, so `mutation` opting in to
+    # ghost.py is committed on a SIDE BRANCH only -- its own commit, never
+    # merged -- and main is checked out again. Both halves are load-bearing:
+    #   on a branch -> ledger._departed is False (a branch's own commits carry
+    #                it, FN-58), so `mutation` opting in to
     #                ledger.resolve_departed cannot clear the seeded finding.
-    #                While absence was the only thing keeping these tests
-    #                honest, the opt-in resolved it before the assertions ran.
-    #   untracked -> not in ctx.files under mode "all", so it is not a changed
-    #                file and auto_resolve_mutation's own rule stays quiet.
-    # A TRACKED ghost.py satisfies the first and breaks the second.
+    #                The file used to be simply ABSENT, and the opt-in resolved
+    #                it before the assertions ran; then UNTRACKED on disk, which
+    #                held only while departure read the working tree.
+    #   not at HEAD -> not in ctx.files under mode "all", so it is not a changed
+    #                file and auto_resolve_mutation's own rule stays quiet; and
+    #                line_departed, which reads only files a certified revision
+    #                tracks, never reads it.
+    # ghost.py on main satisfies the first and breaks the second.
+    subprocess.run(["git", "checkout", "-q", "-b", "side"], cwd=r, check=True)
     (r / "src" / "pkg").mkdir()
     (r / "src" / "pkg" / "ghost.py").write_text(MUT_FN, encoding="utf-8")
+    subprocess.run(["git", "add", "src/pkg/ghost.py"], cwd=r, check=True)
+    subprocess.run(["git", "commit", "-q", "-m", "side: ghost"], cwd=r, check=True)
+    subprocess.run(["git", "checkout", "-q", "main"], cwd=r, check=True)
     return r
 
 
@@ -1775,9 +1782,9 @@ def _mut_fid(file, content=MUT_LINE, op="cmp-flip"):
 
 
 def _seed_mut(led, fid=None, file="src/pkg/ghost.py", line=2, op="cmp-flip"):
-    # ghost.py is present-but-untracked (see _mut_repo), so neither
-    # auto_resolve_mutation nor the departed-file route can resolve this, and
-    # its line 2 is in the file, so neither can line_departed.
+    # ghost.py is on a side branch's own commit and not at HEAD (see
+    # _mut_repo), so neither auto_resolve_mutation nor the departed-file route
+    # can resolve this, and line_departed never reads it.
     fid = fid or _mut_fid(file, op=op)
     f = Finding(id=fid, tool="mutation", rule=op,
                 severity_raw="medium", severity=Severity.MEDIUM,
@@ -1970,8 +1977,8 @@ def test_gate_resolves_a_mutation_finding_whose_file_left_the_repo(tmp_path, mon
         pipeline.run_gate(r, Gate.PRE_PUSH, "all", cfg, led)
         state = led.open_findings()
         assert state[gone]["status"] == "fixed"
-        # NON-VACUITY: `_mut_repo` also leaves a present-but-untracked
-        # ghost.py, and the default-seeded finding on it must NOT resolve --
+        # NON-VACUITY: `_mut_repo` also commits ghost.py on a side branch,
+        # and the default-seeded finding on it must NOT resolve --
         # otherwise "resolves everything" would satisfy the assertion above.
         _seed_mut(led)
         pipeline.run_gate(r, Gate.PRE_PUSH, "all", cfg, led)
@@ -1996,20 +2003,20 @@ def test_gate_resolves_a_mutation_survivor_whose_line_left_the_file(tmp_path, mo
     led = Ledger(r / ".aramid" / "ledger.db")
     # The id of a line real.py (TRACKED, at HEAD) no longer holds -- `x > 2`
     # was rewritten to `x > 1` -- against a seed on the same file whose line
-    # IS there (non-vacuity), and one on the present-but-UNTRACKED ghost.py,
-    # which is not at HEAD and so is never read (llm-review 88a4fab2: the
-    # first cut read the working tree, and an uncommitted edit cleared a
-    # blocking finding for good).
+    # IS there (non-vacuity), and one on ghost.py, which is not at HEAD (a
+    # side branch's own commit holds it) and so is never read here
+    # (llm-review 88a4fab2: the first cut read the working tree, and an
+    # uncommitted edit cleared a blocking finding for good).
     gone = _mut_fid("src/real.py", content="    return x > 2")
     try:
         _seed_mut(led, fid=gone, file="src/real.py")
         present = _seed_mut(led, file="src/real.py")
-        untracked = _seed_mut(led, fid=_mut_fid("src/pkg/ghost.py", content="    return x > 2"))
+        off_head = _seed_mut(led, fid=_mut_fid("src/pkg/ghost.py", content="    return x > 2"))
         pipeline.run_gate(r, Gate.PRE_PUSH, "all", cfg, led)
         state = led.open_findings()
         assert state[gone]["status"] == "fixed"
         assert state[present]["status"] == "open"
-        assert state[untracked]["status"] == "open"
+        assert state[off_head]["status"] == "open"
         ev = [e for e in led.events() if e.type is EventType.FINDING_RESOLVED
               and e.finding_id == gone]
         assert [e.payload for e in ev] == [{"auto_resolved": "line_departed"}]
@@ -2084,6 +2091,52 @@ def test_the_gate_resolves_against_the_certified_refs_not_head_alone(tmp_path, m
         assert led.open_findings()[fid]["status"] == "open"
     finally:
         led.close()
+
+
+def test_every_departure_resolver_reads_the_certified_refs_not_head_alone(tmp_path, monkeypatch):
+    """THE WIRING for FN-58: `run_gate` hands the revisions it certifies to
+    every departure resolver, not only to `line_departed` (pinned above).
+    real.py is at c1 (the ref being pushed) and deleted at c2 (HEAD). Read at
+    HEAD alone, `file_departed` clears the mutation row and `evidence_gone`
+    the llm one; read at every certified revision, both stay open.
+    `record_run`'s departed clause asks only for a runner in scope_tools, and
+    this gate runs none, so its pin is the revisions it was handed."""
+    from aramid import pushrefs
+    r = _mut_repo(tmp_path)
+    c1 = subprocess.run(["git", "rev-parse", "HEAD"], cwd=r, check=True,
+                        capture_output=True, text=True).stdout.strip()
+    subprocess.run(["git", "rm", "-q", "src/real.py"], cwd=r, check=True)
+    subprocess.run(["git", "commit", "-q", "-m", "c2 deletes real.py"], cwd=r, check=True)
+    c2 = subprocess.run(["git", "rev-parse", "HEAD"], cwd=r, check=True,
+                        capture_output=True, text=True).stdout.strip()
+    monkeypatch.setattr(pipeline, "GATE_RUNNER_KEYS",
+                        {**pipeline.GATE_RUNNER_KEYS, Gate.PRE_PUSH: []})
+    cfg = config.load_config(r)
+    led = Ledger(r / ".aramid" / "ledger.db")
+    cert = pushrefs.Certification(
+        refs=(pushrefs.PushRef("refs/heads/feature", c1, "refs/heads/feature", "0" * 40),),
+        head_at_start=c2, hook=True)
+    try:
+        mut = _seed_mut(led, file="src/real.py")
+        llm = "e" * 64
+        led.record_run("r0", _MUT_NOW, "drain", set(), set(), [Finding(
+            id=llm, tool="llm-review", rule="llm/a01", severity_raw="high",
+            severity=Severity.HIGH, verdict=Verdict.WARN, file="src/real.py", line=2,
+            message="m", evidence=MUT_LINE, gate=Gate.ALL, source=Source.LLM)])
+        handed = []
+        record_run = Ledger.record_run
+
+        def spy(self, *a, **kw):
+            handed.append(kw.get("revs"))
+            return record_run(self, *a, **kw)
+        monkeypatch.setattr(Ledger, "record_run", spy)
+        pipeline.run_gate(r, Gate.PRE_PUSH, "all", cfg, led, certified=cert)
+        state = led.open_findings()
+    finally:
+        led.close()
+    assert state[mut]["status"] == "open"
+    assert state[llm]["status"] == "open"
+    assert handed == [(c1, c2)]
 
 
 def test_an_uncommitted_rewrite_does_not_clear_a_survivor_at_the_gate(tmp_path, monkeypatch):

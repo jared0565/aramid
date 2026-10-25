@@ -10,7 +10,10 @@ from pathlib import Path
 # needed. Safe because `diagnostics` imports nothing but `sys` -- unlike
 # `queue`, which imports Ledger from here and so must stay local (see
 # `compact`).
-from aramid import diagnostics
+from aramid import diagnostics, gitutil
+# `departure` reads git (gitutil, toolpath, runners.base, proctree) and none of
+# those import the ledger, so module scope is safe here too.
+from aramid.departure import Departure
 from aramid.models import Event, EventType, Finding
 
 _SCHEMA = """
@@ -109,15 +112,20 @@ def _resolved_root(root: Path | None) -> Path | None:
         return None
 
 
-def _departed(root: Path | None, file: str | None,
-              base: Path | None = None) -> bool:
-    """True when `file` is no longer present in the repo at all.
+def _departed(departure: Departure | None, file: str | None) -> bool:
+    """True when `file` has left what the run certifies, by `departure`'s rule.
 
-    Pass `base` (an already-resolved root) to skip re-resolving per call; it
-    takes precedence over `root`, which may then be None.
+    FN-58 (channel round 325). Until 0.20.10 this asked the WORKING TREE
+    (`(root / file).exists()`), so a file another branch added -- never in the
+    checked-out tree -- read as departed, and pushing a sibling, or for
+    runner rows committing on one, wrote every such row `fixed`. It now asks
+    git: absent at every certified revision, and carried as its own content
+    by no branch (`departure.Departure.gone`). An uncommitted deletion is
+    therefore no departure either: what is not committed is not there.
 
-    OPT-IN BY DESIGN: `root` is None for every caller except the gate, so this
-    returns False and behaviour is unchanged for them. That is not tidiness,
+    OPT-IN BY DESIGN: `departure` is None for every caller except the gate
+    (which passes a root), so this returns False and behaviour is unchanged for
+    them. That is not tidiness,
     it is a safety requirement -- `commands/init._scan_history` records
     HISTORICAL gitleaks findings from `git log --all`, whose paths are those of
     OLD commits and routinely do not exist at HEAD. Resolving on absence there
@@ -156,49 +164,27 @@ def _departed(root: Path | None, file: str | None,
     condition HERE; in a repo where those labels diverge, they are not.
 
     The property is now enforced rather than assumed, by `_is_synthetic_path`
-    ahead of any filesystem question. Do not replace that with a `try/except`
-    around the existence check -- there is no exception to catch.
+    ahead of any other question. Do not replace that with a `try/except`
+    around the lookup -- there is no exception to catch: git simply has no
+    such path, which is the answer "absent".
 
-    CONTAINMENT. `root / file` does not keep you inside root. Measured:
+    CONTAINMENT. A stored path that is absolute, on a drive, or climbs with
+    `..` (`C:/Windows/win.ini`, `/etc/passwd`) names nothing in the repository,
+    so git never has it and it would read as absent everywhere -- RESOLVING
+    the finding. A path that was never inside the repository cannot have
+    departed it: `departure.repo_path` refuses it first, the safe direction,
+    and normalizes the rest (`src/../bad.py` IS `bad.py`, and is judged).
+    Under the file-system rule this was a resolve()-and-contain check,
+    measured on both forms above.
 
-        Path(r'F:\\Projects\\aramid') / 'C:/Windows/win.ini' -> C:\\Windows\\win.ini
-        Path(r'F:\\Projects\\aramid') / '/etc/passwd'        -> F:\\etc\\passwd
-
-    An absolute `file` discards root outright and `..` is never normalized
-    away, so the check lands on some unrelated path that almost never exists --
-    reporting "departed" and silently RESOLVING the finding. A path that was
-    never inside the repository cannot have departed it, so an escape returns
-    False, which is also the safe direction: the finding stays open.
+    A git that did not answer (`GitTimeout`, FN-17) is no answer either, and
+    goes up: `record_run` reads it as "not departed", `resolve_departed`
+    counts the row skipped, and the reader refuses every later question at
+    once, so one timeout is paid per run.
     """
-    if not file or _is_synthetic_path(file):
+    if departure is None or not file or _is_synthetic_path(file):
         return False
-    if base is None:
-        base = _resolved_root(root)
-    if base is None:
-        return False
-    try:
-        target = base / file
-        # EXISTENCE FIRST, containment only on absence -- and this ordering is
-        # an optimisation, not a semantic change. `resolve()` is a filesystem
-        # round trip on Windows and dominated the cost when `resolve_departed`
-        # walks every open finding of a producer; the overwhelmingly common
-        # answer is "the file is still there", which one `exists()` settles.
-        # Equivalent case by case, because containment can only ever turn a
-        # True into a False, and a path that EXISTS is already False:
-        #   inside + exists   -> False both ways
-        #   inside + absent   -> True  both ways (containment passes)
-        #   escaped + exists  -> False both ways ("C:/Windows/win.ini" is
-        #                        there, so `not exists()` was already False)
-        #   escaped + absent  -> False both ways (containment rejects it)
-        # Symlinks included: `exists()` follows them, so a link out of the repo
-        # to a live file answers False exactly as `resolve()` + containment did.
-        if target.exists():
-            return False
-        if not target.resolve().is_relative_to(base):
-            return False       # never inside the repo, so it cannot have left
-        return True
-    except (OSError, ValueError):
-        return False
+    return departure.gone(file)
 
 
 def note_yield(ledger, run_id: str, at: str, *, resolver: str, tool: str,
@@ -253,7 +239,7 @@ def note_yield(ledger, run_id: str, at: str, *, resolver: str, tool: str,
 
 
 def resolve_departed(ledger, run_id: str, at: str, *, root, tool: str,
-                     present_ids) -> list[str]:
+                     present_ids, revs: tuple[str, ...] = ("HEAD",)) -> list[str]:
     """Resolve one producer's open findings whose file has LEFT the repository.
 
     WHY PRODUCERS NEED THEIR OWN CALL. `record_run` already does this, but only
@@ -286,7 +272,8 @@ def resolve_departed(ledger, run_id: str, at: str, *, root, tool: str,
     NOT OPTED IN, and each for a reason worth re-checking rather than
     assuming:
       - `llm-review` needs nothing -- `auto_resolve_llm` fires when the stored
-        evidence quote is absent from HEAD, and deleting the file removes it.
+        evidence quote is gone by the same rule (FN-58), and deleting the file
+        removes it.
       - `js-mutation` and `fuzz` now resolve through `resolve_repaired`
         instead, which was the right shape for them: they had no resolver of
         any kind, so a genuine FIX cleared nothing, and opting them in here
@@ -311,26 +298,35 @@ def resolve_departed(ledger, run_id: str, at: str, *, root, tool: str,
     from under itself. `root` None makes this a no-op, so a caller that has no
     repo to check cannot accidentally clear anything. Never raises.
 
-    COST, measured rather than assumed (Windows / CPython 3.14, both producers,
-    steady state with every file present). This walks every open finding of the
-    named producer on every pre-push, so it is linear and worth watching:
+    `revs` are the revisions the gate certifies (`pipeline._certified_revs`).
+    Departure is asked of them and of the branches, never of the working tree
+    (FN-58, channel round 325: a sibling branch's push cleared rows raised on
+    another unmerged branch, whose file was never in the checked-out tree).
 
-        10 open findings ->   3.0 ms      <- realistic
-       200 open findings ->  31.1 ms
-      1000 open findings -> 120.5 ms
+    COST, measured rather than assumed (Windows / CPython 3.14, red-proof rows,
+    steady state with every file present at HEAD, five runs each, 2026-10-25).
+    Two git processes per run that has a candidate -- `rev-parse`, then one
+    `ls-tree` per certified revision -- and a set lookup per finding, so the
+    size of the backlog hardly shows:
 
-    The naive form -- `root.resolve()` per finding, then `resolve()` again on
-    the target before testing existence -- measured 808 ms at 1000. Hoisting
-    the root (`_resolved_root`) and testing existence before containment
-    (`_departed`) accounts for the 6.7x; `open_findings()` itself is ~10 ms at
-    that size and is not the bottleneck. If a producer with a large backlog
-    ever opts in, re-measure before assuming this stays cheap.
+        10 open findings -> ~150 ms
+      1000 open findings -> ~155 ms      (single runs up to ~680 ms: process start)
+
+    Until FN-58 this asked the file system: 3.0 ms at 10, 120.5 ms at 1000.
+    Content absent from every certified revision also costs the branch walk
+    (`departure`'s docstring): 0.26 s for 10 deleted files with 50 stale
+    branches, 11.7 s when those 50 are unmerged and inherit the files -- one
+    `ls-tree` and one merge base per such tip, per call. Each resolver call
+    builds its own reader, and a pre-push gate makes up to six: this one per
+    opted-in producer (three), `auto_resolve_llm`, `line_departed`, and
+    `record_run`'s departed clause; each walks only when it has such content.
     """
     base = _resolved_root(root)
     if base is None:
         note_yield(ledger, run_id, at, resolver="file_departed", tool=tool,
                    considered=0, resolved=0)
         return []                      # no repo to check -> clear nothing
+    departure = Departure(base, revs)
     resolved: list[str] = []
     skipped = 0
     considered = 0
@@ -340,7 +336,7 @@ def resolve_departed(ledger, run_id: str, at: str, *, root, tool: str,
             continue
         considered += 1
         try:
-            if _departed(None, rec.get("file"), base=base):
+            if _departed(departure, rec.get("file")):
                 ledger.append(Event(EventType.FINDING_RESOLVED, run_id, at,
                                     finding_id=fid,
                                     payload={"auto_resolved": "file_departed"}))
@@ -659,7 +655,8 @@ class Ledger:
                    certified=None, refs_moved=None, head_at_exit: str | None = None,
                    degraded: dict[str, str] | None = None,
                    stalled: list[str] | None = None,
-                   head: str | None = None):
+                   head: str | None = None,
+                   revs: tuple[str, ...] | None = None):
         state, seen = _materialize(self.events())
         present = {f.id for f in findings}
         payload = {"gate": gate, "tools": sorted(scope_tools)}
@@ -722,6 +719,9 @@ class Ledger:
             if f.id not in seen:
                 new_ids.append(f.id)
         successors = _successors(state, present, findings, new_ids)
+        # The reader asks git nothing until a row needs it, so one per run costs
+        # nothing up front (FN-58).
+        departure = Departure(root, revs or ("HEAD",)) if root is not None else None
         for fid, rec in state.items():
             if rec["status"] != "open" or fid in present:
                 continue
@@ -730,12 +730,13 @@ class Ledger:
             # -- red-proof, tdd -- could resolve findings on deleted files, and
             # REVERTED before shipping. Doing so exposes every finding whose
             # stored `file` is not a repo-relative path at all, because
-            # `_departed` answers "gone" for anything that does not exist:
+            # `_departed` answers "gone" for anything that does not exist (since
+            # FN-58: anything git has at no certified revision and on no branch):
             #
             #     consumers/dast.py writes  file=f"{f.method} {f.path}"
-            #     _departed(root, "GET /login")  ->  True
+            #     _departed(<a reader>, "GET /login")  ->  True
             #
-            # It passes containment (it joins to root/GET/login) and every open
+            # It passes containment (it names root/GET/login) and every open
             # DAST finding would be written `fixed` on the next gate run -- a
             # false repair, of security findings, into an append-only audit
             # trail. That is the exact class this block exists to prevent.
@@ -790,7 +791,15 @@ class Ledger:
             tool_scope = (examined_by_tool or {}).get(rec.get("tool"))
             in_scope = (rec.get("file") in scope_files
                         and (tool_scope is None or rec.get("file") in tool_scope))
-            if in_scope or _departed(root, rec.get("file")):
+            # DEPARTED is asked of git, not the disk (FN-58): at pre-commit
+            # `revs` is None and HEAD is what there is; at pre-push the
+            # certified revisions. A plain commit on a sibling branch used to
+            # clear the other branch's rows here, gitleaks's included.
+            try:
+                departed = not in_scope and _departed(departure, rec.get("file"))
+            except gitutil.GitTimeout:
+                departed = False           # no answer is not "gone" (FN-17)
+            if in_scope or departed:
                 payload = {}
                 if fid in successors:
                     payload = {"auto_resolved": "rewritten", "superseded_by": successors[fid]}

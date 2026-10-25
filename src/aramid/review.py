@@ -10,6 +10,7 @@ from pathlib import Path
 
 from aramid import config as config_mod
 from aramid import diagnostics, gitutil, triage
+from aramid.departure import Departure
 from aramid.fingerprint import compute_fingerprint, normalize_line
 from aramid.ledger import note_yield
 from aramid.models import Event, EventType, Finding, Gate, Severity, Source, Verdict
@@ -305,26 +306,29 @@ def _strip_ws(text: str) -> str:
     return re.sub(r"\s+", "", text)
 
 
-def _quote_elsewhere(root: Path, evidence: str, quote: str) -> bool:
-    """Whether some tracked file at HEAD carries the whole quote (FN-22).
+def _quote_elsewhere(root: Path, evidence: str, quote: str,
+                     revs=("HEAD",)) -> bool:
+    """Whether some file tracked at one of `revs` carries the whole quote (FN-22).
 
-    Asked only for a finding whose own path is absent at HEAD, where "the
-    quote is gone" used to mean a `git mv` resolved every finding on the file
-    -- an armed confirmed critical included. `git grep -F` on the quote's
-    longest line narrows the search; the whitespace-stripped whole quote, the
-    same test the file's own content gets, decides. Only a positive find
-    keeps the finding open: a grep that answers with an error leaves the
-    pre-FN-22 answer (resolved); one git cannot start raises into the
-    caller's per-record guard, which leaves the finding open and counts it
-    skipped; a GitTimeout goes up (FN-17)."""
+    Asked only for a finding whose own path is absent at every revision the
+    run certifies (`revs`, FN-58; HEAD until then), where "the quote is gone"
+    used to mean a `git mv` resolved every finding on the file -- an armed
+    confirmed critical included. `git grep -F` on the quote's longest line
+    narrows the search; the whitespace-stripped whole quote, the same test the
+    file's own content gets, decides. Only a positive find keeps the finding
+    open: a grep that answers with an error leaves the pre-FN-22 answer
+    (resolved); one git cannot start raises into the caller's per-record
+    guard, which leaves the finding open and counts it skipped; a GitTimeout
+    goes up (FN-17)."""
     needle = max((line.strip() for line in evidence.splitlines()), key=len)
-    cp = gitutil._run(root, "grep", "-F", "-I", "-l", "-z", "-e", needle, "HEAD", "--")
-    if cp.returncode != 0:
-        return False
-    for hit in cp.stdout.split("\0"):
-        rel = hit.removeprefix("HEAD:")
-        if hit and quote in _strip_ws(gitutil.blob_at(root, "HEAD", rel) or ""):
-            return True
+    for rev in revs:
+        cp = gitutil._run(root, "grep", "-F", "-I", "-l", "-z", "-e", needle, rev, "--")
+        if cp.returncode != 0:
+            continue
+        for hit in cp.stdout.split("\0"):
+            rel = hit.removeprefix(f"{rev}:")
+            if hit and quote in _strip_ws(gitutil.blob_at(root, rev, rel) or ""):
+                return True
     return False
 
 
@@ -443,17 +447,21 @@ def apply_refute(finding: dict, refuted: bool, reason: str) -> dict:
     return out
 
 
-def auto_resolve_llm(root: Path, ledger, run_id: str, at: str) -> list[str]:
+def auto_resolve_llm(root: Path, ledger, run_id: str, at: str,
+                     revs: tuple[str, ...] = ("HEAD",)) -> list[str]:
     """Zero-token deterministic resolution (spec section 5): an OPEN LLM
-    finding whose verbatim evidence quote no longer exists in the HEAD
-    version of its file is fixed -- resolve it BEFORE the block check so a
-    dev who fixed the code is never blocked by a stale finding. A missing/
-    unreadable file counts as gone -- except a path absent at HEAD whose
-    quote is still in another tracked file: a `git mv` is not a fix (FN-22,
-    `_quote_elsewhere`). A quote moved into a different file while its own
-    file stays is still resolved. False-resolve safety net: the edit that
-    removed the quote is itself a commit, so triage re-enqueues the file and
-    the next drain re-reviews it.
+    finding whose verbatim evidence quote no longer exists in its file at
+    the revisions the run certifies (`revs`), and that no branch carries as
+    its own, is fixed (FN-58: HEAD until then, so a sibling branch's push
+    cleared quotes another unmerged branch had added) -- resolve it BEFORE
+    the block check so a dev who fixed the code is never blocked by a stale
+    finding. A missing file counts as gone -- except a path absent at every
+    certified revision whose quote is still in another tracked file: a `git
+    mv` is not a fix (FN-22, `_quote_elsewhere`). A file git cannot read
+    keeps the finding open. A quote moved into a different file while its
+    own file stays is still resolved. False-resolve safety net: the edit
+    that removed the quote is itself a commit, so triage re-enqueues the
+    file and the next drain re-reviews it.
 
     KNOWN LIMITATION, and the operator's exit from it. "The quote is gone" is
     a proxy for "the code changed", and a real fix does not always move the
@@ -494,6 +502,7 @@ def auto_resolve_llm(root: Path, ledger, run_id: str, at: str) -> list[str]:
     resolved = []
     skipped = 0
     considered = 0
+    departure = Departure(root, revs)
     for fid, rec in ledger.open_findings().items():
         if rec.get("source") != "llm" or rec.get("status") != "open":
             continue
@@ -501,19 +510,12 @@ def auto_resolve_llm(root: Path, ledger, run_id: str, at: str) -> list[str]:
         # Per-record guard (fail-safe requirement): a MALFORMED rec (e.g.
         # evidence/line stored as null so `.get(k, default)` returns None,
         # not the default) must be SKIPPED -- left open for manual triage --
-        # never crash the gate and never be silently resolved away. This
-        # outer guard wraps the whole body; the inner read_for_fingerprint
-        # try/except below keeps its own "unreadable file = gone = resolve"
-        # semantics for WELL-FORMED recs. A git that did not answer is not an
-        # unreadable file (FN-17): GitTimeout goes up through both, so no
-        # finding is resolved on it and the first timeout is the only one paid.
+        # never crash the gate and never be silently resolved away. A git
+        # that did not answer is not an unreadable file (FN-17): GitTimeout
+        # goes up, so no finding is resolved on it, and the reader refuses
+        # every later question at once, so the first timeout is the only one
+        # paid.
         try:
-            try:
-                content = gitutil.read_for_fingerprint(root, "HEAD", rec.get("file", ""))
-            except gitutil.GitTimeout:
-                raise
-            except Exception:
-                content = ""
             # Strip ALL whitespace (not _squash_ws' collapse-runs) on both
             # sides: deliberately MORE permissive than verify_findings' squash
             # so a mere reformat of the evidence line (e.g. spaces added inside
@@ -524,12 +526,21 @@ def auto_resolve_llm(root: Path, ledger, run_id: str, at: str) -> list[str]:
             # So a quote is "gone" only when its non-whitespace characters no
             # longer appear.
             quote = _strip_ws(rec.get("evidence", ""))
-            if quote and quote in _strip_ws(content):
+            file = rec.get("file", "")
+            # GONE AT WHAT THE RUN CERTIFIES, not at HEAD (FN-58, channel
+            # round 325): no certified revision's copy of the file holds the
+            # quote, and no branch carries it as its own. HEAD alone read a
+            # quote another unmerged branch added as gone on every push of a
+            # sibling, and a push of some other ref judged by the checkout.
+            # A file git cannot read now keeps the finding open; it used to
+            # read as "" and resolve.
+            if quote and not departure.gone(file, lambda text, q=quote: q in _strip_ws(text)):
                 continue
-            # FN-22: a path gone from HEAD is a move until the quote is
-            # found nowhere -- a deleted file still resolves.
-            if quote and gitutil.blob_at(root, "HEAD", rec.get("file", "")) is None \
-                    and _quote_elsewhere(root, rec["evidence"], quote):
+            # FN-22: a path gone from every certified revision is a move
+            # until the quote is found nowhere -- a deleted file still
+            # resolves.
+            if quote and not departure.tracked_at_certified(file) \
+                    and _quote_elsewhere(root, rec["evidence"], quote, departure.revs()):
                 continue
             ledger.append(Event(EventType.FINDING_RESOLVED, run_id, at, finding_id=fid,
                                 payload={"auto_resolved": "evidence_gone"}))
@@ -537,9 +548,6 @@ def auto_resolve_llm(root: Path, ledger, run_id: str, at: str) -> list[str]:
         except gitutil.GitTimeout:
             raise
         except Exception:
-            # Counts only what the OUTER guard catches. The inner
-            # read_for_fingerprint handler above sets content = "" and carries
-            # on by design, so it never reaches here.
             skipped += 1
             continue
     diagnostics.note_skipped("llm-resolve", skipped)

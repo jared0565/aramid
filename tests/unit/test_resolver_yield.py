@@ -152,6 +152,12 @@ def test_red_proven_records_the_candidates_it_walked(led):
 
 
 def test_file_departed_records_the_candidates_it_walked(led, tmp_path):
+    # Departure is asked of git (FN-58): a repository with one commit, which
+    # src/gone.py is not in.
+    import subprocess
+    for args in (("init", "-q", "-b", "main"), ("config", "user.email", "t@t"),
+                 ("config", "user.name", "t"), ("commit", "-q", "--allow-empty", "-m", "c0")):
+        subprocess.run(["git", *args], cwd=tmp_path, check=True, capture_output=True)
     _seed(led, _finding(FID, tool="mutation", file="src/gone.py"))
 
     ledger_mod.resolve_departed(led, "r1", NOW, root=tmp_path, tool="mutation",
