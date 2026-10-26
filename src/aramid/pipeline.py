@@ -959,6 +959,60 @@ def _certified_pushes(certified) -> tuple:
     return certified.refs if certified is not None else ()
 
 
+# The labels a gitleaks row can carry: the tool's own, and FN-38's inline
+# label for a hit a marker or a repo file hid.
+_GITLEAKS_LABELS = (gitleaks.NAME, inline.GITLEAKS)
+
+
+def _rescan_before_closing(root: Path, mode: str, certified, ledger: Ledger,
+                           findings: list[Finding], scope_tools: set[str],
+                           scope_files: set[str], ref_for, salt: bytes, gate: Gate,
+                           classify, gate_deadline: float | None) -> frozenset[str]:
+    """The ids of open gitleaks rows a scan of the whole file still finds
+    (OPERATOR 2026-10-25, "Re-scan before closing"), for `record_run`.
+
+    A staged or range gitleaks scan reads a patch: `git --staged` and `git
+    --log-opts` report only the lines the commit or push ADDS. A secret on a
+    line the change leaves alone was therefore never reported, and
+    `record_run` wrote its open row `fixed` because its file was in scope: a
+    false repair of a BLOCK-tier secret (measured 2026-10-25 at 142ec17, in
+    both modes, under all four labels a row can come from). So the rows it
+    would close are re-scanned whole, as committed -- the index at
+    pre-commit, every certified revision at pre-push -- and only what that
+    scan no longer finds may close. Ids only: a vouched row is present, never
+    detected, so it blocks nothing the patch scan did not.
+
+    Only when such a row exists, and never for `--all`, which scans whole
+    files already. A label the re-scan cannot vouch for, and a re-scan that
+    fails outright, keep their rows open: no answer is not "gone". Neither
+    degrades gitleaks, whose own scan ran: whether a row may close is not
+    what blocks a commit."""
+    if mode not in ("staged", "range"):
+        return frozenset()
+    present = {f.id for f in findings}
+    rows = {fid: rec for fid, rec in ledger.open_findings().items()
+            if rec.get("status") == "open" and fid not in present
+            and rec.get("tool") in _GITLEAKS_LABELS and rec.get("tool") in scope_tools
+            and rec.get("file") in scope_files}
+    if not rows:
+        return frozenset()
+    files = sorted({rec["file"] for rec in rows.values()})
+    found: set[str] = set()
+    vouched = set(_GITLEAKS_LABELS)
+    try:
+        for rev in ((":",) if mode == "staged" else _certified_revs(certified)):
+            raws, ok = gitleaks.rescan(root, files, rev, gate_deadline)
+            found |= {f.id for f in normalize(raws, root, ref_for, salt, gate, classify)}
+            vouched &= ok
+    except Exception as exc:
+        print(f"aramid: gitleaks could not re-scan {len(files)} file(s) before closing "
+              f"their rows ({type(exc).__name__}); {len(rows)} row(s) stay open",
+              file=sys.stderr)
+        return frozenset(rows)
+    return frozenset(fid for fid, rec in rows.items()
+                     if fid in found or rec["tool"] not in vouched)
+
+
 def run_gate(root: Path, gate: Gate, mode: str, cfg: config_mod.Config, ledger: Ledger,
              accept_degraded: str | None = None, *,
              clock: Callable[[], str] = _default_clock,
@@ -1165,6 +1219,9 @@ def run_gate(root: Path, gate: Gate, mode: str, cfg: config_mod.Config, ledger: 
     # and BEFORE the row is written, so the row says what the gate saw at
     # exit. Nothing here can raise (pushrefs fails closed by returning a
     # moved ref with `after=None`, never an exception).
+    still_found = _rescan_before_closing(root, mode, certified, ledger, findings, scope_tools,
+                                         scope_files, ref_for, salt, gate, classify,
+                                         gate_deadline)
     moved = pushrefs.drift(root, certified) if certified is not None else None
     head_at_exit = pushrefs.head(root) if certified is not None else None
     new_ids = ledger.record_run(run_id, at, str(gate), scope_tools, scope_files, findings,
@@ -1182,7 +1239,8 @@ def run_gate(root: Path, gate: Gate, mode: str, cfg: config_mod.Config, ledger: 
                                 # What departure is asked of (FN-58): the
                                 # certified revisions, HEAD at pre-commit.
                                 revs=_certified_revs(certified),
-                                pushed=_certified_pushes(certified))
+                                pushed=_certified_pushes(certified),
+                                still_found=still_found)
 
     # record_run above can NEVER resolve a whole-suite finding: those carry the
     # synthetic `<test-suite>` marker, which is not a path and so is never in

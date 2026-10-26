@@ -44,7 +44,8 @@ from pathlib import Path
 from aramid import gitutil
 from aramid.normalizer import RawFinding
 from aramid.runners import inline
-from aramid.runners.base import RunnerResult, ToolState, run_subprocess
+from aramid.runners.base import (CONTENT_UNREADABLE, RunContext, RunnerResult, ToolState,
+                                 run_subprocess)
 from aramid.fingerprint import normalize_path
 from aramid.runners._util import relativize
 
@@ -433,3 +434,57 @@ def _raw_findings(items: list, ctx, *, hidden: bool) -> list[RawFinding]:
             subject=(NAME, item["RuleID"]) if hidden else None,
         ))
     return out
+
+
+def rescan(root: Path, files: list[str], rev: str,
+           gate_deadline: float | None = None) -> tuple[list[RawFinding], frozenset[str]]:
+    """`files` scanned WHOLE as `rev` holds them (`:` the index), for the gate
+    deciding which open rows may close (`pipeline._rescan_before_closing`):
+    the hits, and the labels whose pass ran clean. A label left out vouches
+    for nothing, so its rows stay open.
+
+    The staged and range scans read a patch, the lines a commit or push adds,
+    so their silence about a line they never read says nothing. This is
+    `--all`'s scan, `dir` on a copy, of the blobs git holds -- never the disk,
+    which is not what a commit or push ships -- beside the repo's own
+    `.gitleaks.toml`, from where the patch scan read it: its rules are the
+    ones the row was found by. Each hit carries the line it was found on, so
+    its id is the one a patch scan gives that line.
+
+    `dir` on a copy cannot apply a `.gitleaksignore` entry (the fingerprint
+    holds a temp path: test_gitleaks_repo_files_live), so the file is not
+    copied, and a hit an entry hides from the git scans comes back under the
+    tool's own label. Each own hit is therefore returned under the inline
+    label too, and the row that names the hidden hit is found."""
+    root = Path(root)
+    with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as td:
+        tree = Path(td) / "committed"
+        tree.mkdir()
+        blobs: dict[str, str] = {}
+        for rel in files:
+            # `:path` names the index.
+            text = gitutil.blob_at(root, "" if rev == ":" else rev, rel)
+            if text is None:
+                return [], frozenset()          # git could not say: vouch for nothing
+            dst = tree / rel
+            dst.parent.mkdir(parents=True, exist_ok=True)
+            dst.write_bytes(text.encode("utf-8"))
+            blobs[normalize_path(rel)] = text
+        configs = [_CONFIG_FILE] if (root / _CONFIG_FILE).is_file() else []
+        for name in configs:
+            shutil.copyfile(root / name, tree / name)
+        ctx = RunContext(root=tree, files=[*files, *configs], full_tree=True,
+                         inline_pass=True, gate_deadline=gate_deadline)
+        result = run(ctx)
+        if result.state is not ToolState.OK:
+            return [], frozenset()
+        vouched = {NAME} | {sub.tool for sub in result.sub_results or ()
+                            if sub.tool == inline.GITLEAKS and sub.state is ToolState.OK}
+        raws = [raw for raw in parse(result, ctx) if normalize_path(raw.file) in blobs]
+    for raw in raws:
+        lines = blobs[normalize_path(raw.file)].splitlines()
+        raw.line_content = (lines[raw.line - 1] if 0 < raw.line <= len(lines)
+                            else CONTENT_UNREADABLE)
+    twins = [replace(raw, tool=inline.GITLEAKS, rule=inline.RULE, subject=(NAME, raw.rule))
+             for raw in raws if raw.tool == NAME]
+    return raws + twins, frozenset(vouched)

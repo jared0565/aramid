@@ -657,7 +657,8 @@ class Ledger:
                    degraded: dict[str, str] | None = None,
                    stalled: list[str] | None = None,
                    head: str | None = None,
-                   revs: tuple[str, ...] | None = None, pushed=()):
+                   revs: tuple[str, ...] | None = None, pushed=(),
+                   still_found: frozenset[str] = frozenset()):
         state, seen = _materialize(self.events())
         present = {f.id for f in findings}
         payload = {"gate": gate, "tools": sorted(scope_tools)}
@@ -724,7 +725,11 @@ class Ledger:
         # nothing up front (FN-58).
         departure = Departure(root, revs or ("HEAD",), pushed) if root is not None else None
         for fid, rec in state.items():
-            if rec["status"] != "open" or fid in present:
+            # `still_found`: ids a scan of the whole file still finds where this
+            # run's own scan read only a patch (pipeline._rescan_before_closing).
+            # Present, so never resolved, and never detected, so they block
+            # nothing the patch scan did not.
+            if rec["status"] != "open" or fid in present or fid in still_found:
                 continue
             # THE TOOL GATE STAYS AHEAD OF THE DEPARTED CHECK. Considered
             # moving it (2026-08-09) so that producers absent from scope_tools

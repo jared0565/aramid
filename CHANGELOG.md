@@ -69,6 +69,23 @@ to publish a tag that disagrees with it.
   plus one per pushed branch, to find the default branch, one `ls-tree` of
   it, then one `ls-tree` and one merge base per unmerged branch tip, in each
   resolver that meets it.
+- **A secret on a line a commit or push leaves alone keeps its finding
+  open.** The commit and push secret scans read a patch: `gitleaks git
+  --staged` and `gitleaks git --log-opts <range>` report only the lines
+  added. So a secret elsewhere in a file the change touched went unreported,
+  and the gate wrote its open finding `fixed` while the secret was still in
+  the file (measured on 0.20.10, and on the commit before this fix in both
+  scan modes, for gitleaks's own findings and for the `gitleaks-inline`
+  findings of a hit that a `gitleaks:allow` comment, a `.gitleaksignore`
+  entry or the repo's `.gitleaks.toml` hid). Such a finding now closes only
+  when a scan of those files whole, as committed (the staged content at
+  pre-commit, each revision the push certifies at pre-push, never the working
+  tree), no longer finds it; one it still finds stays open and blocks
+  nothing, as before. That scan runs only when such a finding exists. If it
+  cannot run, or its second pass is skipped for lack of budget, the findings
+  it could not vouch for stay open, and gitleaks is not reported degraded.
+  Findings the old rule closed are not reopened by this release; `aramid
+  check --all` reopens one whose secret is still there.
 - **`scripts/promote_live.py` says when `gh` failed, instead of calling the
   release unpublished.** Promoting 0.20.10 from a shell with `gh` but no
   `git` on PATH, `gh release view` exited 1 ("unable to find git executable
