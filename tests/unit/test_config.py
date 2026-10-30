@@ -365,7 +365,11 @@ def test_llm_defaults_present(tmp_path, monkeypatch):
     # effort: all three tiers live-verified 2026-07-14; cheap/ollama stays ""
     # deliberately (non-empty effort => think:true, wrong for the cheap tier).
     assert [a["effort"] for a in ladder] == ["", "medium", "high"]
-    assert [a["model"] for a in ladder] == ["deepseek-v4-flash", "gpt-5.5", "opus"]
+    # Each answered live 2026-10-30 through 0.20.10's argv; the models they
+    # replaced did not (deepseek-v4-flash: HTTP 410, retired 2026-09-25;
+    # gpt-5.5: gone from codex's catalog, exit 1).
+    assert [a["model"] for a in ladder] == ["minimax-m3.1-flash", "gpt-6.1-sol",
+                                            "claude-opus-5-5"]
 
 
 def test_llm_repo_override_merges(tmp_path, monkeypatch):

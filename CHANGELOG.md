@@ -14,6 +14,18 @@ to publish a tag that disagrees with it.
 
 ### Fixed
 
+- **The shipped reviewer models answer again.** Two of the three default
+  `[[llm.ladder]]` models had retired: Ollama answers `deepseek-v4-flash` with
+  HTTP 410 ("retired on September 25, 2026"), and `gpt-5.5` is absent from
+  codex 0.166.0's model catalog on a ChatGPT login (exit 1). Each failure is
+  recorded as a bare `error`, so when the claude arm failed as well (its
+  cause unknown; it answers again) every one of aramid's own drains from
+  2026-10-26 read "all providers unavailable". The defaults are now
+  `minimax-m3.1-flash` (ollama-cloud), `gpt-6.1-sol` (codex-cli) and
+  `claude-opus-5-5` (claude-cli, pinned in place of the `opus` alias); each
+  answered through 0.20.10's own command line on 2026-10-30. A ladder you set
+  in `~/.aramid/config.toml` or `aramid.toml` replaces the shipped one whole,
+  so it is unaffected.
 - **A finding is cleared as gone only when what the push certifies has lost
   it and no other branch still carries it (FN-58, channel round 325).** Four
   resolvers judged that a file, a quoted line or a mutated line had gone by

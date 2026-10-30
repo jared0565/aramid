@@ -143,9 +143,11 @@ Two different orderings — do not conflate them:
 
 | tier | provider | model (default) | effort | min_score |
 |---|---|---|---|---|
-| `cheap` | `ollama-cloud` | `deepseek-v4-flash` | `""` | `40` |
-| `mid` | `codex-cli` | `gpt-5.5` | `medium` | `60` |
-| `frontier` | `claude-cli` | `opus` | `high` | `80` |
+| `cheap` | `ollama-cloud` | `minimax-m3.1-flash` | `""` | `40` |
+| `mid` | `codex-cli` | `gpt-6.1-sol` | `medium` | `60` |
+| `frontier` | `claude-cli` | `claude-opus-5-5` | `high` | `80` |
+
+These replaced `deepseek-v4-flash` and `gpt-5.5` (and the `opus` alias) on 2026-10-30, after both retired under the shipped defaults: the ollama arm got HTTP 410, the codex arm exit 1, and `review` records each as a bare `error`, so every drain's review read "all providers unavailable" from 2026-10-26. A model that leaves its provider's catalog looks exactly like an outage; check `codex debug models` and Ollama's `/api/tags` first.
 
 `target_arm(score)` picks the highest-`min_score` arm whose band contains the item's score (or the cheapest arm below the lowest band). `reviewer_order()` then attempts the target tier first, degrading to nearest-available (prefer at-or-below the target, then climb above), deduped by provider. OpenRouter is opt-in only — added to `provider_order` plus a `[[llm.ladder]]` arm manually — capped by `[llm].openrouter_monthly_cap_usd` (default $5.00/month), checked against a local spend log before every call.
 
@@ -266,9 +268,9 @@ Two invariants worth keeping in mind when touching this:
 
 | tier | provider | model | effort | min_score |
 |---|---|---|---|---|
-| `"cheap"` | `"ollama-cloud"` | `"deepseek-v4-flash"` | `""` | `40` |
-| `"mid"` | `"codex-cli"` | `"gpt-5.5"` | `"medium"` | `60` |
-| `"frontier"` | `"claude-cli"` | `"opus"` | `"high"` | `80` |
+| `"cheap"` | `"ollama-cloud"` | `"minimax-m3.1-flash"` | `""` | `40` |
+| `"mid"` | `"codex-cli"` | `"gpt-6.1-sol"` | `"medium"` | `60` |
+| `"frontier"` | `"claude-cli"` | `"claude-opus-5-5"` | `"high"` | `80` |
 
 **`[llm.autolearn]`**:
 
