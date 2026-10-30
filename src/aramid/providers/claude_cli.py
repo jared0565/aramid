@@ -57,6 +57,9 @@ def available(cfg) -> bool:
 
 
 def review(prompt: str, model: str, timeout_s: float, *, effort: str = "") -> ProviderResponse:
+    refused = base.timeout_refused(timeout_s)
+    if refused is not None:
+        return refused
     exe = toolpath.which("claude")
     if exe is None:
         return ProviderResponse(text="", error=base.ERR_UNAVAILABLE)

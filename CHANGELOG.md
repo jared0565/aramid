@@ -45,6 +45,19 @@ to publish a tag that disagrees with it.
   answered through 0.20.10's own command line on 2026-10-30. A ladder you set
   in `~/.aramid/config.toml` or `aramid.toml` replaces the shipped one whole,
   so it is unaffected.
+- **A reviewer call is never started with a timeout it cannot keep.**
+  `[llm].call_timeout_s = inf` is valid TOML and loaded as it stood. Given it,
+  or a number as large as `1e300`, the claude-cli and codex-cli providers
+  started the CLI and raised OverflowError 0.02 s later, without stopping it:
+  the CLI ran on with nothing reading its answer (measured 2026-10-30 with a
+  stand-in child). ollama-cloud raised the same error. Found by aramid's own
+  fuzz drain on 2026-10-30. Every provider now refuses a timeout that is not
+  a number, or is not above 0 and at most 86400 seconds, before it starts or
+  sends anything; the attempt is an `error` whose `detail` begins
+  `bad timeout`, and the ladder moves on. A config layer that sets
+  `call_timeout_s` outside that range is named on stderr and by `doctor`, as
+  any other config problem is; the value is still loaded as written, so it
+  is the providers that refuse it.
 - **A finding is cleared as gone only when what the push certifies has lost
   it and no other branch still carries it (FN-58, channel round 325).** Four
   resolvers judged that a file, a quoted line or a mutated line had gone by

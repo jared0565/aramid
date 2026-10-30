@@ -257,7 +257,7 @@ Two invariants worth keeping in mind when touching this:
 |---|---|---|---|
 | `enabled` | bool | `true` | Master switch for the LLM reviewer consumer. |
 | `max_items_per_drain` | int | `3` | Cap on items reviewed by the LLM per drain. Distinct from `[drain].max_items_per_drain` (=10). |
-| `call_timeout_s` | int (s; `float()`'d) | `240` | Per-call timeout for an LLM provider invocation. |
+| `call_timeout_s` | int (s; `float()`'d) | `240` | Per-call timeout for an LLM provider invocation. Must be above 0 and at most 86400 (`config_keys.BOUNDED`): outside that a config layer gets a config warning, the value still loads, and every provider refuses the call before starting anything (`providers.base.timeout_refused`: `error`, `detail` `bad timeout: ...`). `inf` and `1e300` once overflowed the OS wait after the CLI had started. |
 | `packet_max_bytes` | int | `120000` | Max size of the review packet sent to the LLM; oversized packets get sections dropped. |
 | `llm_block_armed` | bool | `false` | Bake-then-arm flag: confirmed-CRITICAL LLM findings WARN until armed. Flipped via `aramid arm --llm`. |
 | `provider_order` | list[str] | `["claude-cli", "codex-cli", "ollama-cloud"]` | Ordered provider chain (consumed only as a set/availability check). `openrouter` is opt-in only. |

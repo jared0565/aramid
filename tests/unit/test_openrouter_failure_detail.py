@@ -45,6 +45,17 @@ def test_a_network_failure_keeps_the_exception(monkeypatch):
     assert (resp.error, resp.detail) == (base.ERR_ERROR, "ConnectionResetError: reset by peer")
 
 
+@pytest.mark.parametrize("timeout_s", [float("inf"), float("-inf"), 0.0, 1e300])
+def test_an_unusable_timeout_sends_nothing(monkeypatch, tmp_path, timeout_s):
+    sent = []
+    monkeypatch.setattr(openrouter.urllib.request, "urlopen",
+                        lambda req, timeout: sent.append(req))
+    resp = openrouter.review("P", "m", timeout_s, cfg=_cfg())
+    assert (resp.error, sent) == (base.ERR_ERROR, [])
+    assert resp.detail.startswith("bad timeout: ")
+    assert not (tmp_path / "llm_spend.jsonl").exists()
+
+
 def test_an_answer_has_no_detail(monkeypatch):
     ok = json.dumps({"choices": [{"message": {"content": '{"findings": []}'}}]})
     monkeypatch.setattr(openrouter.urllib.request, "urlopen",

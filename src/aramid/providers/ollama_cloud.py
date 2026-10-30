@@ -37,6 +37,9 @@ NUM_PREDICT = 16384
 
 
 def review(prompt: str, model: str, timeout_s: float, *, effort: str = "") -> ProviderResponse:
+    refused = base.timeout_refused(timeout_s)
+    if refused is not None:
+        return refused
     key = os.environ.get("OLLAMA_API_KEY")
     if not key:
         return ProviderResponse(text="", error=base.ERR_UNAVAILABLE)

@@ -64,6 +64,18 @@ def test_a_refused_command_line_keeps_the_refusal(monkeypatch, capsys):
                                          "exit 1: error: unknown option '--safe-mode'")
 
 
+@pytest.mark.parametrize("timeout_s", [float("inf"), float("-inf"), 0.0, 1e300])
+def test_an_unusable_timeout_starts_nothing(monkeypatch, timeout_s):
+    """The drain's fuzzer: review() raised OverflowError on an infinite
+    timeout (row ace833c8ab6c)."""
+    started = []
+    monkeypatch.setattr(claude_cli.base, "run_provider_subprocess",
+                        lambda *a, **k: started.append(a))
+    resp = claude_cli.review("P", "claude-opus-5-5", timeout_s)
+    assert (resp.error, started) == (base.ERR_ERROR, [])
+    assert resp.detail.startswith("bad timeout: ")
+
+
 def test_an_answer_has_no_detail(monkeypatch):
     out = json.dumps({"result": '{"findings": []}', "usage": {}})
     resp = _run(monkeypatch, 0, out, "")

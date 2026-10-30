@@ -9,7 +9,8 @@ itself (every key there is one aramid reads, and its value's type is the
 key's type) plus the keys that are read but have no default to write down,
 listed in OPTIONAL below. A key aramid wrote or documented and never read
 is RETIRED: named, with the reason, so the warning can say "delete it"
-rather than "unknown".
+rather than "unknown". A number with a range (BOUNDED) is named when a
+layer sets it outside that range.
 """
 from importlib import resources
 
@@ -52,6 +53,32 @@ RETIRED: dict[tuple[str, ...], str] = {
                               "so setting it arms nothing"),
     ("dast", "start_command"): "it was documented as reserved and never read",
 }
+
+# The longest one provider call may be given. Past some such number the OS
+# wait overflows: `inf` (valid TOML) and `1e300` each made
+# `run_provider_subprocess` start the CLI and raise OverflowError 0.02 s
+# later, leaving the child running (measured 2026-10-30). No review needs a
+# day; the default is 240 s.
+CALL_TIMEOUT_MAX_S = 86400.0
+
+# Numbers aramid reads with a range. Path -> (above, at most).
+BOUNDED: dict[tuple[str, ...], tuple[float, float]] = {
+    ("llm", "call_timeout_s"): (0.0, CALL_TIMEOUT_MAX_S),
+}
+
+
+def in_bounds(path: tuple[str, ...], value) -> bool:
+    """Whether `value` is inside the range BOUNDED gives `path`: a number,
+    not a boolean, above the low end and at most the high one -- so never
+    `inf` or `nan`, which no comparison holds for. A path with no range is
+    always in bounds. The providers ask the same of the timeout they are
+    handed (providers.base.timeout_refused)."""
+    if path not in BOUNDED:
+        return True
+    low, high = BOUNDED[path]
+    return (isinstance(value, (int, float)) and not isinstance(value, bool)
+            and low < value <= high)
+
 
 _TYPE_WORDS = {"boolean": "true or false", "number": "a number", "string": "a string",
                "list": "a list", "table": "a table",
@@ -141,6 +168,11 @@ def problems(raw: dict, *, known: dict | None = None) -> list[str]:
             got = _type_name(value)
             if got not in _ACCEPTS.get(want, (want,)):
                 out.append(f"{_where(path)} should be {_TYPE_WORDS[want]}, got {value!r}")
+                continue
+            if not in_bounds(path, value):
+                low, high = BOUNDED[path]
+                out.append(f"{_where(path)} should be a number above {low:g} and at most "
+                           f"{high:g}, got {value!r}")
                 continue
             if isinstance(value, dict):
                 walk(value, path)

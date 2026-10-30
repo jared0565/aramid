@@ -72,6 +72,19 @@ def test_a_reply_after_a_tool_keeps_the_tool(monkeypatch, capsys):
     assert (resp.error, resp.detail) == (base.ERR_ERROR, "tool used: command_execution")
 
 
+@pytest.mark.parametrize("timeout_s", [float("inf"), float("-inf"), 0.0, 1e300])
+def test_an_unusable_timeout_starts_nothing(monkeypatch, timeout_s):
+    """The drain's fuzzer: review() raised OverflowError on an infinite
+    timeout (row 6c39f76329d8) -- after the CLI had started, which then ran
+    on with nobody waiting for it (measured 2026-10-30)."""
+    started = []
+    monkeypatch.setattr(codex_cli.base, "run_provider_subprocess",
+                        lambda *a, **k: started.append(a))
+    resp = codex_cli.review("P", "gpt-6.1-sol", timeout_s)
+    assert (resp.error, started) == (base.ERR_ERROR, [])
+    assert resp.detail.startswith("bad timeout: ")
+
+
 def test_an_answer_has_no_detail(monkeypatch):
     out = _events({"type": "item.completed",
                    "item": {"type": "agent_message", "text": '{"findings": []}'}})

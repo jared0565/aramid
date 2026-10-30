@@ -21,7 +21,7 @@ import subprocess
 import sys
 from dataclasses import dataclass
 
-from aramid import diagnostics, toolpath
+from aramid import config_keys, diagnostics, toolpath
 from aramid.runners import base as runners_base
 
 ERR_UNAVAILABLE = "unavailable"
@@ -99,6 +99,19 @@ def http_detail(exc) -> str:
     if not said.strip():
         said = str(exc.reason or "")
     return failure_detail(f"HTTP {exc.code}", said)
+
+
+def timeout_refused(timeout_s) -> ProviderResponse | None:
+    """The response for a timeout no call can run under -- not a number,
+    not finite, at or below 0, or above config_keys.CALL_TIMEOUT_MAX_S --
+    else None. Every provider asks before it starts anything: an infinite
+    one started the CLI and then raised OverflowError, leaving it running
+    (config_keys.CALL_TIMEOUT_MAX_S says what was measured)."""
+    if config_keys.in_bounds(("llm", "call_timeout_s"), timeout_s):
+        return None
+    return ProviderResponse(text="", error=ERR_ERROR, detail=failure_detail(
+        "bad timeout", f"timeout_s must be a number above 0 and at most "
+                       f"{config_keys.CALL_TIMEOUT_MAX_S:g}, got {timeout_s!r}"))
 
 
 def chain(cfg) -> list[object]:
