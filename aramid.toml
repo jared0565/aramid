@@ -168,6 +168,23 @@ pre_push_match_ci = true
 # here. A drain that runs long defers the other repos' items to the next one
 # ([drain].wall_clock_budget_s): another repo's item deferred this repo's at
 # 18:00Z on 10-10. A faster unit suite is the fix; this is the limit moved.
+#
+# REVISED AGAIN 2026-10-30, operator decision "Raise both limits", from the same
+# record (`extra.baseline_s`, seconds):
+#
+#   10-11..10-18   950  1028  956  909  1114  1266  967  969  1398  1028  1209  1099  1020
+#   10-23          997  1166
+#   10-25          1101  1491
+#   10-26          1411  1505, then "baseline timeout" (over 1600) three times
+#
+# After those three, mutation gave up (a repo-scoped give-up that only a config
+# change releases) and tested nothing for 28 drains, 10-26 to 10-30. Even the
+# runs before it were truncated: about 900 s was left for 9-10 mutants. 2400 is
+# 1.5x the 1600 s the baseline last overran; wall_budget_s rises by the same 800,
+# to 3300, so the mutants keep their 900 s. Cost: up to about 55 min of mutation
+# in a drain (hard_deadline_s is 5400), and other repos' items deferred more
+# often. At the growth seen since 10-10 (746 s that day) this lasts two to three
+# weeks; a faster unit suite is still the fix.
 [mutation]
 # Mutation's baseline is NOT the gate's suite -- see `mutation._full_argv`.
 # `[tests].command` is now CI's whole tree (~1141 s) and the mutation baseline
@@ -177,8 +194,8 @@ pre_push_match_ci = true
 # (~305 s) fits, and `test_this_repos_mutation_baseline_is_not_the_whole_tree`
 # fails if these two ever converge again.
 test_command = ["python", "-m", "pytest", "-q", "tests/unit"]
-wall_budget_s = 2500
-baseline_timeout_s = 1600
+wall_budget_s = 3300
+baseline_timeout_s = 2400
 
 [shadow]
 # Armed HERE, on the repo that ships the check. A module-shadow of this tool at

@@ -1395,6 +1395,32 @@ def test_this_repos_mutation_baseline_is_not_the_whole_tree(monkeypatch, tmp_pat
         f"cannot fit it: {mutation_argv}")
 
 
+# The drain's own record (`aramid ledger consumers --consumer mutation --json`,
+# `extra.baseline_s`): 1,505 s at 2026-10-26 07:42Z, then three runs over the
+# 1,600 s limit, after which mutation gave up and tested nothing for 28 drains
+# (10-26 to 10-30). The least the baseline now takes under drain conditions.
+_LAST_DRAIN_BASELINE_S = 1600
+# What the mutants had left when the limits were last raised (2500 - 1600).
+_MUTANTS_SHARE_S = 900
+
+
+def test_this_repos_mutation_budget_clears_the_last_drain_baseline(monkeypatch, tmp_path):
+    """Operator decision 2026-10-30, "Raise both limits": the baseline limit
+    clears the last drain baseline by half again, and the wall budget rises
+    with it, because its clock starts before the baseline -- raising the
+    baseline alone would turn a loud timeout into a quiet "no mutants tested".
+    Read through `_knobs`, what `consume` runs on."""
+    from pathlib import Path
+
+    monkeypatch.setattr(config_mod, "_user_config_path",
+                        lambda: tmp_path / "no-user.toml")
+    cfg = config_mod.load_config(Path(__file__).resolve().parents[2])
+    knobs = mut_consumer._knobs(cfg.mutation)
+
+    assert knobs["baseline_timeout_s"] >= 1.5 * _LAST_DRAIN_BASELINE_S, knobs
+    assert knobs["wall_budget_s"] - knobs["baseline_timeout_s"] >= _MUTANTS_SHARE_S, knobs
+
+
 # --- re-test OPEN survivors when a test file changes -------------------------
 #
 # A survivor is recorded at head N. At head N+1 the only change is a NEW TEST
