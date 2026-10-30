@@ -55,8 +55,10 @@ def _call(module, prompt: str, model: str, cfg, timeout_s: float, *, effort: str
     started = time.monotonic()
     try:
         resp = module.review(prompt, model, timeout_s, **kwargs)
-    except Exception:
-        resp = providers_base.ProviderResponse(text="", error=providers_base.ERR_ERROR)
+    except Exception as exc:
+        resp = providers_base.ProviderResponse(
+            text="", error=providers_base.ERR_ERROR,
+            detail=providers_base.failure_detail(type(exc).__name__, str(exc)))
     return resp, round(time.monotonic() - started, 3)
 
 
@@ -175,7 +177,7 @@ def consume(item, ctx: DrainContext) -> ConsumerResult:
                        cfg, timeout_s, effort=arm.effort)
         attempts.append({"tier": arm.tier, "provider": arm.provider,
                          "model": arm.model, "error": r.error,
-                         "latency_s": lat})
+                         "detail": r.detail, "latency_s": lat})
         if r.error in ("", providers_base.ERR_MALFORMED):
             resp, reviewer_arm = r, arm
             break
@@ -209,7 +211,14 @@ def consume(item, ctx: DrainContext) -> ConsumerResult:
             sel["malformed"] = True
             note = f"malformed response from {truncated[0]['provider']} (output cap hit)"
         else:
-            note = "all providers unavailable"
+            # Each provider, with the head of its detail (an HTTP status, an
+            # exit code) or else its error code; the line itself stays in
+            # `attempts`. Only the head: health reads this note for "giving
+            # up" and the no-work marks by substring, and what a provider
+            # printed must not be able to say either.
+            note = "all providers unavailable -- " + "; ".join(
+                f"{x['provider']}: {x['detail'].partition(': ')[0] or x['error']}"
+                for x in attempts)
         return ConsumerResult(consumer=NAME, state="degraded", note=note,
                               extra={"selection": sel})
     provider = providers_base.PROVIDERS[reviewer_arm.provider]   # for the refute cross-check
@@ -254,7 +263,7 @@ def consume(item, ctx: DrainContext) -> ConsumerResult:
                     attempts.append({"tier": up_arm.tier,
                                      "provider": up_arm.provider,
                                      "model": up_arm.model, "error": r2.error,
-                                     "latency_s": lat2})
+                                     "detail": r2.detail, "latency_s": lat2})
                     # Cost accrues on SPEND, not on parse success -- an
                     # unparseable response still burned real tokens (same
                     # rule as the primary call above).
@@ -290,7 +299,7 @@ def consume(item, ctx: DrainContext) -> ConsumerResult:
                 attempts.append({"tier": aud_arm.tier,
                                  "provider": aud_arm.provider,
                                  "model": aud_arm.model, "error": ra.error,
-                                 "latency_s": lata})
+                                 "detail": ra.detail, "latency_s": lata})
                 _audits_used += 1
                 if ra.error in ("", providers_base.ERR_MALFORMED):
                     cost += ra.cost_usd
@@ -366,6 +375,7 @@ def consume(item, ctx: DrainContext) -> ConsumerResult:
                                      "refuter_tier": None,
                                      "self_refute": False,
                                      "outcome": "unavailable",
+                                     "detail": "",
                                      "latency_s": 0.0})
                 clipped += 1
                 cand = review.apply_refute(
@@ -392,6 +402,7 @@ def consume(item, ctx: DrainContext) -> ConsumerResult:
                     "self_refute": self_refute,
                     "outcome": ("unavailable" if parsed is None
                                 else ("refuted" if parsed[0] else "survived")),
+                    "detail": rr.detail,
                     "latency_s": rlat})
                 if parsed is None:      # transport failure OR malformed refute:
                     parsed = (True, f"refute unavailable ({rr.error or 'malformed'})")

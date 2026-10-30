@@ -76,8 +76,9 @@ def review(prompt: str, model: str, timeout_s: float, *, effort: str = "") -> Pr
     rc, out, err = got
     combined = f"{out}\n{err}".lower()
     if rc != 0:
+        detail = base.failure_detail(f"exit {rc}", _failure_line(out, err))
         if any(m in combined for m in _QUOTA_MARKERS):
-            return ProviderResponse(text="", error=base.ERR_QUOTA)
+            return ProviderResponse(text="", error=base.ERR_QUOTA, detail=detail)
         refused = [line for line in err.splitlines() if line.startswith(_REFUSED)]
         if refused:
             # Said, because without this line the arm just fails on every
@@ -86,8 +87,9 @@ def review(prompt: str, model: str, timeout_s: float, *, effort: str = "") -> Pr
                   f"command line, so the reviewer was not run. It is never started "
                   f"without the options that keep it from using tools: upgrade Claude "
                   f"Code. It said: {refused[0][:200]}", file=sys.stderr)
-            return ProviderResponse(text="", error=base.ERR_UNAVAILABLE)
-        return ProviderResponse(text="", error=base.ERR_ERROR)
+            return ProviderResponse(text="", error=base.ERR_UNAVAILABLE,
+                                    detail=base.failure_detail(f"exit {rc}", refused[0]))
+        return ProviderResponse(text="", error=base.ERR_ERROR, detail=detail)
     try:
         envelope = json.loads(out)
         text = envelope["result"]
@@ -101,6 +103,23 @@ def review(prompt: str, model: str, timeout_s: float, *, effort: str = "") -> Pr
                             cost_usd=0.0)
     _log(resp, model)
     return resp
+
+
+def _failure_line(out: str, err: str) -> str:
+    """What a failed run said about why: the `result` of an envelope that
+    says `is_error` (with --output-format json a failed call can still print
+    one), else the last line of stderr, else of stdout when stdout is not an
+    envelope. Any other envelope's `result` is a review, and is never read."""
+    try:
+        envelope = json.loads(out)
+    except ValueError:
+        envelope = None
+    if isinstance(envelope, dict):
+        result = envelope.get("result")
+        if envelope.get("is_error") is True and isinstance(result, str) and result.strip():
+            return result
+        return base.last_line(err)
+    return base.last_line(err) or base.last_line(out)
 
 
 def _log(resp: ProviderResponse, model: str) -> None:

@@ -4,10 +4,13 @@ only. Money rules (spec section 6, the ONE fail-closed path):
   is readable AND below [llm].openrouter_monthly_cap_usd.
 - review() re-checks the cap immediately before sending (defense in depth)
   and appends the response's actual cost to the spend log BEFORE returning.
+A failure keeps its HTTP status or exception in `detail` (base.http_detail,
+base.failure_detail); the error code stays ERR_ERROR, as before.
 """
 import json
 import os
 import sys
+import urllib.error
 import urllib.request
 from datetime import datetime, timezone
 
@@ -82,8 +85,11 @@ def review(prompt: str, model: str, timeout_s: float, *, effort: str = "", cfg) 
                                "tokens_in": 0, "tokens_out": 0,
                                "cost_usd": 0.0, "note": "timeout -- cost unknown"})
         return ProviderResponse(text="", error=base.ERR_TIMEOUT)
-    except (OSError, ValueError):
-        return ProviderResponse(text="", error=base.ERR_ERROR)
+    except urllib.error.HTTPError as exc:   # an OSError: caught first to keep its status
+        return ProviderResponse(text="", error=base.ERR_ERROR, detail=base.http_detail(exc))
+    except (OSError, ValueError) as exc:
+        return ProviderResponse(text="", error=base.ERR_ERROR,
+                                detail=base.failure_detail(type(exc).__name__, str(exc)))
 
     # Hardening: any unexpected response shape becomes ERR_MALFORMED instead
     # of raising out of review(). The choices chain uses STRICT access on

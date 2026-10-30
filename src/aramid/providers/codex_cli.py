@@ -98,8 +98,9 @@ def review(prompt: str, model: str, timeout_s: float, *, effort: str = "") -> Pr
     rc, out, err = got
     combined = f"{out}\n{err}".lower()
     if rc != 0:
+        detail = base.failure_detail(f"exit {rc}", _failure_line(out, err))
         if any(m in combined for m in _QUOTA_MARKERS):
-            return ProviderResponse(text="", error=base.ERR_QUOTA)
+            return ProviderResponse(text="", error=base.ERR_QUOTA, detail=detail)
         refused = [line for line in err.splitlines() if line.startswith(_REFUSED)]
         if refused:
             # Said, because without this line the arm just fails on every
@@ -108,8 +109,9 @@ def review(prompt: str, model: str, timeout_s: float, *, effort: str = "") -> Pr
                   f"command line, so the reviewer was not run. It is never started "
                   f"without the options that keep it from using tools. It said: "
                   f"{refused[0][:200]}", file=sys.stderr)
-            return ProviderResponse(text="", error=base.ERR_UNAVAILABLE)
-        return ProviderResponse(text="", error=base.ERR_ERROR)
+            return ProviderResponse(text="", error=base.ERR_UNAVAILABLE,
+                                    detail=base.failure_detail(f"exit {rc}", refused[0]))
+        return ProviderResponse(text="", error=base.ERR_ERROR, detail=detail)
 
     text, tokens_in, tokens_out = None, 0, 0
     tool = None
@@ -159,7 +161,8 @@ def review(prompt: str, model: str, timeout_s: float, *, effort: str = "") -> Pr
         print(f"aramid: providers: codex-cli: the reviewer used a tool ({tool[:80]}), so its "
               f"reply was thrown away. It is started without tools; this `codex` gave it "
               f"one anyway.", file=sys.stderr)
-        return ProviderResponse(text="", error=base.ERR_ERROR)
+        return ProviderResponse(text="", error=base.ERR_ERROR,
+                                detail=base.failure_detail("tool used", tool))
 
     if text is None:
         return ProviderResponse(text="", error=base.ERR_MALFORMED)
@@ -168,6 +171,30 @@ def review(prompt: str, model: str, timeout_s: float, *, effort: str = "") -> Pr
                             cost_usd=0.0)
     _log(resp, model or "default")
     return resp
+
+
+def _failure_line(out: str, err: str) -> str:
+    """What a failed run said about why: the message of the last
+    `turn.failed` or `error` event on stdout, else the last line of stderr,
+    else of stdout. Events first: a retired model exited 1 with nothing on
+    stderr and its events on stdout (2026-10-30)."""
+    said = ""
+    for line in out.splitlines():
+        try:
+            event = json.loads(line)
+        except ValueError:
+            continue
+        if not isinstance(event, dict):
+            continue
+        if event.get("type") == "turn.failed" and isinstance(event.get("error"), dict):
+            message = event["error"].get("message")
+        elif event.get("type") == "error":
+            message = event.get("message")
+        else:
+            continue
+        if isinstance(message, str) and message.strip():
+            said = message
+    return said or base.last_line(err) or base.last_line(out)
 
 
 def _log(resp: ProviderResponse, model: str) -> None:

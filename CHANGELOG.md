@@ -12,13 +12,32 @@ to publish a tag that disagrees with it.
 
 ## [Unreleased]
 
+### Added
+
+- **A failed reviewer call says why.** Each llm-review attempt (served,
+  cascade and audit) and each refute keeps a `detail`: the HTTP status or exit
+  code, then one line of what the provider said, 200 characters at most. The
+  provider keys in the environment, and the secret shapes the review packet
+  masks, are masked before the line is cut. codex's reason is read from its
+  JSON events first, then stderr; claude's from an envelope that says
+  `is_error`, never from one that holds a review. When every arm fails, the
+  degraded note names each provider with its status or code
+  (`all providers unavailable -- ollama-cloud: HTTP 410; codex-cli: exit 1`),
+  which `aramid status` shows; the line itself is in
+  `aramid ledger consumers --consumer llm-review --json`. Only the head goes
+  in the note: `status` reads the note for "giving up" and the no-work marks,
+  and what a provider printed must not be able to say either. Until now each
+  failure was a bare `error`, which is how two retired models read as a
+  four-day outage. openrouter keeps an HTTP error's status as well; its error
+  code is unchanged.
+
 ### Fixed
 
 - **The shipped reviewer models answer again.** Two of the three default
   `[[llm.ladder]]` models had retired: Ollama answers `deepseek-v4-flash` with
   HTTP 410 ("retired on September 25, 2026"), and `gpt-5.5` is absent from
-  codex 0.166.0's model catalog on a ChatGPT login (exit 1). Each failure is
-  recorded as a bare `error`, so when the claude arm failed as well (its
+  codex 0.166.0's model catalog on a ChatGPT login (exit 1). Each failure was
+  recorded as a bare `error` (see Added), so when the claude arm failed as well (its
   cause unknown; it answers again) every one of aramid's own drains from
   2026-10-26 read "all providers unavailable". The defaults are now
   `minimax-m3.1-flash` (ollama-cloud), `gpt-6.1-sol` (codex-cli) and

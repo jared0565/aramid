@@ -152,14 +152,14 @@ existing note-string tests keep passing).
   "target_tier": "cheap",
   "served": {"tier": "mid", "provider": "codex-cli", "model": "gpt-5.5", "effort": "medium"},
   "attempts": [
-    {"tier": "cheap", "provider": "ollama-cloud", "model": "deepseek-v4-flash", "error": "unavailable", "latency_s": 0.02},
-    {"tier": "mid", "provider": "codex-cli", "model": "gpt-5.5", "error": "", "latency_s": 41.3}
+    {"tier": "cheap", "provider": "ollama-cloud", "model": "deepseek-v4-flash", "error": "error", "detail": "HTTP 410: deepseek-v4-flash:0731 was retired on September 25, 2026.", "latency_s": 1.2},
+    {"tier": "mid", "provider": "codex-cli", "model": "gpt-5.5", "error": "", "detail": "", "latency_s": 41.3}
   ],
   "uplift": {"mode": "shadow", "pick": "mid", "applied": false, "sampled_q": 0.21},
   "cascade": {"triggered": true, "trigger": "critical", "applied": false},
   "audit": {"performed": true, "tier": "frontier", "new_findings": 1, "missed_criticals": 1},
   "refutes": [
-    {"refuter_provider": "claude-cli", "refuter_tier": "frontier", "outcome": "survived", "latency_s": 55.0}
+    {"refuter_provider": "claude-cli", "refuter_tier": "frontier", "outcome": "survived", "detail": "", "latency_s": 55.0}
   ],
   "tokens": {"in": 8123, "out": 942}
 }
@@ -169,6 +169,10 @@ Rules:
 
 - `attempts` records **every** arm tried in the fallthrough loop, including
   the winner (`error: ""`) — failed arms finally leave a trace.
+- `detail` (added 2026-10-30, operator decision) is why an attempt or a
+  refute failed: an HTTP status or exit code and one masked line of what the
+  provider said (`providers.base.failure_detail`), `""` when it answered. A
+  bare `error` let two retired models read as a four-day outage.
 - `uplift.mode` is `"off" | "shadow" | "armed" | "error"`. In shadow,
   `pick` records what the policy would have served; `applied` is false.
 - `cascade.applied` / `audit.performed` are false when skipped for budget or

@@ -6,7 +6,9 @@ model-source policy this is a dev-time provider; OpenRouter is in-app only.
 HTTPError (a subclass of OSError) is caught BEFORE the generic OSError branch
 so a 429 maps to ERR_QUOTA and 401/403 to ERR_UNAVAILABLE, matching the CLI
 providers' quota semantics; every other failure is ERR_ERROR, and any
-unexpected body shape is ERR_MALFORMED (never a silent empty review)."""
+unexpected body shape is ERR_MALFORMED (never a silent empty review). A
+failure keeps its status and what the body said in `detail`
+(base.http_detail): a retired model answers 410 with the date it went."""
 import json
 import os
 import sys
@@ -60,15 +62,17 @@ def review(prompt: str, model: str, timeout_s: float, *, effort: str = "") -> Pr
         with urllib.request.urlopen(req, timeout=timeout_s) as fh:  # noqa: S310
             data = json.loads(fh.read().decode("utf-8"))
     except urllib.error.HTTPError as exc:
+        detail = base.http_detail(exc)
         if exc.code == 429:
-            return ProviderResponse(text="", error=base.ERR_QUOTA)
+            return ProviderResponse(text="", error=base.ERR_QUOTA, detail=detail)
         if exc.code in (401, 403):
-            return ProviderResponse(text="", error=base.ERR_UNAVAILABLE)
-        return ProviderResponse(text="", error=base.ERR_ERROR)
+            return ProviderResponse(text="", error=base.ERR_UNAVAILABLE, detail=detail)
+        return ProviderResponse(text="", error=base.ERR_ERROR, detail=detail)
     except TimeoutError:
         return ProviderResponse(text="", error=base.ERR_TIMEOUT)
-    except (OSError, ValueError):
-        return ProviderResponse(text="", error=base.ERR_ERROR)
+    except (OSError, ValueError) as exc:
+        return ProviderResponse(text="", error=base.ERR_ERROR,
+                                detail=base.failure_detail(type(exc).__name__, str(exc)))
 
     try:
         if not isinstance(data, dict):

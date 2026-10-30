@@ -9,7 +9,14 @@ resolve the exe's path via `toolpath.which`), prompt on STDIN (packets
 exceed Windows argv limits), utf-8 with errors="replace" (the Phase 2a
 cp1252 lesson), and a Windows process-TREE kill on timeout -- node-based
 CLIs spawn children that subprocess.run's own kill would orphan.
+
+A failed call says why in `detail` (`failure_detail`, operator decision
+2026-10-30): an HTTP status or exit code and one masked line of what the
+provider said. Until then the reason was dropped, and two retired models
+(an HTTP 410 from ollama, an exit 1 from codex) read as a four-day outage.
 """
+import json
+import os
 import subprocess
 import sys
 from dataclasses import dataclass
@@ -37,9 +44,61 @@ class ProviderResponse:
     tokens_out: int = 0
     cost_usd: float = 0.0
     error: str = ""    # "" | unavailable | quota | timeout | malformed | error | truncated
+    detail: str = ""   # why it failed, one masked line (failure_detail); "" otherwise
 
 
 PROVIDERS: dict[str, object] = {}  # populated by provider modules at import
+
+# The longest `detail` an attempt keeps.
+DETAIL_MAX = 200
+# The keys aramid itself sends. A value shorter than _KEY_MIN is not a key,
+# and masking it would mangle every place its letters occur in the line.
+_KEY_ENV = ("OLLAMA_API_KEY", "OPENROUTER_API_KEY")
+_KEY_MIN = 8
+
+
+def last_line(text: str) -> str:
+    """The last line of `text` with anything but whitespace on it."""
+    lines = [line for line in (text or "").splitlines() if line.strip()]
+    return lines[-1] if lines else ""
+
+
+def failure_detail(head: str, text: str = "") -> str:
+    """`head` (an HTTP status, an exit code, an exception's class), then
+    `text` on one line, cut to DETAIL_MAX. The provider keys in the
+    environment and the secret shapes the review packet masks
+    (`review.redact_packet`) are masked first, so no part of one survives
+    the cut. A CLI's error line can quote the prompt, which is the repo's
+    code; the attempt it lands in stays in the local ledger."""
+    from aramid import redact, review   # here, not at the top: review imports the ledger
+    keys = [k for k in (os.environ.get(name, "") for name in _KEY_ENV) if len(k) >= _KEY_MIN]
+    text = " ".join(review.redact_packet(redact.scrub(text or "", keys)).split())
+    return (f"{head}: {text}" if text else head)[:DETAIL_MAX]
+
+
+def http_detail(exc) -> str:
+    """`failure_detail` for an urllib HTTPError: the status, and what the
+    body says -- its JSON `error` (a string, or an object's `message`), else
+    the body itself, else the reason phrase. Ollama's "retired on September
+    25, 2026" came as `{"error": "..."}` with HTTP 410."""
+    try:
+        body = exc.read(4096).decode("utf-8", "replace")
+    except Exception:   # a body that cannot be read is a body not kept
+        body = ""
+    said = body
+    try:
+        data = json.loads(body)
+    except ValueError:
+        data = None
+    if isinstance(data, dict):
+        error = data.get("error")
+        if isinstance(error, dict):
+            error = error.get("message")
+        if isinstance(error, str) and error.strip():
+            said = error
+    if not said.strip():
+        said = str(exc.reason or "")
+    return failure_detail(f"HTTP {exc.code}", said)
 
 
 def chain(cfg) -> list[object]:
