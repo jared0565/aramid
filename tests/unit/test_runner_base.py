@@ -208,14 +208,16 @@ def test_on_stdout_line_sees_every_line_in_order_and_raw_is_still_complete(tmp_p
 def test_on_stdout_line_arrives_before_the_child_exits(tmp_path):
     # Streaming means the tap fires while the child is still alive -- a
     # callback that only ran at exit would satisfy the ordering test above.
-    code = ("import sys, time\nprint('early'); sys.stdout.flush()\n"
-            "time.sleep(1.5)\nprint('late')\n")
-    stamps = []
-    start = time.monotonic()
+    # The child marks its own way out, so no clock is read here: a stopwatch
+    # started before the launch counted interpreter start-up, and failed under
+    # load with the stream intact ('early' at 1.28 s against 1.0, 2026-10-31).
+    exiting = tmp_path / "exiting"
+    code = ("import pathlib, sys, time\nprint('early'); sys.stdout.flush()\n"
+            f"time.sleep(1.5)\npathlib.Path({str(exiting)!r}).touch()\nprint('late')\n")
+    seen = []
     run_subprocess([sys.executable, "-c", code], tmp_path, 10,
-                   on_stdout_line=lambda line: stamps.append((line, time.monotonic() - start)))
-    assert [s[0] for s in stamps] == ["early", "late"]
-    assert stamps[0][1] < 1.0, stamps
+                   on_stdout_line=lambda line: seen.append((line, exiting.exists())))
+    assert seen == [("early", False), ("late", True)], seen
 
 
 def test_on_stdout_line_still_captures_a_large_stderr_without_deadlock(tmp_path):
