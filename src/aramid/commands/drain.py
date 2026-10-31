@@ -740,7 +740,10 @@ def cmd_drain(targets: list, *, dry_run: bool = False, max_items: int | None = N
                 print(f"aramid drain: skipping {repo_path}: {exc}", file=sys.stderr)
                 degraded = True
         if dry_run:
-            return 0
+            # The same exit the drain gives for a repo it could not probe:
+            # a preview that skipped one and exited 0 said nothing was wrong
+            # while every scheduled drain exited 2 (2026-10-30).
+            return 2 if degraded else 0
 
         # Most-DEFERRED first, then score, stable (so registry order still
         # breaks a full tie). One deferral guarantees an item is opened by

@@ -58,6 +58,21 @@ to publish a tag that disagrees with it.
   `call_timeout_s` outside that range is named on stderr and by `doctor`, as
   any other config problem is; the value is still loaded as written, so it
   is the providers that refuse it.
+- **A registered repo that has left the disk is named, rows or none.** Two
+  scratch repos registered on 2026-10-21 each wrote one fleet row and were
+  then deleted with their temp directory. Every scheduled drain from then on
+  exited 2, skipping both, and said so only on the stderr the scheduled task
+  discards. `aramid fleet` listed both as all `ok`, the verdict called them
+  `stale (9.3d)`, and while such a repo's rows are fresh it counted as green
+  and could hold a streak. The `missing path: <name> (aramid fleet
+  deregister <name>)` reason, which was given only to a vanished repo that had
+  never recorded a row, now covers one with rows as well. It also appears in
+  the readiness line `aramid status` and the hooks print (FN-1's own case
+  read `no rows:` there), and `aramid fleet` shows `(missing path)` in place of
+  the old cells. Such a repo is never counted green and holds no streak, so
+  the verdict stays insufficient-data until it is deregistered. `aramid
+  drain --dry-run` now exits 2 when it cannot probe a repo, as the drain
+  does; it returned 0 after skipping both.
 - **A finding is cleared as gone only when what the push certifies has lost
   it and no other branch still carries it (FN-58, channel round 325).** Four
   resolvers judged that a file, a quoted line or a mutated line had gone by

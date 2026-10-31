@@ -330,8 +330,11 @@ def judge(rows: list[dict], registered: dict[str, str], policy: Policy, now: str
     by rows, never by silence. `spurious` names the registry entries that
     are not members (`spurious_entries`): reported for removal, counted
     for nothing. `vanished` holds the keys of members whose path is gone
-    (`vanished_repos`): one with no rows is reported as `missing path:`
-    with its remedy instead of under `no rows:`; the verdict is the same."""
+    (`vanished_repos`): each is reported as `missing path:` with its remedy,
+    rows or none, and marked `missing_path`; it is never green and holds no
+    streak, since no row can come from it again, and the verdict is
+    insufficient-data until it is deregistered. A vanished repo with rows
+    used to read as green while they were fresh and `stale` after."""
     now_dt = _parse(now) or datetime.now(timezone.utc)
     cutoff = now_dt - timedelta(days=ROW_WINDOW_DAYS)
     # Amendment A1: a row is fresh at time t while t - at <= window; exactly
@@ -397,15 +400,23 @@ def judge(rows: list[dict], registered: dict[str, str], policy: Policy, now: str
         row_at = _parse(row["at"])
         age = round(max(0.0, (now_dt - row_at).total_seconds() / 86400.0), 2)
         repos_out[key] = {"name": row.get("name") or name, "rows": counts[key],
-                          "latest_at": row["at"], "green": health_mod.row_green(crit),
+                          "latest_at": row["at"],
+                          "green": health_mod.row_green(crit) and key not in vanished,
                           "red_criteria": _red_criteria(crit), "criteria": crit,
                           "stale": not _fresh(row, now_dt), "age_days": age}
+    for key, v in repos_out.items():
+        # Only on a vanished member, so a verdict without one reads as before.
+        if key in vanished:
+            v["missing_path"] = True
     missing = sorted((v["name"] for v in repos_out.values() if v["rows"] == 0), key=str.casefold)
+    gone = sorted((v["name"] for v in repos_out.values() if v.get("missing_path")),
+                  key=str.casefold)
     stale = sorted((v["name"] for v in repos_out.values() if v["stale"]), key=str.casefold)
     all_green_now = (bool(registered) and not missing and not stale
                      and all(v["green"] for v in repos_out.values()))
-    if stale:
-        # A1 step 3: an idle fleet holds no streak.
+    if stale or gone:
+        # A1 step 3: an idle fleet holds no streak, and a repo that has left
+        # the disk is idle for good.
         streak_start, versions, disarm = None, set(), None
     # Spec section 4 criterion 6: ANY `*_armed` flag true on some repo's latest
     # row -- a semgrep or pack arm counts, not only a drain consumer's
@@ -433,12 +444,10 @@ def judge(rows: list[dict], registered: dict[str, str], policy: Policy, now: str
     if not registered:
         verdict = INSUFFICIENT
         reasons.append("no repos registered")
-    elif missing:
+    elif missing or gone:
         verdict = INSUFFICIENT
-        gone = sorted((v["name"] for k, v in repos_out.items() if v["rows"] == 0 and k in vanished),
-                      key=str.casefold)
-        waiting = sorted((v["name"] for k, v in repos_out.items()
-                          if v["rows"] == 0 and k not in vanished), key=str.casefold)
+        waiting = sorted((v["name"] for v in repos_out.values()
+                          if v["rows"] == 0 and not v.get("missing_path")), key=str.casefold)
         if waiting:
             reasons.append("no rows: " + ", ".join(waiting))
         reasons.extend(f"missing path: {n} (`aramid fleet deregister {n}`)" for n in gone)
@@ -729,13 +738,16 @@ def readiness_line(verdict: dict | None, *, now: str | None = None) -> str:
            for v in repos.values() if v.get("red_criteria")]
     if red:
         tail.append("red: " + ", ".join(red))
-    missing = sorted((v["name"] for v in repos.values() if not v.get("rows")), key=str.casefold)
+    missing = sorted((v["name"] for v in repos.values()
+                      if not v.get("rows") and not v.get("missing_path")), key=str.casefold)
     if missing:
         tail.append("no rows: " + ", ".join(missing))
+    gone = sorted((v["name"] for v in repos.values() if v.get("missing_path")), key=str.casefold)
+    tail.extend(f"missing path: {n} (`aramid fleet deregister {n}`)" for n in gone)
     # Amendment A1: verdicts written before it carry no `stale` key and
     # render exactly as before.
     stale = [f"{v['name']} ({float(v.get('age_days') or 0.0):.1f}d)"
-             for v in repos.values() if v.get("stale")]
+             for v in repos.values() if v.get("stale") and not v.get("missing_path")]
     if stale:
         window = verdict.get("policy", {}).get("max_row_age_days")
         tail.append("stale: " + ", ".join(stale) + (f" -- window {window}d" if window else ""))
@@ -788,7 +800,10 @@ def render_report(verdict: dict | None, policy: Policy, *, now: str | None = Non
     cells_header = "  ".join(f"{label:<10}" for _k, label in _COLUMNS)
     out.append(f"  {'repo':<{width}}  {'rows':>4}  {'latest':<25}  {cells_header}".rstrip())
     for v in repos:
-        if not v.get("rows"):
+        if v.get("missing_path"):
+            # Its rows say what it was, not what it is: no row can come again.
+            latest, cells = "(missing path)", ["-"] * len(_COLUMNS)
+        elif not v.get("rows"):
             latest, cells = "(no rows)", ["-"] * len(_COLUMNS)
         else:
             latest = str(v.get("latest_at"))

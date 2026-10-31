@@ -507,7 +507,7 @@ Score one commit (or `A..B` range) and enqueue it if risky.
 ### `aramid drain [--all | --repo PATH] [--dry-run] [--max-items N]`
 Sweep registered repos, catch-up-triage, pop the highest-scored queued item(s), run consumers, record results.
 - Scope group (mutually exclusive): `--all`, `--repo PATH`; default is the current directory.
-- `--dry-run` — read-only preview, no lock, no mutation.
+- `--dry-run` — read-only preview, no lock, no mutation. Exits `2` when a repo could not be probed (a missing directory, an unparseable `aramid.toml`), the code the drain gives for the same skip; until 2026-10-30 it returned `0` whatever it skipped.
 - `--max-items N` (int, default `None`) — caps items drained this run.
 
 ### `aramid ledger list|show <id>|filter [--tool] [--rule] [--status] [--severity] [--json]|consumers [--consumer NAME] [--last N] [--json]|mark-rotated <id> --reason REASON|mark-not-a-secret <id> --reason REASON|mark-unreachable <id> --reason REASON|resolve <id>... --out-of-scope --reason REASON|resolve <id> --fixed COMMIT --test COMMAND [--red-proof] --reason REASON`
@@ -624,7 +624,7 @@ The agent-harness hook endpoint (Claude Code) that `aramid init` registers in `.
 | `aramid rebaseline` (no `--yes`) | `3` always (reports what would be discarded) |
 | `aramid doctor` | Checked in this order (`commands/doctor.py` `cmd_doctor`): `2` if a BLOCK-tier tool (gitleaks, semgrep) is missing or a detected or configured test suite's tool cannot be resolved; else `3` if `aramid.toml` cannot be parsed (the test-toolchain probe is then skipped, so a missing test tool cannot be seen); else `2` if the repo is configured but not enforced, a relocated shim behind another tool's hook is stale or missing, aramid is installed editable while any repo is registered, or `.claude/settings.json` or `.mcp.json` carries a tampered aramid entry; else `0`, including when the only problems are WARN rows (a missing WARN-tier tool such as ruff or pip-audit, a config-key warning, a test gate with nothing to run). |
 | `aramid schedule` | `3` on unknown action, a non-zero `schtasks` result, a failed `crontab` write, or `crontab` missing from `PATH`; `status` returns `3` when the job is not installed |
-| `aramid drain` | `0` ok; `2` degraded (some repo/consumer failed, rest completed); `3` if the lock is already held (real drain, not dry-run) or the registry is unusable (unreadable, or written by a newer aramid -- before 0.19.0 that case read as an empty registry and exited `0`); `0` also when no repos are registered/given |
+| `aramid drain` | `0` ok; `2` degraded (some repo/consumer failed, rest completed; `--dry-run` too, when it could not probe a repo); `3` if the lock is already held (real drain, not dry-run) or the registry is unusable (unreadable, or written by a newer aramid -- before 0.19.0 that case read as an empty registry and exited `0`); `0` also when no repos are registered/given |
 | `aramid triage` | `0` on success (queued or not); `3` on engine error |
 | `aramid ledger show <id>` | `3` if id unknown |
 | `aramid ledger mark-rotated` | `3` if id unknown, or finding's status is neither `historical` nor `not_a_secret` |

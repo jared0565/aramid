@@ -291,6 +291,25 @@ def test_drain_isolates_broken_repo_exit_2(tmp_path, seam, fake_consumer):
     assert len(fake_consumer.calls) == 1  # good repo still drained
 
 
+def test_a_dry_run_that_cannot_probe_a_repo_exits_2_like_the_drain(
+        tmp_path, seam, fake_consumer, capsys):
+    """The preview returned 0 whatever it skipped, so on 2026-10-30 it said
+    nothing was wrong while every scheduled drain exited 2 over two vanished
+    repos. It still previews the rest and still writes nothing."""
+    good = _risky_repo(tmp_path, "good")
+    registry.register(tmp_path / "vanished", "t0")  # path does not exist
+    registry.register(good, "t0")
+
+    rc = cmd_drain([], dry_run=True)
+
+    out, err = capsys.readouterr()
+    assert rc == 2
+    assert "aramid drain: skipping " in err and "vanished" in err, err
+    assert any(str(good) in ln and "(dry-run)" in ln for ln in out.splitlines()), out
+    assert fake_consumer.calls == []
+    assert not (good / ".aramid" / "ledger.db").exists()
+
+
 def test_drain_isolates_repo_with_corrupt_config(tmp_path, seam, fake_consumer):
     broken = _risky_repo(tmp_path, "broken")
     (broken / "aramid.toml").write_text("this is not = valid toml [", encoding="utf-8")

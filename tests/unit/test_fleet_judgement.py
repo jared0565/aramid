@@ -4,6 +4,8 @@ compact old rows once a day, and never raise."""
 import json
 from datetime import datetime, timedelta, timezone
 
+import pytest
+
 from aramid import fleet, health, leftovers, notices
 
 NOW_DT = datetime(2026, 9, 20, 12, 0, 0, tzinfo=timezone.utc)
@@ -35,6 +37,18 @@ def _row(repo, days_ago, version="0.9.0", *, red=(), armed=None, run_id=None,
                          "armed": dict(armed or {}), "open": 0, "blocking": 0}}
 ENTRIES = [{"path": "F:/projects/a", "registered_at": "t"},
            {"path": "F:/projects/b", "registered_at": "t"}]
+
+
+@pytest.fixture(autouse=True)
+def _entries_on_disk(tmp_path, monkeypatch):
+    """The two members exist. A member whose path has gone is `missing path`
+    and never ready, rows or none (2026-10-30), which is not what these
+    tests are about; the paths above were never on disk."""
+    on_disk = []
+    for name in ("a", "b"):
+        (tmp_path / "projects" / name).mkdir(parents=True)
+        on_disk.append({"path": str(tmp_path / "projects" / name), "registered_at": "t"})
+    monkeypatch.setitem(globals(), "ENTRIES", on_disk)
 
 
 def _seed(rows):
