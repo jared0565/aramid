@@ -1421,6 +1421,36 @@ def test_this_repos_mutation_budget_clears_the_last_drain_baseline(monkeypatch, 
     assert knobs["wall_budget_s"] - knobs["baseline_timeout_s"] >= _MUTANTS_SHARE_S, knobs
 
 
+# The rest of this repo's item after mutation: llm-review's three ladder arms
+# at the 240 s call timeout, and fuzz (85 s at most in the 10-30 drains).
+_REST_OF_ITEM_S = 900
+
+
+def test_this_repos_drain_deadline_outlasts_a_mutation_item_with_one_confirm(monkeypatch, tmp_path):
+    """Operator decision 2026-10-31, "Deadline now, profile next". The wall
+    budget is checked between mutants, so a full-suite confirm started inside
+    it runs to its own limit, `baseline_timeout_s`: mutation took 4,422 s at
+    the 10-30 19:00Z drain against a 3,300 s budget, and an item can take
+    their sum. Under the 5,400 s default deadline that is a drain the
+    watchdog stops mid-item. Read through what the drain arms its watchdog
+    from, under the installed task's ceiling."""
+    from pathlib import Path
+
+    from aramid import drain_limits
+
+    monkeypatch.setattr(config_mod, "_user_config_path",
+                        lambda: tmp_path / "no-user.toml")
+    cfg = config_mod.load_config(Path(__file__).resolve().parents[2])
+    knobs = mut_consumer._knobs(cfg.mutation)
+    interval = cfg.drain.get("interval_hours", 4)
+
+    deadline = drain_limits.drain_deadline_s(
+        [cfg], task_limit_minutes=drain_limits.task_limit_minutes(interval))
+
+    assert deadline >= knobs["wall_budget_s"] + knobs["baseline_timeout_s"] + _REST_OF_ITEM_S, (
+        deadline, knobs)
+
+
 # --- re-test OPEN survivors when a test file changes -------------------------
 #
 # A survivor is recorded at head N. At head N+1 the only change is a NEW TEST

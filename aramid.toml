@@ -181,10 +181,17 @@ pre_push_match_ci = true
 # change releases) and tested nothing for 28 drains, 10-26 to 10-30. Even the
 # runs before it were truncated: about 900 s was left for 9-10 mutants. 2400 is
 # 1.5x the 1600 s the baseline last overran; wall_budget_s rises by the same 800,
-# to 3300, so the mutants keep their 900 s. Cost: up to about 55 min of mutation
-# in a drain (hard_deadline_s is 5400), and other repos' items deferred more
-# often. At the growth seen since 10-10 (746 s that day) this lasts two to three
-# weeks; a faster unit suite is still the fix.
+# to 3300, so the mutants keep their 900 s. Cost: this paragraph said "up to
+# about 55 min of mutation in a drain (hard_deadline_s is 5400)", and that was
+# wrong (corrected 2026-10-31). The wall budget is checked between mutants, so
+# a full-suite confirm started inside it runs to its own 2400 s limit, as the
+# 10-10 paragraph above says: mutation took 3,637 s at the 10-30 15:00Z drain
+# and 4,422 s at 19:00Z, one mutant tested each, and an item can take
+# wall_budget_s + baseline_timeout_s, past the 90 min deadline (see [drain]
+# below). Other repos' items are deferred more often. "Two to three weeks" at
+# the growth since 10-10 (746 s that day) is not safe either: the baseline read
+# 1,829 s and then 2,296 s in its first two runs under these limits. A faster
+# unit suite is still the fix.
 [mutation]
 # Mutation's baseline is NOT the gate's suite -- see `mutation._full_argv`.
 # `[tests].command` is now CI's whole tree (~1141 s) and the mutation baseline
@@ -196,6 +203,18 @@ pre_push_match_ci = true
 test_command = ["python", "-m", "pytest", "-q", "tests/unit"]
 wall_budget_s = 3300
 baseline_timeout_s = 2400
+
+[drain]
+# 2026-10-31, operator decision "Deadline now, profile next". The watchdog
+# stops a drain at hard_deadline_s (default 5400 s, 90 min), and one mutation
+# item here can outlast that: wall_budget_s + baseline_timeout_s is 5,700 s
+# before the item's other consumers. 7200 covers it plus 900 s for them
+# (`test_this_repos_drain_deadline_outlasts_a_mutation_item_with_one_confirm`)
+# and sits under the 13,500 s the 4-hour interval allows. The drain's
+# deadline is the widest any candidate repo asks for, so this lengthens a
+# drain that carries this repo's item; a long drain still defers the other
+# repos' items to the next one. Profiling tests/unit is the follow-up.
+hard_deadline_s = 7200
 
 [shadow]
 # Armed HERE, on the repo that ships the check. A module-shadow of this tool at
