@@ -1451,6 +1451,36 @@ def test_this_repos_drain_deadline_outlasts_a_mutation_item_with_one_confirm(mon
         deadline, knobs)
 
 
+def test_this_repos_whole_suite_runs_use_xdist_workers_the_dev_extra_declares(
+        monkeypatch, tmp_path):
+    """Operator decision 2026-10-31, "Fix that test, adopt -n 6". The serial
+    tests/unit baseline took 1,593 s at the 03:00Z drain and ran past its
+    2,400 s limit at 07:00Z while other sessions loaded the machine; `-n 6`
+    ran the suite in 747 s on a quiet one. The whole-suite runs (the
+    baseline, every stage-2 confirm) carry the workers; a targeted stage-1
+    run, a few seconds of one file, never does. `-n` without the plugin is
+    a usage error that reads as "baseline failing", so the dev extra names
+    it."""
+    import re
+    import tomllib
+    from pathlib import Path
+
+    monkeypatch.setattr(config_mod, "_user_config_path",
+                        lambda: tmp_path / "no-user.toml")
+    root = Path(__file__).resolve().parents[2]
+    cfg = config_mod.load_config(root)
+
+    full = mut_consumer._full_argv(cfg, root)
+    assert full[-3:] == ["-n", "6", "tests/unit"], full
+    for rel in ("src/aramid/commands/drain.py",      # direct hits: tests/unit/test_drain_*.py
+                "src/aramid/no_such_module_xyz.py"):  # no test file: the scoped -k fallback
+        stage1 = mut_consumer._stage1_argv(root, rel, cfg, root)
+        assert "-n" not in stage1 and stage1 != full, (rel, stage1)
+    dev = tomllib.loads((root / "pyproject.toml").read_text(encoding="utf-8"))[
+        "project"]["optional-dependencies"]["dev"]
+    assert any(re.match(r"pytest-xdist\b", d) for d in dev), dev
+
+
 # --- re-test OPEN survivors when a test file changes -------------------------
 #
 # A survivor is recorded at head N. At head N+1 the only change is a NEW TEST

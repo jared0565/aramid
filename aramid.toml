@@ -200,7 +200,18 @@ pre_push_match_ci = true
 # "baseline failing" when the truth was that it never finished. tests/unit
 # (~305 s) fits, and `test_this_repos_mutation_baseline_is_not_the_whole_tree`
 # fails if these two ever converge again.
-test_command = ["python", "-m", "pytest", "-q", "tests/unit"]
+#
+# `-n 6` (pytest-xdist, the dev extra), operator decision 2026-10-31 "Fix that
+# test, adopt -n 6": tests/unit measured 1,692 s serial and 747 s on six
+# workers on a quiet machine, 1,588 s on six while other sessions' suites ran.
+# The serial baseline had run past its 2,400 s limit at the 07:00Z drain that
+# day. Only the whole-suite runs carry the workers (the baseline, every stage-2
+# confirm); `_stage1_argv` keeps path arguments alone, so a targeted run of one
+# file never pays for starting them
+# (`test_this_repos_whole_suite_runs_use_xdist_workers_the_dev_extra_declares`).
+# The drain's interpreter must have the plugin: without it `-n` is a usage
+# error, which reads as "baseline failing".
+test_command = ["python", "-m", "pytest", "-q", "-n", "6", "tests/unit"]
 wall_budget_s = 3300
 baseline_timeout_s = 2400
 

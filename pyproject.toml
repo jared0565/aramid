@@ -91,7 +91,11 @@ Issues = "https://github.com/jared0565/aramid/issues"
 # `pytest-cov` feeds scripts/latent_mutants.py: the CI leg that counts the
 # generator mutants the unit suite never executes runs the suite under
 # coverage first, and a dev environment must be able to reproduce that count.
-dev = ["pytest>=8", "pyyaml>=6", "packaging>=23", "build>=1", "pytest-cov>=5"]
+# `pytest-xdist` runs this repo's own mutation suite on workers
+# (`[mutation].test_command` in aramid.toml has `-n 6`); 3.8.0 is the version
+# measured on it (2026-10-31).
+dev = ["pytest>=8", "pyyaml>=6", "packaging>=23", "build>=1", "pytest-cov>=5",
+       "pytest-xdist>=3.8"]
 
 [project.scripts]
 aramid = "aramid.cli:main"
