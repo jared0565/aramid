@@ -201,6 +201,23 @@ def test_dry_run_on_a_repo_with_no_ledger_says_queued_none(tmp_path, seam, capsy
     assert err == ""
 
 
+def test_a_dry_run_that_cannot_probe_a_repo_exits_2_and_previews_the_rest(
+        tmp_path, seam, capsys):
+    """The drain's own exit for a repo it could not probe. Only the
+    integration arm held the 2, so `2 -> 3` on the dry-run's return
+    survived the unit suite at the 2026-10-31 03:00Z drain."""
+    registry.register(tmp_path / "vanished", "t0")  # path does not exist
+    r = _repo(tmp_path)
+
+    rc = cmd_drain([], dry_run=True, clock=CLOCK)
+
+    out, err = capsys.readouterr()
+    assert rc == 2
+    assert err.startswith("aramid drain: skipping ") and "vanished" in err, err
+    assert out == f"aramid drain (dry-run): {r.resolve()} queued=none\n", out
+    assert seam.calls == []
+
+
 # ------------------------------------------------------- what gets popped --
 
 def test_nothing_queued_drains_nothing_and_says_so(tmp_path, seam, capsys):
