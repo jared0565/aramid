@@ -14,8 +14,8 @@ the question (spec section 7).
 from pathlib import Path
 
 from aramid import config as config_mod
+from aramid import pipeline
 from aramid.detectors import detect_package_manager, detect_stacks, detect_tests
-from aramid.pipeline import GATE_RUNNER_KEYS, _is_applicable
 from aramid.runners import clippy, deps, eslint, inline, ruff, typecheck
 from aramid.runners import tests as tests_runner
 from aramid.runners.base import RunContext
@@ -104,7 +104,10 @@ def selected_tool_names(root: Path, cfg) -> set[str]:
     retire, which is the safe direction.
     """
     ctx = _build_ctx(root, cfg)
-    all_keys = {key for keys in GATE_RUNNER_KEYS.values() for key in keys}
+    # Read through the module at call time, never bound by name at import: a
+    # table swapped while this module was first imported would otherwise stay
+    # here for the whole process (test_toolset.py's live-gate-table test).
+    all_keys = {key for keys in pipeline.GATE_RUNNER_KEYS.values() for key in keys}
     return _expand_keys(all_keys, root, ctx)
 
 
@@ -133,7 +136,7 @@ def expected_tool_names(root: Path, cfg, gate) -> set[str]:
     forever, which is a worse failure than the blind spot it replaces.
     """
     ctx = _build_ctx(root, cfg)
-    keys = set(GATE_RUNNER_KEYS.get(gate, ()))
+    keys = set(pipeline.GATE_RUNNER_KEYS.get(gate, ()))
     # `_expand_keys` adds the literal key "tests" beside the suite's label
     # (T-8 GC5: `selected_tool_names` must keep a still-configured test
     # setup selected so mark-unreachable refuses). That key is never a
@@ -154,7 +157,7 @@ def _expand_keys(keys, root: Path, ctx) -> set[str]:
     The expansion is NOT identity for typecheck, deps or tests (spec section
     3's table), which is precisely the part that must not be duplicated.
     """
-    applicable = {key for key in keys if _is_applicable(key, ctx)}
+    applicable = {key for key in keys if pipeline._is_applicable(key, ctx)}
 
     names: set[str] = set()
     for key in applicable:

@@ -242,6 +242,35 @@ def test_pip_audit_not_expected_reads_null(tmp_path):
     lg.close()
 
 
+def test_dep_audit_reads_the_live_gate_table_not_the_one_health_was_imported_under(
+        tmp_path, monkeypatch):
+    """health bound `GATE_RUNNER_KEYS` by name at import, the same way toolset
+    did (see test_toolset.py's test of the same name for the measured order
+    leak). Imported while a test had swapped the table out, it kept the swap:
+    with `deps` gone from pre-push, a missed dependency audit read as "not
+    expected" (None) instead of red (False), a false green on the criterion."""
+    import importlib
+    import sys
+
+    import aramid
+    from aramid import pipeline
+
+    monkeypatch.setattr(aramid, "health", sys.modules["aramid.health"])
+    monkeypatch.delitem(sys.modules, "aramid.health")
+    with monkeypatch.context() as swapped:
+        swapped.setattr(pipeline, "GATE_RUNNER_KEYS",
+                        {gate: [] for gate in pipeline.GATE_RUNNER_KEYS})
+        fresh = importlib.import_module("aramid.health")
+
+    lg = Ledger(tmp_path / "l.db")
+    missed = _result(tools_ran=("gitleaks", "semgrep"), stacks=("python",))
+    got = fresh.criteria(fresh.snapshot(None, lg, missed, gate=Gate.PRE_PUSH))
+    lg.close()
+    assert got["dep_audit_ran"] is False, (
+        "the swap is over and deps is pre-push tier again; a missed audit must "
+        "read red, not as an audit this gate never expected")
+
+
 # ------------------------------------------------------------ row_green -----
 
 def test_row_green_table():

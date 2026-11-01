@@ -286,6 +286,49 @@ def test_expected_is_a_subset_of_selected(tmp_path, monkeypatch):
         assert toolset.expected_tool_names(root, cfg, gate) <= selected, gate
 
 
+# --- the live gate table, never the one toolset was first imported under ------
+# Measured 2026-10-25: test_llm_gate.py run before test_pipeline.py's
+# test_run_started_records_what_the_gate_was_expected_to_run failed it with
+# `'semgrep' in []`. toolset bound `GATE_RUNNER_KEYS` by name at import, and
+# pipeline imports toolset lazily, at the first gate run. When that first run
+# came inside a test that had swapped the whole table
+# (`monkeypatch.setattr(pipeline, "GATE_RUNNER_KEYS", {..., PRE_PUSH: []})`),
+# toolset kept the swapped table for the rest of the process: every later gate
+# recorded an empty `expected`. That is a red in one direction and a false
+# green in the other, for any test asserting a tool is NOT expected. Production
+# never swaps the table; the hole is in the tests that guard the skip streak.
+
+def _import_fresh_under_a_swapped_table(monkeypatch, name):
+    """Import `aramid.<name>` anew while the gate table is swapped out, then
+    put the real table back: the 10-25 order, without depending on test order.
+    The module already loaded is put back at teardown."""
+    import importlib
+    import sys
+
+    import aramid
+    from aramid import pipeline
+
+    monkeypatch.setattr(aramid, name, sys.modules[f"aramid.{name}"])
+    monkeypatch.delitem(sys.modules, f"aramid.{name}")
+    with monkeypatch.context() as swapped:
+        swapped.setattr(pipeline, "GATE_RUNNER_KEYS",
+                        {gate: [] for gate in pipeline.GATE_RUNNER_KEYS})
+        return importlib.import_module(f"aramid.{name}")
+
+
+def test_toolset_reads_the_live_gate_table_not_the_one_it_was_imported_under(
+        tmp_path, monkeypatch):
+    from aramid.models import Gate
+
+    fresh = _import_fresh_under_a_swapped_table(monkeypatch, "toolset")
+    cfg = _cfg(tmp_path, monkeypatch, tmp_path)
+
+    assert "gitleaks" in fresh.expected_tool_names(tmp_path, cfg, Gate.PRE_PUSH), (
+        "the swap is over and gitleaks is pre-push tier again; a toolset still "
+        "holding the swapped table records an empty `expected` for every gate")
+    assert "gitleaks" in fresh.selected_tool_names(tmp_path, cfg)
+
+
 # --- examines_path: does THIS runner ever look at THIS path? -----------------
 # The predicate `ledger resolve --out-of-scope` gates on. Read from each
 # runner's own suffix constant, never a second copy, so the runner and the

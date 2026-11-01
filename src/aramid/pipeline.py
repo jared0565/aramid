@@ -1195,10 +1195,10 @@ def run_gate(root: Path, gate: Gate, mode: str, cfg: config_mod.Config, ledger: 
     # runner for files it never opened, recording false repairs. A runner that
     # reports None is absent here and falls back (ledger.record_run).
     examined_by_tool = _examined_by_tool(flat_results)
-    # Local import: toolset.py imports pipeline.GATE_RUNNER_KEYS/_is_applicable
-    # at module scope, so importing it here at module scope would be
-    # circular (mirrors ledger.compact()'s identical fix for the
-    # queue.py/ledger.py cycle, ledger.py:155).
+    # Local import: toolset.py imports this module at module scope (and reads
+    # GATE_RUNNER_KEYS/_is_applicable through it at call time), so importing
+    # it here at module scope would be circular (mirrors ledger.compact()'s
+    # identical fix for the queue.py/ledger.py cycle, ledger.py:155).
     from aramid import toolset
     selected_tools = toolset.selected_tool_names(root, cfg)
     # `root=` opts this run into resolving findings whose file has LEFT the

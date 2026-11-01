@@ -18,9 +18,9 @@ from collections import defaultdict
 from dataclasses import dataclass, field
 
 from aramid import config as config_mod
+from aramid import pipeline
 from aramid import yield_report
 from aramid.models import EventType, Gate, Verdict
-from aramid.pipeline import GATE_RUNNER_KEYS
 from aramid.runners.deps import NAME_PIP_AUDIT
 
 CRITERIA = ("no_skip_streak", "consumers_healthy", "resolvers_ok",
@@ -309,7 +309,9 @@ def _dep_audit_ran(gate, result, tools_ran: set[str]) -> bool | None:
     if result is None:
         return None
     try:
-        keys = GATE_RUNNER_KEYS.get(Gate(str(gate)), ())
+        # Through the module at call time, never bound at import (see
+        # toolset.selected_tool_names for why).
+        keys = pipeline.GATE_RUNNER_KEYS.get(Gate(str(gate)), ())
     except ValueError:  # no gate, or one this aramid does not know: nothing expected
         return None
     if "deps" not in keys or "python" not in (getattr(result, "stacks", ()) or ()):
