@@ -42,11 +42,17 @@ to publish a tag that disagrees with it.
   on the branch went unchecked. Seen in this repo on 2026-11-01: a 38-minute
   mutation run on the pre-amend commit. The drain now checks, before taking
   an item, whether any branch, tag or remote-tracking branch still contains
-  its head; if none does, or the commit is gone, it takes HEAD instead,
-  keeps the item's base, and records why (`rewritten: <sha> is on no branch
-  or tag`). A queued commit still on a branch is drained where it is, even
-  with HEAD on another branch, and when git cannot say the item is left
-  alone.
+  its head. If none does, it drains the tip of the one local branch whose
+  own reflog recorded the head -- where the amend, rebase or reset left the
+  work -- keeps the item's base, and records why (`rewritten: <sha> is on no
+  branch or tag; drained at <branch>`). It does not take HEAD: an amend
+  followed by a checkout of another branch would drain the wrong range, or
+  an empty one. When no branch's reflog holds the head, or several do, the
+  item is drained as queued, as before, with a reason saying so. HEAD's own
+  reflog and remote-tracking reflogs are not read, so an amend followed by a
+  force-push still has one answer. A queued commit still on a branch is
+  drained where it is, even with HEAD on another branch, and when git
+  cannot say the item is left alone.
 - **The shipped reviewer models answer again.** Two of the three default
   `[[llm.ladder]]` models had retired: Ollama answers `deepseek-v4-flash` with
   HTTP 410 ("retired on September 25, 2026"), and `gpt-5.5` is absent from

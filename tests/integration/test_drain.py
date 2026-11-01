@@ -177,7 +177,11 @@ def test_a_manual_triage_of_an_old_range_does_not_rewind_the_sweep(
 # commit: 38 minutes of mutation, plus review and fuzz, on code no branch
 # contained, while the commit on main went unchecked. A queued head that no
 # branch, tag or remote-tracking branch contains any more was rewritten away
-# (amend, rebase, reset); the drain consumes HEAD in its place.
+# (amend, rebase, reset); the drain consumes the tip of the one local branch
+# whose own reflog recorded it. The first cut took HEAD, and an amend followed
+# by a checkout of the base's branch drained an empty range (llm-review
+# 865e2d26). The unit pins are tests/unit/test_drain_repoint.py: the drain's
+# mutation run never reaches this file.
 
 def _recording(monkeypatch):
     consumed = []
@@ -202,12 +206,15 @@ def _queued_now(r):
         led.close()
 
 
-def _queued_script_commit(tmp_path):
+def _queued_script_commit(tmp_path, branch=None):
     """base, then one commit that scores 45 on its own (risky content 25 +
-    novelty 20) and is queued; the same shape as 2026-11-01's."""
+    novelty 20) and is queued; the same shape as 2026-11-01's. With `branch`,
+    that commit is made on a new branch of that name cut at base."""
     r = _repo(tmp_path)
     _commit(r, "README.md", "x\n", "base")
     base = _head(r)
+    if branch:
+        _git(r, "checkout", "-q", "-b", branch)
     _commit(r, "tools/run.py", "import subprocess\nsubprocess.run(['true'])\n", "first")
     triage_cmd.cmd_triage(r, "HEAD")                 # what the post-commit shim does
     first = _head(r)
@@ -237,6 +244,30 @@ def test_an_amended_queued_commit_is_drained_at_its_replacement(
     assert _queued_now(r) is None, "the replacement was consumed, so nothing is left"
 
 
+def test_an_amend_on_a_branch_that_is_not_checked_out_is_drained_there(
+        tmp_path, seam, monkeypatch):
+    """llm-review 865e2d26, on the first cut, which took HEAD: amend a
+    queued commit on a feature branch, check out main at the base, and the
+    drain consumed base..base -- an empty range -- and marked the item
+    drained while the amended branch went unchecked."""
+    r, base, first = _queued_script_commit(tmp_path, branch="feature")
+    (r / "tools" / "run.py").write_text(
+        "import subprocess\nsubprocess.run(['true'], check=True)\n", encoding="utf-8")
+    _git(r, "commit", "-q", "-a", "--amend", "--no-edit")
+    amended = _head(r)
+    triage_cmd.cmd_triage(r, "HEAD")
+    assert _queued_now(r).head == first, "precondition: the replacement was not queued"
+    _git(r, "checkout", "-q", "main")
+    assert _head(r) == base
+    consumed = _recording(monkeypatch)
+
+    assert cmd_drain([], dry_run=False) == 0
+
+    assert consumed == [(base, amended)], (
+        f"the drain consumed {consumed}, not {base[:7]}..{amended[:7]}, the "
+        f"amended feature branch")
+
+
 def test_a_queued_commit_still_on_a_branch_is_drained_where_it_is(
         tmp_path, seam, monkeypatch):
     """The other limb: HEAD has moved to another branch, but main still holds
@@ -250,10 +281,12 @@ def test_a_queued_commit_still_on_a_branch_is_drained_where_it_is(
     assert consumed == [(base, first)]
 
 
-def test_a_queued_commit_that_no_longer_exists_is_drained_at_head(
+def test_a_queued_commit_that_no_longer_exists_is_drained_as_queued(
         tmp_path, seam, monkeypatch):
-    """Amended, then pruned: the commit object itself is gone, and no
-    worktree can be cut at it."""
+    """Amended, then pruned: the commit object itself is gone, and so is
+    every reflog entry that named it, so no branch can be shown to hold its
+    replacement. Drained as queued -- what the drain did before it re-pointed
+    anything -- with a reason saying why, instead of a guess."""
     r, base, first = _queued_script_commit(tmp_path)
     led = Ledger(r / ".aramid" / "ledger.db")
     try:
@@ -269,7 +302,15 @@ def test_a_queued_commit_that_no_longer_exists_is_drained_at_head(
 
     assert cmd_drain([], dry_run=False) == 0
 
-    assert consumed == [(base, first)]
+    assert consumed == [(base, "0" * 40)]
+    led = Ledger(r / ".aramid" / "ledger.db")
+    try:
+        reasons = [rs for e in led.events() if e.type is EventType.QUEUE_ITEM_COALESCED
+                   for rs in e.payload.get("reasons", [])]
+    finally:
+        led.close()
+    assert ("rewritten: 000000000000 is on no branch or tag, and no branch's reflog "
+            "holds it; drained as queued") in reasons, reasons
 
 
 def _amended_away(tmp_path):
@@ -316,8 +357,8 @@ def test_a_dead_head_checked_out_detached_is_not_re_pointed(tmp_path, seam, monk
 
 def test_an_empty_range_item_moves_its_base_with_its_head(tmp_path, seam, monkeypatch):
     """The re-test item is base == head (an empty range: only the re-test pass
-    has work). Rewritten away, both ends move to HEAD, or the consumers would
-    be handed the amend's diff as a range nobody queued."""
+    has work). Rewritten away, both ends move to the replacement, or the
+    consumers would be handed the amend's diff as a range nobody queued."""
     r, base, first, amended = _amended_away(tmp_path)
     led = Ledger(r / ".aramid" / "ledger.db")
     try:

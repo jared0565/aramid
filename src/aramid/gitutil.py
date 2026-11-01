@@ -238,6 +238,29 @@ def on_any_ref(root: Path, sha: str) -> bool | None:
     return bool(cp.stdout.strip())
 
 
+def branches_that_held(root: Path, sha: str) -> list[tuple[str, str]] | None:
+    """The local branches whose own reflog records the commit `sha`, each as
+    (name, tip): where an amend, rebase or reset that rewrote `sha` away left
+    the work, because the branch it was rewritten on logged the old value
+    before the new one. Only a branch's own reflog is read -- never HEAD's,
+    which logs every commit and every checkout, and never a remote-tracking
+    branch's, which a force-push of the rewrite logs a second time. A branch
+    with no reflog holds nothing. None when git could not say; the caller
+    must not read that as "no branch"."""
+    cp = _run(root, "for-each-ref", "--format=%(objectname) %(refname)", "refs/heads")
+    if cp.returncode != 0:
+        return None
+    held = []
+    for line in cp.stdout.splitlines():
+        tip, _, ref = line.partition(" ")
+        log = _run(root, "log", "--walk-reflogs", "--format=%H", ref, "--")
+        if log.returncode != 0:
+            return None
+        if sha in log.stdout.split():
+            held.append((ref.removeprefix("refs/heads/"), tip))
+    return held
+
+
 def diff_paths(root: Path, base: str | None, head: str) -> list[str]:
     if base is None:
         cp = _run(root, "diff-tree", "--no-commit-id", "--name-only", "-r", "--root", head)

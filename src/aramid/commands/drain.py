@@ -449,7 +449,7 @@ def _sweep(root: Path, cfg, ledger, at: str) -> None:
 
 
 def _repoint_rewritten(root: Path, ledger, item: queue.QueueItem, at: str) -> queue.QueueItem:
-    """The queued item, re-pointed at HEAD when its head was rewritten away.
+    """The queued item, re-pointed at the work its head was rewritten into.
 
     2026-11-01, this repo: a commit was queued, then amended. The replacement
     scored under `min_score` (its paths' novelty had been spent by the first
@@ -460,25 +460,50 @@ def _repoint_rewritten(root: Path, ledger, item: queue.QueueItem, at: str) -> qu
     Rewritten away means no branch, tag or remote-tracking branch contains
     the head any more (`gitutil.on_any_ref` is False), not merely that HEAD
     does not descend from it: a commit still on main while HEAD sits on
-    another branch is drained where it is. HEAD stands in for it, the same
-    HEAD the sweep triages up to. The base is kept, except on an empty-range
-    item (base == head: the re-test item), whose base went with its head.
-    Recorded as a coalesce, so `materialize_queue` and compaction read it
-    like any other, with a reason naming the dead head. Unchanged when git
-    cannot say, when there is no HEAD, or when HEAD IS the head (checked
-    out detached: someone is working on it)."""
+    another branch is drained where it is. The replacement is the tip of the
+    one local branch whose own reflog recorded the head
+    (`gitutil.branches_that_held`): the amend, rebase or reset that rewrote
+    it logged the old value on that branch. Not HEAD: the first cut took
+    HEAD, and an amend followed by a checkout of the base's branch drained
+    base..base, an empty range, and marked the item drained while the amended
+    branch went unchecked (llm-review 865e2d26; OPERATOR 2026-11-01 "Follow
+    the branch reflog"). The base is kept, except on an empty-range item
+    (base == head: the re-test item), whose base goes with its head.
+
+    No such branch, or more than one: drained as queued, which is what the
+    drain did before it re-pointed anything, with a reason saying why --
+    recorded once, however many drains the item waits through. Unchanged and
+    silent when git cannot say, or when HEAD IS the head (checked out
+    detached: someone is working on it). Every change is recorded as a
+    coalesce, so `materialize_queue` and compaction read it like any other."""
     if gitutil.on_any_ref(root, item.head) is not False:
         return item
-    head = gitutil.rev_sha(root, "HEAD")
-    if head is None or head == item.head:
+    if gitutil.rev_sha(root, "HEAD") == item.head:
         return item
-    base = head if item.base == item.head else item.base
-    reasons = sorted(set(item.reasons) | {
-        f"rewritten: {item.head[:12]} is on no branch or tag; drained at HEAD"})
+    held = gitutil.branches_that_held(root, item.head)
+    if held is None:
+        return item
+    dead, base, head = item.head[:12], item.base, item.head
+    if len(held) == 1:
+        branch, head = held[0]
+        if item.base == item.head:
+            base = head
+        reason = (f"rewritten: {dead} is on no branch or tag; drained at {branch} "
+                  f"({head[:12]}), whose reflog held it")
+    elif held:
+        names = ", ".join(sorted(name for name, _tip in held))
+        reason = (f"rewritten: {dead} is on no branch or tag, and {len(held)} branches' "
+                  f"reflogs hold it ({names}); drained as queued")
+    else:
+        reason = (f"rewritten: {dead} is on no branch or tag, and no branch's reflog "
+                  f"holds it; drained as queued")
+    if reason in item.reasons:
+        return item
     ledger.append(Event(EventType.QUEUE_ITEM_COALESCED, uuid.uuid4().hex, at,
                         finding_id=item.id,
                         payload={"rewritten": item.head, "base": base, "head": head,
-                                 "score": item.score, "reasons": reasons}))
+                                 "score": item.score,
+                                 "reasons": sorted(set(item.reasons) | {reason})}))
     return queue.queued_item(queue.materialize_queue(ledger.events())) or item
 
 
