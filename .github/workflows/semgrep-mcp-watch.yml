@@ -1,0 +1,47 @@
+# Daily watch: has a semgrep release stopped pinning mcp at 1.29.0?
+#
+# semgrep pins `mcp==1.29.0`, so every aramid install carries the advisories
+# against it until a semgrep release admits mcp 1.30 or later and this repo
+# raises its semgrep floor to that release. The script reads the newest
+# semgrep's own wheel metadata on PyPI; see its docstring for the outcomes.
+#
+# A RED RUN IS THE ALERT. Green is the normal day ("still requires
+# mcp==1.29.0"). Red with "allows mcp ..." or "no longer depends on mcp" means
+# raise the floor; red with "could not tell" means look at the log. GitHub
+# emails scheduled-run failures to the account that last changed the `cron`
+# line below. Nothing here may set continue-on-error: that would turn the
+# alert into a green run (tests/unit/test_semgrep_mcp_watch.py).
+#
+# Not on push or pull_request: a PyPI outage must not turn a push red. In a
+# public repo GitHub pauses scheduled workflows after 60 days with no commits.
+#
+# Delete this file, the script and its test in the commit that raises the floor.
+name: semgrep-mcp-watch
+
+on:
+  schedule:
+    - cron: "41 6 * * *"   # 06:41 UTC daily, off the hour
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  watch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      # Pinned like aramid.yml's (tests/unit/test_workflow_pinning.py).
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: "3.12"
+
+      - name: Install packaging (the script's only dependency)
+        run: python -P -m pip install "packaging==26.3"
+
+      - name: Read the newest semgrep's mcp requirement
+        run: python -P .github/scripts/semgrep_mcp_watch.py
