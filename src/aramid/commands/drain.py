@@ -448,6 +448,40 @@ def _sweep(root: Path, cfg, ledger, at: str) -> None:
         triage.run_triage(root, cfg, ledger, last, head, at)
 
 
+def _repoint_rewritten(root: Path, ledger, item: queue.QueueItem, at: str) -> queue.QueueItem:
+    """The queued item, re-pointed at HEAD when its head was rewritten away.
+
+    2026-11-01, this repo: a commit was queued, then amended. The replacement
+    scored under `min_score` (its paths' novelty had been spent by the first
+    commit's triage), so it was never queued and never coalesced, and the
+    15:00Z drain consumed the pre-amend commit -- mutation, review and fuzz
+    on code no branch contained -- while the commit on main went unchecked.
+
+    Rewritten away means no branch, tag or remote-tracking branch contains
+    the head any more (`gitutil.on_any_ref` is False), not merely that HEAD
+    does not descend from it: a commit still on main while HEAD sits on
+    another branch is drained where it is. HEAD stands in for it, the same
+    HEAD the sweep triages up to. The base is kept, except on an empty-range
+    item (base == head: the re-test item), whose base went with its head.
+    Recorded as a coalesce, so `materialize_queue` and compaction read it
+    like any other, with a reason naming the dead head. Unchanged when git
+    cannot say, when there is no HEAD, or when HEAD IS the head (checked
+    out detached: someone is working on it)."""
+    if gitutil.on_any_ref(root, item.head) is not False:
+        return item
+    head = gitutil.rev_sha(root, "HEAD")
+    if head is None or head == item.head:
+        return item
+    base = head if item.base == item.head else item.base
+    reasons = sorted(set(item.reasons) | {
+        f"rewritten: {item.head[:12]} is on no branch or tag; drained at HEAD"})
+    ledger.append(Event(EventType.QUEUE_ITEM_COALESCED, uuid.uuid4().hex, at,
+                        finding_id=item.id,
+                        payload={"rewritten": item.head, "base": base, "head": head,
+                                 "score": item.score, "reasons": reasons}))
+    return queue.queued_item(queue.materialize_queue(ledger.events())) or item
+
+
 def _pending_retest_item(root: Path, cfg, ledger, at: str) -> queue.QueueItem | None:
     """The EMPTY-QUEUE re-test item. Consumers run only on a popped item,
     so a repo with nothing queued never re-tested the mutation survivors
@@ -715,6 +749,8 @@ def cmd_drain(targets: list, *, dry_run: bool = False, max_items: int | None = N
                     queue.expire_stale(ledger, clock(),
                                        int(cfg.drain.get("item_expiry_days", 30)))
                     item = queue.queued_item(queue.materialize_queue(ledger.events()))
+                    if item is not None:
+                        item = _repoint_rewritten(root, ledger, item, clock())
                     if item is None:
                         item = _pending_retest_item(root, cfg, ledger, clock())
                     if item is not None and item.score < int(cfg.triage.get("min_score", 40)):

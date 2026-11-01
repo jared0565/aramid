@@ -41,7 +41,7 @@ def _run(root: Path, *args: str) -> subprocess.CompletedProcess:
     # S603 justification: aramid's single git wrapper -- "git" is a fixed
     # literal (_GIT, never derived from *args; only tests replace it) and
     # every call site passes fixed subcommands (rev-parse, show, rev-list,
-    # diff, ls-files, log, merge-base, worktree). It is started by the
+    # diff, ls-files, log, merge-base, for-each-ref, worktree). It is started by the
     # absolute path `toolpath.program` finds for it, never by the bare name:
     # Windows looks for a bare name in the current directory before PATH,
     # and that directory is the repo being judged (FN-47).
@@ -222,6 +222,20 @@ def is_ancestor(root: Path, ancestor: str, descendant: str) -> bool:
     unknown rev reads as False, never raises."""
     cp = _run(root, "merge-base", "--is-ancestor", ancestor, descendant)
     return cp.returncode == 0
+
+
+def on_any_ref(root: Path, sha: str) -> bool | None:
+    """Whether a branch, tag or remote-tracking branch still contains the
+    commit `sha`. False when none does -- it was amended, rebased or reset
+    away -- or when the commit no longer resolves (pruned after that).
+    None when git could not say; the caller must not read that as gone."""
+    if rev_sha(root, sha) is None:
+        return False
+    cp = _run(root, "for-each-ref", "--contains", sha, "--count=1",
+              "--format=%(refname)", "refs/heads", "refs/tags", "refs/remotes")
+    if cp.returncode != 0:
+        return None
+    return bool(cp.stdout.strip())
 
 
 def diff_paths(root: Path, base: str | None, head: str) -> list[str]:

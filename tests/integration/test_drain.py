@@ -169,6 +169,172 @@ def test_a_manual_triage_of_an_old_range_does_not_rewind_the_sweep(
         f"the newest triaged head in history {c2[:7]}")
 
 
+# ------------------------------------------ a queued head rewritten away ---
+# 2026-11-01, this repo: a commit was queued at 11:10Z and amended at 11:18Z.
+# The replacement's triage scored 25 against `min_score` 40 -- its paths'
+# novelty had been spent by the first commit's triage -- so it was never
+# queued and never coalesced, and the 15:00Z drain consumed the PRE-AMEND
+# commit: 38 minutes of mutation, plus review and fuzz, on code no branch
+# contained, while the commit on main went unchecked. A queued head that no
+# branch, tag or remote-tracking branch contains any more was rewritten away
+# (amend, rebase, reset); the drain consumes HEAD in its place.
+
+def _recording(monkeypatch):
+    consumed = []
+
+    class _Recording:
+        NAME = "recording"
+
+        @classmethod
+        def consume(cls, item, ctx):
+            consumed.append((item.base, item.head))
+            return ConsumerResult(consumer=cls.NAME, state="ok", findings=[])
+
+    monkeypatch.setattr(drain_mod, "CONSUMERS", {"recording": _Recording})
+    return consumed
+
+
+def _queued_now(r):
+    led = Ledger(r / ".aramid" / "ledger.db")
+    try:
+        return queue.queued_item(queue.materialize_queue(led.events()))
+    finally:
+        led.close()
+
+
+def _queued_script_commit(tmp_path):
+    """base, then one commit that scores 45 on its own (risky content 25 +
+    novelty 20) and is queued; the same shape as 2026-11-01's."""
+    r = _repo(tmp_path)
+    _commit(r, "README.md", "x\n", "base")
+    base = _head(r)
+    _commit(r, "tools/run.py", "import subprocess\nsubprocess.run(['true'])\n", "first")
+    triage_cmd.cmd_triage(r, "HEAD")                 # what the post-commit shim does
+    first = _head(r)
+    assert (_queued_now(r).base, _queued_now(r).head) == (base, first)
+    registry.register(r, "t0")
+    return r, base, first
+
+
+def test_an_amended_queued_commit_is_drained_at_its_replacement(
+        tmp_path, seam, monkeypatch):
+    r, base, first = _queued_script_commit(tmp_path)
+    (r / "tools" / "run.py").write_text(
+        "import subprocess\nsubprocess.run(['true'], check=True)\n", encoding="utf-8")
+    _git(r, "commit", "-q", "-a", "--amend", "--no-edit")
+    amended = _head(r)
+    triage_cmd.cmd_triage(r, "HEAD")                 # 25 now: novelty spent, not queued
+    assert _queued_now(r).head == first, (
+        "precondition: the replacement did not move the item -- the shape this "
+        "test exists for no longer occurs")
+    consumed = _recording(monkeypatch)
+
+    assert cmd_drain([], dry_run=False) == 0
+
+    assert consumed == [(base, amended)], (
+        f"the drain consumed {consumed}, not {base[:7]}..{amended[:7]}: the "
+        f"pre-amend commit {first[:7]} is on no branch")
+    assert _queued_now(r) is None, "the replacement was consumed, so nothing is left"
+
+
+def test_a_queued_commit_still_on_a_branch_is_drained_where_it_is(
+        tmp_path, seam, monkeypatch):
+    """The other limb: HEAD has moved to another branch, but main still holds
+    the queued commit. Not an ancestor of HEAD is not rewritten away."""
+    r, base, first = _queued_script_commit(tmp_path)
+    _git(r, "checkout", "-q", "-b", "elsewhere", base)
+    consumed = _recording(monkeypatch)
+
+    assert cmd_drain([], dry_run=False) == 0
+
+    assert consumed == [(base, first)]
+
+
+def test_a_queued_commit_that_no_longer_exists_is_drained_at_head(
+        tmp_path, seam, monkeypatch):
+    """Amended, then pruned: the commit object itself is gone, and no
+    worktree can be cut at it."""
+    r, base, first = _queued_script_commit(tmp_path)
+    led = Ledger(r / ".aramid" / "ledger.db")
+    try:
+        item = queue.queued_item(queue.materialize_queue(led.events()))
+        led.append(Event(EventType.QUEUE_ITEM_COALESCED, "t-gone", "2026-11-01T11:18:00+00:00",
+                         finding_id=item.id,
+                         payload={"base": base, "head": "0" * 40, "score": item.score,
+                                  "reasons": list(item.reasons)}))
+    finally:
+        led.close()
+    assert _queued_now(r).head == "0" * 40
+    consumed = _recording(monkeypatch)
+
+    assert cmd_drain([], dry_run=False) == 0
+
+    assert consumed == [(base, first)]
+
+
+def _amended_away(tmp_path):
+    """Today's sequence up to the drain: queued, amended, replacement not queued."""
+    r, base, first = _queued_script_commit(tmp_path)
+    (r / "tools" / "run.py").write_text("import subprocess\n", encoding="utf-8")
+    _git(r, "commit", "-q", "-a", "--amend", "--no-edit")
+    triage_cmd.cmd_triage(r, "HEAD")
+    assert _queued_now(r).head == first
+    return r, base, first, _head(r)
+
+
+def test_a_head_git_cannot_place_is_left_where_it_is(tmp_path, seam, monkeypatch):
+    """`on_any_ref` answers None when git could not say. That is not "gone":
+    the drain does not guess, and consumes the item as queued."""
+    r, base, first, _amended = _amended_away(tmp_path)
+    monkeypatch.setattr(drain_mod.gitutil, "on_any_ref", lambda root, sha: None)
+    consumed = _recording(monkeypatch)
+
+    assert cmd_drain([], dry_run=False) == 0
+
+    assert consumed == [(base, first)]
+
+
+def test_a_dead_head_checked_out_detached_is_not_re_pointed(tmp_path, seam, monkeypatch):
+    """No branch holds it, but HEAD is it: someone is working on that commit.
+    Nothing to re-point to, and no `rewritten` reason that would say so."""
+    r, base, first = _queued_script_commit(tmp_path)
+    _git(r, "checkout", "-q", "--detach")
+    _git(r, "branch", "-q", "-f", "main", base)
+    consumed = _recording(monkeypatch)
+
+    assert cmd_drain([], dry_run=False) == 0
+
+    assert consumed == [(base, first)]
+    led = Ledger(r / ".aramid" / "ledger.db")
+    try:
+        reasons = [rs for e in led.events() if e.type is EventType.QUEUE_ITEM_COALESCED
+                   for rs in e.payload.get("reasons", [])]
+    finally:
+        led.close()
+    assert not [rs for rs in reasons if rs.startswith("rewritten:")], reasons
+
+
+def test_an_empty_range_item_moves_its_base_with_its_head(tmp_path, seam, monkeypatch):
+    """The re-test item is base == head (an empty range: only the re-test pass
+    has work). Rewritten away, both ends move to HEAD, or the consumers would
+    be handed the amend's diff as a range nobody queued."""
+    r, base, first, amended = _amended_away(tmp_path)
+    led = Ledger(r / ".aramid" / "ledger.db")
+    try:
+        item = queue.queued_item(queue.materialize_queue(led.events()))
+        led.append(Event(EventType.QUEUE_ITEM_COALESCED, "t-retest", "2026-11-01T11:19:00+00:00",
+                         finding_id=item.id,
+                         payload={"base": first, "head": first, "score": item.score,
+                                  "reasons": [queue.pending_retest_reason(1)]}))
+    finally:
+        led.close()
+    consumed = _recording(monkeypatch)
+
+    assert cmd_drain([], dry_run=False) == 0
+
+    assert consumed == [(amended, amended)]
+
+
 
 # ------------------------------------------ the empty-queue re-test item ---
 # Consumers run only on a popped item, so a repo with nothing queued never

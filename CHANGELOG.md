@@ -33,6 +33,20 @@ to publish a tag that disagrees with it.
 
 ### Fixed
 
+- **An amended commit is drained as amended.** When a queued commit was
+  amended (or rebased, or reset away) before the drain, the drain still
+  consumed the old commit: the replacement's triage often scored under
+  `min_score`, because the old commit's triage had already counted its paths
+  as seen, so it was never queued and never merged into the item. Mutation,
+  review and fuzz then ran on code that no branch contained, and the commit
+  on the branch went unchecked. Seen in this repo on 2026-11-01: a 38-minute
+  mutation run on the pre-amend commit. The drain now checks, before taking
+  an item, whether any branch, tag or remote-tracking branch still contains
+  its head; if none does, or the commit is gone, it takes HEAD instead,
+  keeps the item's base, and records why (`rewritten: <sha> is on no branch
+  or tag`). A queued commit still on a branch is drained where it is, even
+  with HEAD on another branch, and when git cannot say the item is left
+  alone.
 - **The shipped reviewer models answer again.** Two of the three default
   `[[llm.ladder]]` models had retired: Ollama answers `deepseek-v4-flash` with
   HTTP 410 ("retired on September 25, 2026"), and `gpt-5.5` is absent from
