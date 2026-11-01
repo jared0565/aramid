@@ -10,12 +10,21 @@ Run as a subprocess against a `--snapshot` of what it would read from PyPI, so
 the CLI contract the workflow invokes is what is pinned. Exit codes: 0 still
 blocked, 1 act (raise the floor), 2 could not tell. Every red outcome below is
 asserted by its exit code, so a script that always says "blocked" fails them.
+The one exception is the fetch itself (`_get`), driven in-process near the end
+with the network and the clock stubbed.
 """
+import contextlib
+import importlib.util
 import json
 import subprocess
 import sys
+import types
+import urllib.error
+import urllib.parse
+import urllib.request
 from pathlib import Path
 
+import pytest
 import yaml
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -266,6 +275,77 @@ def test_the_default_pyproject_is_this_repos(tmp_path):
     r, out = _run(tmp_path, _snapshot("mcp==1.29.0"), pyproject=None)
 
     _verdict(r, out, 0)
+
+
+# -- the fetch: drain findings ----------------------------------------------
+# The 15:00Z drain of 2026-11-01 mutated `_get` and three mutants survived
+# (ledger rows 5d92cfec, 1444a9ba, 1f84bac7): the attempt floor, the wait
+# between attempts and the request timeout. Every test above reads a snapshot,
+# so none of them ever fetched. These drive `_get` in-process, in a freshly
+# loaded copy of the script whose own `urllib` and `time` names are replaced:
+# nothing global is patched, nothing touches the network and nothing waits.
+
+def _offline(answer=None):
+    """A fresh copy of the script whose fetches are recorded, not made. Each
+    request's timeout is recorded in `calls`, each wait in `sleeps`; a request
+    fails as an unreachable host would, unless `answer` is given."""
+    spec = importlib.util.spec_from_file_location("semgrep_mcp_watch", SCRIPT)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    calls, sleeps = [], []
+
+    @contextlib.contextmanager
+    def urlopen(request, timeout=None):
+        calls.append(timeout)
+        if answer is None:
+            raise urllib.error.URLError("unreachable (stub)")
+        yield types.SimpleNamespace(read=lambda: answer)
+
+    mod.urllib = types.SimpleNamespace(
+        parse=urllib.parse, error=urllib.error,
+        request=types.SimpleNamespace(Request=urllib.request.Request,
+                                      urlopen=urlopen))
+    mod.time = types.SimpleNamespace(sleep=sleeps.append)
+    return mod, calls, sleeps
+
+
+def test_one_attempt_asked_for_is_one_request_and_no_wait():
+    """Row 5d92cfec (`max(attempts, 1)` -> `max(attempts, 2)`). Zero asked for
+    is still one request, so a mis-set --attempts cannot skip the read."""
+    for asked in (1, 0):
+        mod, calls, sleeps = _offline()
+
+        with pytest.raises(mod.CouldNotTell, match="could not read"):
+            mod._get("https://pypi.invalid/x", "application/json", asked)
+
+        assert len(calls) == 1, f"--attempts {asked}: {len(calls)} requests"
+        assert sleeps == [], f"--attempts {asked}: waited {sleeps}"
+
+
+def test_each_retry_waits_five_seconds_more_than_the_one_before():
+    """Row 1444a9ba (`5 * attempt` -> `6 * attempt`). Three attempts against an
+    index that never answers: no wait before the first, 5 s, then 10 s."""
+    mod, calls, sleeps = _offline()
+
+    with pytest.raises(mod.CouldNotTell, match="could not read"):
+        mod._get("https://pypi.invalid/x", "application/json", 3)
+
+    assert len(calls) == 3
+    assert sleeps == [5, 10]
+
+
+def test_a_request_gives_up_after_thirty_seconds():
+    """Row 1f84bac7 (`timeout=30` -> `timeout=31`). Without a timeout urlopen
+    waits forever, and a hung PyPI would hold the job to its 10-minute limit.
+    The exact 30 is a pinned number; no outcome depends on it being 30 and not
+    31. Also the one path where the first request answers."""
+    mod, calls, sleeps = _offline(answer=b'{"ok": true}')
+
+    body = mod._get("https://pypi.invalid/x", "application/json", 3)
+
+    assert body == b'{"ok": true}'
+    assert calls == [30]
+    assert sleeps == []
 
 
 # -- the workflow -----------------------------------------------------------
