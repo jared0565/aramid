@@ -12,6 +12,22 @@ to publish a tag that disagrees with it.
 
 ## [Unreleased]
 
+### Added
+
+- **`aramid doctor` says when one of aramid's git hooks is out of date.** It
+  compares each of aramid's own hooks in their own slots (pre-commit,
+  pre-push and the post-commit triage hook) with what the installed aramid
+  writes for it, from the repo's own `[hooks].pre_push_match_ci` and the
+  hook's own interpreter, and names each one that differs (`hooks: aramid's
+  pre-push shim in <dir> is STALE (differs from what aramid X.Y.Z writes)`),
+  with `aramid init .` as the remedy. It is a warning:
+  doctor's exit code is unchanged, and doctor never rewrites a hook. Until
+  now only a hook relocated behind another tool's was checked, so a repo
+  that skipped a release's "re-run `aramid init`" kept the old hook with no
+  notice; on 0.20.11 that is a pre-push hook that does not pass the remote's
+  name. A hook git copied in from the template directory
+  (`aramid hooks install`) is current when it matches the current template.
+
 ## [0.20.11] — 2026-11-02
 
 ### Added

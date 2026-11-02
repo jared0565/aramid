@@ -27,6 +27,7 @@ from pathlib import Path
 
 import pytest
 
+import aramid
 from aramid import hooks as hooks_mod
 from aramid.commands import doctor
 from aramid.commands.doctor import ToolStatus
@@ -448,6 +449,129 @@ def test_relocated_probe_flags_a_relocated_shim_without_an_interp_line(tmp_path)
         "template -- run `aramid init .`"]
 
 
+# -------------------------------------------------------- probe_stale_shims --
+# aramid's OWN shim in its own slot, which probe_relocated_shims skips. The
+# OPERATOR's "Make doctor flag it" (2026-11-02): 0.20.11 changed the pre-push
+# shim, and doctor ran rc 0 with no notice over the old one on aramid itself.
+
+def _own(r, hook, body):
+    hdir = hooks_mod.hooks_dir(r)
+    hdir.mkdir(parents=True, exist_ok=True)
+    (hdir / hook).write_bytes(body)
+    return hdir
+
+
+def _stale_line(hdir, hook):
+    return (f"hooks: aramid's {hook} shim in {hdir} is STALE (differs from what aramid "
+            f"{aramid.__version__} writes) -- run `aramid init .` to regenerate it; doctor "
+            f"never rewrites a hook")
+
+
+def _pre_0_20_11(shim):
+    """The pre-push shim every consumer had before 0.20.11: no remote name."""
+    old = shim.replace(b'ARAMID_PUSH_REMOTE="$1" ', b"")
+    assert old != shim
+    return old
+
+
+def test_stale_probe_is_silent_off_an_onboarded_repo_with_a_hooks_dir(tmp_path):
+    plain = _repo(tmp_path, onboarded=False, name="plain")
+    _own(plain, "pre-push", _pre_0_20_11(_current(plain, Gate.PRE_PUSH)))
+    assert doctor.probe_stale_shims(plain) == []            # not onboarded: not asked
+    r = _repo(tmp_path)
+    assert doctor.probe_stale_shims(r) == []                # onboarded, hooks dir absent
+    hooks_mod.hooks_dir(r).mkdir(parents=True)
+    assert doctor.probe_stale_shims(r) == []                # empty hooks dir
+
+
+def test_stale_probe_is_silent_for_current_shims_in_every_slot(tmp_path):
+    r = _repo(tmp_path)
+    _own(r, "pre-commit", _current(r, Gate.PRE_COMMIT))
+    _own(r, "pre-push", _current(r, Gate.PRE_PUSH))
+    _own(r, "post-commit", hooks_mod.render_triage_shim(Path(sys.executable)))
+    assert doctor.probe_stale_shims(r) == []
+
+
+def test_stale_probe_flags_the_pre_push_shim_from_before_the_remote_name(tmp_path):
+    r = _repo(tmp_path)
+    _own(r, "pre-commit", _current(r, Gate.PRE_COMMIT))
+    hdir = _own(r, "pre-push", _pre_0_20_11(_current(r, Gate.PRE_PUSH)))
+    assert doctor.probe_stale_shims(r) == [_stale_line(hdir, "pre-push")]
+
+
+def test_stale_probe_renders_with_the_repos_own_match_ci(tmp_path):
+    # What install() renders from: the CI-parity shim is current only while
+    # the repo asks for CI parity.
+    r = _repo(tmp_path)
+    (r / "aramid.toml").write_text(
+        "schema_version = 1\n[hooks]\npre_push_match_ci = true\n", encoding="utf-8")
+    wide = hooks_mod.render_shim(Gate.PRE_PUSH, Path(sys.executable), True)
+    assert wide != hooks_mod.render_shim(Gate.PRE_PUSH, Path(sys.executable), False)
+    hdir = _own(r, "pre-push", wide)
+    assert doctor.probe_stale_shims(r) == []
+    (r / "aramid.toml").write_text("schema_version = 1\n", encoding="utf-8")
+    assert doctor.probe_stale_shims(r) == [_stale_line(hdir, "pre-push")]
+
+
+def test_stale_probe_compares_against_the_shims_own_interpreter(tmp_path):
+    # Not the one doctor runs under: another python writes another shim in
+    # any case, and the question is whether this one is the current template.
+    r = _repo(tmp_path)
+    shim = hooks_mod.render_shim(Gate.PRE_PUSH, tmp_path / "py" / "python", False)
+    assert shim != _current(r, Gate.PRE_PUSH)
+    hdir = _own(r, "pre-push", shim)
+    assert doctor.probe_stale_shims(r) == []
+    _own(r, "pre-push", _pre_0_20_11(shim))
+    assert doctor.probe_stale_shims(r) == [_stale_line(hdir, "pre-push")]
+
+
+def test_stale_probe_takes_a_current_global_template_shim_as_current(tmp_path):
+    # `aramid hooks install` puts the template variant into every new clone.
+    r = _repo(tmp_path)
+    tmpl = hooks_mod.render_template_shim(Gate.PRE_PUSH, Path(sys.executable))
+    hdir = _own(r, "pre-push", tmpl)
+    assert doctor.probe_stale_shims(r) == []
+    _own(r, "pre-push", _pre_0_20_11(tmpl))
+    assert doctor.probe_stale_shims(r) == [_stale_line(hdir, "pre-push")]
+
+
+def test_stale_probe_flags_a_stale_triage_shim(tmp_path):
+    r = _repo(tmp_path)
+    current = hooks_mod.render_triage_shim(Path(sys.executable))
+    stale = current.replace(b"--budget 15", b"--budget 10")
+    assert stale != current
+    hdir = _own(r, "post-commit", stale)
+    assert doctor.probe_stale_shims(r) == [_stale_line(hdir, "post-commit")]
+
+
+def test_stale_probe_flags_an_own_shim_without_an_interp_line(tmp_path):
+    r = _repo(tmp_path)
+    hdir = _own(r, "pre-commit", f"#!/bin/sh\n{hooks_mod.MARKER_START}\nexit 0\n".encode())
+    assert doctor.probe_stale_shims(r) == [
+        f"hooks: aramid's pre-commit shim in {hdir} carries no INTERP line, so it cannot "
+        f"be checked against the template -- run `aramid init .`"]
+
+
+def test_stale_probe_leaves_foreign_and_relocated_slots_to_the_other_probes(tmp_path):
+    r = _repo(tmp_path)
+    _own(r, "pre-commit", b"#!/bin/sh\n# a human wrote this\nexit 0\n")
+    _relocated(r, hook="pre-push", body=_pre_0_20_11(_current(r, Gate.PRE_PUSH)))
+    assert doctor.probe_stale_shims(r) == []
+    assert doctor.probe_relocated_shims(r) != []            # that probe owns this one
+
+
+def test_stale_probe_fails_open_when_the_hooks_dir_cannot_be_read(tmp_path, monkeypatch):
+    # Open, so a probe error never breaks doctor; the cost is a missed WARN.
+    r = _repo(tmp_path)
+    _own(r, "pre-push", _pre_0_20_11(_current(r, Gate.PRE_PUSH)))
+
+    def unreadable(root):
+        raise OSError("unreadable")
+
+    monkeypatch.setattr(hooks_mod, "hooks_dir", unreadable)
+    assert doctor.probe_stale_shims(r) == []
+
+
 # ---------------------------------------------------------------- cmd_doctor --
 
 def _all_present():
@@ -562,6 +686,28 @@ def test_doctor_exits_2_when_configured_but_not_enforced(tmp_path, capsys, quiet
         f"aramid: doctor: hooks: aramid.toml is present but pre-commit, pre-push missing "
         f"from {hooks_mod.hooks_dir(r)} -- this repo is configured but NOT enforced. Git "
         f"hooks are not cloned; run `aramid init .`\n")
+
+
+def test_doctor_names_a_stale_shim_and_keeps_its_exit(tmp_path, capsys, quiet):
+    # The OPERATOR's "Make doctor flag it" (2026-11-02): a WARN, never an exit.
+    r = _repo(tmp_path)
+    _own(r, "pre-commit", _current(r, Gate.PRE_COMMIT))
+    hdir = _own(r, "pre-push", _pre_0_20_11(_current(r, Gate.PRE_PUSH)))
+
+    assert _run(r) == 0
+    out, err = capsys.readouterr()
+    assert err == f"aramid: doctor: {_stale_line(hdir, 'pre-push')}\n"
+    assert out.endswith("aramid: doctor: all BLOCK-tier tools present.\n")
+
+
+def test_doctor_says_nothing_of_a_stale_shim_while_init_is_running(tmp_path, capsys, quiet):
+    # init prints this report moments before it rewrites every shim.
+    r = _repo(tmp_path)
+    _own(r, "pre-commit", _current(r, Gate.PRE_COMMIT))
+    _own(r, "pre-push", _pre_0_20_11(_current(r, Gate.PRE_PUSH)))
+
+    assert _run(r, during_init=True) == 0
+    assert capsys.readouterr().err == ""
 
 
 def test_doctor_exits_2_for_a_relocated_shim_finding(tmp_path, capsys, quiet):

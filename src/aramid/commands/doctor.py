@@ -1098,6 +1098,64 @@ def probe_relocated_shims(root: Path) -> list[str]:
         return []                   # fail open: never break doctor
 
 
+def probe_stale_shims(root: Path) -> list[str]:
+    """Read-only report on aramid's OWN shim in its own slot when it differs
+    from what this aramid writes for it -- the in-slot half of
+    `probe_relocated_shims`, which skips a slot aramid holds.
+
+    The OPERATOR's "Make doctor flag it" (2026-11-02): 0.20.11 changed the
+    pre-push shim (ARAMID_PUSH_REMOTE), and doctor ran rc 0 with no notice
+    over the old one on aramid itself. A consumer who skips the CHANGELOG's
+    "re-run `aramid init`" was never told; this tells them.
+
+    Rendered as `install()` renders: from the repo's own
+    `[hooks].pre_push_match_ci`, and for the shim's OWN baked interpreter,
+    not the one doctor runs under (another python writes another shim in any
+    case; the question is "is this the current template"). A gate shim that
+    matches the GLOBAL TEMPLATE render is current too: `aramid hooks install`
+    puts that variant into every new clone. A WARN by that ruling: the
+    caller prints these and never changes its exit for them (a stale
+    RELOCATED shim exits 2; see `probe_relocated_shims`).
+
+    Fails OPEN, to [], on any error: a probe that raised would break doctor,
+    and the cost is one missed warning."""
+    try:
+        if not (root / "aramid.toml").exists():
+            return []
+        from aramid import __version__
+        from aramid import hooks as hooks_mod
+        hdir = hooks_mod.hooks_dir(root)
+        if not hdir.is_dir():
+            return []
+        match_ci = hooks_mod._match_ci(root)
+        renderers = [(g.value,
+                      lambda interp, g=g: (hooks_mod.render_shim(g, interp, match_ci),
+                                           hooks_mod.render_template_shim(g, interp)))
+                     for g in hooks_mod.GATES]
+        renderers.append((hooks_mod.TRIAGE_HOOK,
+                          lambda interp: (hooks_mod.render_triage_shim(interp),)))
+        lines = []
+        for hook, render in renderers:
+            slot = hdir / hook
+            if not hooks_mod._is_aramid_shim(slot):
+                continue            # absent (probe_enforcement) or not ours (relocated)
+            current = slot.read_bytes()
+            interp_sh = _baked_interpreter(current)
+            interp = _sh_path_to_win(interp_sh) if interp_sh else None
+            if interp is None:
+                lines.append(f"hooks: aramid's {hook} shim in {hdir} carries no INTERP line, "
+                             f"so it cannot be checked against the template -- run "
+                             f"`aramid init .`")
+                continue
+            if current not in render(interp):
+                lines.append(f"hooks: aramid's {hook} shim in {hdir} is STALE (differs from "
+                             f"what aramid {__version__} writes) -- run `aramid init .` to "
+                             f"regenerate it; doctor never rewrites a hook")
+        return lines
+    except Exception:
+        return []                   # fail open: never break doctor
+
+
 def relocated_gate_notes(root: Path) -> list[str]:
     """A gate shim another tool's managed hook runs: armed, but whether a
     failing gate there still blocks is that hook's doing, and aramid does not
@@ -1127,7 +1185,8 @@ def cmd_doctor(root: Path, fix: bool = False, during_init: bool = False) -> int:
     read-only counterpart of what `install()` repairs. That widens 2 from "a BLOCK-tier tool is missing"
     to "the gate is not fully operational", which covers both: in each case
     the repo is not actually being gated, and reporting 0 would be a false
-    green light.
+    green light. A stale aramid shim in its OWN slot is reported and never
+    changes the exit (`probe_stale_shims`; the OPERATOR's WARN, 2026-11-02).
 
     T-2: also returns 2 when the repo's TEST toolchain is broken (see
     `probe_tests`) -- a detected-or-configured test suite whose tool cannot
@@ -1248,6 +1307,12 @@ def cmd_doctor(root: Path, fix: bool = False, during_init: bool = False) -> int:
         print(f"aramid: doctor: {line}", file=sys.stderr)
     for line in relocated_gate_notes(root):
         print(f"aramid: doctor: {line}", file=sys.stderr)
+    if not during_init:
+        # Suppressed during `aramid init`, which rewrites every shim moments
+        # after this report prints. Printed, never an exit: the OPERATOR's
+        # "Make doctor flag it" (2026-11-02) is a WARN.
+        for line in probe_stale_shims(root):
+            print(f"aramid: doctor: {line}", file=sys.stderr)
 
     from aramid import registry as registry_mod
     editable_gate = editable_consumers_lines(direct_url, registry_mod.load_registry())
