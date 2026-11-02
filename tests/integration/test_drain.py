@@ -268,6 +268,38 @@ def test_an_amend_on_a_branch_that_is_not_checked_out_is_drained_there(
         f"amended feature branch")
 
 
+def test_a_branch_reset_back_to_its_base_is_not_drained_as_an_empty_range(
+        tmp_path, seam, monkeypatch):
+    """llm-review 4aa577a6, on the reflog cut: reset the queued commit's
+    branch back to the base and re-commit the work on a new branch. The only
+    branch whose reflog holds the head sits at the base, and taking its tip
+    drained base..base. OPERATOR 2026-11-01 "Refuse an empty range": a tip at
+    or behind the base is not taken, and the item is drained as queued."""
+    r, base, first = _queued_script_commit(tmp_path, branch="feature")
+    _git(r, "reset", "-q", "--hard", base)
+    _git(r, "checkout", "-q", "-b", "elsewhere")
+    _commit(r, "tools/run.py",
+            "import subprocess\nsubprocess.run(['true'], check=True)\n", "redo")
+    triage_cmd.cmd_triage(r, "HEAD")
+    assert _queued_now(r).head == first, "precondition: the re-commit was not queued"
+    consumed = _recording(monkeypatch)
+
+    assert cmd_drain([], dry_run=False) == 0
+
+    assert consumed == [(base, first)], (
+        f"the drain consumed {consumed}, not {base[:7]}..{first[:7]} as queued: "
+        f"feature's tip is the base")
+    led = Ledger(r / ".aramid" / "ledger.db")
+    try:
+        reasons = [rs for e in led.events() if e.type is EventType.QUEUE_ITEM_COALESCED
+                   for rs in e.payload.get("reasons", [])]
+    finally:
+        led.close()
+    assert (f"rewritten: {first[:12]} is on no branch or tag, and no branch whose "
+            f"reflog holds it (feature) has commits past its base; drained as queued"
+            ) in reasons, reasons
+
+
 def test_a_queued_commit_still_on_a_branch_is_drained_where_it_is(
         tmp_path, seam, monkeypatch):
     """The other limb: HEAD has moved to another branch, but main still holds

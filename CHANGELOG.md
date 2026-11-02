@@ -47,8 +47,12 @@ to publish a tag that disagrees with it.
   work -- keeps the item's base, and records why (`rewritten: <sha> is on no
   branch or tag; drained at <branch>`). It does not take HEAD: an amend
   followed by a checkout of another branch would drain the wrong range, or
-  an empty one. When no branch's reflog holds the head, or several do, the
-  item is drained as queued, as before, with a reason saying so. HEAD's own
+  an empty one. Nor does it take a branch whose tip is at or behind the
+  item's base: a reset back to the base, with the work re-committed on a new
+  branch, leaves that branch holding nothing the item queued. Of several
+  branches, the one with commits past the base is taken. When no branch
+  qualifies, or several do, the item is drained as queued, as before, with
+  a reason saying so. HEAD's own
   reflog and remote-tracking reflogs are not read, so an amend followed by a
   force-push still has one answer. A queued commit still on a branch is
   drained where it is, even with HEAD on another branch, and when git

@@ -470,7 +470,15 @@ def _repoint_rewritten(root: Path, ledger, item: queue.QueueItem, at: str) -> qu
     the branch reflog"). The base is kept, except on an empty-range item
     (base == head: the re-test item), whose base goes with its head.
 
-    No such branch, or more than one: drained as queued, which is what the
+    A branch whose tip is at or behind the base carries none of the work: a
+    reset back to the base, with the work re-committed on a new branch, left
+    the one branch holding the head AT the base, and taking it drained
+    base..base (llm-review 4aa577a6; OPERATOR 2026-11-01 "Refuse an empty
+    range"). Such a branch is no candidate, and of several, the one left is
+    the one ("Narrow it with the new check", llm-review 970524b4). The
+    re-test item is exempt: its base is its own dead head.
+
+    No candidate, or more than one: drained as queued, which is what the
     drain did before it re-pointed anything, with a reason saying why --
     recorded once, however many drains the item waits through. Unchanged and
     silent when git cannot say, or when HEAD IS the head (checked out
@@ -483,17 +491,24 @@ def _repoint_rewritten(root: Path, ledger, item: queue.QueueItem, at: str) -> qu
     held = gitutil.branches_that_held(root, item.head)
     if held is None:
         return item
+    retest = item.base == item.head
+    carrying = [(name, tip) for name, tip in held
+                if retest or not gitutil.is_ancestor(root, tip, item.base)]
     dead, base, head = item.head[:12], item.base, item.head
-    if len(held) == 1:
-        branch, head = held[0]
-        if item.base == item.head:
+    if len(carrying) == 1:
+        branch, head = carrying[0]
+        if retest:
             base = head
         reason = (f"rewritten: {dead} is on no branch or tag; drained at {branch} "
                   f"({head[:12]}), whose reflog held it")
+    elif carrying:
+        names = ", ".join(sorted(name for name, _tip in carrying))
+        reason = (f"rewritten: {dead} is on no branch or tag, and {len(carrying)} branches "
+                  f"whose reflogs hold it could carry its work ({names}); drained as queued")
     elif held:
         names = ", ".join(sorted(name for name, _tip in held))
-        reason = (f"rewritten: {dead} is on no branch or tag, and {len(held)} branches' "
-                  f"reflogs hold it ({names}); drained as queued")
+        reason = (f"rewritten: {dead} is on no branch or tag, and no branch whose reflog "
+                  f"holds it ({names}) has commits past its base; drained as queued")
     else:
         reason = (f"rewritten: {dead} is on no branch or tag, and no branch's reflog "
                   f"holds it; drained as queued")
