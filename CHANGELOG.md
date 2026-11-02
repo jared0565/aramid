@@ -34,6 +34,28 @@ to publish a tag that disagrees with it.
   name. A hook git copied in from the template directory
   (`aramid hooks install`) is current when it matches the current template.
 
+### Fixed
+
+- **Mutation testing no longer stands down for good over occasional slow
+  baselines.** The give-up `mutation giving up: <suite> does not fit the Ns
+  baseline budget after 3 attempts` counted every baseline timeout in the
+  repository's history, so three timeouts weeks apart stopped mutation
+  testing permanently, even with green baselines between them. On graphite,
+  timeouts on 10-17, 10-28 and 10-29, with 22 green baselines between them,
+  stood mutation down on 10-29; every drain since has skipped it, and its
+  fleet row stays red on `consumers_healthy`. Now only timeouts since the
+  consumer's last baseline that finished green count. The same applies to
+  `baseline command not found` and to the JavaScript consumer's timeout
+  give-up. Nothing else resets the count: not a give-up, not an item with
+  nothing to test, not a red baseline, and not another consumer's run. So
+  three timeouts with no green baseline between them still stand down
+  across new commits and new queue items, as before. A repo stood down this
+  way resumes the next time a drain has Python for mutation to test, if a
+  green baseline followed its earlier timeouts; otherwise raise
+  `baseline_timeout_s` as before. js_mutation now
+  records `baseline_s`, the baseline's measured time, as mutation already
+  did; `aramid ledger consumers --json` shows it under `extra`.
+
 ## [0.20.11] — 2026-11-02
 
 ### Added

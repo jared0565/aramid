@@ -385,9 +385,15 @@ def consume(item, ctx: DrainContext) -> ConsumerResult:
     # Reported on EVERY completed run, kills or none: `examined` names the
     # open findings this run read, so an empty claim is still a run that
     # looked (consumers.base.Repaired; interop round 180).
+    # The measured baseline, under the key the Python consumer uses: it is the
+    # green-baseline marker the repo-scoped timeout give-up resets on
+    # (`base.GREEN_BASELINE_KEY`), and the number `baseline_timeout_s` is sized
+    # against. Only this return records it -- every earlier one is a baseline
+    # that did not finish green.
+    extra = {**stats, base.GREEN_BASELINE_KEY: float(base_res.duration_s or 0.0)}
     return ConsumerResult(consumer=NAME, state="ok", findings=findings,
                           duration_s=time.monotonic() - started, cost=0.0,
-                          note=note, extra=dict(stats),
+                          note=note, extra=extra,
                           repaired=base.Repaired(tool=TOOL, reason="mutant_killed",
                                                  ids=repaired_ids,
                                                  examined=tuple(sorted(open_ids))))

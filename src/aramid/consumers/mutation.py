@@ -78,11 +78,14 @@ def timeout_note_prefix(budget: float, suite: str) -> str:
     A suite that overruns its budget is a property of the repo's config: no
     commit changes it, so head-scoping that counter means it never latches.
 
-    Those two inputs are also the release valve. The give-up below is
-    permanent for as long as the note matches, so it has to stop matching when
-    the operator does something about it: raise `baseline_timeout_s`, or point
+    Those two inputs are also the release valve. The give-up below holds for
+    as long as the note matches, so it has to stop matching when the operator
+    does something about it: raise `baseline_timeout_s`, or point
     `test_command` at a narrower suite, and the prefix changes, the count
-    falls to zero, and mutation tries again on the next drain.
+    falls to zero, and mutation tries again on the next drain. The count is
+    also only of timeouts since the last baseline that finished green
+    (`base.note_count_any_item`): three timeouts with green baselines between
+    them are a suite that fits, on a machine that was sometimes busy.
     """
     return f"baseline timeout: {suite} did not finish within the {budget:.0f}s budget"
 
@@ -827,14 +830,15 @@ def _give_up_note(ledger, item, suite: str, baseline_budget: float, argv0: str):
     """The note `consume` returns instead of running, or None. Four
     give-ups, each keyed on a load-bearing note prefix and a threshold met
     (`>=`) rather than exceeded -- the first two are REPO-scoped
-    (`note_count_any_item`), the last two are scoped to this item at this head.
+    (`note_count_any_item`, which counts since the last green baseline), the
+    last two are scoped to this item at this head.
     Every one stays `ok`: `degraded` stops the drain marking the item
     drained, which would pin the queue and re-run every other consumer on
     it forever. Loud in `status`, not in the drain state."""
     if base.note_count_any_item(
             ledger, NAME, timeout_note_prefix(baseline_budget, suite)) >= _TIMEOUT_GIVE_UP:
-        # REPO-scoped and permanent until the config changes -- see
-        # `timeout_note_prefix`.
+        # REPO-scoped: held until the config changes, counted only since the
+        # last green baseline -- see `timeout_note_prefix`.
         return (f"mutation giving up: {suite} does not fit the "
                 f"{baseline_budget:.0f}s baseline budget after "
                 f"{_TIMEOUT_GIVE_UP} attempts -- raise "
@@ -1493,8 +1497,10 @@ def consume(item, ctx: DrainContext) -> ConsumerResult:
     extra["mutation_scores"] = _finalize_scores(scores)
     # How long the configured suite actually took, measured. Recorded so an
     # operator sizing `baseline_timeout_s` has a real number to size it
-    # against rather than doubling the budget until the timeouts stop.
-    extra["baseline_s"] = baseline_s
+    # against rather than doubling the budget until the timeouts stop. Also
+    # the green-baseline marker the repo-scoped give-ups reset on
+    # (`base.note_count_any_item`), so it is written on this path only.
+    extra[base.GREEN_BASELINE_KEY] = baseline_s
     # A repair claim is a FULL-SUITE-CONFIRMED kill, which is a strictly
     # smaller set than `killed_fps`. `_mutant_fp` is the same
     # `compute_fingerprint` call `normalize` makes for a survivor (same

@@ -150,7 +150,7 @@ def _run(r, base, head, monkeypatch, cfg, outcomes=None, *, default=FAIL, clock=
 
 
 ZERO = {"generated": 0, "tested": 0, "killed": 0, "survived": 0, "timeouts": 0, "errors": 0,
-        "unconfirmed_kills": 0, "killed_fps": [], "truncated": False}
+        "unconfirmed_kills": 0, "killed_fps": [], "truncated": False, "baseline_s": 0.0}
 
 
 def _stats(res, **expect):
@@ -262,6 +262,42 @@ def test_three_baseline_timeouts_on_any_item_give_up_with_the_budget_named(
         "ok", "js mutation giving up: npm test does not fit the 480s baseline budget after"
               " 3 attempts -- raise [js_mutation].baseline_timeout_s")
     assert oracle.calls == []
+
+
+def _seed_green(r, item_id="older"):
+    """One finished run whose baseline went green, as `consume` records it."""
+    led = Ledger(r / ".aramid" / "ledger.db")
+    try:
+        led.append(Event(EventType.CONSUMER_RUN_FINISHED, "g", "2026-08-10T05:00:00+00:00",
+                         payload={"consumer": "js_mutation", "item_id": item_id,
+                                  "state": "ok", "note": "0 survivor(s) of 2 mutant(s) tested",
+                                  "duration_s": 900.0, "baseline_s": 412.5}))
+    finally:
+        led.close()
+
+
+def test_a_green_baseline_after_the_timeouts_releases_the_give_up(tmp_path, monkeypatch):
+    r, base, head = _repo(tmp_path)
+    timeout = pymut.timeout_note_prefix(480.0, "npm test") + " (last seen @ x)"
+    _seed_notes(r, 2, timeout, item_id="older")
+    _seed_green(r)
+    _seed_notes(r, 1, timeout, item_id="newer")
+
+    res, oracle = _run(r, base, head, monkeypatch, {})
+
+    assert res.state == "ok" and "giving up" not in res.note, res.note
+    assert len(oracle.calls) == 4, "baseline + 3 mutants"
+
+
+def test_a_completed_run_records_the_baseline_it_measured(tmp_path, monkeypatch):
+    """The marker the timeout give-up resets on, and the number an operator
+    sizes `baseline_timeout_s` against -- the Python consumer's `baseline_s`."""
+    r, base, head = _repo(tmp_path, 1)
+    measured = RunnerResult(tool="npm", state=ToolState.OK, returncode=0, duration_s=412.5)
+
+    res, _oracle = _run(r, base, head, monkeypatch, {}, {"BASE": measured})
+
+    assert res.extra.get("baseline_s") == 412.5
 
 
 def test_three_failing_baselines_at_this_item_give_up(tmp_path, monkeypatch):
@@ -755,7 +791,7 @@ def test_a_run_whose_every_mutant_timed_out_certifies_nothing_and_says_so(
     res, oracle = _run(r, base, head, monkeypatch, {}, {"BASE": baseline}, default=TIMEOUT)
 
     assert res.state == "ok"
-    _stats(res, generated=2, tested=2, timeouts=2)
+    _stats(res, generated=2, tested=2, timeouts=2, baseline_s=390.4)
     assert res.note == ("no mutant reached a verdict: 2 tested, 2 timed out, 0 errored -- the"
                         " baseline took 390s; [js_mutation].mutant_timeout_s is 120s,"
                         " raised to 586s for this suite")
@@ -780,7 +816,7 @@ def test_a_mutant_gets_one_and_a_half_times_a_baseline_longer_than_the_knob(
     assert [(lab, t) for lab, t, _ in oracle.calls] == [
         ("BASE", 480.0), ("f1", 640.5), ("f2", 640.5)]
     _stats(res, generated=2, tested=2, killed=2,
-           killed_fps=[fp(r, "f1"), fp(r, "f2")])
+           killed_fps=[fp(r, "f1"), fp(r, "f2")], baseline_s=427.0)
 
 
 def test_the_configured_mutant_timeout_is_a_floor_for_a_fast_suite(tmp_path, monkeypatch):
@@ -833,7 +869,7 @@ def test_a_baseline_that_ate_the_whole_budget_certifies_nothing_and_says_so(
                        {"BASE": baseline}, clock=(0.0, 450.5))
 
     assert res.state == "ok"
-    _stats(res, generated=3, tested=0, truncated=True)
+    _stats(res, generated=3, tested=0, truncated=True, baseline_s=449.6)
     assert res.note == ("no mutants tested: 3 generated, 0 certified -- the 450s wall budget"
                         " covers the whole item and the baseline alone took 450s. Raise"
                         " [js_mutation].wall_budget_s.")

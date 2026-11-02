@@ -13,6 +13,11 @@ OK = "ok"
 DEGRADED = "degraded"
 ERROR = "error"
 
+# The CONSUMER_RUN_FINISHED key a mutation consumer records ONLY on a run whose
+# baseline finished green (the measured seconds). `note_count_any_item` resets
+# on it, so both consumers must write it on that path and on no other.
+GREEN_BASELINE_KEY = "baseline_s"
+
 
 @dataclass
 class DrainContext:
@@ -128,11 +133,25 @@ def note_count_any_item(ledger, consumer: str, prefix: str) -> int:
     commits, so it MUST put its own release valve in the prefix -- mutation
     keys on (suite command, budget), the two things an operator can change.
     Without that this is a one-way door.
+
+    The second release valve is evidence: the count is of matching runs SINCE
+    this consumer's last run that carries `GREEN_BASELINE_KEY`, i.e. whose
+    baseline finished green. Counted over all history instead, three timeouts
+    twelve days apart -- with 22 green baselines between them --
+    stood mutation down for good in a downstream repo (graphite, 2026-10-29)
+    on the claim that its suite "does not fit". Only a green baseline resets:
+    a give-up, an idle item, a red baseline (a suite that stops at its first
+    failure says nothing about the whole suite's time) and another consumer's
+    run all leave the count where it was, so a latch still holds across
+    items and heads. Matched on the key, never the value: 0.0 is a time.
     """
     n = 0
     for e in ledger.events():
-        if (e.type is EventType.CONSUMER_RUN_FINISHED
-                and e.payload.get("consumer") == consumer
-                and str(e.payload.get("note", "")).startswith(prefix)):
+        if (e.type is not EventType.CONSUMER_RUN_FINISHED
+                or e.payload.get("consumer") != consumer):
+            continue
+        if GREEN_BASELINE_KEY in e.payload:
+            n = 0
+        elif str(e.payload.get("note", "")).startswith(prefix):
             n += 1
     return n

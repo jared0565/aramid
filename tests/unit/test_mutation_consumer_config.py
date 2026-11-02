@@ -164,6 +164,85 @@ def test_missing_command_give_up_fires_at_exactly_the_threshold(tmp_path):
                     f"{n} attempts -- fix [mutation].test_command or [tests].command")
 
 
+# --- the repo-scoped give-ups count only since the last GREEN baseline -----
+#
+# graphite, 2026-10-17..29: three 1500s baseline timeouts twelve days apart,
+# 22 runs between them whose baselines finished green, and a
+# permanent stand-down saying the suite "does not fit". A run that carries
+# `baseline_s` is one whose baseline FINISHED GREEN -- `consume` records it on
+# that path only -- which disproves "does not fit", so it resets the count.
+# Nothing else may: the never-latch fix (a give-up returns ok, so the next
+# drain is a fresh item at a new head) has to keep latching across both.
+
+_GRAPHITE_SUITE = "-P scripts/mutation_tests.py"
+_GRAPHITE_ARGS = (_GRAPHITE_SUITE, 1500.0, "python")
+_TIMEOUT = {"state": "degraded",
+            "note": mut_consumer.timeout_note_prefix(1500.0, _GRAPHITE_SUITE)
+            + " (last seen @ 893dd08717be)"}
+_GREEN = {"state": "ok", "note": "1 confirmed survivor(s) of 10 mutant(s) tested",
+          "baseline_s": 1388.0}
+_GRAPHITE_GIVE_UP = ("mutation giving up: -P scripts/mutation_tests.py does not fit the 1500s "
+                     "baseline budget after 3 attempts -- raise [mutation].baseline_timeout_s, "
+                     "or point [mutation].test_command at a narrower suite")
+
+
+def _ledger_with_runs(tmp_path, runs):
+    """A real ledger holding one CONSUMER_RUN_FINISHED per payload, oldest
+    first, each on its own queue item; `consumer` defaults to this one."""
+    from aramid.ledger import Event, EventType, Ledger
+    led = Ledger(tmp_path / "ledger.db")
+    for i, payload in enumerate(runs):
+        led.append(Event(EventType.CONSUMER_RUN_FINISHED, f"run{i}",
+                         f"2026-10-29T00:00:{i:02d}Z", None,
+                         {"consumer": mut_consumer.NAME, "item_id": f"i{i}", **payload}))
+    return led
+
+
+def test_timeout_give_up_counts_only_timeouts_since_the_last_green_baseline(tmp_path):
+    spread = _ledger_with_runs(tmp_path / "s", [_TIMEOUT, _GREEN, _GREEN, _TIMEOUT,
+                                                _GREEN, _TIMEOUT])
+    two_since = _ledger_with_runs(tmp_path / "t", [_TIMEOUT, _TIMEOUT, _GREEN,
+                                                   _TIMEOUT, _TIMEOUT])
+    three_since = _ledger_with_runs(tmp_path / "a", [_TIMEOUT, _GREEN, _TIMEOUT,
+                                                     _TIMEOUT, _TIMEOUT])
+    assert mut_consumer._give_up_note(spread, _item(), *_GRAPHITE_ARGS) is None, \
+        "graphite's shape: three timeouts, never three without a green baseline between"
+    assert mut_consumer._give_up_note(two_since, _item(), *_GRAPHITE_ARGS) is None
+    assert mut_consumer._give_up_note(three_since, _item(), *_GRAPHITE_ARGS) == _GRAPHITE_GIVE_UP
+
+
+def test_a_green_baseline_resets_the_count_by_its_key_not_its_value(tmp_path):
+    instant = dict(_GREEN, baseline_s=0.0)
+    led = _ledger_with_runs(tmp_path, [_TIMEOUT, _TIMEOUT, instant, _TIMEOUT])
+    assert mut_consumer._give_up_note(led, _item(), *_GRAPHITE_ARGS) is None
+
+
+def test_runs_that_never_finished_a_green_baseline_do_not_reset_the_count(tmp_path):
+    """The never-latch guard. Between three timeouts on three items: a give-up
+    (ok, so its item drained), an idle item, a RED baseline (it finished, but
+    a suite that stops at its first failure proves nothing about the whole
+    suite's time), and a green baseline recorded by ANOTHER consumer."""
+    give_up = {"state": "ok", "note": _GRAPHITE_GIVE_UP}
+    idle = {"state": "ok", "note": "no python files in range"}
+    red = {"state": "degraded",
+           "note": mut_consumer.failing_note_prefix("f" * 40) + " -- rc 1: boom"}
+    elsewhere = dict(_GREEN, consumer="js_mutation")
+    led = _ledger_with_runs(tmp_path, [_TIMEOUT, give_up, idle, _TIMEOUT, red, elsewhere,
+                                       _TIMEOUT])
+    assert mut_consumer._give_up_note(led, _item(), *_GRAPHITE_ARGS) == _GRAPHITE_GIVE_UP
+
+
+def test_missing_command_give_up_counts_only_since_the_last_green_baseline(tmp_path):
+    missing = {"state": "degraded",
+               "note": mut_consumer.missing_note_prefix("python") + " (resolved from x)"}
+    reset = _ledger_with_runs(tmp_path / "r", [missing, missing, _GREEN, missing])
+    latched = _ledger_with_runs(tmp_path / "l", [missing, _GREEN, missing, missing, missing])
+    assert mut_consumer._give_up_note(reset, _item(), "pytest -q", 480.0, "python") is None
+    assert mut_consumer._give_up_note(latched, _item(), "pytest -q", 480.0, "python") == (
+        "mutation giving up: python not found after 3 attempts -- fix "
+        "[mutation].test_command or [tests].command")
+
+
 def test_failing_baseline_give_up_is_scoped_to_this_item_and_head(tmp_path):
     head = "c" * 40
     prefix = mut_consumer.failing_note_prefix(head)
