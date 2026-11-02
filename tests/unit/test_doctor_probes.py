@@ -572,6 +572,99 @@ def test_stale_probe_fails_open_when_the_hooks_dir_cannot_be_read(tmp_path, monk
     assert doctor.probe_stale_shims(r) == []
 
 
+# ---------------------------------------------------- probe_unguarded_shims --
+# The OPERATOR's "Exit 2 only if -P missing" (2026-11-02): an own-slot shim
+# that launches `-m aramid` without `-P` is the cwd-shadowable shape 30dc615
+# closed, and exits 2 like the relocated and agent-surface cases; any other
+# staleness stays probe_stale_shims' WARN.
+
+def _without_p(shim, launch=b" -P -m aramid"):
+    bare = shim.replace(launch, launch.replace(b" -P", b""))
+    assert bare != shim
+    return bare
+
+
+def _unguarded_line(hdir, hook):
+    return (f"hooks: aramid's {hook} shim in {hdir} runs aramid WITHOUT `-P`, so an "
+            f"aramid.py at the repo root would run in the gate's place -- run `aramid "
+            f"init .` to regenerate it; doctor never rewrites a hook")
+
+
+def test_unguarded_probe_is_silent_off_an_onboarded_repo_with_a_hooks_dir(tmp_path):
+    plain = _repo(tmp_path, onboarded=False, name="plain")
+    _own(plain, "pre-commit", _without_p(_current(plain)))
+    assert doctor.probe_unguarded_shims(plain) == []        # not onboarded: not asked
+    r = _repo(tmp_path)
+    assert doctor.probe_unguarded_shims(r) == []            # onboarded, hooks dir absent
+    hooks_mod.hooks_dir(r).mkdir(parents=True)
+    assert doctor.probe_unguarded_shims(r) == []            # empty hooks dir
+
+
+def test_unguarded_probe_is_silent_for_current_and_merely_stale_shims(tmp_path):
+    # Today's missing remote name is stale, not unguarded: the WARN's case.
+    r = _repo(tmp_path)
+    _own(r, "pre-commit", _current(r, Gate.PRE_COMMIT))
+    hdir = _own(r, "pre-push", _pre_0_20_11(_current(r, Gate.PRE_PUSH)))
+    _own(r, "post-commit", hooks_mod.render_triage_shim(Path(sys.executable)))
+    assert doctor.probe_unguarded_shims(r) == []
+    assert doctor.probe_stale_shims(r) == [_stale_line(hdir, "pre-push")]
+
+
+def test_unguarded_probe_names_a_shim_without_p_in_every_slot_and_only_once(tmp_path):
+    r = _repo(tmp_path)
+    _own(r, "pre-commit", _without_p(_current(r, Gate.PRE_COMMIT)))
+    _own(r, "pre-push", _without_p(hooks_mod.render_template_shim(Gate.PRE_PUSH,
+                                                                  Path(sys.executable))))
+    hdir = _own(r, "post-commit", _without_p(hooks_mod.render_triage_shim(Path(sys.executable))))
+    assert doctor.probe_unguarded_shims(r) == [_unguarded_line(hdir, "pre-commit"),
+                                               _unguarded_line(hdir, "pre-push"),
+                                               _unguarded_line(hdir, "post-commit")]
+    assert doctor.probe_stale_shims(r) == []                # named once, as the exit-2 line
+
+
+def test_unguarded_probe_flags_a_shim_whose_fallback_launch_alone_lacks_p(tmp_path):
+    # `py -3` runs whenever the baked interpreter is gone: a launch like any other.
+    r = _repo(tmp_path)
+    hdir = _own(r, "pre-commit", _without_p(_current(r), launch=b"py -3 -P -m aramid"))
+    assert b'"$INTERP" -P -m aramid' in (hdir / "pre-commit").read_bytes()
+    assert doctor.probe_unguarded_shims(r) == [_unguarded_line(hdir, "pre-commit")]
+
+
+def test_unguarded_probe_flags_one_without_an_interp_line(tmp_path):
+    r = _repo(tmp_path)
+    hdir = _own(r, "pre-commit", f"#!/bin/sh\n{hooks_mod.MARKER_START}\n"
+                                 f"py -3 -m aramid check --gate pre-commit\n".encode())
+    assert doctor.probe_unguarded_shims(r) == [_unguarded_line(hdir, "pre-commit")]
+    assert doctor.probe_stale_shims(r) == []
+
+
+def test_unguarded_probe_reads_a_comment_as_no_launch(tmp_path):
+    r = _repo(tmp_path)
+    shim = _current(r).replace(b"#!/bin/sh\n", b"#!/bin/sh\n  # was: python -m aramid check\n", 1)
+    hdir = _own(r, "pre-commit", shim)
+    assert doctor.probe_unguarded_shims(r) == []
+    assert doctor.probe_stale_shims(r) == [_stale_line(hdir, "pre-commit")]
+
+
+def test_unguarded_probe_leaves_foreign_and_relocated_slots_to_the_other_probes(tmp_path):
+    r = _repo(tmp_path)
+    _own(r, "pre-commit", b"#!/bin/sh\npython -m aramid check --gate pre-commit\n")
+    _relocated(r, hook="pre-push", body=_without_p(_current(r, Gate.PRE_PUSH)))
+    assert doctor.probe_unguarded_shims(r) == []
+    assert doctor.probe_relocated_shims(r) != []            # that probe owns this one
+
+
+def test_unguarded_probe_fails_open_when_the_hooks_dir_cannot_be_read(tmp_path, monkeypatch):
+    r = _repo(tmp_path)
+    _own(r, "pre-commit", _without_p(_current(r)))
+
+    def unreadable(root):
+        raise OSError("unreadable")
+
+    monkeypatch.setattr(hooks_mod, "hooks_dir", unreadable)
+    assert doctor.probe_unguarded_shims(r) == []
+
+
 # ---------------------------------------------------------------- cmd_doctor --
 
 def _all_present():
@@ -705,6 +798,25 @@ def test_doctor_says_nothing_of_a_stale_shim_while_init_is_running(tmp_path, cap
     r = _repo(tmp_path)
     _own(r, "pre-commit", _current(r, Gate.PRE_COMMIT))
     _own(r, "pre-push", _pre_0_20_11(_current(r, Gate.PRE_PUSH)))
+
+    assert _run(r, during_init=True) == 0
+    assert capsys.readouterr().err == ""
+
+
+def test_doctor_exits_2_for_an_own_shim_without_p(tmp_path, capsys, quiet):
+    # The OPERATOR's "Exit 2 only if -P missing" (2026-11-02).
+    r = _repo(tmp_path)
+    hdir = _own(r, "pre-commit", _without_p(_current(r, Gate.PRE_COMMIT)))
+    _own(r, "pre-push", _current(r, Gate.PRE_PUSH))
+
+    assert _run(r) == 2
+    assert capsys.readouterr().err == f"aramid: doctor: {_unguarded_line(hdir, 'pre-commit')}\n"
+
+
+def test_doctor_says_nothing_of_a_shim_without_p_while_init_is_running(tmp_path, capsys, quiet):
+    r = _repo(tmp_path)
+    _own(r, "pre-commit", _without_p(_current(r, Gate.PRE_COMMIT)))
+    _own(r, "pre-push", _current(r, Gate.PRE_PUSH))
 
     assert _run(r, during_init=True) == 0
     assert capsys.readouterr().err == ""

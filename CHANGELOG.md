@@ -21,7 +21,13 @@ to publish a tag that disagrees with it.
   hook's own interpreter, and names each one that differs (`hooks: aramid's
   pre-push shim in <dir> is STALE (differs from what aramid X.Y.Z writes)`),
   with `aramid init .` as the remedy. It is a warning:
-  doctor's exit code is unchanged, and doctor never rewrites a hook. Until
+  doctor's exit code is unchanged, and doctor never rewrites a hook. The one
+  exception exits 2: a hook that starts aramid with `python -m aramid` but
+  without `-P`, which doctor names as running aramid WITHOUT -P. Hooks run
+  from the repository root, so without `-P` an `aramid.py` there would run in
+  the gate's place. Every release since 0.1.0 writes `-P`, so only a hook
+  from before the first release, or one edited by hand, is affected. A stale
+  hook relocated behind another tool's already exited 2. Until
   now only a hook relocated behind another tool's was checked, so a repo
   that skipped a release's "re-run `aramid init`" kept the old hook with no
   notice; on 0.20.11 that is a pre-push hook that does not pass the remote's

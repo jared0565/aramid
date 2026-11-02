@@ -1115,31 +1115,17 @@ def probe_stale_shims(root: Path) -> list[str]:
     matches the GLOBAL TEMPLATE render is current too: `aramid hooks install`
     puts that variant into every new clone. A WARN by that ruling: the
     caller prints these and never changes its exit for them (a stale
-    RELOCATED shim exits 2; see `probe_relocated_shims`).
+    RELOCATED shim exits 2; see `probe_relocated_shims`). A shim that lost
+    `-P` is left to `probe_unguarded_shims`, whose lines DO exit 2.
 
     Fails OPEN, to [], on any error: a probe that raised would break doctor,
     and the cost is one missed warning."""
     try:
-        if not (root / "aramid.toml").exists():
-            return []
         from aramid import __version__
-        from aramid import hooks as hooks_mod
-        hdir = hooks_mod.hooks_dir(root)
-        if not hdir.is_dir():
-            return []
-        match_ci = hooks_mod._match_ci(root)
-        renderers = [(g.value,
-                      lambda interp, g=g: (hooks_mod.render_shim(g, interp, match_ci),
-                                           hooks_mod.render_template_shim(g, interp)))
-                     for g in hooks_mod.GATES]
-        renderers.append((hooks_mod.TRIAGE_HOOK,
-                          lambda interp: (hooks_mod.render_triage_shim(interp),)))
         lines = []
-        for hook, render in renderers:
-            slot = hdir / hook
-            if not hooks_mod._is_aramid_shim(slot):
-                continue            # absent (probe_enforcement) or not ours (relocated)
-            current = slot.read_bytes()
+        for hook, hdir, current, render in _own_slot_shims(root):
+            if _launches_aramid_without_p(current):
+                continue            # probe_unguarded_shims names it, and exits 2
             interp_sh = _baked_interpreter(current)
             interp = _sh_path_to_win(interp_sh) if interp_sh else None
             if interp is None:
@@ -1154,6 +1140,69 @@ def probe_stale_shims(root: Path) -> list[str]:
         return lines
     except Exception:
         return []                   # fail open: never break doctor
+
+
+def probe_unguarded_shims(root: Path) -> list[str]:
+    """aramid's OWN shim in its own slot that launches `-m aramid` without
+    `-P`: the cwd-shadowable shape 30dc615 closed (a hook runs with the repo
+    root as cwd, so an `aramid.py` there would run in the gate's place).
+
+    The OPERATOR's "Exit 2 only if -P missing" (2026-11-02): `cmd_doctor`
+    exits 2 for these, as it does for a stale RELOCATED shim and for an
+    agent-surface entry that lost `-P`; every other kind of staleness stays
+    `probe_stale_shims`' WARN, which skips these so each is named once. Read
+    from the shim's own launch lines, not by rendering: any shim without
+    `-P` differs from what this aramid writes.
+
+    Fails OPEN, to [], on any error, like its sibling: a probe that raised
+    would break doctor. That direction costs one missed exit 2."""
+    try:
+        return [f"hooks: aramid's {hook} shim in {hdir} runs aramid WITHOUT `-P`, so an "
+                f"aramid.py at the repo root would run in the gate's place -- run `aramid "
+                f"init .` to regenerate it; doctor never rewrites a hook"
+                for hook, hdir, current, _render in _own_slot_shims(root)
+                if _launches_aramid_without_p(current)]
+    except Exception:
+        return []                   # fail open: never break doctor
+
+
+def _own_slot_shims(root: Path):
+    """(hook, hooks dir, bytes, render) for each slot holding aramid's OWN
+    shim -- pre-commit, pre-push and the post-commit triage -- in an
+    onboarded repo; `render(interp)` gives every variant aramid writes there
+    today. An absent slot is `probe_enforcement`'s and a foreign or
+    relocated one `probe_relocated_shims`', so neither is yielded. Raises;
+    the probes that call it fail open."""
+    if not (root / "aramid.toml").exists():
+        return
+    from aramid import hooks as hooks_mod
+    hdir = hooks_mod.hooks_dir(root)
+    if not hdir.is_dir():
+        return
+    match_ci = hooks_mod._match_ci(root)
+    renderers = [(g.value,
+                  lambda interp, g=g: (hooks_mod.render_shim(g, interp, match_ci),
+                                       hooks_mod.render_template_shim(g, interp)))
+                 for g in hooks_mod.GATES]
+    renderers.append((hooks_mod.TRIAGE_HOOK,
+                      lambda interp: (hooks_mod.render_triage_shim(interp),)))
+    for hook, render in renderers:
+        slot = hdir / hook
+        if hooks_mod._is_aramid_shim(slot):
+            yield hook, hdir, slot.read_bytes(), render
+
+
+def _launches_aramid_without_p(body: bytes) -> bool:
+    """True when a non-comment line of `body` runs `-m aramid` with no `-P`
+    token before it. Every launch counts, the `py -3` fallback included: it
+    runs whenever the baked interpreter is gone."""
+    for line in body.splitlines():
+        if line.lstrip().startswith(b"#"):
+            continue
+        head, launch, _ = line.partition(b"-m aramid")
+        if launch and b"-P" not in head.split():
+            return True
+    return False
 
 
 def relocated_gate_notes(root: Path) -> list[str]:
@@ -1186,7 +1235,9 @@ def cmd_doctor(root: Path, fix: bool = False, during_init: bool = False) -> int:
     to "the gate is not fully operational", which covers both: in each case
     the repo is not actually being gated, and reporting 0 would be a false
     green light. A stale aramid shim in its OWN slot is reported and never
-    changes the exit (`probe_stale_shims`; the OPERATOR's WARN, 2026-11-02).
+    changes the exit (`probe_stale_shims`; the OPERATOR's WARN, 2026-11-02),
+    unless it launches aramid without `-P`: that one returns 2
+    (`probe_unguarded_shims`; the OPERATOR's "Exit 2 only if -P missing").
 
     T-2: also returns 2 when the repo's TEST toolchain is broken (see
     `probe_tests`) -- a detected-or-configured test suite whose tool cannot
@@ -1307,10 +1358,14 @@ def cmd_doctor(root: Path, fix: bool = False, during_init: bool = False) -> int:
         print(f"aramid: doctor: {line}", file=sys.stderr)
     for line in relocated_gate_notes(root):
         print(f"aramid: doctor: {line}", file=sys.stderr)
+    # Both suppressed during `aramid init`, which rewrites every shim moments
+    # after this report prints. A stale own-slot shim is printed, never an
+    # exit (the OPERATOR's WARN, 2026-11-02); one that lost `-P` exits 2 below
+    # (the OPERATOR's "Exit 2 only if -P missing", the same day).
+    unguarded_shims = [] if during_init else probe_unguarded_shims(root)
+    for line in unguarded_shims:
+        print(f"aramid: doctor: {line}", file=sys.stderr)
     if not during_init:
-        # Suppressed during `aramid init`, which rewrites every shim moments
-        # after this report prints. Printed, never an exit: the OPERATOR's
-        # "Make doctor flag it" (2026-11-02) is a WARN.
         for line in probe_stale_shims(root):
             print(f"aramid: doctor: {line}", file=sys.stderr)
 
@@ -1367,6 +1422,8 @@ def cmd_doctor(root: Path, fix: bool = False, during_init: bool = False) -> int:
         return 2                        # tools fine, but nothing is gating
     if relocated_gate:
         return 2                        # tools fine, but the relocated shim is not what init installs
+    if unguarded_shims:
+        return 2                        # an own shim that lost -P is the -P-stripping class
     if editable_gate:
         return 2                        # tools fine, but the gate is a working tree
     if settings_tampered:
