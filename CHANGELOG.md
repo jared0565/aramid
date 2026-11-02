@@ -12,6 +12,8 @@ to publish a tag that disagrees with it.
 
 ## [Unreleased]
 
+## [0.20.11] — 2026-11-02
+
 ### Added
 
 - **A failed reviewer call says why.** Each llm-review attempt (served,
@@ -6548,7 +6550,8 @@ Stated plainly because each one changes how you should deploy this:
 - **PyPI publishing is not set up.** Install from a GitHub Release artifact or
   from git; `pip install aramid` does not work.
 
-[Unreleased]: https://github.com/jared0565/aramid/compare/v0.20.10...HEAD
+[Unreleased]: https://github.com/jared0565/aramid/compare/v0.20.11...HEAD
+[0.20.11]: https://github.com/jared0565/aramid/releases/tag/v0.20.11
 [0.20.10]: https://github.com/jared0565/aramid/releases/tag/v0.20.10
 [0.20.9]: https://github.com/jared0565/aramid/releases/tag/v0.20.9
 [0.20.8]: https://github.com/jared0565/aramid/releases/tag/v0.20.8
