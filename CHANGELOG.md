@@ -36,14 +36,28 @@ to publish a tag that disagrees with it.
 
 ### Fixed
 
+- **Acknowledging a fleet-defect notice no longer silences that defect for
+  good.** A `fleet-defect` notice clears when the defect is gone from the
+  repo's latest gate row, and only a cleared notice is ever posted again.
+  But only notices still pending were cleared, so one acknowledged with
+  `aramid notices ack` never cleared: the same defect on the same repo could
+  go away and come back and raise no notice again. Now an acknowledged
+  notice clears like a pending one once the defect is gone from the latest
+  row, and the defect coming back posts it again, under the same id. While
+  the defect is still on the latest row the acknowledgement holds and
+  nothing is posted again, as before. On graphite, the mutation notice
+  acknowledged on 2026-11-03 stayed uncleared although graphite's fleet rows
+  have carried no defect since 2026-11-05. A notice acknowledged before this
+  release clears on the first drain after it that finds the defect gone
+  from the repo's latest row.
 - **Mutation testing no longer stands down for good over occasional slow
   baselines.** The give-up `mutation giving up: <suite> does not fit the Ns
   baseline budget after 3 attempts` counted every baseline timeout in the
   repository's history, so three timeouts weeks apart stopped mutation
   testing permanently, even with green baselines between them. On graphite,
   timeouts on 10-17, 10-28 and 10-29, with 22 green baselines between them,
-  stood mutation down on 10-29; every drain since has skipped it, and its
-  fleet row stays red on `consumers_healthy`. Now only timeouts since the
+  stood mutation down on 10-29, and every graphite fleet row for the next
+  week (79 of them) was red on `consumers_healthy`. Now only timeouts since the
   consumer's last baseline that finished green count. The same applies to
   `baseline command not found` and to the JavaScript consumer's timeout
   give-up. Nothing else resets the count: not a give-up, not an item with

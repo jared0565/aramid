@@ -76,6 +76,15 @@ def pending(events: list[dict] | None = None) -> list[dict]:
                   key=lambda n: str(n.get("at", "")))
 
 
+def uncleared(events: list[dict] | None = None) -> list[dict]:
+    """Pending AND acked notices: every one whose condition has not been
+    seen to go away. An ack answers the occurrence, so recovery must still
+    clear an acked notice -- otherwise `post` never re-posts it and the
+    ack silences that condition for good."""
+    recs = materialize(read_events() if events is None else events)
+    return [r["notice"] for r in recs.values() if not r["cleared"]]
+
+
 def pending_count() -> int | None:
     """None when the store cannot be read -- the gate's JSON key has to be
     able to say 'unknown' rather than 'none'."""

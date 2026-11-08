@@ -590,7 +590,7 @@ def _post_defects(rows: list[dict], registered: dict[str, str], policy: Policy,
     for r in sorted(rows, key=lambda r: str(r.get("at", ""))):
         if r.get("repo") in registered:
             by_repo[r["repo"]].append(r)
-    pending = {n["id"]: n for n in notices.pending() if n.get("notice_kind") == "fleet-defect"}
+    uncleared = {n["id"]: n for n in notices.uncleared() if n.get("notice_kind") == "fleet-defect"}
     for repo, seq in by_repo.items():
         name = seq[-1].get("name") or registered[repo]
         latest = set(_defects_of(seq[-1]))
@@ -606,7 +606,7 @@ def _post_defects(rows: list[dict], registered: dict[str, str], policy: Policy,
                                "itself on the first row without it."),
                          evidence={"repo": repo, "name": name, "kind": kind, "target": target,
                                    "rows": policy.defect_rows}, now=now)
-        for n in pending.values():
+        for n in uncleared.values():
             ev = n.get("evidence", {})
             if ev.get("repo") == repo and (ev.get("kind"), ev.get("target")) not in latest:
                 notices.clear(n["id"], reason="defect absent from latest row", now=now)

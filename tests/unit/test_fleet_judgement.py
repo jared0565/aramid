@@ -164,6 +164,61 @@ def test_persistent_defect_posts_one_notice_and_clears_on_recovery():
     assert cleared[0]["reason"] == "defect absent from latest row"
 
 
+LATEST = (NOW_DT + timedelta(hours=2)).isoformat()
+_DEFECT = "gap_addressed/mutation NEVER RAN"
+
+
+def _acked_defect_notice() -> str:
+    """Three rows of one defect on repo a post a notice; the operator acks it."""
+    rows = [_row(R_A, d, armed=ARMED, defects=[_DEFECT], red=("resolvers_ok",))
+            for d in (4, 3, 2)]
+    _seed(_entries_rows(rows + [_row(R_B, 3)]))
+    _judge()
+    (n,) = [n for n in notices.pending() if n["notice_kind"] == "fleet-defect"]
+    assert notices.ack(n["id"], repo="f:/projects/b", now=NOW) is True
+    assert notices.pending() == []
+    return n["id"]
+
+
+def _cleared_ids() -> list[str]:
+    return [e["id"] for e in notices.read_events() if e["kind"] == "cleared"]
+
+
+def test_an_acked_defect_notice_is_cleared_when_the_defect_leaves_the_latest_row():
+    """Spec section 6: "When the latest row no longer carries it, a `cleared`
+    event is appended" -- acked or not. Clearing only PENDING notices left an
+    acked one uncleared for good (graphite's bb4f0c48ce89, acked 2026-11-03,
+    clean from 11-05, never cleared)."""
+    nid = _acked_defect_notice()
+    _seed(_entries_rows([_row(R_A, 0.1, armed=ARMED)]))      # recovered
+    _judge(LATER)
+    assert _cleared_ids() == [nid]
+
+
+def test_a_defect_that_returns_after_an_acked_notice_cleared_is_posted_again():
+    """An ack answers the occurrence it was given for. Once the defect has
+    gone and come back, that is a new occurrence and must reach the
+    operator, under the same id (`post` re-posts only a cleared notice)."""
+    nid = _acked_defect_notice()
+    _seed(_entries_rows([_row(R_A, 0.1, armed=ARMED)]))      # recovered
+    _judge(LATER)
+    _seed(_entries_rows([_row(R_A, d, armed=ARMED, defects=[_DEFECT], red=("resolvers_ok",))
+                         for d in (0.08, 0.06, 0.04)]))     # back, 3 rows running
+    _judge(LATEST)
+    assert [(n["id"], n["at"]) for n in notices.pending()] == [(nid, LATEST)]
+
+
+def test_an_acked_defect_that_persists_is_neither_cleared_nor_posted_again():
+    """The other half of the ack: while the defect is still on the latest
+    row, the ack holds -- no `cleared`, so no re-post and no nagging."""
+    _acked_defect_notice()
+    _seed(_entries_rows([_row(R_A, 1, armed=ARMED, defects=[_DEFECT], red=("resolvers_ok",))]))
+    _judge(LATER)
+    _judge(LATEST)
+    assert _cleared_ids() == []
+    assert notices.pending() == []
+
+
 def test_two_rows_of_a_defect_are_not_yet_a_notice():
     rows = [_row(R_A, d, armed=ARMED, defects=["gap_addressed/mutation NEVER RAN"],
                  red=("resolvers_ok",)) for d in (3, 2)] + [_row(R_B, 3)]
