@@ -12,6 +12,11 @@ to publish a tag that disagrees with it.
 
 ## [Unreleased]
 
+## [0.20.12] — 2026-11-08
+
+Nothing `aramid init` writes changed in this release, so there is no need
+to re-run it.
+
 ### Added
 
 - **`aramid doctor` says when one of aramid's git hooks is out of date.** It
@@ -47,9 +52,12 @@ to publish a tag that disagrees with it.
   the defect is still on the latest row the acknowledgement holds and
   nothing is posted again, as before. On graphite, the mutation notice
   acknowledged on 2026-11-03 stayed uncleared although graphite's fleet rows
-  have carried no defect since 2026-11-05. A notice acknowledged before this
-  release clears on the first drain after it that finds the defect gone
-  from the repo's latest row.
+  carried no defect from 2026-11-05 through 2026-11-08. A notice
+  acknowledged before this release clears on the first drain after it that
+  finds the defect gone from the repo's latest row. One case is left as it
+  was: a defect that went away and came back while its notice was
+  acknowledged, and is on the latest row now, stays silent until it next
+  goes away, because the clear is judged on the latest row only.
 - **Mutation testing no longer stands down for good over occasional slow
   baselines.** The give-up `mutation giving up: <suite> does not fit the Ns
   baseline budget after 3 attempts` counted every baseline timeout in the
@@ -6608,7 +6616,8 @@ Stated plainly because each one changes how you should deploy this:
 - **PyPI publishing is not set up.** Install from a GitHub Release artifact or
   from git; `pip install aramid` does not work.
 
-[Unreleased]: https://github.com/jared0565/aramid/compare/v0.20.11...HEAD
+[Unreleased]: https://github.com/jared0565/aramid/compare/v0.20.12...HEAD
+[0.20.12]: https://github.com/jared0565/aramid/releases/tag/v0.20.12
 [0.20.11]: https://github.com/jared0565/aramid/releases/tag/v0.20.11
 [0.20.10]: https://github.com/jared0565/aramid/releases/tag/v0.20.10
 [0.20.9]: https://github.com/jared0565/aramid/releases/tag/v0.20.9
