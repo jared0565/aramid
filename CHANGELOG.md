@@ -36,6 +36,29 @@ to publish a tag that disagrees with it.
     `tests/unit/test_doctor_probes.py` now cover the warning when no suite
     is detected, and the probe of the suite that is.
 
+- **A sweep of all of `commands/doctor.py` found four branches that only
+  `tests/integration` covered; each is now pinned at unit scope.** With
+  the splice fix below, the drain's stage-2 confirm can report a
+  `doctor.py` survivor again, so all 91 of the module's generator mutants
+  were run the way a drain runs them: stage 1 against its five
+  `test_doctor_*.py` files, then each survivor against `tests/unit`. 78
+  were killed at stage 1. Of the 13 survivors, 6 were killed by unit
+  tests of doctor's rendered output (`test_toolpath_divergence.py`,
+  `test_agent_files.py`, `test_agent_settings.py`, `test_agent_mcp.py`),
+  none of which reads source text, and 3 change a subprocess probe's
+  `timeout=15` to `16`, which no test can tell apart. The other 4 passed
+  all 5,321 unit tests and are covered only in
+  `tests/integration/test_doctor.py`, which the drain never runs:
+  - `editable_consumers_lines`, `or` -> `and`: doctor would fail a wheel
+    install that has consumers, calling it EDITABLE, and an editable
+    install that has none;
+  - `probe_deps`, `and` -> `or`: doctor would warn that pip-audit does
+    not run on a repo that is not Python, or that has a `[project]` table;
+  - `probe_providers`, either API-key branch inverted: a set key would be
+    reported MISSING and an unset one as set.
+
+  Three tests in `tests/unit/test_doctor_probes.py` now cover them.
+
 ### Fixed
 
 - **A mutant now changes only its mutated expression, so a test that reads

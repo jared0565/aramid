@@ -905,6 +905,72 @@ def test_probe_tests_probes_the_suite_it_detects_and_does_not_warn(tmp_path, mon
         ToolStatus("tests-pytest", True, "9.0.3", detail="pytest found")]
 
 
+# ----------------------- editable_consumers_lines, probe_deps, probe_providers --
+# A full stage-1 sweep of this module on 2026-11-09 (all 91 generator mutants,
+# spliced) found these branches pinned only in tests/integration/test_doctor.py,
+# which the drain never runs -- `quiet` above stubs the first two out of every
+# cmd_doctor arm. Each of these passed every test in tests/unit: `or` -> `and`
+# in editable_consumers_lines (a wheel with consumers called EDITABLE), `and`
+# -> `or` in probe_deps (the pip-audit warning on a repo that is not Python, or
+# that has a [project] table), and either API-key branch of probe_providers
+# inverted.
+
+_EDITABLE_URL = json.dumps({"url": "file:///F:/Projects/aramid", "dir_info": {"editable": True}})
+_WHEEL_URL = json.dumps({"url": "file:///tmp/aramid-0.5.1-py3-none-any.whl",
+                         "archive_info": {"hash": "sha256=abc"}})
+
+
+def test_editable_consumers_lines_fails_only_an_editable_install_with_consumers():
+    two = [{"path": "a"}, {"path": "b"}]
+
+    assert doctor.editable_consumers_lines(_WHEEL_URL, two) == []
+    assert doctor.editable_consumers_lines(None, two) == []
+    assert doctor.editable_consumers_lines(_EDITABLE_URL, []) == []
+    assert doctor.editable_consumers_lines(_EDITABLE_URL, two) == [
+        "aramid: doctor: aramid is installed EDITABLE while 2 registered repo(s) run it -- "
+        "every one of their hooks executes this working tree, uncommitted edits included. "
+        "Promote a built wheel: `python scripts/promote_live.py <version>` (RELEASING.md, "
+        '"Promoting a release to the live tool").']
+
+
+def test_probe_deps_warns_about_pip_audit_only_for_a_python_repo_it_cannot_audit(tmp_path):
+    bare = _repo(tmp_path, name="bare")             # no Python at all
+    project = _repo(tmp_path, name="project")       # Python, with a [project] table
+    (project / "pyproject.toml").write_text("[project]\nname = 'x'\n", encoding="utf-8")
+    tool_only = _repo(tmp_path, name="tool-only")   # Python, and nothing pip-audit reads
+    (tool_only / "pyproject.toml").write_text("[tool.ruff]\nline-length = 100\n",
+                                              encoding="utf-8")
+
+    assert doctor.probe_deps(bare) == []
+    assert doctor.probe_deps(project) == []
+    assert doctor.probe_deps(tool_only) == [ToolStatus(
+        "pip-audit", True, warn=True,
+        detail="audits requirements*.txt at the repo root or a pyproject.toml with a "
+               "[project] table, and this repo has neither, so the Python dependency audit "
+               "does NOT run in any gate (a tool-only pyproject declares no dependencies)")]
+
+
+def test_probe_providers_reports_each_api_key_by_whether_it_is_set(monkeypatch):
+    from aramid.providers import spend as spend_mod
+    monkeypatch.setattr(doctor.toolpath, "which", lambda name: None)
+    monkeypatch.setattr(spend_mod, "month_spend_usd", lambda provider, now_iso: 1.5)
+    monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
+    monkeypatch.delenv("OLLAMA_API_KEY", raising=False)
+    clis = ["  MISSING  claude-cli   not found on PATH",
+            "  MISSING  codex-cli    not found on PATH"]
+
+    assert doctor.probe_providers() == [
+        *clis,
+        "  MISSING  openrouter   no OPENROUTER_API_KEY in environment",
+        "  MISSING  ollama-cloud no OLLAMA_API_KEY in environment"]
+    monkeypatch.setenv("OPENROUTER_API_KEY", "set-by-the-test")
+    monkeypatch.setenv("OLLAMA_API_KEY", "set-by-the-test")
+    assert doctor.probe_providers() == [
+        *clis,
+        "  OK       openrouter   key set; this month $1.50",
+        "  OK       ollama-cloud key set"]
+
+
 def test_doctor_fix_repairs_only_what_is_missing_and_reprobes_once(tmp_path, capsys, quiet):
     probes = []
 
