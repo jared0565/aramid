@@ -38,6 +38,30 @@ to publish a tag that disagrees with it.
 
 ### Fixed
 
+- **A mutant now changes only its mutated expression, so a test that reads
+  source text no longer kills every mutant of the files it reads.** A
+  mutant used to be the whole module re-rendered by `ast.unparse`, with
+  comments dropped and quotes normalized: `commands/doctor.py` went from
+  1,453 lines to 1,046. A test that compares source text failed on every
+  such rendering, whatever the mutation, so it counted every mutant of the
+  files it read as killed and hid real survivors. On aramid itself that
+  was `test_toolpath`'s bare-launch scan: since 2026-10-11 the drain's
+  stage-2 confirm counted every `doctor.py` mutant that survived stage 1
+  as killed. Re-rendering
+  all 104 changeable modules with no mutation fails exactly that one unit
+  test. A repo whose tests read its own source (snapshots, grep the source,
+  docstring checks) was exposed the same way.
+
+  The mutated expression's text is now spliced into the original source,
+  in parentheses unless it is a literal, and padded so every later line
+  keeps its number. Every other line, comment and quote stays as written.
+  A splice that does not parse back to the mutated program is never used:
+  that mutant falls back to the whole-module rendering. All 4,188 mutants
+  of aramid's own source are the same programs as before, each keeps its
+  file's line count, and none fell back (measured on Python 3.14). Mutant
+  identity, the op set and their order are unchanged, so recorded
+  survivors keep their ids.
+
 - **`aramid doctor`'s "no test suite detected" warning now lists every kind
   of suite aramid detects.** Since 0.2.0 it said that aramid "recognizes
   only pytest (test_*.py, *_test.py, conftest.py) and an npm `test` script;

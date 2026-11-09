@@ -1,13 +1,23 @@
 """mutation -- owned stdlib-ast mutator (Phase 2c-1 spec section 2).
 
-Four operator families, applied one site at a time; mutants are rendered
-with ast.unparse (comments/formatting lost -- acceptable: mutants exist
-only inside the consumer's throwaway worktree). Deterministic ordering so
+Four operator families, applied one site at a time. A mutant is the
+original source with only the mutated expression's text replaced by its
+ast.unparse rendering, so every other line, comment and quote is as
+written and every line keeps its number. Until 2026-11-09 a mutant was
+the WHOLE module re-rendered by ast.unparse, with comments dropped and
+quotes normalized, on the reasoning that mutants exist only in the
+consumer's throwaway worktree. That holds for running the code, not for
+the verdict: a test that reads source text failed on every mutant of the
+files it reads, a kill whatever the mutation. On aramid itself that was
+test_toolpath's bare-launch scan, for every doctor.py mutant. A splice
+that does not parse back to the mutated tree is never used: that mutant
+falls back to the whole-module rendering. Deterministic ordering so
 budget truncation is reproducible and fingerprints stable across drains.
 The copy-by-walk-index trick relies on ast.walk's traversal order being a
 pure function of tree shape, which deepcopy preserves."""
 import ast
 import copy
+import re
 from dataclasses import dataclass
 
 from aramid import diagnostics
@@ -84,6 +94,44 @@ def _mutations_at(node, func_name):
                lambda n: setattr(n, "test", n.test.operand))
 
 
+# The parser's line breaks (what ast.get_source_segment splits on).
+_LINE_BREAK = re.compile(r"\r\n|\r|\n")
+
+
+def _line_starts(source: str) -> list[int]:
+    """The index in `source` at which each line starts; line N is [N - 1]."""
+    return [0] + [m.end() for m in _LINE_BREAK.finditer(source)]
+
+
+def _char_offset(source: str, starts: list[int], lineno: int, col: int) -> int:
+    """The index in `source` of AST position (lineno, col). An AST column
+    counts UTF-8 BYTES, so a line with non-ASCII text before the position
+    would put a character count in the wrong place."""
+    begin = starts[lineno - 1]
+    end = starts[lineno] if lineno < len(starts) else len(source)
+    return begin + len(source[begin:end].encode("utf-8")[:col].decode("utf-8"))
+
+
+def _splice(source: str, starts: list[int], old: ast.expr, text: str) -> str:
+    """`source` with the text of expression `old` replaced by `text`. Anything
+    but a literal is parenthesized, so the new operator cannot bind to its
+    neighbours, and a replaced span that ran over several lines is padded
+    back to that many inside the parentheses, so every line after it keeps
+    its number."""
+    start = _char_offset(source, starts, old.lineno, old.col_offset)
+    end = _char_offset(source, starts, old.end_lineno, old.end_col_offset)
+    if not isinstance(old, ast.Constant):
+        text = "(" + text + "\n" * (old.end_lineno - old.lineno) + ")"
+    return source[:start] + text + source[end:]
+
+
+def _same_program(text: str, tree: ast.Module) -> bool:
+    try:
+        return ast.dump(ast.parse(text)) == ast.dump(tree)
+    except SyntaxError:
+        return False
+
+
 def generate_mutants(source: str, target_lines: set[int]) -> list[Mutant]:
     try:
         tree = ast.parse(source)
@@ -94,6 +142,7 @@ def generate_mutants(source: str, target_lines: set[int]) -> list[Mutant]:
         return []
     mutants: list[Mutant] = []
     unparseable = 0
+    starts = _line_starts(source)
     nodes = list(ast.walk(tree))
     for idx, node in enumerate(nodes):
         lineno = getattr(node, "lineno", None)
@@ -106,12 +155,27 @@ def generate_mutants(source: str, target_lines: set[int]) -> list[Mutant]:
             if op not in OPS:
                 raise ValueError(f"unregistered mutation op {op!r}: add it to mutation.OPS")
             tree_copy = copy.deepcopy(tree)
-            mutate(list(ast.walk(tree_copy))[idx])
+            twin = list(ast.walk(tree_copy))[idx]
+            mutate(twin)
+            # not-drop rewrites the If's test; every other op, the node itself.
+            old, new = (node.test, twin.test) if isinstance(node, ast.If) else (node, twin)
             try:
-                mutated = ast.unparse(ast.fix_missing_locations(tree_copy))
+                text = ast.unparse(new)
             except Exception:
                 unparseable += 1
                 continue
+            try:
+                mutated = _splice(source, starts, old, text)
+            except (IndexError, UnicodeDecodeError):
+                mutated = None
+            if mutated is None or not _same_program(mutated, tree_copy):
+                # The safety net: a splice that is not the mutated program is
+                # never used; this mutant is the whole module rendered, as before.
+                try:
+                    mutated = ast.unparse(ast.fix_missing_locations(tree_copy))
+                except Exception:
+                    unparseable += 1
+                    continue
             mutants.append(Mutant(file="", line=lineno, op=op,
                                   description=desc, source=mutated, func=enc[2]))
     # Unlike the ledger guards, this one is an EXPECTED outcome of mutating an

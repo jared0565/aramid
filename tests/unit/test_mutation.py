@@ -182,3 +182,124 @@ def test_a_mutant_the_unparser_rejects_is_counted_and_skipped(monkeypatch, capsy
     got = generate_mutants(src, {2})
     assert len(got) == len(baseline) - 1
     assert capsys.readouterr().err == "aramid: mutation: skipped 1 unparseable mutant\n"
+
+
+# --- a mutant changes its expression and nothing else (2026-11-09) ----------
+# A mutant used to be the whole module re-rendered by ast.unparse: comments
+# gone, quotes normalized, lines renumbered. A test that reads source TEXT then
+# failed on every mutant of the files it reads -- a kill whatever the mutation.
+# On aramid itself: test_toolpath's bare-launch scan, for every doctor.py
+# mutant. The fixture has a comment, both quote styles, an `or` over two lines,
+# and an `é` before a mutated comparison on its line (AST columns count UTF-8
+# BYTES, so a splice that counts characters lands in the wrong place there).
+
+SPLICE_SRC = '''\
+def probe(kinds, name):
+    # a comment the whole-module render dropped
+    label = "double-quoted"
+    if not kinds:
+        return [label, 'single']
+    if (name == "x"
+            or name == "y"):
+        return 10
+    return "é" != name and len(kinds) > 2
+'''
+
+
+def _rendered_mutants(src):
+    """The generator as it was: the same sites, each module re-rendered whole."""
+    tree = ast.parse(src)
+    spans = mutation._eligible_spans(tree, set(range(1, len(src.splitlines()) + 1)))
+    out = []
+    for idx, node in enumerate(ast.walk(tree)):
+        lineno = getattr(node, "lineno", None)
+        enc = lineno and mutation._enclosing(spans, lineno)
+        if not enc:
+            continue
+        for op, desc, mutate in mutation._mutations_at(node, enc[2]):
+            twin = ast.parse(src)
+            mutate(list(ast.walk(twin))[idx])
+            out.append(((lineno, op, desc), ast.unparse(twin)))
+    return sorted(out)
+
+
+def test_a_mutant_keeps_every_line_outside_its_expression():
+    muts = generate_mutants(SPLICE_SRC, set(range(1, 10)))
+    assert sorted(m.op for m in muts) == [
+        "bool-swap", "bool-swap", "cmp-flip", "cmp-flip", "cmp-flip", "cmp-flip",
+        "int-bound", "int-bound", "not-drop"]
+    original = SPLICE_SRC.split("\n")
+    for m in muts:
+        lines = m.source.split("\n")
+        assert len(lines) == len(original), (m.op, m.line)
+        changed = {n for n, (a, b) in enumerate(zip(original, lines), 1) if a != b}
+        assert changed and changed <= {m.line, m.line + 1}, (m.op, m.line, changed)
+        assert lines[1] == "    # a comment the whole-module render dropped"
+        assert lines[2] == '    label = "double-quoted"'
+
+
+def test_a_spliced_mutant_is_the_same_program_the_whole_render_was():
+    muts = generate_mutants(SPLICE_SRC, set(range(1, 10)))
+    rendered = _rendered_mutants(SPLICE_SRC)
+    assert [(m.line, m.op, m.description) for m in muts] == [key for key, _ in rendered]
+    for m, (_, whole) in zip(muts, rendered):
+        assert ast.dump(ast.parse(m.source)) == ast.dump(ast.parse(whole))
+
+
+def test_a_splice_on_a_byte_column_after_non_ascii_text_lands_on_its_expression():
+    [m] = [m for m in generate_mutants(SPLICE_SRC, {9})
+           if m.op == "int-bound" and m.line == 9]
+    assert m.source.split("\n")[8] == '    return "é" != name and len(kinds) > 3'
+
+
+def test_a_mutant_of_an_expression_over_two_lines_keeps_both_line_numbers():
+    [m] = [m for m in generate_mutants(SPLICE_SRC, {6}) if m.op == "bool-swap" and m.line == 6]
+    assert m.source.split("\n")[5:8] == [
+        "    if ((name == 'x' and name == 'y'",
+        ")):",
+        "        return 10"]
+
+
+def test_a_splice_that_does_not_parse_back_falls_back_to_the_whole_render(monkeypatch):
+    """The safety net: a splice whose text is not the mutated program is
+    never used. The fallback is the whole-module render, as before."""
+    monkeypatch.setattr(mutation, "_splice", lambda source, starts, old, text: source)
+    muts = generate_mutants(SPLICE_SRC, {4})
+    [nd] = [m for m in muts if m.op == "not-drop"]
+    assert nd.source == dict(_rendered_mutants(SPLICE_SRC))[(nd.line, nd.op, nd.description)]
+    assert "# a comment" not in nd.source
+
+
+def test_an_expression_on_the_first_line_is_spliced_in_place():
+    src = 'def f(x): return x == "a"  # kept\n'
+    [m] = generate_mutants(src, {1})
+    assert m.source == 'def f(x): return (x != \'a\')  # kept\n'
+
+
+def test_the_last_line_of_a_source_with_no_final_newline_is_spliced_in_place():
+    src = 'def f(x):\n    return x == "a"  # kept'
+    [m] = generate_mutants(src, {2})
+    assert m.source == 'def f(x):\n    return (x != \'a\')  # kept'
+
+
+def test_a_mutant_neither_splice_nor_whole_render_can_give_is_one_counted_skip(
+        monkeypatch, capsys):
+    real = mutation.ast.unparse
+
+    def unparse(node):
+        if isinstance(node, ast.Module):
+            raise ValueError("cannot render")
+        return real(node)
+    monkeypatch.setattr(mutation.ast, "unparse", unparse)
+    monkeypatch.setattr(mutation, "_splice", lambda source, starts, old, text: source)
+
+    assert generate_mutants("def f(a, b):\n    return a == b\n", {2}) == []
+    assert capsys.readouterr().err == "aramid: mutation: skipped 1 unparseable mutant\n"
+
+
+def test_a_splice_that_cannot_place_its_text_falls_back_to_the_whole_render(monkeypatch):
+    def boom(source, starts, lineno, col):
+        raise IndexError(lineno)
+    monkeypatch.setattr(mutation, "_char_offset", boom)
+    [nd] = [m for m in generate_mutants(SPLICE_SRC, {4}) if m.op == "not-drop"]
+    assert nd.source == dict(_rendered_mutants(SPLICE_SRC))[(nd.line, nd.op, nd.description)]
