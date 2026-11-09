@@ -28,6 +28,7 @@ from pathlib import Path
 import pytest
 
 import aramid
+from aramid import config as config_mod
 from aramid import hooks as hooks_mod
 from aramid.commands import doctor
 from aramid.commands.doctor import ToolStatus
@@ -874,6 +875,34 @@ def test_doctor_exits_0_with_a_pointer_when_a_test_gate_has_nothing_to_run(
     assert "  WARN     tests        no test suite detected\n" in out
     assert out.endswith("aramid: doctor: all BLOCK-tier TOOLS present, but see the warning(s) "
                         "above -- not every BLOCK-tier gate has something to run here.\n")
+
+
+# ---------------------------------------------------------------- probe_tests --
+# The branch on `detect_tests`' answer was pinned only in tests/integration,
+# which the drain never runs. 2026-11-09: the generator's `if not kinds:` ->
+# `if kinds:` passed every behaviour test in tests/unit. Its one stage-2 kill
+# was test_toolpath's bare-launch scan, which fails on ANY ast.unparse-rendered
+# doctor.py (the rendered quotes differ from its allowlist), whatever the
+# mutation.
+
+def test_probe_tests_warns_when_it_detects_no_suite(tmp_path):
+    root = _repo(tmp_path)
+
+    [status] = doctor.probe_tests(root, config_mod.load_config(root))
+
+    assert (status.name, status.present, status.warn) == ("tests", True, True)
+    assert status.detail.startswith(
+        "no test suite detected -- the BLOCK-tier test gate will run NOTHING")
+
+
+def test_probe_tests_probes_the_suite_it_detects_and_does_not_warn(tmp_path, monkeypatch):
+    root = _repo(tmp_path)
+    (root / "test_x.py").write_text("def test_x():\n    pass\n", encoding="utf-8")
+    monkeypatch.setattr(doctor, "probe_tool",
+                        lambda name: ToolStatus(name, True, "9.0.3", detail=f"{name} found"))
+
+    assert doctor.probe_tests(root, config_mod.load_config(root)) == [
+        ToolStatus("tests-pytest", True, "9.0.3", detail="pytest found")]
 
 
 def test_doctor_fix_repairs_only_what_is_missing_and_reprobes_once(tmp_path, capsys, quiet):

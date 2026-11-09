@@ -227,6 +227,22 @@ def test_two_rows_of_a_defect_are_not_yet_a_notice():
     assert notices.pending() == []
 
 
+def test_a_defect_notice_on_a_row_with_no_name_uses_the_registered_name():
+    """`seq[-1].get("name") or registered[repo]`: a row that carries no name
+    is titled by the registry's display name, never `None`. 2026-11-09: the
+    generator's `or` -> `and` passed every test in tests/unit, because every
+    fixture row's name equals its registered one."""
+    rows = [_row(R_A, d, armed=ARMED, defects=[_DEFECT], red=("resolvers_ok",))
+            for d in (4, 3, 2)]
+    for r in rows:
+        del r["name"]
+    _seed(_entries_rows(rows + [_row(R_B, 3)]))
+    _judge()
+    (n,) = [n for n in notices.pending() if n["notice_kind"] == "fleet-defect"]
+    assert n["title"] == "a: resolver gap_addressed/mutation on the last 3 gate runs"
+    assert n["evidence"]["name"] == "a"
+
+
 def test_compaction_drops_rows_older_than_180_days_once_a_day():
     _seed(_entries_rows(_ready_rows() + [_row(R_A, 200, armed=ARMED)]))
     assert len(fleet.read_rows()) == 9

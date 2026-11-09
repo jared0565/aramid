@@ -12,6 +12,30 @@ to publish a tag that disagrees with it.
 
 ## [Unreleased]
 
+### Added
+
+- **The two mutation survivors in 0.20.12's code are pinned at unit
+  scope.** Triage scored four of 0.20.12's five code commits at 25, so no
+  drain ever queued them, and the fifth was drained truncated. Their 208
+  generator mutants were therefore run by hand against the unit suite, the
+  way a drain runs them. 206 were killed: `fleet._post_defects` 6 of 7,
+  `consumers/base.note_count_any_item` 5 of 5, `doctor` 22 of 23,
+  `js_mutation.consume` 56 of 56 and the mutation consumer 117 of 117.
+  `notices.uncleared` gives the generator nothing to mutate. Two survived:
+  - `fleet._post_defects` names a fleet-defect notice
+    `seq[-1].get("name") or registered[repo]`, and `or` -> `and` passed
+    every unit test, because every fixture row's name equals its
+    registered one. A test now covers a row with no name: the title uses
+    the registered name, never `None`.
+  - `doctor.probe_tests`' `if not kinds:` -> `if kinds:` passed every
+    behaviour test in `tests/unit`, because only `tests/integration`
+    covered that branch and the drain never runs it. On this repo the
+    drain's stage-2 confirm would still count it killed:
+    `test_toolpath`'s bare-launch scan fails on any re-rendered
+    `doctor.py`, whatever the mutation. Two tests in
+    `tests/unit/test_doctor_probes.py` now cover the warning when no suite
+    is detected, and the probe of the suite that is.
+
 ### Fixed
 
 - **`aramid doctor`'s "no test suite detected" warning now lists every kind
