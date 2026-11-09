@@ -674,6 +674,49 @@ def test_no_detectable_suite_does_not_change_doctor_exit_code(
     assert code == 0
 
 
+# --- the no-suite WARN must describe the detector it reports on ------------
+#
+# From 0.2.0 through 0.20.12 this WARN said "cargo and go suites are not
+# detected", while `detect_tests` -- which `probe_tests` calls to decide
+# whether to warn at all -- detected `tests/*.rs` and `*_test.go` (d400e47,
+# two hours after this text was written), and the gate's own no-suite notice
+# (`pipeline._no_suite_notice`) said so. The tests above pin WHEN it fires
+# and the exit code, never the words, so a Rust or Go user was told that
+# adding test files would not help. Found by the 0.20.12 stranger read on a
+# Rust crate. The two copies of the sentence are separate strings; the second
+# test makes them agree.
+
+_RECOGNIZED = ("aramid detects pytest (test_*.py, *_test.py, conftest.py), an npm "
+               "`test` script, cargo (a tests/*.rs file) and go (a *_test.go file) "
+               "-- a Rust crate whose tests are all inline #[cfg(test)] is the "
+               "known gap.")
+
+
+def test_the_no_suite_warning_renders_in_full(tmp_path):
+    root = _repo(tmp_path)
+    [status] = doctor.probe_tests(root, config_mod.load_config(root))
+
+    assert doctor._report_line(status) == (
+        "  WARN     tests        no test suite detected -- the BLOCK-tier test "
+        "gate will run NOTHING, so a green gate will not mean your tests "
+        "passed. " + _RECOGNIZED + " Set [tests].command to point aramid at "
+        "your suite, or [tests].enabled = false to declare this repo has none")
+
+
+def test_doctor_and_the_gate_describe_the_same_detector(tmp_path):
+    from types import SimpleNamespace
+
+    from aramid import pipeline
+
+    root = _repo(tmp_path)
+    [status] = doctor.probe_tests(root, config_mod.load_config(root))
+    # `_no_suite_notice` reads only ctx.root and ctx.stacks.
+    gate = pipeline._no_suite_notice(SimpleNamespace(root=root, stacks={"rust"}))
+
+    assert _RECOGNIZED in gate, "control: the gate's copy is the reference"
+    assert _RECOGNIZED in status.detail
+
+
 # --- an EDITABLE live install with registered repos is a failure -----------
 #
 # `install_mode_lines` reports an editable aramid and, on its own, never

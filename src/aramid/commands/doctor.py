@@ -687,11 +687,12 @@ def probe_tests(root: Path, cfg) -> list[ToolStatus]:
             "tests", True, warn=True,
             detail="no test suite detected -- the BLOCK-tier test gate will "
                    "run NOTHING, so a green gate will not mean your tests "
-                   "passed. aramid recognizes only pytest (test_*.py, "
-                   "*_test.py, conftest.py) and an npm `test` script; cargo "
-                   "and go suites are not detected. Set [tests].command to "
-                   "point aramid at your suite, or [tests].enabled = false "
-                   "to declare this repo has none")]
+                   "passed. aramid detects pytest (test_*.py, *_test.py, "
+                   "conftest.py), an npm `test` script, cargo (a tests/*.rs "
+                   "file) and go (a *_test.go file) -- a Rust crate whose "
+                   "tests are all inline #[cfg(test)] is the known gap. Set "
+                   "[tests].command to point aramid at your suite, or "
+                   "[tests].enabled = false to declare this repo has none")]
 
     out = []
     if "pytest" in kinds:

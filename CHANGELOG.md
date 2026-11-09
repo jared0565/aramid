@@ -12,6 +12,20 @@ to publish a tag that disagrees with it.
 
 ## [Unreleased]
 
+### Fixed
+
+- **`aramid doctor`'s "no test suite detected" warning now lists every kind
+  of suite aramid detects.** Since 0.2.0 it said that aramid "recognizes
+  only pytest (test_*.py, *_test.py, conftest.py) and an npm `test` script;
+  cargo and go suites are not detected". aramid has detected cargo (a `.rs`
+  file in a `tests/` directory) and go (a `*_test.go` file) since 0.2.0 too,
+  and the gate's own notice already said so, so a Rust or Go user was told
+  that adding test files would not help. The warning still appears in
+  exactly the same repos, since doctor decides with the same detection; only
+  its explanation changes. Its list of what aramid detects now matches the
+  gate's notice word for word, including the gap that remains: a Rust crate
+  whose tests are all inline `#[cfg(test)]`. A test keeps the two in step.
+
 ## [0.20.12] — 2026-11-08
 
 Nothing `aramid init` writes changed in this release, so there is no need
