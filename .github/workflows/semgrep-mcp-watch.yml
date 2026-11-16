@@ -1,13 +1,17 @@
-# Daily watch: has a semgrep release stopped pinning mcp at 1.29.0?
+# Daily watch: has a semgrep release stopped pinning mcp at 1.29.0, or
+# opentelemetry-api at 1.37.x?
 #
-# semgrep pins `mcp==1.29.0`, so every aramid install carries the advisories
-# against it until a semgrep release admits mcp 1.30 or later and this repo
-# raises its semgrep floor to that release. The script reads the newest
-# semgrep's own wheel metadata on PyPI; see its docstring for the outcomes.
+# semgrep pins `mcp==1.29.0` and `opentelemetry-api~=1.37.0` (with the sdk and
+# the OTLP exporter in lockstep), so every aramid install carries the
+# advisories against both until a semgrep release admits a fixed version and
+# this repo raises its semgrep floor to that release. The script reads the
+# newest semgrep's own wheel metadata on PyPI and prints one line per package;
+# see its docstring for the outcomes.
 #
-# A RED RUN IS THE ALERT. Green is the normal day ("still requires
-# mcp==1.29.0"). Red with "allows mcp ..." or "no longer depends on mcp" means
-# raise the floor; red with "could not tell" means look at the log. GitHub
+# A RED RUN IS THE ALERT. Green is the normal day (both lines "still
+# requires ..."). Red with "allows ..." or "no longer depends on ..." means
+# raise the floor for the package that line names; red with "could not tell"
+# means look at the log. GitHub
 # emails scheduled-run failures to the account that last changed the `cron`
 # line below. Nothing here may set continue-on-error: that would turn the
 # alert into a green run (tests/unit/test_semgrep_mcp_watch.py).
@@ -15,7 +19,9 @@
 # Not on push or pull_request: a PyPI outage must not turn a push red. In a
 # public repo GitHub pauses scheduled workflows after 60 days with no commits.
 #
-# Delete this file, the script and its test in the commit that raises the floor.
+# Delete this file, the script and its test in the commit that raises the floor
+# past both packages. A commit that settles one removes that package from the
+# script's WATCHED and its tests.
 name: semgrep-mcp-watch
 
 on:
@@ -43,5 +49,5 @@ jobs:
       - name: Install packaging (the script's only dependency)
         run: python -P -m pip install "packaging==26.3"
 
-      - name: Read the newest semgrep's mcp requirement
+      - name: Read the newest semgrep's mcp and opentelemetry requirements
         run: python -P .github/scripts/semgrep_mcp_watch.py

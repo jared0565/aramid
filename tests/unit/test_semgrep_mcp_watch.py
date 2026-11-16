@@ -1,17 +1,21 @@
-"""The daily watch for the semgrep release that lets mcp past 1.29.0.
+"""The daily watch for the semgrep release that lets mcp or opentelemetry-api
+past its pin.
 
-semgrep pins `mcp==1.29.0`, so the mcp advisories against 1.29.0 stay open for
-every install of aramid until a semgrep release admits a newer mcp and this
-repo raises its semgrep floor to that release (the operator's plan of
-2026-10-30). `.github/scripts/semgrep_mcp_watch.py` reads the newest semgrep's
-own wheel metadata on PyPI each day and goes red when the floor can move.
+semgrep pins `mcp==1.29.0` and `opentelemetry-api~=1.37.0` (with the sdk and
+the OTLP exporter in lockstep), so the advisories against both stay open for
+every install of aramid until a semgrep release admits a fixed version and
+this repo raises its semgrep floor to that release (the operator's plans of
+2026-10-30 and 2026-11-16). `.github/scripts/semgrep_mcp_watch.py` reads the
+newest semgrep's own wheel metadata on PyPI each day and goes red when the
+floor can move.
 
 Run as a subprocess against a `--snapshot` of what it would read from PyPI, so
 the CLI contract the workflow invokes is what is pinned. Exit codes: 0 still
-blocked, 1 act (raise the floor), 2 could not tell. Every red outcome below is
-asserted by its exit code, so a script that always says "blocked" fails them.
-The one exception is the fetch itself (`_get`), driven in-process near the end
-with the network and the clock stubbed.
+blocked, 1 act (raise the floor), 2 could not tell; with one verdict per
+package, the highest. Every red outcome below is asserted by its exit code, so
+a script that always says "blocked" fails them. The one exception is the fetch
+itself (`_get`), driven in-process near the end with the network and the clock
+stubbed.
 """
 import contextlib
 import importlib.util
@@ -35,15 +39,27 @@ SCRIPT_REL = ".github/scripts/semgrep_mcp_watch.py"
 PYPROJECT = '[project]\nname = "x"\ndependencies = ["click>=8", "semgrep>=1.137,<2"]\n'
 WHEELS = ("semgrep-{v}-py3-none-manylinux_2_34_x86_64.whl",
           "semgrep-{v}-py3-none-win_amd64.whl")
+OTEL_NAMES = ("opentelemetry-api", "opentelemetry-sdk", "opentelemetry-exporter-otlp-proto-http")
+
+
+def _otel(spec="~=1.37.0"):
+    """semgrep's three lockstep opentelemetry lines, all at `spec`."""
+    return tuple(f"{name}{spec}" for name in OTEL_NAMES)
+
+
+OTEL_VERSIONS = ("1.37.0", "1.45.0", "1.45.1", "1.45.2")
 
 
 def _snapshot(mcp_line="mcp==1.29.0", version="1.183.0",
-              mcp_versions=("1.28.1", "1.29.0", "1.30.0", "1.31.0"), wheels=None):
+              mcp_versions=("1.28.1", "1.29.0", "1.30.0", "1.31.0"), wheels=None,
+              otel_lines=_otel(), otel_versions=OTEL_VERSIONS):
     if wheels is None:
-        requires = ["click~=8.1"] + ([mcp_line] if mcp_line is not None else [])
+        requires = (["click~=8.1"] + ([mcp_line] if mcp_line is not None else [])
+                    + list(otel_lines))
         wheels = {name.format(v=version): requires for name in WHEELS}
     return {"semgrep_version": version, "wheels": wheels,
-            "mcp_versions": list(mcp_versions)}
+            "versions": {"mcp": list(mcp_versions),
+                         "opentelemetry-api": list(otel_versions)}}
 
 
 def _run(tmp_path, snapshot, pyproject=PYPROJECT, extra=()):
@@ -182,11 +198,82 @@ def test_a_release_outside_the_current_bounds_says_to_widen_them(tmp_path):
     assert "<2" in out
 
 
+# -- opentelemetry-api: three lockstep lines, one package -----------------------
+# CVE-2026-114603 is fixed in 1.45.1 and CVE-2026-126360 in 1.45.2 (OSV,
+# 2026-11-16), so 1.45.2 is the first clear release. sdk 1.37.0 requires
+# `opentelemetry-api==1.37.0` and the exporter requires `opentelemetry-sdk~=
+# 1.37.0`, so semgrep's sdk and exporter lines hold the api back as surely as
+# its api line does.
+
+def test_the_opentelemetry_pins_semgrep_ships_today_are_still_blocked(tmp_path):
+    """What 1.185.0 says in every wheel (read from PyPI 2026-11-16)."""
+    r, out = _run(tmp_path, _snapshot(version="1.185.0"))
+
+    _verdict(r, out, 0)
+    assert "opentelemetry-api~=1.37.0" in out   # the line that blocks
+    assert "<1.45.2" in out                     # and what it is blocked on
+
+
+def test_a_range_that_stops_at_1_45_1_is_still_blocked(tmp_path):
+    """1.45.1 fixes only the first advisory. 1.45.2 is listed and the range
+    stops just short of it, so a threshold set one release too low passes it."""
+    r, out = _run(tmp_path, _snapshot(otel_lines=_otel(">=1.45,<1.45.2"), version="1.190.0"))
+
+    _verdict(r, out, 0)
+
+
+def test_all_three_lines_past_the_fix_unblock(tmp_path):
+    r, out = _run(tmp_path, _snapshot(otel_lines=_otel("~=1.45.2"), version="1.190.0"))
+
+    _verdict(r, out, 1)
+    assert "allows opentelemetry-api 1.45.2" in out
+    assert "semgrep>=1.190.0" in out
+    assert "still requires `mcp==1.29.0`" in out    # the other package is reported too
+
+
+def test_an_api_line_past_the_fix_with_the_sdk_still_pinned_is_still_blocked(tmp_path):
+    """A semgrep that moved its api line alone still installs api 1.37.x:
+    sdk 1.37.0 requires it exactly. Reading only the api line said "act"."""
+    api, _, exporter = _otel("~=1.45.2")
+    _, sdk, _ = _otel("~=1.37.0")
+    r, out = _run(tmp_path, _snapshot(otel_lines=(api, sdk, exporter), version="1.190.0"))
+
+    _verdict(r, out, 0)
+    assert "opentelemetry-sdk~=1.37.0" in out
+
+
+def test_dropping_opentelemetry_altogether_unblocks(tmp_path):
+    r, out = _run(tmp_path, _snapshot(otel_lines=(), version="1.190.0"))
+
+    _verdict(r, out, 1)
+    assert "no longer depends on opentelemetry-api" in out
+
+
+def test_no_opentelemetry_release_list_is_not_a_pass(tmp_path):
+    r, out = _run(tmp_path, _snapshot(otel_versions=()))
+
+    _verdict(r, out, 2)
+    assert "no final opentelemetry-api releases" in out
+
+
+def test_one_package_that_cannot_tell_does_not_hide_the_others_verdict(tmp_path):
+    """No mcp release list, opentelemetry-api unblocked: the run is red as
+    "could not tell", and the log still says the otel floor can move. (An
+    unparseable line is NOT such a case: it could name either package, so it
+    leaves both unable to tell.)"""
+    r, out = _run(tmp_path, _snapshot("mcp>=1.29", mcp_versions=(),
+                                      otel_lines=_otel("~=1.45.2"), version="1.190.0"))
+
+    _verdict(r, out, 2)
+    assert "could not tell for mcp" in out
+    assert "allows opentelemetry-api 1.45.2" in out
+
+
 # -- could not tell: red, never green ------------------------------------------
 
 def test_wheels_that_disagree_are_not_guessed_at(tmp_path):
-    wheels = {"semgrep-1.190.0-py3-none-win_amd64.whl": ["mcp==1.29.0"],
-              "semgrep-1.190.0-py3-none-macosx_11_0_arm64.whl": ["mcp>=1.29"]}
+    wheels = {"semgrep-1.190.0-py3-none-win_amd64.whl": ["mcp==1.29.0", *_otel()],
+              "semgrep-1.190.0-py3-none-macosx_11_0_arm64.whl": ["mcp>=1.29", *_otel()]}
     r, out = _run(tmp_path, _snapshot(version="1.190.0", wheels=wheels))
 
     _verdict(r, out, 2)
@@ -196,7 +283,8 @@ def test_wheels_that_disagree_are_not_guessed_at(tmp_path):
 def test_two_mcp_lines_in_one_wheel_are_left_to_a_human(tmp_path):
     """Split by environment, one line may unblock while the other does not;
     judging only the last (or first) line read would guess."""
-    requires = ['mcp==1.29.0; python_version < "3.12"', 'mcp>=1.30; python_version >= "3.12"']
+    requires = ['mcp==1.29.0; python_version < "3.12"', 'mcp>=1.30; python_version >= "3.12"',
+                *_otel()]
     wheels = {name.format(v="1.190.0"): requires for name in WHEELS}
     r, out = _run(tmp_path, _snapshot(version="1.190.0", wheels=wheels))
 
