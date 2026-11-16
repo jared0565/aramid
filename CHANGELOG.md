@@ -12,6 +12,11 @@ to publish a tag that disagrees with it.
 
 ## [Unreleased]
 
+## [0.20.13] — 2026-11-16
+
+Nothing `aramid init` writes changed in this release, so there is no need
+to re-run it.
+
 ### Added
 
 - **The two mutation survivors in 0.20.12's code are pinned at unit
@@ -6701,7 +6706,8 @@ Stated plainly because each one changes how you should deploy this:
 - **PyPI publishing is not set up.** Install from a GitHub Release artifact or
   from git; `pip install aramid` does not work.
 
-[Unreleased]: https://github.com/jared0565/aramid/compare/v0.20.12...HEAD
+[Unreleased]: https://github.com/jared0565/aramid/compare/v0.20.13...HEAD
+[0.20.13]: https://github.com/jared0565/aramid/releases/tag/v0.20.13
 [0.20.12]: https://github.com/jared0565/aramid/releases/tag/v0.20.12
 [0.20.11]: https://github.com/jared0565/aramid/releases/tag/v0.20.11
 [0.20.10]: https://github.com/jared0565/aramid/releases/tag/v0.20.10
