@@ -181,10 +181,14 @@ jobs:
       # installs the built wheel into a clean venv and runs this same gate
       # from it; do not read a green run of THIS step as that proof.
       #
-      # COST: the gate's BLOCK-tier `tests` runner re-runs tests/unit (per
-      # aramid.toml), so this duplicates part of the suite step above. That is
-      # the price of exercising the real gate end-to-end; the legs run in
-      # parallel, so it costs wall-clock once, not seven times.
+      # COST: the gate's BLOCK-tier `tests` runner runs aramid.toml's
+      # [tests].command, which is the WHOLE tree, not tests/unit as this
+      # comment said until 2026-11-16. By then this step took as long as the
+      # suite step above: 24-28 min of a 52-58 min Windows leg at a96475d.
+      # Since that day the command carries `-n 6` (xdist workers), so this step
+      # reruns the tree on workers while the suite step above stays serial.
+      # That is the price of exercising the real gate end-to-end; the legs run
+      # in parallel, so it costs wall-clock once, not seven times.
       #
       # TEETH VERIFIED, not assumed: run against a fresh clone with a planted
       # AWS credential, this exits 1 with a gitleaks BLOCK. Against the clean

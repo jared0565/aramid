@@ -112,3 +112,35 @@ def test_the_owasp_ruleset_this_repo_gates_with_actually_exists():
     rules = REPO / "src" / "aramid" / "rules" / "owasp.yml"
     assert rules.is_file(), f"vendored semgrep ruleset missing at {rules}"
     assert rules.stat().st_size > 0, "vendored semgrep ruleset is empty"
+
+
+# --- the gate's suite: CI's tree, on xdist workers ---------------------------
+
+def test_the_gate_runs_cis_whole_tree_on_the_xdist_workers_the_dev_extra_declares(
+        monkeypatch, tmp_path):
+    """Operator decision 2026-11-16, "Workers in both gates". The serial
+    whole tree measured 4,732 s against the 4,800 s `[tests].timeout_s` cap;
+    `-n 6` ran the same 6081 passed / 50 skipped / 4 xfailed in 1,662 s.
+    The command reaches the local pre-push gate AND CI's "Run aramid gate at
+    pre-push tier" step; CI's "Run test suite" step does not read it and
+    stays serial, so every leg still runs the tree once without workers.
+
+    Equality, not membership, because it pins both halves at once: no path
+    argument (the gate runs the tree CI runs, not a subset) and six workers.
+    `-n` without the plugin is a usage error that would block every push,
+    so the dev extra must name it."""
+    import re
+    import tomllib
+
+    from aramid.runners import tests as tests_runner
+
+    monkeypatch.setattr(config_mod, "_user_config_path",
+                        lambda: tmp_path / "no-user.toml")
+    cfg = config_mod.load_config(REPO)
+
+    argv = tests_runner._argv(config_mod.effective_test_command(cfg), REPO)
+
+    assert argv == ["python", "-m", "pytest", "-q", "-n", "6"], argv
+    dev = tomllib.loads((REPO / "pyproject.toml").read_text(encoding="utf-8"))[
+        "project"]["optional-dependencies"]["dev"]
+    assert any(re.match(r"pytest-xdist\b", d) for d in dev), dev

@@ -37,8 +37,9 @@ bake_started = "2026-08-02"
 # on every push across the 7-leg matrix -- so nothing is unverified, it is
 # verified a few minutes later instead of before the push.
 #
-# CI PARITY. This is deliberately the same command CI's "Run test suite" step
-# runs -- the WHOLE tree, not `tests/unit`. The point of a pre-push gate is
+# CI PARITY. This deliberately runs the same TREE CI's "Run test suite" step
+# runs -- the WHOLE tree, not `tests/unit`. (Not the same command since
+# 2026-11-16: the workers below are this gate's, see there.) The point of a pre-push gate is
 # that what passes here passes there, and the ~370 integration and e2e tests
 # that `tests/unit` excludes are exactly the ones most likely to break on a
 # different machine. Scoping this narrowly bought a fast push and paid for it
@@ -51,7 +52,22 @@ bake_started = "2026-08-02"
 # The argv form is used rather than a string because POSIX splitting eats
 # backslashes and this repo's primary dev platform is Windows.
 [tests]
-command = ["python", "-m", "pytest", "-q"]
+command = ["python", "-m", "pytest", "-q", "-n", "6"]
+# `-n 6` (pytest-xdist, the dev extra), operator decision 2026-11-16 "Workers
+# in both gates". The serial tree measured 4,732 s that morning, 68 s under
+# timeout_s below; on six workers the same 6081 passed / 50 skipped / 4
+# xfailed took 1,662 s (one run each, both with --durations=0).
+#
+# This command is ALSO what CI's "Run aramid gate at pre-push tier" step runs,
+# so that step gets the workers too. CI's "Run test suite" step does not read
+# this file and stays serial, so every leg still runs the tree once without
+# workers. What that costs: a failure that only shows serially is caught
+# there, one CI round-trip after the push, never here. Without the plugin
+# `-n` is a usage error that blocks every push, so the dev extra names it
+# (`test_the_gate_runs_cis_whole_tree_on_the_xdist_workers_the_dev_extra_declares`).
+#
+# timeout_s and [timeouts].pre_push are left where they were. They are hang
+# detectors, and tightening them is a separate decision.
 # The whole tree measured ~1141 s; `tests/unit` alone was ~243 s under the old
 # 600 s cap. A timeout is not a cost -- it never slows a passing push -- but
 # too tight a one blocks EVERY push, so this keeps a similar ratio of headroom
