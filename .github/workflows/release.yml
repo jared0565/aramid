@@ -65,8 +65,17 @@ jobs:
   # workflow-level grant is `contents: write`, and a job without its own grant
   # gets a 403 that the script reports by name rather than reading as "no
   # runs". The tag push starts the `aramid` matrix in parallel with this job,
-  # so when RELEASING.md's step 4 was skipped the wait is one matrix (~30 min);
-  # the 75-minute budget covers a re-run of a lost leg on top of that.
+  # so when RELEASING.md's step 4 was skipped the wait is one matrix. Measured
+  # 2026-11-16 (the 0.20.13 runs): a matrix takes as long as its Windows legs,
+  # 43-49 min (macOS 26-27). What 75 minutes covers:
+  #   - A macOS leg GitHub never gives a runner: cancelled at 15 min ("not
+  #     acquired by Runner"), it happened four times that day. Re-run at once,
+  #     it finishes about 42 min in, inside the matrix.
+  #   - NOT a lost Windows leg: two ~49 min legs back to back is ~98 min.
+  #   - A red run beside a green one on the same sha: either counts.
+  # Running out fails closed: this job exits 1, nothing is built or published,
+  # and `gh run rerun <this run>` once the commit is green finishes the
+  # release, with no re-tag (RELEASING.md step 4).
   verify-ci:
     runs-on: ubuntu-latest
     timeout-minutes: 90
