@@ -68,6 +68,22 @@ to publish a tag that disagrees with it.
   still record nothing, because they did not look. Reported from bytesTTS
   (round 350). It takes effect on the first completed fuzz or DAST run
   under the new version.
+- **gitleaks' report is read as UTF-8, so a non-ASCII file name no longer
+  crashes the secret scan on Windows.** gitleaks writes its JSON report in
+  UTF-8 without escaping non-ASCII characters. aramid read it, and the
+  inline-marker pass's report, in the locale code page. On cp1252 a path
+  holding an undecodable byte made the read raise: measured on a staged
+  `pronounced-aːramid.py` with the real gitleaks binary, 0.20.13 stopped
+  with `UnicodeDecodeError`, so the BLOCK-tier secret scan crashed and the
+  push was refused. A path that did decode came out garbled.
+  **One-time effect on Windows, for findings whose file path has non-ASCII
+  characters:** a finding's id is built from its path, so such a finding
+  appears once as a NEW blocking row under its real path. The old row,
+  recorded under the garbled path, closes as `fixed`. That `fixed` is this
+  encoding change, not a rotation: the secret is still there, and the new
+  row blocks until it is marked again (`aramid ledger mark-not-a-secret`,
+  `mark-rotated`, or a `.aramid-suppressions.toml` entry). Paths that are
+  all ASCII keep their ids.
 
 ## [0.20.13] — 2026-11-16
 

@@ -399,6 +399,36 @@ def test_the_inline_pass_reports_only_leaks_the_allow_comment_hid(tmp_path, monk
     assert "a `gitleaks:allow` comment" in hidden.message
 
 
+def test_both_reports_are_read_as_utf8_not_the_locale_code_page(tmp_path, monkeypatch,
+                                                                cp1252_locale):
+    """gitleaks writes its JSON report in UTF-8 and does not escape
+    non-ASCII. Both passes read it in the locale code page. On cp1252 the
+    `ː` in this path (U+02D0, `CB 90`) cannot decode: the main pass raised,
+    and the BLOCK-tier secret scan crashed. The inline pass (FN-38) crashed
+    its own label. A path that does decode came out garbled instead, and
+    the finding's id inherits its path. Each pass is checked separately:
+    fixing only the first read leaves the second CRASHED."""
+    path = tmp_path / "pronounced-aːramid.py"
+
+    def fake(argv, cwd, timeout_s, env=None):
+        report = Path(argv[argv.index("--report-path") + 1])
+        hidden = "--ignore-gitleaks-allow" in argv
+        items = [_leak(path, 1), _leak(path, 2)] if hidden else [_leak(path, 2)]
+        report.write_bytes(json.dumps(items, ensure_ascii=False).encode("utf-8"))
+        return RunnerResult("gitleaks", ToolState.OK, returncode=1)
+
+    monkeypatch.setattr(gitleaks, "run_subprocess", fake)
+    ctx = RunContext(root=tmp_path, inline_pass=True)
+
+    result = gitleaks.run(ctx)
+
+    own, second = result.sub_results
+    assert (own.state, second.state) == (ToolState.OK, ToolState.OK), second.stderr
+    assert [(f.tool, f.file, f.line) for f in gitleaks.parse(result, ctx)] == [
+        ("gitleaks", "pronounced-aːramid.py", 2),
+        (inline.GITLEAKS, "pronounced-aːramid.py", 1)]
+
+
 def test_the_full_tree_second_pass_scans_the_same_staged_copy(tmp_path, monkeypatch):
     _allow_tree(tmp_path)
     staged_dirs = []

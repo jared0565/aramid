@@ -221,7 +221,11 @@ def run(ctx) -> RunnerResult:
             return RunnerResult(NAME, ToolState.CRASHED, stderr=result.stderr,
                                 duration_s=result.duration_s, returncode=result.returncode)
 
-        text = report_path.read_text() if report_path.exists() else ""
+        # UTF-8, not the locale code page: gitleaks writes its JSON report in
+        # UTF-8 and does not escape non-ASCII. On cp1252 a path or secret
+        # holding an undecodable byte crashed the BLOCK-tier scan, and one
+        # that decoded came out garbled, its finding id with it.
+        text = report_path.read_text(encoding="utf-8") if report_path.exists() else ""
 
         if result.returncode not in _OK_RETURNCODES:
             return RunnerResult(NAME, ToolState.CRASHED, raw=text, stderr=result.stderr,
@@ -294,7 +298,8 @@ def _read_pass(ctx, argv, cwd: Path, timeout: float, env: dict, report_path: Pat
             result.returncode == 1 and not report_path.exists()):
         return failed
     try:
-        items = json.loads((report_path.read_text() if report_path.exists() else "") or "[]")
+        items = json.loads((report_path.read_text(encoding="utf-8")
+                            if report_path.exists() else "") or "[]")
     except json.JSONDecodeError:
         return failed
     if scan_root is not None:
