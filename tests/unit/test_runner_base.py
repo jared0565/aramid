@@ -74,6 +74,24 @@ def test_the_reader_caches_per_file(tmp_path):
     p.write_text("REWRITTEN\nREWRITTEN\n", encoding="utf-8")
     assert read("d.py", 2) == "second", "second lookup must come from the cache"
 
+
+def test_the_reader_decodes_the_scanned_bytes_as_utf8_not_the_code_page(tmp_path,
+                                                                       cp1252_locale):
+    """The line text is hashed into the finding id (compute_fingerprint). Read
+    in the locale code page, a line holding `ï` came back on Windows as
+    `Ã¯`, so the same ruff or semgrep finding had one id there and another
+    on Linux and macOS. `.aramid-suppressions.toml` entries are keyed by that
+    id and committed, so an entry written on one platform did not bind on
+    the other. git blobs (gitutil.read_for_fingerprint) were already read as
+    UTF-8. A byte that is not UTF-8 is still replaced, never raised."""
+    root = tmp_path / "repo"
+    root.mkdir()
+    (root / "d.py").write_bytes('msg = "naïve"\r\nbad = b"\xff"\n'.encode("utf-8")
+                                .replace("\xff".encode("utf-8"), b"\xff"))
+    read = scanned_line_reader(root)
+    assert read("d.py", 1) == 'msg = "naïve"'
+    assert read("d.py", 2) == 'bad = b"�"'
+
 def test_missing_binary_is_missing(tmp_path):
     r = run_subprocess(["definitely-not-a-real-binary-xyz"], tmp_path, 5)
     assert r.state is ToolState.MISSING

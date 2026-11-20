@@ -73,6 +73,16 @@ def test_read_for_fingerprint_untracked_uses_worktree(tmp_path):
     content = gitutil.read_for_fingerprint(r, "HEAD", "u.py")
     assert content == "secret=1\n"            # non-empty, LF-normalized
 
+def test_read_for_fingerprint_reads_an_untracked_file_as_utf8(tmp_path, cp1252_locale):
+    """A tracked file's text comes from `git show`, which gitutil decodes as
+    UTF-8. The untracked fallback read the worktree in the locale code page,
+    so on Windows the same line hashed differently once the file was added.
+    A byte that is not UTF-8 is still replaced, never raised."""
+    r = _repo(tmp_path)
+    (r / "u.py").write_bytes('name = "naïve"\r\n'.encode("utf-8") + b'raw = "\xff"\n')
+    assert gitutil.read_for_fingerprint(r, "HEAD", "u.py") == \
+        'name = "naïve"\nraw = "�"\n'
+
 def test_rev_sha_and_first_parent(tmp_path):
     r = _repo(tmp_path)
     _commit(r, "a.py", "x = 1\n", "first")

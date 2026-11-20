@@ -108,8 +108,13 @@ def scanned_line_reader(root):
             p = Path(path)
             if not p.is_absolute():
                 p = base / p
+            # UTF-8, never the locale code page: this text is hashed into the
+            # finding id, and a cp1252 read made a non-ASCII line hash one way
+            # on Windows and another on Linux and macOS, so a committed
+            # suppression bound on one platform only. git blobs
+            # (gitutil.read_for_fingerprint) were already decoded as UTF-8.
             try:
-                lines = (p.read_text(errors="replace")
+                lines = (p.read_text(encoding="utf-8", errors="replace")
                           .replace("\r\n", "\n").splitlines())
             except OSError:
                 lines = None

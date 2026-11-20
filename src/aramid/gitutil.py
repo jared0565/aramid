@@ -204,7 +204,9 @@ def read_for_fingerprint(root: Path, ref: str, rel_path: str) -> str:
     if not is_tracked(root, rel_path):
         p = root / rel_path
         if p.exists():
-            return p.read_text(errors="replace").replace("\r\n", "\n")
+            # UTF-8, as `git show` above is decoded: otherwise the same line
+            # hashes differently once the file is added.
+            return p.read_text(encoding="utf-8", errors="replace").replace("\r\n", "\n")
     return ""
 
 def rev_sha(root: Path, rev: str) -> str | None:

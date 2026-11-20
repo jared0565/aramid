@@ -92,6 +92,23 @@ to publish a tag that disagrees with it.
   output is all ASCII and was never affected. A cache file that does not
   decode as UTF-8, such as one written by an earlier version, now counts
   as a cache miss, and the audit simply runs again.
+- **Finding ids no longer depend on the platform for lines with non-ASCII
+  text.** Part of a finding's id is the text of the line it is on. ruff and
+  semgrep findings, and the untracked-file fallback for every other tool,
+  read that line in the locale code page. On Windows a line holding `ï`
+  was hashed as `Ã¯`, so the same finding had one id on Windows and
+  another on Linux and macOS. A `.aramid-suppressions.toml` entry is keyed
+  by that id and is committed, so an entry written on one platform did
+  not suppress the finding on the other. The line is now read as UTF-8
+  everywhere, the way git's copy of a tracked file already was.
+  **One-time effect on Windows, only for findings on a line with non-ASCII
+  text:** each one gets the id Linux and macOS already give it. An open
+  one is closed as `superseded` by its new id, which opens in its place.
+  An overridden one comes back once as a new open finding, because an
+  override names its id; override it again. A suppression entry written
+  on Windows for such a finding stops matching and must be re-pasted with
+  the new id, and one written on Linux or macOS starts matching. Findings
+  on all-ASCII lines keep their ids.
 
 ## [0.20.13] — 2026-11-16
 
