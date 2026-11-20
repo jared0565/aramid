@@ -461,28 +461,41 @@ def test_shared_budget_caps_the_second_suites_timeout(tmp_path, monkeypatch):
     """[review B2] The two suites share ONE deadline: the SECOND suite's
     timeout is `remaining_budget`, not its own independent full timeout --
     proven by a real (small) sleep in the first suite eating into the
-    budget the second suite is then handed."""
+    budget the second suite is then handed.
+
+    Every bound is read off the clock when it applies, not written as a
+    fixed number, so time spent before a suite starts (detection, a busy
+    machine) moves the bound together with the value. The fixed form,
+    0.5 s +/- 0.05 for the first suite, failed a pre-push gate on
+    2026-11-20 when 86 ms passed before the first suite started. The 5 s
+    budget only has to outlast that delay: the test fails wrongly only if
+    more than ~5 s passes before the first suite starts, which leaves
+    pytest TIMEOUT and the fake never called."""
     _dual_repo(tmp_path)
     captured: list = []
 
     def fake(argv, cwd, timeout_s, env=None):
-        captured.append((argv[0], timeout_s))
+        entered = time.monotonic()
         if argv[0] == "pytest":
             time.sleep(0.2)
+        captured.append((argv[0], timeout_s, entered, time.monotonic()))
         return RunnerResult(tool=argv[0], state=ToolState.OK, returncode=0)
 
     monkeypatch.setattr(tests_runner, "run_subprocess", fake)
-    ctx = RunContext(root=tmp_path, gate_deadline=time.monotonic() + 0.5)
-    tests_runner.run(ctx)
+    deadline = time.monotonic() + 5.0
+    tests_runner.run(RunContext(root=tmp_path, gate_deadline=deadline))
 
-    assert captured[0][0] == "pytest"
-    assert captured[0][1] == pytest.approx(0.5, abs=0.05)   # ~full shared budget
-    assert captured[1][0] == "npm"
-    # Budget minus ~0.2s pytest already spent -- a wide band (not a tight
-    # pytest.approx) because real sleep() can overshoot under scheduler
-    # jitter; still comfortably separates "capped by remaining" from
-    # either the full 300s per-tool default or a fresh 0.5s budget.
-    assert 0.05 < captured[1][1] < 0.45
+    (first, first_timeout, first_in, first_out), (second, second_timeout, second_in, _) = captured
+    assert (first, second) == ("pytest", "npm")
+    # The first suite is handed what was left of the shared budget as it
+    # started: never more than the whole budget, never less than what was
+    # left when the fake was entered.
+    assert deadline - first_in <= first_timeout <= 5.0
+    # The second suite gets only what is left AFTER the first suite's sleep.
+    # The upper bound rules out the 300 s per-tool default, a fresh 5 s
+    # budget, and a remaining value read once before both suites (that one
+    # is >= deadline - first_in, at least 0.2 s above this bound).
+    assert deadline - second_in <= second_timeout <= deadline - first_out
 
 
 def test_run_respects_the_cached_detected_tests_over_a_fresh_walk(tmp_path, monkeypatch):
