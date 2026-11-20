@@ -120,15 +120,21 @@ def _read_cache(path: Path) -> str | None:
         return None
     if time.time() - path.stat().st_mtime > CACHE_TTL_S:
         return None
+    # UTF-8 both ways, never the locale code page: the content is a tool's
+    # output that run_subprocess already decoded as UTF-8, and npm, pnpm,
+    # yarn and cargo-audit do not escape non-ASCII. On cp1252 a character it
+    # cannot hold raised UnicodeEncodeError at the write, which crashed the
+    # deps runner. A file that will not decode -- one written in the code
+    # page before this, or a corrupt one -- is a miss, and the audit re-runs.
     try:
-        return path.read_text()
-    except OSError:
+        return path.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError):
         return None
 
 
 def _write_cache(path: Path, content: str) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(content)
+    path.write_text(content, encoding="utf-8")
 
 
 # --------------------------------------------------------------- python ----

@@ -452,6 +452,55 @@ def test_js_result_is_cached_and_reused_within_ttl(tmp_path, monkeypatch):
     assert len(cache_files) == 1
 
 
+def test_an_audit_holding_characters_outside_the_code_page_is_cached_as_utf8(
+        tmp_path, monkeypatch, cp1252_locale):
+    """npm, pnpm, yarn and cargo-audit write JSON with raw non-ASCII, and
+    run_subprocess hands it over decoded as UTF-8 (runners/base.py). The
+    cache was written in the locale code page: on cp1252 a character it
+    cannot hold raised UnicodeEncodeError, not an OSError, so the deps
+    runner crashed and the push was refused under --strict."""
+    (tmp_path / "package-lock.json").write_bytes(b'{"lockfileVersion": 3}')
+    raw = json.dumps({"advisories": {"t": "漢字 aːramid"}}, ensure_ascii=False)
+    calls = {"n": 0}
+
+    def fake_run_subprocess(argv, cwd, timeout_s, env=None):
+        calls["n"] += 1
+        return RunnerResult(tool="npm", state=ToolState.OK, raw=raw)
+
+    monkeypatch.setattr(deps, "run_subprocess", fake_run_subprocess)
+    ctx = RunContext(root=tmp_path, pkg_manager="npm")
+
+    first, second = deps.run_js(ctx), deps.run_js(ctx)
+
+    assert calls["n"] == 1, "the second run is served from the cache"
+    assert first.raw == second.raw == raw
+
+
+def test_a_cache_file_that_is_not_utf8_is_a_miss_not_a_crash(tmp_path, monkeypatch,
+                                                             cp1252_locale):
+    """A cache written before the cache became UTF-8, in cp1252, or a
+    corrupt one: the read raised UnicodeDecodeError, a ValueError the
+    OSError arm does not catch. It is now a cache miss, and the audit runs
+    again. Such files live at most CACHE_TTL_S anyway."""
+    (tmp_path / "package-lock.json").write_bytes(b'{"lockfileVersion": 3}')
+    calls = {"n": 0}
+
+    def fake_run_subprocess(argv, cwd, timeout_s, env=None):
+        calls["n"] += 1
+        return RunnerResult(tool="npm", state=ToolState.OK, raw="{}")
+
+    monkeypatch.setattr(deps, "run_subprocess", fake_run_subprocess)
+    ctx = RunContext(root=tmp_path, pkg_manager="npm")
+    deps.run_js(ctx)
+    [cache] = (tmp_path / ".aramid" / "cache").glob("deps-*.json")
+    cache.write_bytes('{"t": "café"}'.encode("cp1252"))   # 0xE9 alone is not UTF-8
+
+    again = deps.run_js(ctx)
+
+    assert calls["n"] == 2, "the undecodable cache was a miss, so the audit ran again"
+    assert again.state is ToolState.OK and again.raw == "{}"
+
+
 def test_cache_key_changes_with_lockfile_content(tmp_path, monkeypatch):
     (tmp_path / "package-lock.json").write_text('{"lockfileVersion": 3}')
     monkeypatch.setattr(

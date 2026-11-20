@@ -84,6 +84,14 @@ to publish a tag that disagrees with it.
   row blocks until it is marked again (`aramid ledger mark-not-a-secret`,
   `mark-rotated`, or a `.aramid-suppressions.toml` entry). Paths that are
   all ASCII keep their ids.
+- **The dependency-audit cache is written and read as UTF-8.** npm, pnpm,
+  yarn and cargo-audit write JSON with raw non-ASCII characters. The
+  24-hour audit cache under `.aramid/cache/` was written in the locale code
+  page, so on Windows an advisory holding a character cp1252 cannot store
+  raised `UnicodeEncodeError` and crashed the dependency audit. pip-audit's
+  output is all ASCII and was never affected. A cache file that does not
+  decode as UTF-8, such as one written by an earlier version, now counts
+  as a cache miss, and the audit simply runs again.
 
 ## [0.20.13] — 2026-11-16
 

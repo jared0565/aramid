@@ -43,18 +43,25 @@ def recent_iso() -> str:
 
 @pytest.fixture
 def cp1252_locale(monkeypatch) -> None:
-    """Make every `Path.read_text` that names no encoding decode as cp1252,
-    which is what Windows does with Python's UTF-8 mode off.
+    """Make every `Path.read_text` and `Path.write_text` that names no
+    encoding use cp1252, which is what Windows does with Python's UTF-8 mode
+    off.
 
     A missing `encoding=` changes nothing on a UTF-8 locale, so without this
     a regression for it could fail only on a cp1252 host and would guard
-    nothing on the Linux and macOS CI legs. Only `Path.read_text` is
-    covered: a bare `open()` in text mode is not."""
-    real = Path.read_text
+    nothing on the Linux and macOS CI legs. Only those two `Path` methods
+    are covered: a bare `open()` in text mode is not, and neither is a
+    subprocess's text decoding. Write test inputs with `write_bytes`, which
+    this leaves alone."""
+    real_read, real_write = Path.read_text, Path.write_text
 
     def read_text(self, encoding=None, *args, **kwargs):
-        return real(self, encoding or "cp1252", *args, **kwargs)
+        return real_read(self, encoding or "cp1252", *args, **kwargs)
+
+    def write_text(self, data, encoding=None, *args, **kwargs):
+        return real_write(self, data, encoding or "cp1252", *args, **kwargs)
     monkeypatch.setattr(Path, "read_text", read_text)
+    monkeypatch.setattr(Path, "write_text", write_text)
 
 
 @pytest.fixture(autouse=True)
