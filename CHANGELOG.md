@@ -52,6 +52,22 @@ to publish a tag that disagrees with it.
   now say it is disabled, and that uncommenting the line or re-running
   `aramid schedule install` turns it back on. `aramid schedule status`
   still exits 0 in that case, as it does for a disabled task on Windows.
+- **The fuzz and DAST resolvers no longer read `NEVER RAN` while they
+  run.** A fuzz run or DAST probe that completed but cleared nothing
+  reported no claim at all. So the drain recorded no run of
+  `crash_not_reproduced` (fuzz) or `endpoint_reprobed` (DAST), and
+  `aramid resolvers` graded the resolver `NEVER RAN` once its producer had
+  any open finding. That turned the repo's fleet row red on
+  `resolvers_ok`, and after three rows posted a fleet-defect notice. Both
+  consumers now report every open finding they read on every completed
+  run, claimed or not, as the two mutation consumers already did. A run
+  that clears nothing then grades `no clears yet`, an outcome rather than
+  a defect. That includes an open finding the run did not reach (a
+  function not fuzzed this time, an endpoint that did not answer), which
+  would otherwise grade `BLIND`. Runs that time out, fail or are skipped
+  still record nothing, because they did not look. Reported from bytesTTS
+  (round 350). It takes effect on the first completed fuzz or DAST run
+  under the new version.
 
 ## [0.20.13] — 2026-11-16
 

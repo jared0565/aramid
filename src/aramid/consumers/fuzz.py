@@ -220,6 +220,7 @@ def consume(item, ctx: DrainContext) -> ConsumerResult:
              "timeouts": 0, "import_failures": 0, "truncated": False}
     findings: list[RawFinding] = []
     repaired_ids: tuple = ()
+    examined: tuple = ()
     tmp = Path(tempfile.mkdtemp(prefix="aramid-fuzz-"))
     wt = tmp / "wt"
     try:
@@ -372,11 +373,19 @@ def consume(item, ctx: DrainContext) -> ConsumerResult:
             if isinstance(entry, (list, tuple)) and len(entry) == 2:
                 fuzzed_by_file.setdefault(entry[0], set()).add(entry[1])
         still_crashing = _reported_ids(findings, wt)
+        open_crashes = base.open_findings_for(ctx.ledger, TOOL)
         repaired_ids = tuple(sorted(
-            fid for fid, rec in base.open_findings_for(ctx.ledger, TOOL).items()
+            fid for fid, rec in open_crashes.items()
             if fid not in still_crashing
             and any(_names_function(rec.get("message", ""), func)
                     for func in fuzzed_by_file.get(rec.get("file", ""), ()))))
+        # Every open crash this run READ, claimed or not and fuzzed or not --
+        # what both mutation consumers report (consumers.base.Repaired,
+        # interop round 180). Only the fuzzed scope would be too narrow: an
+        # open crash in a function this run did not reach would then read
+        # `considered 0` beside an open finding, which the census grades
+        # BLIND (bytesTTS, round 350).
+        examined = tuple(sorted(open_crashes))
     finally:
         try:
             gitutil._run(ctx.root, "worktree", "remove", "--force", str(wt))
@@ -391,13 +400,20 @@ def consume(item, ctx: DrainContext) -> ConsumerResult:
         note += f"; {stats['skipped_unhinted']} skipped (unhinted)"
     if stats["truncated"]:
         note += " (truncated: max_functions cap hit)"
+    # Reported on EVERY completed run, claims or none. With `repaired=None`
+    # when nothing was claimed, the drain wrote no yield event, so a fuzz
+    # producer whose crashes were never fixed in code had its resolver read
+    # NEVER RAN for good, and the repo's fleet row red on resolvers_ok
+    # (bytesTTS, interop round 350). The early returns above -- disabled, no
+    # files, a timeout, a broken driver -- never get here and still write
+    # nothing: those runs did not look.
     return ConsumerResult(consumer=NAME, state="ok", findings=findings,
                           duration_s=time.monotonic() - started, cost=0.0,
                           note=note, extra=dict(stats),
                           repaired=base.Repaired(tool=TOOL,
                                                  reason="crash_not_reproduced",
-                                                 ids=repaired_ids)
-                          if repaired_ids else None)
+                                                 ids=repaired_ids,
+                                                 examined=examined))
 
 
 base.CONSUMERS[NAME] = sys.modules[__name__]

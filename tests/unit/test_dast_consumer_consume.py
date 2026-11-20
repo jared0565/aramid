@@ -157,7 +157,8 @@ def test_findings_become_warn_raws_at_line_0_with_the_synthetic_file(tmp_path, m
         ("dast", "dast-header-csp", "medium", "GET /", 0,
          "Content-Security-Policy missing", "headers: 4"),
         ("dast", "dast-exposed-path", "high", "GET /.git/config", 0, "exposed", "status: 200")]
-    assert res.repaired is None, "nothing open, nothing to claim"
+    assert (res.repaired.ids, res.repaired.examined) == ((), ()), \
+        "nothing open: a claim of nothing, over nothing"
 
 
 # --------------------------------------------------------- degradations --
@@ -238,7 +239,8 @@ def test_a_finding_that_still_fires_on_a_probed_endpoint_is_not_claimed(
 
     res, _ = _run(tmp_path, monkeypatch, {"base_url": "http://h/"}, Probe(([CSP], {"GET /"})))
 
-    assert res.repaired is None
+    assert (res.repaired.ids, res.repaired.examined) == ((), (fid,)), \
+        "still firing: examined, never claimed"
     assert [f.rule for f in res.findings] == ["dast-header-csp"]
 
 
@@ -248,7 +250,38 @@ def test_a_finding_on_an_endpoint_this_scan_did_not_reach_stays_open(tmp_path, m
 
     res, _ = _run(tmp_path, monkeypatch, {"base_url": "http://h/"}, Probe(([], {"GET /"})))
 
-    assert res.repaired is None
+    assert (res.repaired.ids, res.repaired.examined) == ((), (fid,))
+
+
+def test_a_completed_probe_reports_what_it_examined_so_the_census_sees_it_ran(
+        tmp_path, monkeypatch):
+    """The fuzz consumer's round-350 defect, in the other consumer that had
+    it: a successful probe that claimed nothing returned `repaired=None`,
+    so the drain wrote no yield event and `endpoint_reprobed/dast` would read
+    NEVER RAN for good once any DAST finding was open and unfixed. The open
+    finding is on an endpoint this scan did not reach, the case that would
+    grade BLIND if `examined` held only the probed scope; the census is
+    checked end to end, as the drain records it."""
+    from aramid import ledger as ledger_mod
+    from aramid import yield_report
+    fid = dc._finding_fp("dast-header-csp", "GET", "/admin")
+    _seed_open(tmp_path, fid, "GET /admin")
+
+    res, _ = _run(tmp_path, monkeypatch, {"base_url": "http://h/"}, Probe(([], {"GET /"})))
+
+    assert res.repaired is not None
+    assert (res.repaired.tool, res.repaired.reason, res.repaired.ids, res.repaired.examined) == (
+        "dast", "endpoint_reprobed", (), (fid,))
+    led = Ledger(tmp_path / "ledger.db")
+    try:
+        ledger_mod.resolve_repaired(led, "d1", "2026-11-20T10:00:00+00:00",
+                                    tool=res.repaired.tool, reason=res.repaired.reason,
+                                    ids=res.repaired.ids, present_ids=set(),
+                                    examined=res.repaired.examined)
+        rows = {(row.resolver, row.tool): row for row in yield_report.collect(led)}
+    finally:
+        led.close()
+    assert rows[("endpoint_reprobed", "dast")].verdict == "no clears yet"
 
 
 def test_a_claim_names_only_the_probed_and_silent_ids_sorted(tmp_path, monkeypatch):

@@ -189,7 +189,9 @@ def test_the_driver_gets_the_targets_the_default_cases_and_batch_timeout(
     assert env["PYTHONHASHSEED"] == "0" and env["PYTHONDONTWRITEBYTECODE"] == "1"
     assert res.extra == {**ZERO, "functions_seen": 2, "functions_fuzzed": 2, "cases_run": 100,
                          "import_failed": {}}
-    assert res.cost == 0.0 and res.repaired is None
+    assert res.cost == 0.0
+    assert (res.repaired.ids, res.repaired.examined) == ((), ()), \
+        "a completed run reports a claim of nothing, over nothing open"
     assert _no_worktrees(r)
 
 
@@ -477,7 +479,7 @@ def test_records_become_findings_and_the_counters_read_the_verdict(tmp_path, mon
         ("fuzz", "crash-zerodivisionerror", "medium", "lib.py", 2,
          "fuzz crash: f(x=0) raised ZeroDivisionError: division by zero"),
         ("fuzz", "crash-keyerror", "medium", "lib.py", 1, "fuzz crash: g() raised KeyError: k")]
-    assert res.repaired is None
+    assert (res.repaired.ids, res.repaired.examined) == ((), ())
 
 
 def test_a_verdict_with_nothing_in_it_reads_as_zeros(tmp_path, monkeypatch):
@@ -512,7 +514,8 @@ def test_a_crash_that_still_reproduces_is_not_claimed(tmp_path, monkeypatch):
                   Driver({"records": [CRASH], "fuzzed": [["lib.py", "f"]]}))
 
     assert [f.file for f in res.findings] == ["lib.py"]
-    assert res.repaired is None
+    assert (res.repaired.ids, res.repaired.examined) == ((), (fid,)), \
+        "still crashing: examined, never claimed"
 
 
 def test_a_crash_in_a_function_the_driver_did_not_fuzz_stays_open(tmp_path, monkeypatch):
@@ -522,7 +525,43 @@ def test_a_crash_in_a_function_the_driver_did_not_fuzz_stays_open(tmp_path, monk
 
     res, _ = _run(r, base, head, monkeypatch, {}, Driver({"fuzzed": [["lib.py", "g"]]}))
 
-    assert res.repaired is None
+    assert (res.repaired.ids, res.repaired.examined) == ((), (fid,))
+
+
+def test_a_completed_run_reports_what_it_examined_so_the_census_sees_it_ran(tmp_path, monkeypatch):
+    """bytesTTS, round 350: `crash_not_reproduced/fuzz NEVER RAN` on every
+    gate row, the fleet row red on resolvers_ok, while fuzz kept running.
+    A completed run that claimed nothing returned `repaired=None`, so the
+    drain wrote no yield event and the census read the resolver as never
+    called. Both mutation consumers report `examined` on every completed
+    run (round 180); fuzz now does too.
+
+    The open crash is in a function this run did NOT fuzz, which is
+    bytesTTS's shape and the one that would grade BLIND if `examined` held
+    only the fuzzed scope. So the census is checked end to end: the claim
+    goes through the ledger as the drain records it, and yield_report grades
+    the row."""
+    from aramid import ledger as ledger_mod
+    from aramid import yield_report
+    r, base, head = _repo(tmp_path, {"lib.py": _fns(["f", "g"])})
+    fid = _fid(r, "lib.py", 2)
+    _seed_open(r, fid, "lib.py", "fuzz crash: f(x=0) raised ZeroDivisionError: division by zero")
+
+    res, _ = _run(r, base, head, monkeypatch, {}, Driver({"fuzzed": [["lib.py", "g"]]}))
+
+    assert res.repaired is not None
+    assert (res.repaired.tool, res.repaired.reason, res.repaired.ids, res.repaired.examined) == (
+        "fuzz", "crash_not_reproduced", (), (fid,))
+    led = Ledger(r / ".aramid" / "ledger.db")
+    try:
+        ledger_mod.resolve_repaired(led, "d1", "2026-11-20T10:00:00+00:00",
+                                    tool=res.repaired.tool, reason=res.repaired.reason,
+                                    ids=res.repaired.ids, present_ids=set(),
+                                    examined=res.repaired.examined)
+        rows = {(row.resolver, row.tool): row for row in yield_report.collect(led)}
+    finally:
+        led.close()
+    assert rows[("crash_not_reproduced", "fuzz")].verdict == "no clears yet"
 
 
 def test_only_well_formed_fuzzed_pairs_count(tmp_path, monkeypatch):
@@ -534,7 +573,7 @@ def test_only_well_formed_fuzzed_pairs_count(tmp_path, monkeypatch):
                   Driver({"fuzzed": [["lib.py", "f", "extra"], {"file": "lib.py", "function": "f"},
                                      "lib.py", ["lib.py"]]}))
 
-    assert res.repaired is None, "a triple, a dict, a string and a single are not (file, func)"
+    assert res.repaired.ids == (), "a triple, a dict, a string and a single are not (file, func)"
 
 
 def test_a_pair_is_file_then_function(tmp_path, monkeypatch):
@@ -544,7 +583,7 @@ def test_a_pair_is_file_then_function(tmp_path, monkeypatch):
 
     res, _ = _run(r, base, head, monkeypatch, {}, Driver({"fuzzed": [["f", "lib.py"]]}))
 
-    assert res.repaired is None
+    assert res.repaired.ids == ()
 
 
 def test_candidate_functions_on_unparseable_source_is_empty_with_zero_skips():

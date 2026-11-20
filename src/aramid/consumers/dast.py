@@ -116,19 +116,27 @@ def consume(item, ctx: DrainContext) -> ConsumerResult:
     # claims repair for a finding it is simultaneously reporting is the worst
     # failure this mechanism can have, so it is not left to one filter.
     still_firing = {_finding_fp(f.check, f.method, f.path) for f in findings}
+    open_hygiene = base.open_findings_for(ctx.ledger, TOOL)
     repaired_ids = tuple(sorted(
-        fid for fid, rec in base.open_findings_for(ctx.ledger, TOOL).items()
+        fid for fid, rec in open_hygiene.items()
         if rec.get("file") in probed and fid not in still_firing))
 
     host = parts.hostname
+    # Reported on EVERY successful probe, claims or none, with every open
+    # finding it read as `examined` -- what both mutation consumers report
+    # (consumers.base.Repaired, interop round 180). `repaired=None` when
+    # nothing was claimed wrote no yield event, so this resolver would have
+    # read NEVER RAN for good, as fuzz's did in bytesTTS (round 350). The
+    # probed scope alone would be too narrow: an open finding on an endpoint
+    # this scan did not reach would read `considered 0`, which grades BLIND.
     return ConsumerResult(consumer=NAME, state="ok", findings=raws, cost=0.0,
                           note=f"{len(raws)} hygiene finding(s) on {host}",
                           extra={"target": host, "found": len(raws),
                                  "probed": sorted(probed)},
                           repaired=base.Repaired(tool=TOOL,
                                                  reason="endpoint_reprobed",
-                                                 ids=repaired_ids)
-                          if repaired_ids else None)
+                                                 ids=repaired_ids,
+                                                 examined=tuple(sorted(open_hygiene))))
 
 
 base.CONSUMERS[NAME] = sys.modules[__name__]
