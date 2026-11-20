@@ -87,6 +87,17 @@ def test_has_mypy_config_false_when_nothing_present(tmp_path):
     assert typecheck.has_mypy_config(tmp_path) is False
 
 
+def test_has_mypy_config_reads_pyproject_as_utf8_not_the_locale_code_page(tmp_path, cp1252_locale):
+    # bytesTTS, 2026-11-17: TOML is UTF-8 by specification, but the file was
+    # read with the locale code page. U+02D0 is CB 90 in UTF-8, and cp1252
+    # leaves 0x90 undefined, so the read raised UnicodeDecodeError. That is
+    # neither a TOMLDecodeError nor an OSError, so it escaped and `aramid
+    # check` stopped with an engine error before any check ran.
+    (tmp_path / "pyproject.toml").write_bytes(
+        b"# pronounced a\xcb\x90ramid\n[tool.mypy]\nstrict = true\n")
+    assert typecheck.has_mypy_config(tmp_path) is True
+
+
 def test_run_dispatches_to_tsc_when_tsconfig_present(tmp_path, monkeypatch):
     _repo(tmp_path, tsconfig=True)
     bin_dir = tmp_path / "node_modules" / ".bin"

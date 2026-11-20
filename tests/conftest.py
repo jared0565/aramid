@@ -41,6 +41,22 @@ def recent_iso() -> str:
     return (datetime.now(timezone.utc) - timedelta(hours=1)).isoformat()
 
 
+@pytest.fixture
+def cp1252_locale(monkeypatch) -> None:
+    """Make every `Path.read_text` that names no encoding decode as cp1252,
+    which is what Windows does with Python's UTF-8 mode off.
+
+    A missing `encoding=` changes nothing on a UTF-8 locale, so without this
+    a regression for it could fail only on a cp1252 host and would guard
+    nothing on the Linux and macOS CI legs. Only `Path.read_text` is
+    covered: a bare `open()` in text mode is not."""
+    real = Path.read_text
+
+    def read_text(self, encoding=None, *args, **kwargs):
+        return real(self, encoding or "cp1252", *args, **kwargs)
+    monkeypatch.setattr(Path, "read_text", read_text)
+
+
 @pytest.fixture(autouse=True)
 def _isolated_autolearn_state(tmp_path, monkeypatch):
     monkeypatch.setattr(autolearn, "state_path",

@@ -58,7 +58,7 @@ def has_mypy_config(root: Path) -> bool:
     pp = root / "pyproject.toml"
     if pp.exists():
         try:
-            data = tomllib.loads(pp.read_text())
+            data = tomllib.loads(pp.read_text(encoding="utf-8"))
         except (tomllib.TOMLDecodeError, OSError):
             return False
         return "mypy" in data.get("tool", {})

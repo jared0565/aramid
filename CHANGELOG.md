@@ -12,6 +12,23 @@ to publish a tag that disagrees with it.
 
 ## [Unreleased]
 
+### Fixed
+
+- **A `pyproject.toml` holding certain UTF-8 characters no longer stops
+  `aramid check` on Windows.** The mypy detection read the file in the
+  locale code page (cp1252 unless Python's UTF-8 mode is on), and cp1252
+  leaves 0x81, 0x8D, 0x8F, 0x90 and 0x9D undefined. Any character whose
+  UTF-8 form holds one of those bytes, such as `ː` (U+02D0, `CB 90`), made
+  the read raise `UnicodeDecodeError`. Its handler caught only TOML and OS
+  errors, so the gate stopped before any check ran, with `engine error:
+  'charmap' codec can't decode byte 0x90`. That is exit 3: every push in
+  the repo was refused, and every commit went through unchecked, because
+  the pre-commit hook lets an engine error through by design. The file is
+  now read as UTF-8, which TOML requires and aramid's other reads of
+  `pyproject.toml` already did. Reported from bytesTTS (round 348). A
+  `pyproject.toml` that is not valid UTF-8 at all is not valid TOML either,
+  and it still stops the gate with an engine error.
+
 ## [0.20.13] — 2026-11-16
 
 Nothing `aramid init` writes changed in this release, so there is no need
