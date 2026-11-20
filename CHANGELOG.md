@@ -12,6 +12,19 @@ to publish a tag that disagrees with it.
 
 ## [Unreleased]
 
+## [0.20.14] — 2026-11-20
+
+Re-run `aramid init` after upgrading. One line of the `ARAMID.md` it
+writes changed: the pre-commit budget's stated default, now 10 s. `init`
+regenerates the file and says that it changed. Nothing else tells you:
+`aramid doctor` checks the agent blocks and hooks, not `ARAMID.md`. No
+hook or agent-block file changed.
+
+On Windows, a few findings may get a new id once. Two entries under
+Fixed say which: gitleaks findings on non-ASCII file paths, and findings
+on lines with non-ASCII text. Check `aramid ledger filter --status open`
+after the first gate run under this version.
+
 ### Changed
 
 - **The pre-commit gate's default budget is 10 s, up from 5 s.**
@@ -6834,7 +6847,8 @@ Stated plainly because each one changes how you should deploy this:
 - **PyPI publishing is not set up.** Install from a GitHub Release artifact or
   from git; `pip install aramid` does not work.
 
-[Unreleased]: https://github.com/jared0565/aramid/compare/v0.20.13...HEAD
+[Unreleased]: https://github.com/jared0565/aramid/compare/v0.20.14...HEAD
+[0.20.14]: https://github.com/jared0565/aramid/releases/tag/v0.20.14
 [0.20.13]: https://github.com/jared0565/aramid/releases/tag/v0.20.13
 [0.20.12]: https://github.com/jared0565/aramid/releases/tag/v0.20.12
 [0.20.11]: https://github.com/jared0565/aramid/releases/tag/v0.20.11
