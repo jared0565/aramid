@@ -16,8 +16,9 @@ to publish a tag that disagrees with it.
 
 - **A `pyproject.toml` holding certain UTF-8 characters no longer stops
   `aramid check` on Windows.** The mypy detection read the file in the
-  locale code page (cp1252 unless Python's UTF-8 mode is on), and cp1252
-  leaves 0x81, 0x8D, 0x8F, 0x90 and 0x9D undefined. Any character whose
+  locale code page (cp1252 on a Western-locale Windows with Python's UTF-8
+  mode off), and cp1252 leaves 0x81, 0x8D, 0x8F, 0x90 and 0x9D undefined.
+  Other locales' code pages fail on other characters. Any character whose
   UTF-8 form holds one of those bytes, such as `ː` (U+02D0, `CB 90`), made
   the read raise `UnicodeDecodeError`. Its handler caught only TOML and OS
   errors, so the gate stopped before any check ran, with `engine error:
@@ -32,10 +33,11 @@ to publish a tag that disagrees with it.
   npm test suite on Windows.** Test detection also read the file in the
   locale code page. There the `UnicodeDecodeError` is a `ValueError`, which
   the detector takes for unparseable JSON, so it reported no npm suite and
-  said nothing. The BLOCK-tier test gate then ran nothing, `aramid doctor`
-  said no test suite was detected, and the JavaScript mutation consumer had
-  no suite to run. The file is now read as UTF-8, so such a repo runs its
-  npm `test` script on Windows as it already did everywhere else.
+  said nothing. The gate and the JavaScript mutation consumer skipped the
+  npm suite. In a repo whose only suite is npm, the BLOCK-tier test gate
+  ran nothing and `aramid doctor` said no test suite was detected. The file
+  is now read as UTF-8, so such a repo runs its npm `test` script on
+  Windows as it already did everywhere else.
 
 ## [0.20.13] — 2026-11-16
 
