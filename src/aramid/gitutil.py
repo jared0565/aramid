@@ -164,18 +164,26 @@ def range_commits(root: Path, rng):
     cp = _run(root, "rev-list", spec)
     return [line for line in cp.stdout.splitlines() if line] if cp.returncode == 0 else []
 
+def _names(cp) -> list[str]:
+    """The names of a `-z` listing, as they are on disk. Every listing aramid
+    hands its runners is `-z`: without it git C-quotes a name holding a byte
+    above 0x7F (core.quotePath, on by default), a quote, a backslash or a
+    control character -- `"pronounced-a\\313\\220ramid.js"`, quotes included
+    -- and a runner handed that is handed a file that does not exist.
+    Measured on the published 0.20.14: `check --all` copied nothing for
+    gitleaks to scan, so a secret in such a file was missed with nothing
+    said, and semgrep exited 2 for the whole repo."""
+    return [name for name in cp.stdout.split("\0") if name]
+
 def staged_files(root: Path):
-    cp = _run(root, "diff", "--cached", "--name-only", "--diff-filter=ACMR")
-    return [line for line in cp.stdout.splitlines() if line]
+    return _names(_run(root, "diff", "--cached", "--name-only", "--diff-filter=ACMR", "-z"))
 
 def all_tracked_files(root: Path):
-    cp = _run(root, "ls-files")
-    return [line for line in cp.stdout.splitlines() if line]
+    return _names(_run(root, "ls-files", "-z"))
 
 def changed_files(root: Path, rng):
     spec = rng if rng else "HEAD"
-    cp = _run(root, "diff", "--name-only", "--diff-filter=ACMR", spec)
-    return [line for line in cp.stdout.splitlines() if line]
+    return _names(_run(root, "diff", "--name-only", "--diff-filter=ACMR", "-z", spec))
 
 def literal_pathspec(paths) -> list[str]:
     """`--` and each repo path marked `:(literal)`: the ONE spelling of a
@@ -265,10 +273,10 @@ def branches_that_held(root: Path, sha: str) -> list[tuple[str, str]] | None:
 
 def diff_paths(root: Path, base: str | None, head: str) -> list[str]:
     if base is None:
-        cp = _run(root, "diff-tree", "--no-commit-id", "--name-only", "-r", "--root", head)
+        cp = _run(root, "diff-tree", "--no-commit-id", "--name-only", "-r", "--root", "-z", head)
     else:
-        cp = _run(root, "diff", "--name-only", "--diff-filter=ACMR", f"{base}..{head}")
-    return [ln for ln in cp.stdout.splitlines() if ln] if cp.returncode == 0 else []
+        cp = _run(root, "diff", "--name-only", "--diff-filter=ACMR", "-z", f"{base}..{head}")
+    return _names(cp) if cp.returncode == 0 else []
 
 
 def diff_text(root: Path, base: str | None, head: str, max_bytes: int = 400_000,
@@ -304,6 +312,31 @@ def is_test_file(rel: str) -> bool:
 
 _HUNK_RE = re.compile(r"@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@")
 
+# git's named escapes in a C-quoted path (quote.c), as the byte each stands for.
+_C_ESCAPES = {"a": 7, "b": 8, "f": 12, "n": 10, "r": 13, "t": 9, "v": 11, "\\": 92, '"': 34}
+
+
+def _unquote_c(text: str) -> str:
+    """A path as git C-quotes it in a patch header, read back: `"..."` with
+    `\\ooo` octal bytes and the named escapes, decoded as UTF-8. A patch has
+    no `-z` form (`_names`), so this is the one place aramid reads a quoted
+    name. Text that is not quoted comes back as is."""
+    if len(text) < 2 or text[0] != '"' or text[-1] != '"':
+        return text
+    body, out, i = text[1:-1], bytearray(), 0
+    while i < len(body):
+        ch = body[i]
+        if ch == "\\" and body[i + 1:i + 2] in _C_ESCAPES:
+            out.append(_C_ESCAPES[body[i + 1]])
+            i += 2
+        elif ch == "\\" and re.fullmatch(r"[0-7]{3}", body[i + 1:i + 4]):
+            out.append(int(body[i + 1:i + 4], 8))
+            i += 4
+        else:
+            out += ch.encode("utf-8")
+            i += 1
+    return out.decode("utf-8", "replace")
+
 
 def diff_new_lines(root: Path, base: str | None, head: str) -> dict[str, set[int]]:
     """Changed-line map for base..head: repo-relative forward-slash path ->
@@ -318,7 +351,7 @@ def diff_new_lines(root: Path, base: str | None, head: str) -> dict[str, set[int
     current: str | None = None
     for ln in (cp.stdout if cp.returncode == 0 else "").splitlines():
         if ln.startswith("+++ "):
-            target = ln[4:].strip()
+            target = _unquote_c(ln[4:].strip())
             current = None if target == "/dev/null" else \
                 (target[2:] if target.startswith("b/") else target)
         elif ln.startswith("@@ ") and current is not None:

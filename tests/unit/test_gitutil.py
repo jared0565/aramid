@@ -307,3 +307,63 @@ def test_resolve_range_is_none_when_the_only_remote_ref_shares_no_history(tmp_pa
     _git(r, "checkout", "-q", "main")
 
     assert gitutil.resolve_range(r) is None
+
+
+# A name git escapes: U+02D0 is two UTF-8 bytes above 0x7F, so with
+# core.quotePath on (git's default) a listing that is not `-z` prints it as
+# "pronounced-a\313\220ramid.js" -- quotes, backslashes and octal included.
+_ODD = "pronounced-a" + chr(0x2D0) + "ramid.js"
+
+
+def _quoting_repo(tmp_path) -> Path:
+    """`_repo` with git's default quoting forced on in the repo itself, so the
+    answer is the same whatever the developer's global config says."""
+    r = _repo(tmp_path)
+    _git(r, "config", "core.quotePath", "true")
+    return r
+
+
+def test_every_name_listing_returns_a_non_ascii_name_as_it_is_on_disk(tmp_path):
+    """aramid read git's name listings line by line, so every runner was
+    handed the ESCAPED name, a file that does not exist. Measured on the
+    published 0.20.14: `check --all` copied nothing for gitleaks to scan, so a
+    secret in that file was missed with no word said, and semgrep exited 2
+    for the whole repo. `-z` hands over the name as it is on disk."""
+    r = _quoting_repo(tmp_path)
+    (r / _ODD).write_text("t = 1\n", encoding="utf-8")
+    _git(r, "add", "--", _ODD)
+    assert gitutil.staged_files(r) == [_ODD]
+    _git(r, "commit", "-m", "root")
+    root = gitutil.rev_sha(r, "HEAD")
+    assert gitutil.diff_paths(r, None, root) == [_ODD]
+    _commit(r, _ODD, "t = 1\nu = 2\n", "second")
+    head = gitutil.rev_sha(r, "HEAD")
+    assert gitutil.all_tracked_files(r) == [_ODD]
+    assert (r / gitutil.all_tracked_files(r)[0]).is_file()
+    assert gitutil.changed_files(r, f"{root}..HEAD") == [_ODD]
+    assert gitutil.diff_paths(r, root, head) == [_ODD]
+
+
+def test_the_changed_line_map_keys_a_non_ascii_name_as_it_is_on_disk(tmp_path):
+    """`diff_new_lines` reads the name from the `+++ b/...` header, which git
+    escapes the same way and which has no `-z` form."""
+    r = _quoting_repo(tmp_path)
+    _commit(r, _ODD, "t = 1\n", "root")
+    root = gitutil.rev_sha(r, "HEAD")
+    assert gitutil.diff_new_lines(r, None, root) == {_ODD: {1}}
+    _commit(r, _ODD, "t = 1\nu = 2\n", "second")
+    assert gitutil.diff_new_lines(r, root, gitutil.rev_sha(r, "HEAD")) == {_ODD: {2}}
+
+
+def test_the_changed_line_map_decodes_every_escape_git_writes_in_a_header(monkeypatch):
+    """git also escapes a quote, a backslash and control characters whatever
+    core.quotePath says. Windows cannot put those in a file name, so this
+    arm is git's own output as given; it runs on every platform."""
+    patch = ('+++ "b/a\\"q\\\\s\\tt\\303\\251.py"\n'
+             "@@ -0,0 +1 @@\n+x\n"
+             "+++ b/plain.py\n"
+             "@@ -0,0 +3,2 @@\n+y\n+z\n")
+    monkeypatch.setattr(gitutil, "_run",
+                        lambda root, *args: subprocess.CompletedProcess(args, 0, patch, ""))
+    assert gitutil.diff_new_lines(Path("."), "a", "b") == {
+        'a"q\\s\tt' + chr(0xE9) + ".py": {1}, "plain.py": {3, 4}}

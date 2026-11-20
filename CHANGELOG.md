@@ -12,6 +12,32 @@ to publish a tag that disagrees with it.
 
 ## [Unreleased]
 
+### Fixed
+
+- **`aramid check --all` no longer misses a secret in a file whose name is
+  not ASCII, and such a file no longer stops semgrep for the whole repo.**
+  aramid read git's file listings (`ls-files`, `diff --name-only`)
+  line by line. In those listings git escapes a name holding a byte above
+  0x7F, a quote, a backslash or a control character: `pronounced-aːramid.js`
+  comes out as `"pronounced-a\313\220ramid.js"`, quotes included. git does
+  this by default (`core.quotePath`). So the gate's file list, the LLM
+  review packet, queue triage and the regression pack all named a file
+  that does not exist. Under `--all`, gitleaks scans a copy of the listed
+  files, and the copy left that file out without saying so. A secret in it
+  was not reported, and `init`'s baseline did not hold it. semgrep exited
+  2 when such a name was in its file list, so it was skipped for the whole
+  repo and reported as degraded. Both were measured under `--all`. The commit
+  and push scans of gitleaks were never affected, because they read git
+  themselves. Found by installing 0.20.14 from PyPI into a clean
+  environment with a fresh repo, and measured against a control: the same
+  repo with the file renamed to ASCII. The listings now use `-z`, which
+  gives names as they are on disk. The changed-line map used by the `tdd`,
+  red-proof, mutation and fuzz checks reads names from patch headers,
+  which have no `-z` form, so it now decodes git's escaping there. A
+  secret gitleaks had already found under such a name keeps its id. Other
+  tools' findings in such a file can appear for the first time, because
+  those tools never saw it before.
+
 ## [0.20.14] — 2026-11-20
 
 Re-run `aramid init` after upgrading. One line of the `ARAMID.md` it
