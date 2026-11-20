@@ -536,18 +536,26 @@ def test_budget_exhausted_after_first_suite_skips_second_but_keeps_first_result(
     still produce the completed suite's findings, and the second suite's
     timeout is attributed to THAT suite, not to the pipeline slot -- the
     aggregate reports what it learned instead of the whole slot being
-    replaced by a bare TIMEOUT with the first suite's real result gone."""
+    replaced by a bare TIMEOUT with the first suite's real result gone.
+
+    The first suite sleeps until just past the shared deadline, measured
+    from that deadline, not for a fixed 0.3 s against a fixed 0.2 s
+    budget: a slow start only shortens its sleep. The fixed form failed
+    when more than 0.2 s passed before the first suite started (the budget
+    was gone, so pytest itself was TIMEOUT). The 1 s budget moves that
+    limit to ~1 s."""
     _dual_repo(tmp_path)
+    deadline = time.monotonic() + 1.0
 
     def fake(argv, cwd, timeout_s, env=None):
         if argv[0] == "pytest":
-            time.sleep(0.3)
+            time.sleep(max(0.0, deadline - time.monotonic()) + 0.05)
             return RunnerResult(tool="pytest", state=ToolState.OK, returncode=1,
                                  raw="1 failed\n")
         pytest.fail("npm must not run at all once the shared budget is exhausted")
 
     monkeypatch.setattr(tests_runner, "run_subprocess", fake)
-    ctx = RunContext(root=tmp_path, gate_deadline=time.monotonic() + 0.2)
+    ctx = RunContext(root=tmp_path, gate_deadline=deadline)
     result = tests_runner.run(ctx)
 
     subs = {r.tool: r for r in result.sub_results}
