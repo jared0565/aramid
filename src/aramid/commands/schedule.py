@@ -178,6 +178,24 @@ def stale_limit_note(task_xml: str) -> str | None:
             f"{drain_limits.task_limit_iso(hours)})")
 
 
+# The command that turns a disabled task back on and changes nothing else --
+# unlike a re-install, which re-renders the interval from the repo's config.
+ENABLE_HINT = f"run `schtasks /change /tn {TASK_NAME} /enable`"
+
+
+def task_disabled(task_xml: str) -> bool:
+    """Whether the installed task's own <Settings> say <Enabled>false</Enabled>,
+    which is what `schtasks /Change /DISABLE` and the Task Scheduler UI
+    write. Only inside <Settings>: the XML `install` registers carries
+    <Enabled>true</Enabled> in its <TimeTrigger>, so the first <Enabled> in
+    the document is the trigger's and says nothing about the task. A task
+    read back disabled on 2026-11-20 had no trigger <Enabled> at all. No
+    other child of <Settings> holds an <Enabled> of its own."""
+    settings = re.search(r"<Settings>(.*?)</Settings>", task_xml or "", re.S)
+    return bool(settings and re.search(r"<Enabled>\s*false\s*</Enabled>",
+                                       settings.group(1), re.I))
+
+
 # ------------------------------------------------------------ POSIX (cron) ---
 # The drain used to be installable on Windows only, which meant the scheduled
 # red-team half of the product could not run on the platforms most servers and
@@ -257,6 +275,20 @@ def render_cron_line(interpreter: Path, interval_hours: int) -> str:
     return f"{when} {command} -P -m aramid drain --all  {CRON_MARKER}"
 
 
+CRON_ENABLE_HINT = "uncomment its crontab line or re-run `aramid schedule install`"
+
+
+def cron_state(crontab: str) -> str | None:
+    """None when no line carries CRON_MARKER, "disabled" when every line
+    that does is commented out (its first non-blank character is `#`), so
+    cron runs none of them, else "enabled". Commenting the line out is how
+    a crontab entry is switched off by hand, and it keeps the marker."""
+    marked = [ln for ln in crontab.splitlines() if CRON_MARKER in ln]
+    if not marked:
+        return None
+    return "disabled" if all(ln.lstrip().startswith("#") for ln in marked) else "enabled"
+
+
 def strip_aramid_lines(text: str) -> str:
     """Drop only aramid's own marked lines. install/remove rewrite the user's
     ENTIRE crontab, so everything unmarked -- backups, certbot, @reboot jobs --
@@ -311,7 +343,13 @@ def _write_crontab(text: str) -> None:
 
 def _cron_schedule(root, action: str) -> int:
     if action == "status":
-        if CRON_MARKER in _read_crontab():
+        state = cron_state(_read_crontab())
+        if state == "disabled":
+            print(f"aramid schedule: installed but DISABLED ({TASK_NAME}, cron) -- its "
+                  "crontab line is commented out; uncomment it or re-run "
+                  "`aramid schedule install`")
+            return 0
+        if state == "enabled":
             print(f"aramid schedule: installed ({TASK_NAME}, cron)")
             return 0
         print("aramid-drain: not installed")

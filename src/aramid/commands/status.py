@@ -399,6 +399,7 @@ def _scheduled_drain_line() -> str:
         from aramid.commands import schedule as schedule_mod
 
         note = None
+        disabled_hint = None
         if sys.platform == "win32":
             # S603 justification: argv comes from schedule._query_xml_argv(),
             # a fixed literal list -- no external input reaches it.
@@ -407,14 +408,27 @@ def _scheduled_drain_line() -> str:
                 capture_output=True, text=True, errors="replace")
             installed = cp.returncode == 0
             if installed:
+                task_xml = getattr(cp, "stdout", "") or ""
                 # FN-14: a task installed before the time-limit fix is killed
                 # at the hour until re-installed; say so where it is seen.
-                note = schedule_mod.stale_limit_note(getattr(cp, "stdout", "") or "")
+                note = schedule_mod.stale_limit_note(task_xml)
+                # 2026-11-20: a disabled task read `installed` for 12 hours
+                # while three drains did not run. A query that succeeds
+                # says the task exists, not that it will fire.
+                if schedule_mod.task_disabled(task_xml):
+                    disabled_hint = schedule_mod.ENABLE_HINT
         else:
-            installed = schedule_mod.CRON_MARKER in schedule_mod._read_crontab()
+            state = schedule_mod.cron_state(schedule_mod._read_crontab())
+            installed = state is not None
+            if state == "disabled":
+                disabled_hint = schedule_mod.CRON_ENABLE_HINT
         if not installed:
             return "scheduled drain: not installed"
-        return "scheduled drain: installed" + (f" -- {note}" if note else "")
+        tail = f" -- {note}" if note else ""
+        if disabled_hint:
+            return ("scheduled drain: installed but DISABLED -- no drain runs until it "
+                    f"is re-enabled; {disabled_hint}{tail}")
+        return "scheduled drain: installed" + tail
     except Exception:
         return "scheduled drain: unknown"
 

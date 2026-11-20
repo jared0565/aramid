@@ -274,6 +274,104 @@ def test_scheduled_drain_line_names_a_task_installed_before_its_time_limit_was_f
         assert status._scheduled_drain_line() == "scheduled drain: installed", unreadable
 
 
+# What `schtasks /Query /TN aramid-drain /XML` printed on 2026-11-20 for the
+# live task after something had disabled it (only the user SID replaced).
+# Task Scheduler writes <Enabled>false</Enabled> into <Settings> and leaves
+# the trigger's own <Enabled> out. The XML `schedule install` registers has
+# <Enabled>true</Enabled> INSIDE <TimeTrigger>, so a read of the first
+# <Enabled> in the document would call a disabled task enabled.
+_DISABLED_TASK_XML = """<?xml version="1.0" encoding="UTF-16"?>
+<Task version="1.2" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">
+  <RegistrationInfo>
+    <Description>aramid: scheduled queue drain (zero-token triage consumers)</Description>
+    <URI>\\aramid-drain</URI>
+  </RegistrationInfo>
+  <Principals>
+    <Principal id="Author">
+      <UserId>S-1-5-21-0-0-0-1001</UserId>
+      <LogonType>InteractiveToken</LogonType>
+    </Principal>
+  </Principals>
+  <Settings>
+    <DisallowStartIfOnBatteries>false</DisallowStartIfOnBatteries>
+    <StopIfGoingOnBatteries>false</StopIfGoingOnBatteries>
+    <Enabled>false</Enabled>
+    <ExecutionTimeLimit>PT3H55M</ExecutionTimeLimit>
+    <MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy>
+    <StartWhenAvailable>true</StartWhenAvailable>
+    <IdleSettings>
+      <StopOnIdleEnd>true</StopOnIdleEnd>
+      <RestartOnIdle>false</RestartOnIdle>
+    </IdleSettings>
+  </Settings>
+  <Triggers>
+    <TimeTrigger>
+      <StartBoundary>2026-09-28T15:00:00</StartBoundary>
+      <Repetition>
+        <Interval>PT4H</Interval>
+      </Repetition>
+    </TimeTrigger>
+  </Triggers>
+  <Actions Context="Author">
+    <Exec>
+      <Command>C:\\Python314\\python.exe</Command>
+      <Arguments>-P -m aramid drain --all</Arguments>
+    </Exec>
+  </Actions>
+</Task>"""
+
+_DISABLED_LINE = ("scheduled drain: installed but DISABLED -- no drain runs until it "
+                  "is re-enabled; ")
+
+
+def test_scheduled_drain_line_says_disabled_when_the_task_or_its_cron_line_is_off(monkeypatch):
+    """2026-11-20: the task had been disabled for 12 hours -- the 23Z, 03Z
+    and 07Z drains never ran -- while this line said `installed`, because a
+    successful query was all it asked. On POSIX a crontab line commented
+    out to stop the drain still carries CRON_MARKER, and read the same way.
+    Each platform's hint is the command that turns it back on without
+    changing anything else: `/change /enable` keeps the task's interval and
+    limit; install replaces the commented line (strip-then-append)."""
+    import subprocess
+    import sys
+    from pathlib import Path
+    from types import SimpleNamespace
+
+    from aramid.commands import schedule as schedule_mod
+
+    monkeypatch.setattr(sys, "platform", "win32")
+
+    def answer(xml):
+        monkeypatch.setattr(subprocess, "run",
+                            lambda argv, **kw: SimpleNamespace(returncode=0, stdout=xml))
+
+    answer(_DISABLED_TASK_XML)
+    assert status._scheduled_drain_line() == (
+        _DISABLED_LINE + "run `schtasks /change /tn aramid-drain /enable`")
+    answer(_DISABLED_TASK_XML.replace("    <Enabled>false</Enabled>\n", ""))
+    assert status._scheduled_drain_line() == "scheduled drain: installed"
+    answer(schedule_mod.render_task_xml(Path("C:/Python314/python.exe"), 4,
+                                        "2026-09-28T15:00:00"))
+    assert status._scheduled_drain_line() == "scheduled drain: installed", \
+        "the trigger's own <Enabled>true</Enabled> is not the task's"
+    answer(schedule_mod.render_task_xml(Path("C:/Python314/python.exe"), 4,
+                                        "2026-09-28T15:00:00")
+           .replace("<Settings>", "<Settings>\n    <Enabled>false</Enabled>"))
+    assert status._scheduled_drain_line() == (
+        _DISABLED_LINE + "run `schtasks /change /tn aramid-drain /enable`"), \
+        "the trigger's <Enabled>true</Enabled> comes first and must not win"
+
+    monkeypatch.setattr(sys, "platform", "linux")
+    line = f"0 */4 * * * /usr/bin/python3 -P -m aramid drain --all  {schedule_mod.CRON_MARKER}"
+    posix_hint = "uncomment its crontab line or re-run `aramid schedule install`"
+    for crontab in (f"0 3 * * * /x/backup.sh\n# {line}\n", f"  #{line}\n"):
+        monkeypatch.setattr(schedule_mod, "_read_crontab", lambda c=crontab: c)
+        assert status._scheduled_drain_line() == _DISABLED_LINE + posix_hint, crontab
+    for crontab in (f"{line}\n", f"# {line}\n{line}\n"):
+        monkeypatch.setattr(schedule_mod, "_read_crontab", lambda c=crontab: c)
+        assert status._scheduled_drain_line() == "scheduled drain: installed", crontab
+
+
 def test_status_exits_0_on_a_fresh_repo(tmp_path, capsys):
     (tmp_path / "aramid.toml").write_text("schema_version = 1\n", encoding="utf-8")
     assert status.cmd_status(tmp_path) == 0

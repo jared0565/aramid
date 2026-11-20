@@ -38,6 +38,20 @@ to publish a tag that disagrees with it.
   ran nothing and `aramid doctor` said no test suite was detected. The file
   is now read as UTF-8, so such a repo runs its npm `test` script on
   Windows as it already did everywhere else.
+- **`aramid status` no longer calls a disabled drain installed.** On
+  Windows the line asked only whether `schtasks /Query` succeeded. So a
+  task disabled in Task Scheduler, or with `schtasks /Change /DISABLE`,
+  still read `scheduled drain: installed` while no drain ran. On
+  2026-11-20, three scheduled drains in a row were missed that way. The
+  line now reads the task's own `<Settings>` and says
+  `installed but DISABLED -- no drain runs until it is re-enabled; run
+  `schtasks /change /tn aramid-drain /enable``. That command changes
+  nothing else about the task. On Linux and macOS, a crontab line commented
+  out to stop the drain still carried its `# aramid-drain` marker, and both
+  `aramid status` and `aramid schedule status` called it installed. Both
+  now say it is disabled, and that uncommenting the line or re-running
+  `aramid schedule install` turns it back on. `aramid schedule status`
+  still exits 0 in that case, as it does for a disabled task on Windows.
 
 ## [0.20.13] — 2026-11-16
 

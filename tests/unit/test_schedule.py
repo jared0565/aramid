@@ -163,6 +163,29 @@ def test_remove_takes_out_only_aramid_and_status_reports_both_ways(monkeypatch, 
     assert schedule.cmd_schedule(tmp_path, "status") == 3   # not installed
 
 
+def test_status_off_windows_says_disabled_for_a_commented_out_line(monkeypatch, tmp_path, capsys):
+    """A crontab line commented out to stop the drain still carries
+    CRON_MARKER, and status used to call it installed. It still exits 0 --
+    the entry is there, as Windows' status exits 0 for a disabled task --
+    but says the drain will not run. The hint has to be true: install strips
+    every marked line, commented or not, and appends a live one."""
+    line = f"0 */4 * * * /usr/bin/python3 -P -m aramid drain --all  {schedule.CRON_MARKER}"
+    monkeypatch.setattr(sys, "platform", "linux")
+    monkeypatch.setattr(schedule, "_read_crontab", lambda: f"0 3 * * * /x/backup.sh\n# {line}\n")
+    assert schedule.cmd_schedule(tmp_path, "status") == 0
+    assert capsys.readouterr().out == (
+        "aramid schedule: installed but DISABLED (aramid-drain, cron) -- its crontab "
+        "line is commented out; uncomment it or re-run `aramid schedule install`\n")
+
+    written = {}
+    monkeypatch.setattr(schedule, "_write_crontab",
+                        lambda text: written.__setitem__("text", text))
+    assert schedule.cmd_schedule(tmp_path, "install") == 0
+    marked = [ln for ln in written["text"].splitlines() if schedule.CRON_MARKER in ln]
+    assert len(marked) == 1 and not marked[0].lstrip().startswith("#"), written["text"]
+    assert "/x/backup.sh" in written["text"]
+
+
 def test_schedule_no_longer_refuses_outright_on_posix(monkeypatch, tmp_path):
     """Regression guard for the blocker itself: a non-Windows platform must not
     get 'only supported on Windows' back."""
