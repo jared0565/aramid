@@ -109,6 +109,25 @@ def test_head_is_none_outside_a_commit(tmp_path):
     assert handover.read(tmp_path).head is None
 
 
+def test_a_git_message_outside_the_code_page_does_not_crash_the_head_lookup(monkeypatch):
+    """git writes UTF-8. Decoded in cp1252 (text=True with no encoding, on
+    Windows), a refusal naming a path such as `aːron` (U+02D0, `CB 90`) raised
+    UnicodeDecodeError, which is neither OSError nor SubprocessError, out of
+    `aramid handover write`. It now reads as what it is: no HEAD."""
+    def run(argv, **kw):
+        enc, err = kw.get("encoding") or "cp1252", kw.get("errors") or "strict"
+        said = "fatal: detected dubious ownership in repository at 'C:/Users/aːron/r'\n"
+        return subprocess.CompletedProcess(argv, 128, b"".decode(enc, err),
+                                           said.encode("utf-8").decode(enc, err))
+    monkeypatch.setattr(handover.subprocess, "run", run)
+    assert handover._head(Path(".")) is None
+
+    sha = "0123456789abcdef0123456789abcdef01234567"
+    monkeypatch.setattr(handover.subprocess, "run", lambda argv, **kw:
+                        subprocess.CompletedProcess(argv, 0, sha + "\n", ""))
+    assert handover._head(Path(".")) == sha, "control: a HEAD still reads"
+
+
 @pytest.mark.parametrize("delta,expected", [
     (timedelta(seconds=42), "42s"), (timedelta(minutes=5, seconds=59), "5m"),
     (timedelta(hours=3, minutes=1), "3h"), (timedelta(days=2, hours=23), "2d"),

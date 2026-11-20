@@ -128,7 +128,12 @@ def _link_node_modules(src_root: Path, wt: Path) -> bool:
         try:
             cp = subprocess.run(  # noqa: S603
                 toolpath.launchable(["cmd", "/c", "mklink", "/J", str(dst_nm), str(src_nm)]),
-                capture_output=True, text=True, timeout=_MKLINK_TIMEOUT_S)
+                # errors="replace": cmd answers in the console's OEM code
+                # page, which the default decode does not match, and the text
+                # only feeds the message below. A strict decode raised
+                # UnicodeDecodeError in place of the OSError callers handle.
+                capture_output=True, text=True, errors="replace",
+                timeout=_MKLINK_TIMEOUT_S)
         except subprocess.TimeoutExpired:
             raise OSError(f"mklink /J timed out after {_MKLINK_TIMEOUT_S:g} s") from None
         if cp.returncode != 0:

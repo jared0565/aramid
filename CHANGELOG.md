@@ -109,6 +109,21 @@ to publish a tag that disagrees with it.
   on Windows for such a finding stops matching and must be re-pasted with
   the new id, and one written on Linux or macOS starts matching. Findings
   on all-ASCII lines keep their ids.
+- **Three commands no longer crash on a non-ASCII path or a localized
+  Windows message.** They read a program's output in the locale code
+  page, strictly, and on Windows a byte that code page leaves undefined
+  raised `UnicodeDecodeError` instead of the error each command handles.
+  - `aramid hooks template` read and wrote git's global `init.templateDir`
+    this way, so a template directory under a profile such as `aːron`
+    crashed it, and one that decoded came back garbled, so `remove` did
+    not recognise the directory as aramid's.
+  - `aramid handover write` asked git for HEAD this way, and crashed when
+    git's reply named such a path.
+  - The js-mutation consumer's `mklink /J` crashed on cmd's own messages,
+    which arrive in the console code page. A German `Verknüpfung` was
+    enough, so the run crashed instead of reporting the link failure.
+  git's output is now read as UTF-8, which is what git writes. cmd's
+  output keeps the code page, with undecodable bytes replaced.
 
 ## [0.20.13] — 2026-11-16
 

@@ -166,7 +166,11 @@ def _head(root: Path) -> str | None:
     try:
         run = subprocess.run(  # noqa: S603
             toolpath.launchable(["git", "rev-parse", "--verify", "-q", "HEAD"]),
-            cwd=root, capture_output=True, text=True, timeout=10)
+            # git writes UTF-8: in the locale code page a message naming a
+            # non-ASCII path raised UnicodeDecodeError, which the except
+            # below does not catch.
+            cwd=root, capture_output=True, text=True, encoding="utf-8", errors="replace",
+            timeout=10)
     except (OSError, subprocess.SubprocessError):
         return None
     # the same answer as `sha if rc == 0 and sha else None` for every input,

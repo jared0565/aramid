@@ -726,6 +726,31 @@ def test_link_node_modules_on_windows_makes_a_junction_and_reports_its_failure(t
         jsc._link_node_modules(src, wt)
 
 
+def test_a_localized_mklink_refusal_is_a_link_failure_not_a_decode_crash(tmp_path,
+                                                                        monkeypatch):
+    """cmd.exe answers in the console's OEM code page, and text=True decodes
+    in the ANSI one: a German `Verknüpfung` arrives as byte 0x81 (cp850),
+    which cp1252 leaves undefined. Strictly decoded, UnicodeDecodeError
+    escaped `_link_node_modules` in place of the OSError its caller handles,
+    and the js-mutation run crashed. The text only feeds the error message,
+    so an undecodable byte is replaced and the failure reported."""
+    src, wt = tmp_path / "src", tmp_path / "wt"
+    (src / "node_modules").mkdir(parents=True)
+    wt.mkdir()
+    monkeypatch.setattr(jsc.sys, "platform", "win32")
+
+    def run(argv, **kw):
+        enc, err = kw.get("encoding") or "cp1252", kw.get("errors") or "strict"
+        said = b"Die Verkn\x81pfung konnte nicht erstellt werden.\r\n"
+        return _CP(1, said.decode(enc, err))
+    monkeypatch.setattr(jsc.subprocess, "run", run)
+
+    with pytest.raises(OSError) as exc:
+        jsc._link_node_modules(src, wt)
+    assert str(exc.value) == ("mklink /J failed: Die Verkn" + chr(0xFFFD)
+                              + "pfung konnte nicht erstellt werden.")
+
+
 def test_link_node_modules_on_windows_bounds_mklink(tmp_path, monkeypatch):
     """FN-17: `mklink` is a one-shot cmd builtin, so it is bounded rather than
     registered; a hung one reads as the link failure the caller already

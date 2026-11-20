@@ -40,10 +40,15 @@ def _git_config_get(key: str) -> str | None:
     # wrong far more often than right, and the bare name is looked for in
     # the current directory first on Windows (FN-47). Every caller passes
     # CONFIG_KEY, a module constant, not external input.
+    #
+    # encoding="utf-8" in all three: git writes UTF-8 whatever the host
+    # locale, so a cp1252 decode garbled a non-ASCII templateDir, or raised
+    # UnicodeDecodeError on one holding a byte cp1252 leaves undefined.
     try:
         cp = subprocess.run(  # noqa: S603
             toolpath.launchable(["git", "config", "--global", "--get", key]),
-            capture_output=True, text=True, check=False)
+            capture_output=True, text=True, encoding="utf-8", errors="replace",
+            check=False)
     except OSError:
         return None
     value = cp.stdout.strip()
@@ -53,13 +58,13 @@ def _git_config_get(key: str) -> str | None:
 def _git_config_set(key: str, value: str) -> None:
     subprocess.run(  # noqa: S603
         toolpath.launchable(["git", "config", "--global", key, value]),
-        capture_output=True, text=True, check=False)
+        capture_output=True, text=True, encoding="utf-8", errors="replace", check=False)
 
 
 def _git_config_unset(key: str) -> None:
     subprocess.run(  # noqa: S603
         toolpath.launchable(["git", "config", "--global", "--unset", key]),
-        capture_output=True, text=True, check=False)
+        capture_output=True, text=True, encoding="utf-8", errors="replace", check=False)
 
 
 def _same_path(a: str | None, b: Path) -> bool:
