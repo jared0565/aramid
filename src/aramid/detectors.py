@@ -138,7 +138,7 @@ def detect_tests(root: Path) -> set[str]:
     pj = root / "package.json"
     if pj.exists():
         try:
-            if "test" in json.loads(pj.read_text()).get("scripts", {}):
+            if "test" in json.loads(pj.read_text(encoding="utf-8")).get("scripts", {}):
                 out.add("npm")
         except (ValueError, OSError):
             pass

@@ -28,6 +28,14 @@ to publish a tag that disagrees with it.
   `pyproject.toml` already did. Reported from bytesTTS (round 348). A
   `pyproject.toml` that is not valid UTF-8 at all is not valid TOML either,
   and it still stops the gate with an engine error.
+- **A `package.json` holding one of those characters no longer hides its
+  npm test suite on Windows.** Test detection also read the file in the
+  locale code page. There the `UnicodeDecodeError` is a `ValueError`, which
+  the detector takes for unparseable JSON, so it reported no npm suite and
+  said nothing. The BLOCK-tier test gate then ran nothing, `aramid doctor`
+  said no test suite was detected, and the JavaScript mutation consumer had
+  no suite to run. The file is now read as UTF-8, so such a repo runs its
+  npm `test` script on Windows as it already did everywhere else.
 
 ## [0.20.13] — 2026-11-16
 

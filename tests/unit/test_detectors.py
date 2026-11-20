@@ -157,6 +157,16 @@ def test_package_json_test_script_no_lockfile(tmp_path):
     assert detectors.detect_tests(tmp_path) == {"npm"}
 
 
+def test_package_json_is_read_as_utf8_not_the_locale_code_page(tmp_path, cp1252_locale):
+    """JSON is UTF-8. Read in cp1252, the UTF-8 form of U+02D0 (CB 90)
+    holds the undefined byte 0x90, so the read raises UnicodeDecodeError.
+    That is a ValueError, which the detector swallows, so it reports no npm
+    suite and the BLOCK-tier test gate runs nothing, with no error at all."""
+    (tmp_path / "package.json").write_bytes(
+        b'{"description": "a\xcb\x90ramid", "scripts": {"test": "vitest"}}')
+    assert detectors.detect_tests(tmp_path) == {"npm"}
+
+
 def test_dual_stack_no_lockfile(tmp_path):
     """Row 10: dual-stack but NO lockfile (pyproject.toml + test_*.py +
     script)."""
