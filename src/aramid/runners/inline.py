@@ -71,7 +71,8 @@ def within_deadline(ctx, label: str, second_pass) -> RunnerResult:
     and `taskkill` has no bound of its own, so a second pass capped to end
     before the deadline still returned up to 5 s after it, and the gate then
     threw away the tool's own finished result. Reserving the reap in the
-    timeout instead would leave nothing to run on at pre-commit's 5 s budget.
+    timeout instead would leave nothing to run on at pre-commit's budget (5 s
+    when this was written, 10 s by default since 2026-11-20).
     So with a deadline the pass runs on a DAEMON thread (`_run_selected`'s
     docstring has why not a pool), and one still going at the margin is
     abandoned as a TIMEOUT under its label; its child dies by its own timeout

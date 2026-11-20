@@ -15,8 +15,9 @@ these tests -- see the manual smoke test this module's assertions mirror:
     default -- same discovery pattern as tests/integration/test_semgrep_rules.py's
     `_find_semgrep` / tests/integration/test_gates_end_to_end.py's `_find_tool`,
     generalized here to just ruff via `_find_ruff`. A real `ruff check` on a
-    one-line `exec(x)` file completed in ~0.17s, comfortably inside the 5s
-    `pre_commit` wall-clock budget (data/defaults.toml `[timeouts]`).
+    one-line `exec(x)` file completed in ~0.17s, comfortably inside the
+    `pre_commit` wall-clock budget (data/defaults.toml `[timeouts]`; 5s when
+    this was written, 10s by default since 2026-11-20).
   - gitleaks must be MISSING for scenario 1's fail-open assertions. On this
     host it simply isn't installed; on hosts where it is (CI installs a
     pinned binary), `_live_ruff_env` strips every gitleaks-bearing directory

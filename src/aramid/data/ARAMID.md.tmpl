@@ -24,7 +24,7 @@ aramid check --gate pre-push --all --strict --json    # pre-push tier
 
 | Gate | Budget | Scope | Tools | Failure mode |
 |---|---|---|---|---|
-| pre-commit | `[timeouts].pre_commit` (default 5s) | staged files | gitleaks, ruff (security rules) | fail-open |
+| pre-commit | `[timeouts].pre_commit` (default 10s) | staged files | gitleaks, ruff (security rules) | fail-open |
 | pre-push | `[timeouts].pre_push` (default 300s) | changed files | gitleaks, ruff, semgrep, eslint, clippy, typecheck, dependency audit, tests | fail-closed |
 
 Budgets are named rather than fixed here because a repo can raise them in

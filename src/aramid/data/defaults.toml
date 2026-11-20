@@ -22,7 +22,11 @@ ignore_paths = [
 
 [timeouts]
 # Wall-clock budget in seconds, per gate (design doc section 3).
-pre_commit = 5
+# pre_commit was 5 until 2026-11-20. gitleaks runs its main and inline
+# passes back to back: ~2 s on an idle machine and ~3.4 s while another gate
+# runs, where 1 commit in 25 skipped the inline pass at 5 s. It is a ceiling,
+# not a wait: an idle commit still finishes in ~3 s.
+pre_commit = 10
 pre_push = 300
 # Seconds a child process TREE may show no CPU and write no output before
 # aramid kills it as STALLED rather than waiting out the budget above

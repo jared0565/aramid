@@ -12,6 +12,21 @@ to publish a tag that disagrees with it.
 
 ## [Unreleased]
 
+### Changed
+
+- **The pre-commit gate's default budget is 10 s, up from 5 s.**
+  `[timeouts] pre_commit` defaults to 10. At pre-commit gitleaks runs its
+  main pass and then its inline-marker pass. On the maintainer's machine
+  the two took about 2 s together when idle, and about 3.4 s while a test
+  suite ran on six workers. Under that load the whole check took 3.9 to
+  5.3 s, and 1 commit in 25 dropped the inline pass with `gitleaks-inline:
+  timeout (gate budget expired)`. The fleet saw the same: pre-commit rows
+  that skipped a gitleaks pass while another gate was running, which
+  turned `no_skip_streak` red. The budget is a ceiling, not a wait: an
+  idle commit still finishes in about 3 seconds. A repo that sets its own
+  `pre_commit` value keeps it. `ARAMID.md` states the new default after
+  the next `aramid init`.
+
 ### Fixed
 
 - **A `pyproject.toml` holding certain UTF-8 characters no longer stops

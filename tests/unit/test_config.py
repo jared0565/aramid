@@ -147,7 +147,10 @@ def test_defaults_only_when_no_user_or_repo_config(tmp_path, monkeypatch):
     assert cfg.semgrep_block_armed is False
     assert cfg.bake_started is None
     assert cfg.test_command is None
-    assert cfg.timeouts["pre_commit"] == 5
+    # 10, not 5 (2026-11-20): gitleaks runs its main and inline passes back
+    # to back, ~2 s idle and ~3.4 s on a loaded machine, and at 5 s a loaded
+    # commit skipped one of them (measured: 1 of 25, check wall up to 5.3 s).
+    assert cfg.timeouts["pre_commit"] == 10
     assert cfg.timeouts["pre_push"] == 300
     assert cfg.block_rules["deps"]["block_severity"] == "critical"
 
