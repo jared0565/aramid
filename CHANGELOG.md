@@ -12,6 +12,20 @@ to publish a tag that disagrees with it.
 
 ## [Unreleased]
 
+### Fixed
+
+- **A changed line whose text starts with `++ ` no longer hides the rest
+  of its file from the mutation, fuzz, `tdd` and red-proof checks.** Those
+  checks scope themselves to the lines a commit changed, which aramid
+  reads from `git diff --unified=0`. In that output an added line reading
+  `++ two` (two pluses and a space) is printed `+++ two`, the spelling of
+  a file header, and aramid read it as one. The file's later hunks were
+  credited to a path named `two`, so the checks skipped those changed
+  lines. A removed `-- x` followed by an added `++ y` did the same. aramid
+  now skips each hunk's body by the line counts its header gives. The bug
+  was in the parser since 0.1.0. The drain's LLM review found it while
+  reviewing 0.20.15's own change to that parser.
+
 ## [0.20.15] — 2026-11-21
 
 No `aramid init` needed: nothing it writes changed, and neither did any

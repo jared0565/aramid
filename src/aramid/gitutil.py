@@ -310,7 +310,7 @@ def is_test_file(rel: str) -> bool:
     return name.endswith(".py") and (name.startswith("test_") or name.endswith("_test.py"))
 
 
-_HUNK_RE = re.compile(r"@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@")
+_HUNK_RE = re.compile(r"@@ -\d+(?:,(\d+))? \+(\d+)(?:,(\d+))? @@")
 
 # git's named escapes in a C-quoted path (quote.c), as the byte each stands for.
 _C_ESCAPES = {"a": 7, "b": 8, "f": 12, "n": 10, "r": 13, "t": 9, "v": 11, "\\": 92, '"': 34}
@@ -342,23 +342,35 @@ def diff_new_lines(root: Path, base: str | None, head: str) -> dict[str, set[int
     """Changed-line map for base..head: repo-relative forward-slash path ->
     1-based line numbers on the NEW (head) side. Parses --unified=0 hunk
     headers (@@ -a,b +c,d @@); a pure deletion has d==0 and contributes
-    nothing; git emits forward-slash paths already."""
+    nothing; git emits forward-slash paths already.
+
+    The b + d lines after a hunk header are its body, skipped by count: an
+    added `++ two` is printed `+++ two` and a removed `-- x` `--- x`, the
+    spelling of a file header, and before 0.20.16 one was read as a header,
+    crediting the file's next hunk to a path named `two`. The
+    `\\ No newline at end of file` marker is not among the lines counted."""
     if base is None:
         cp = _run(root, "show", "--format=", "--unified=0", head)
     else:
         cp = _run(root, "diff", "--unified=0", f"{base}..{head}")
     out: dict[str, set[int]] = {}
     current: str | None = None
+    body = 0
     for ln in (cp.stdout if cp.returncode == 0 else "").splitlines():
+        if body:
+            if not ln.startswith("\\"):
+                body -= 1
+            continue
         if ln.startswith("+++ "):
             target = _unquote_c(ln[4:].strip())
             current = None if target == "/dev/null" else \
                 (target[2:] if target.startswith("b/") else target)
-        elif ln.startswith("@@ ") and current is not None:
+        elif ln.startswith("@@ "):
             m = _HUNK_RE.match(ln)
             if m is None:
                 continue
-            start, count = int(m.group(1)), int(m.group(2) or "1")
-            if count:
+            start, count = int(m.group(2)), int(m.group(3) or "1")
+            body = int(m.group(1) or "1") + count
+            if count and current is not None:
                 out.setdefault(current, set()).update(range(start, start + count))
     return out

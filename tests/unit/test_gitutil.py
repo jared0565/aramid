@@ -367,3 +367,49 @@ def test_the_changed_line_map_decodes_every_escape_git_writes_in_a_header(monkey
                         lambda root, *args: subprocess.CompletedProcess(args, 0, patch, ""))
     assert gitutil.diff_new_lines(Path("."), "a", "b") == {
         'a"q\\s\tt' + chr(0xE9) + ".py": {1}, "plain.py": {3, 4}}
+
+
+def test_a_changed_line_that_starts_with_two_pluses_is_not_a_file_header(tmp_path):
+    """Under --unified=0 an added line reading `++ two` is printed `+++ two`,
+    and a removed `-- x` is printed `--- x`: the spelling of a file header.
+    Read as one, the file's next hunk was credited to a path named `two` and
+    its own changed lines dropped -- a mutation or fuzz run scoped to that
+    file then missed them (reported by the drain's llm-review 2026-11-21; in
+    the parser since v0.1.0). A hunk's body is the line counts its header
+    gives; nothing inside it is a header. A pure deletion keys nothing."""
+    r = _repo(tmp_path)
+    ten = [f"l{i}" for i in range(1, 11)]
+    _commit(r, "a.md", "\n".join(ten) + "\n", "c1")
+    _commit(r, "c.md", "\n".join(["k1", "-- x", *ten]) + "\n", "c2")
+    _commit(r, "f.md", "\n".join(ten) + "\n", "c3")
+    base = gitutil.rev_sha(r, "HEAD")
+    a = list(ten)
+    a[1], a[8] = "++ two", "nine!"
+    (r / "a.md").write_text("\n".join(a) + "\n", encoding="utf-8")
+    c = ["k1", "++ y", *ten]
+    c[10] = "changed"
+    (r / "c.md").write_text("\n".join(c) + "\n", encoding="utf-8")
+    (r / "f.md").write_text("\n".join(ten[:2] + ten[3:]) + "\n", encoding="utf-8")
+    _git(r, "add", "-A")
+    _git(r, "commit", "-m", "c4")
+    assert gitutil.diff_new_lines(r, base, gitutil.rev_sha(r, "HEAD")) == {
+        "a.md": {2, 9}, "c.md": {2, 11}}
+
+
+def test_a_no_newline_marker_inside_a_hunk_is_not_one_of_its_lines(tmp_path):
+    """`\\ No newline at end of file` qualifies the hunk line before it and is
+    not one of the lines the header counts, so the parse goes on past it to
+    the next file. (Counting it would end the hunk a line early, which no
+    diff git writes can show: the marker only sits in a file's last hunk,
+    and the next file's own header comes before any hunk of its own.)"""
+    r = _repo(tmp_path)
+    _commit(r, "d.md", "d1\nlast", "c1")
+    _commit(r, "e.md", "e1\n", "c2")
+    base = gitutil.rev_sha(r, "HEAD")
+    (r / "d.md").write_text("d1\n++ z", encoding="utf-8")
+    (r / "e.md").write_text("e1\ne2\n", encoding="utf-8")
+    _git(r, "add", "-A")
+    _git(r, "commit", "-m", "c3")
+    assert gitutil.diff_new_lines(r, base, gitutil.rev_sha(r, "HEAD")) == {
+        "d.md": {2}, "e.md": {2}}
+
