@@ -128,6 +128,22 @@ def test_a_git_message_outside_the_code_page_does_not_crash_the_head_lookup(monk
     assert handover._head(Path(".")) == sha, "control: a HEAD still reads"
 
 
+def test_a_git_that_hangs_is_given_ten_seconds_and_then_reads_as_no_head(monkeypatch):
+    """`handover.write` records HEAD through `_head`, so a git that hangs (a
+    held lock, a network share) would hang `aramid handover write` with it.
+    git's run is bounded at 10 s, and a git that outlives the bound reads as
+    no HEAD. No test pinned the bound: the drain's mutant `10 -> 11`
+    survived (finding 63f1fa8f2cd8, 2026-11-20)."""
+    seen = {}
+
+    def run(argv, **kw):
+        seen.update(kw)
+        raise subprocess.TimeoutExpired(argv, kw["timeout"])
+    monkeypatch.setattr(handover.subprocess, "run", run)
+    assert handover._head(Path(".")) is None
+    assert seen["timeout"] == 10
+
+
 @pytest.mark.parametrize("delta,expected", [
     (timedelta(seconds=42), "42s"), (timedelta(minutes=5, seconds=59), "5m"),
     (timedelta(hours=3, minutes=1), "3h"), (timedelta(days=2, hours=23), "2d"),
