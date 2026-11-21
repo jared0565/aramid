@@ -12,6 +12,14 @@ to publish a tag that disagrees with it.
 
 ## [Unreleased]
 
+## [0.20.15] — 2026-11-21
+
+No `aramid init` needed: nothing it writes changed, and neither did any
+dependency. In a repo with a tracked file whose name is not ASCII, the
+first gate run under this version may report findings in that file for
+the first time, because the tools now see it. Check `aramid ledger filter
+--status open` after it.
+
 ### Fixed
 
 - **`aramid check --all` no longer misses a secret in a file whose name is
@@ -6873,7 +6881,8 @@ Stated plainly because each one changes how you should deploy this:
 - **PyPI publishing is not set up.** Install from a GitHub Release artifact or
   from git; `pip install aramid` does not work.
 
-[Unreleased]: https://github.com/jared0565/aramid/compare/v0.20.14...HEAD
+[Unreleased]: https://github.com/jared0565/aramid/compare/v0.20.15...HEAD
+[0.20.15]: https://github.com/jared0565/aramid/releases/tag/v0.20.15
 [0.20.14]: https://github.com/jared0565/aramid/releases/tag/v0.20.14
 [0.20.13]: https://github.com/jared0565/aramid/releases/tag/v0.20.13
 [0.20.12]: https://github.com/jared0565/aramid/releases/tag/v0.20.12
