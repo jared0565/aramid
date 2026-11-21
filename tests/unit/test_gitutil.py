@@ -413,3 +413,12 @@ def test_a_no_newline_marker_inside_a_hunk_is_not_one_of_its_lines(tmp_path):
     assert gitutil.diff_new_lines(r, base, gitutil.rev_sha(r, "HEAD")) == {
         "d.md": {2}, "e.md": {2}}
 
+
+def test_a_quoted_name_keeps_the_digits_that_follow_an_ordinary_character(tmp_path):
+    """`\\ooo` is an escape only after a backslash: in `caf\\303\\251-2024.py`
+    the `-202` that follows the escapes is three characters of the name."""
+    r = _quoting_repo(tmp_path)
+    name = "caf" + chr(0xE9) + "-2024.py"
+    _commit(r, name, "t = 1\n", "root")
+    assert gitutil.diff_new_lines(r, None, gitutil.rev_sha(r, "HEAD")) == {name: {1}}
+

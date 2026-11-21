@@ -321,9 +321,10 @@ def _unquote_c(text: str) -> str:
     `\\ooo` octal bytes and the named escapes, decoded as UTF-8. A patch has
     no `-z` form (`_names`), so this is the one place aramid reads a quoted
     name. Text that is not quoted comes back as is."""
-    if len(text) < 2 or text[0] != '"' or text[-1] != '"':
+    quoted = re.fullmatch(r'"(.*)"', text, re.DOTALL)
+    if quoted is None:
         return text
-    body, out, i = text[1:-1], bytearray(), 0
+    body, out, i = quoted.group(1), bytearray(), 0
     while i < len(body):
         ch = body[i]
         if ch == "\\" and body[i + 1:i + 2] in _C_ESCAPES:
