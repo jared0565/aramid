@@ -1,4 +1,5 @@
 import subprocess
+import sys
 from pathlib import Path
 from aramid import gitutil
 
@@ -364,7 +365,7 @@ def test_the_changed_line_map_decodes_every_escape_git_writes_in_a_header(monkey
              "+++ b/plain.py\n"
              "@@ -0,0 +3,2 @@\n+y\n+z\n")
     monkeypatch.setattr(gitutil, "_run",
-                        lambda root, *args: subprocess.CompletedProcess(args, 0, patch, ""))
+                        lambda root, *args, **kw: subprocess.CompletedProcess(args, 0, patch, ""))
     assert gitutil.diff_new_lines(Path("."), "a", "b") == {
         'a"q\\s\tt' + chr(0xE9) + ".py": {1}, "plain.py": {3, 4}}
 
@@ -422,3 +423,43 @@ def test_a_quoted_name_keeps_the_digits_that_follow_an_ordinary_character(tmp_pa
     _commit(r, name, "t = 1\n", "root")
     assert gitutil.diff_new_lines(r, None, gitutil.rev_sha(r, "HEAD")) == {name: {1}}
 
+
+# A git that names `caf\xe9.py` in Latin-1, as Linux lets a file be named:
+# raw in a `-z` listing and in an unquoted header (core.quotePath false), and
+# C-quoted in a header (`caf\351.md`). Windows and macOS cannot create such
+# a name, so this stands in for git on every platform.
+_LATIN1_GIT = r'''
+import sys
+out = sys.stdout.buffer
+if "--unified=0" in sys.argv:
+    out.write(b"diff --git a/caf\xe9.py b/caf\xe9.py\n--- /dev/null\n+++ b/caf\xe9.py\n"
+              b"@@ -0,0 +1 @@\n+x\n"
+              b'diff --git "a/caf\\351.md" "b/caf\\351.md"\n--- /dev/null\n+++ "b/caf\\351.md"\n'
+              b"@@ -0,0 +1 @@\n+y\n"
+              b"diff --git a/plain.py b/plain.py\n--- /dev/null\n+++ b/plain.py\n"
+              b"@@ -0,0 +1,2 @@\n+p\n+q\n")
+else:
+    out.write(b"caf\xe9.py\0plain.py\0")
+'''
+
+
+def test_a_name_that_is_not_utf8_is_left_out_and_said_once(monkeypatch, capsys):
+    """Measured in WSL Ubuntu on 0.20.15: handed a Latin-1 name, which aramid
+    decoded to `caf�.py`, ruff reported `No such file` for it, semgrep
+    skipped the file without a word, and `check --all` missed a token in it.
+    Handed the real bytes, ruff and gitleaks report the file under another
+    name and semgrep still skips it. So such a name is left out of every
+    listing and of the changed-line map, and the run says so once per name.
+    gitleaks' commit and push scans read git themselves and still see it."""
+    monkeypatch.setattr(gitutil, "_GIT", (sys.executable, "-c", _LATIN1_GIT))
+    monkeypatch.setattr(gitutil, "_UNREADABLE_SAID", set(), raising=False)
+    root = Path(".")
+    assert gitutil.staged_files(root) == ["plain.py"]
+    assert gitutil.all_tracked_files(root) == ["plain.py"]
+    assert gitutil.changed_files(root, None) == ["plain.py"]
+    assert gitutil.diff_paths(root, None, "h") == ["plain.py"]
+    assert gitutil.diff_paths(root, "b", "h") == ["plain.py"]
+    assert gitutil.diff_new_lines(root, "b", "h") == {"plain.py": {1, 2}}
+    assert capsys.readouterr().err.splitlines() == [
+        "aramid: git: caf\\xe9.py is not handed to the tools: its name is not valid UTF-8",
+        "aramid: git: caf\\xe9.md is not handed to the tools: its name is not valid UTF-8"]

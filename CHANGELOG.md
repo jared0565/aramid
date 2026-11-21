@@ -25,6 +25,19 @@ to publish a tag that disagrees with it.
   now skips each hunk's body by the line counts its header gives. The bug
   was in the parser since 0.1.0. The drain's LLM review found it while
   reviewing 0.20.15's own change to that parser.
+- **On Linux, a file whose name is not valid UTF-8 is left out of the
+  tools' file lists, and the run says so.** Linux lets a file be named in
+  Latin-1: `café.py` with `é` stored as the single byte 0xE9. aramid
+  decoded such a name with a replacement character, so it handed its tools
+  a file that does not exist. ruff reported a false `No such file` warning
+  for it, and `check --all` missed a secret in it without a word. Handed
+  the real bytes, ruff and gitleaks report the file under a different
+  name, and semgrep skips it silently, so no tool aramid runs can check it
+  either way. Such a name is now left out, and stderr says so once per
+  run: `aramid: git: caf\xe9.py is not handed to the tools: its name is
+  not valid UTF-8`. The commit-time secret scan still caught a token in
+  such a file, because gitleaks reads staged changes from git itself.
+  Windows and macOS cannot create such names. Measured in WSL Ubuntu.
 
 ## [0.20.15] — 2026-11-21
 

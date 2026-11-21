@@ -1,6 +1,7 @@
 import os
 import re
 import subprocess
+import sys
 from pathlib import Path
 
 from aramid import toolpath
@@ -26,7 +27,7 @@ def _git_env() -> dict[str, str]:
     env.pop("GIT_LITERAL_PATHSPECS", None)
     return env
 
-def _run(root: Path, *args: str) -> subprocess.CompletedProcess:
+def _run(root: Path, *args: str, errors: str = "replace") -> subprocess.CompletedProcess:
     """git's answer: its exit code and output, whatever the code. A git that
     did not ANSWER raises `GitTimeout` instead (FN-17) -- one that outlived
     GIT_TIMEOUT_S, one the drain's hard deadline killed, one asked for after
@@ -51,11 +52,12 @@ def _run(root: Path, *args: str) -> subprocess.CompletedProcess:
     # Windows hosts -- the target platform, and CI's windows-latest runner.
     # errors="replace": never let a decode hiccup crash triage's per-commit
     # diff scan; a best-effort mangled character is acceptable, a raised
-    # exception is not.
+    # exception is not. The name listings pass "surrogateescape" instead, so
+    # a name that is not UTF-8 stays recognisable (`_readable`).
     proc = subprocess.Popen(toolpath.launchable([*_GIT, *args]),  # noqa: S603
                             cwd=str(root), env=_git_env(),
                             stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                            text=True, encoding="utf-8", errors="replace",
+                            text=True, encoding="utf-8", errors=errors,
                             **runners_base.own_group())
     try:
         with runners_base.live_process(lambda: runners_base._kill_tree(proc)):
@@ -172,18 +174,45 @@ def _names(cp) -> list[str]:
     -- and a runner handed that is handed a file that does not exist.
     Measured on the published 0.20.14: `check --all` copied nothing for
     gitleaks to scan, so a secret in such a file was missed with nothing
-    said, and semgrep exited 2 for the whole repo."""
-    return [name for name in cp.stdout.split("\0") if name]
+    said, and semgrep exited 2 for the whole repo. A name that is not UTF-8
+    is left out (`_readable`)."""
+    return [name for name in cp.stdout.split("\0") if name and _readable(name)]
+
+_UNREADABLE_SAID: set[str] = set()
+
+def _readable(name: str) -> bool:
+    """Whether a name git listed is valid UTF-8, the only kind aramid hands
+    its tools. Linux lets a file be named in Latin-1 (`caf\\xe9.py`), and no
+    tool here can be handed one: measured in WSL Ubuntu on 0.20.15, ruff and
+    gitleaks report such a file under a name with U+FFFD in it, so their
+    findings name a file that does not exist, and semgrep skips it without
+    a word. The listings decode it with surrogateescape, which makes it
+    fail to encode here. A name left out is said once per process, on
+    stderr like `diagnostics`. gitleaks' commit scan reads git itself and
+    still caught a token in such a file; its push scan reads git the same
+    way, which was not measured separately."""
+    try:
+        name.encode("utf-8")
+    except UnicodeEncodeError:
+        if name not in _UNREADABLE_SAID:
+            _UNREADABLE_SAID.add(name)
+            shown = name.encode("utf-8", "surrogateescape").decode("ascii", "backslashreplace")
+            print(f"aramid: git: {shown} is not handed to the tools: "
+                  "its name is not valid UTF-8", file=sys.stderr)
+        return False
+    return True
 
 def staged_files(root: Path):
-    return _names(_run(root, "diff", "--cached", "--name-only", "--diff-filter=ACMR", "-z"))
+    return _names(_run(root, "diff", "--cached", "--name-only", "--diff-filter=ACMR", "-z",
+                       errors="surrogateescape"))
 
 def all_tracked_files(root: Path):
-    return _names(_run(root, "ls-files", "-z"))
+    return _names(_run(root, "ls-files", "-z", errors="surrogateescape"))
 
 def changed_files(root: Path, rng):
     spec = rng if rng else "HEAD"
-    return _names(_run(root, "diff", "--name-only", "--diff-filter=ACMR", "-z", spec))
+    return _names(_run(root, "diff", "--name-only", "--diff-filter=ACMR", "-z", spec,
+                       errors="surrogateescape"))
 
 def literal_pathspec(paths) -> list[str]:
     """`--` and each repo path marked `:(literal)`: the ONE spelling of a
@@ -273,9 +302,11 @@ def branches_that_held(root: Path, sha: str) -> list[tuple[str, str]] | None:
 
 def diff_paths(root: Path, base: str | None, head: str) -> list[str]:
     if base is None:
-        cp = _run(root, "diff-tree", "--no-commit-id", "--name-only", "-r", "--root", "-z", head)
+        cp = _run(root, "diff-tree", "--no-commit-id", "--name-only", "-r", "--root", "-z", head,
+                  errors="surrogateescape")
     else:
-        cp = _run(root, "diff", "--name-only", "--diff-filter=ACMR", "-z", f"{base}..{head}")
+        cp = _run(root, "diff", "--name-only", "--diff-filter=ACMR", "-z", f"{base}..{head}",
+                  errors="surrogateescape")
     return _names(cp) if cp.returncode == 0 else []
 
 
@@ -318,9 +349,10 @@ _C_ESCAPES = {"a": 7, "b": 8, "f": 12, "n": 10, "r": 13, "t": 9, "v": 11, "\\": 
 
 def _unquote_c(text: str) -> str:
     """A path as git C-quotes it in a patch header, read back: `"..."` with
-    `\\ooo` octal bytes and the named escapes, decoded as UTF-8. A patch has
-    no `-z` form (`_names`), so this is the one place aramid reads a quoted
-    name. Text that is not quoted comes back as is."""
+    `\\ooo` octal bytes and the named escapes, decoded as UTF-8 with
+    surrogateescape, as the listings are (`_readable`). A patch has no `-z`
+    form (`_names`), so this is the one place aramid reads a quoted name.
+    Text that is not quoted comes back as is."""
     quoted = re.fullmatch(r'"(.*)"', text, re.DOTALL)
     if quoted is None:
         return text
@@ -334,9 +366,9 @@ def _unquote_c(text: str) -> str:
             out.append(int(body[i + 1:i + 4], 8))
             i += 4
         else:
-            out += ch.encode("utf-8")
+            out += ch.encode("utf-8", "surrogateescape")
             i += 1
-    return out.decode("utf-8", "replace")
+    return out.decode("utf-8", "surrogateescape")
 
 
 def diff_new_lines(root: Path, base: str | None, head: str) -> dict[str, set[int]]:
@@ -349,11 +381,12 @@ def diff_new_lines(root: Path, base: str | None, head: str) -> dict[str, set[int
     added `++ two` is printed `+++ two` and a removed `-- x` `--- x`, the
     spelling of a file header, and before 0.20.16 one was read as a header,
     crediting the file's next hunk to a path named `two`. The
-    `\\ No newline at end of file` marker is not among the lines counted."""
+    `\\ No newline at end of file` marker is not among the lines counted.
+    A name that is not UTF-8 is left out, as the listings leave it out."""
     if base is None:
-        cp = _run(root, "show", "--format=", "--unified=0", head)
+        cp = _run(root, "show", "--format=", "--unified=0", head, errors="surrogateescape")
     else:
-        cp = _run(root, "diff", "--unified=0", f"{base}..{head}")
+        cp = _run(root, "diff", "--unified=0", f"{base}..{head}", errors="surrogateescape")
     out: dict[str, set[int]] = {}
     current: str | None = None
     body = 0
@@ -374,4 +407,4 @@ def diff_new_lines(root: Path, base: str | None, head: str) -> dict[str, set[int
             body = int(m.group(1) or "1") + count
             if count and current is not None:
                 out.setdefault(current, set()).update(range(start, start + count))
-    return out
+    return {name: lines for name, lines in out.items() if _readable(name)}
