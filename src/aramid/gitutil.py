@@ -196,7 +196,9 @@ def _readable(name: str) -> bool:
     except UnicodeEncodeError:
         if name not in _UNREADABLE_SAID:
             _UNREADABLE_SAID.add(name)
-            shown = name.encode("utf-8", "surrogateescape").decode("ascii", "backslashreplace")
+            # As a bytes literal reads it: a control character in the name
+            # is printed escaped, never raw to the terminal.
+            shown = repr(name.encode("utf-8", "surrogateescape"))[2:-1]
             print(f"aramid: git: {shown} is not handed to the tools: "
                   "its name is not valid UTF-8", file=sys.stderr)
         return False

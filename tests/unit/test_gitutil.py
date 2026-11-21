@@ -463,3 +463,15 @@ def test_a_name_that_is_not_utf8_is_left_out_and_said_once(monkeypatch, capsys):
     assert capsys.readouterr().err.splitlines() == [
         "aramid: git: caf\\xe9.py is not handed to the tools: its name is not valid UTF-8",
         "aramid: git: caf\\xe9.md is not handed to the tools: its name is not valid UTF-8"]
+
+
+def test_the_left_out_name_is_printed_with_no_control_character_left_raw(monkeypatch, capsys):
+    """The name is the repo's to choose, and a terminal acts on what it is
+    printed: a name holding an escape sequence as well as a byte that is not
+    UTF-8 must reach stderr as text, its control characters escaped."""
+    monkeypatch.setattr(gitutil, "_GIT", (
+        sys.executable, "-c", r'import sys; sys.stdout.buffer.write(b"\x1b[2J\tx\xe9.py\0")'))
+    monkeypatch.setattr(gitutil, "_UNREADABLE_SAID", set())
+    assert gitutil.all_tracked_files(Path(".")) == []
+    assert capsys.readouterr().err.splitlines() == [
+        "aramid: git: \\x1b[2J\\tx\\xe9.py is not handed to the tools: its name is not valid UTF-8"]
