@@ -60,6 +60,82 @@ def test_armed_root_is_the_git_root_only_where_aramid_init_ran(tmp_path, monkeyp
     assert gitutil.armed_root(bare) is None, "a directory outside git"
     assert gitutil.armed_root(tmp_path / "nowhere") is None, "a path that does not exist"
 
+
+def _no_git(monkeypatch, tmp_path):
+    """A git launch with no program behind it: the place `toolpath.program`
+    would hand back when no directory holds git (interop round 341)."""
+    monkeypatch.setattr(gitutil, "_GIT", (str(tmp_path / "no-git-here" / "git"),))
+
+
+def _armed(r: Path) -> Path:
+    (r / "aramid.toml").write_text("schema_version = 1\n", encoding="utf-8")
+    return r
+
+
+def test_git_not_found_says_whether_a_git_launch_has_a_program(tmp_path, monkeypatch):
+    assert gitutil.git_not_found() is False, "the suite's own git is found"
+    _no_git(monkeypatch, tmp_path)
+    assert gitutil.git_not_found() is True
+
+
+def test_armed_root_finds_the_repo_by_its_dot_git_when_git_cannot_be_started(
+        tmp_path, monkeypatch):
+    """Round 341: a git that could not be started read as "not an aramid
+    repo", so the hooks, the MCP tools and `aramid handover` all lost the
+    repo. The answer is the one `rev-parse --show-toplevel` gives: resolved,
+    from the root and from below it, and through a `.git` FILE (a linked
+    worktree or a submodule) as well as a directory."""
+    r = _armed(_repo(tmp_path))
+    sub = r / "src" / "pkg"
+    sub.mkdir(parents=True)
+    linked = tmp_path / "linked"
+    linked.mkdir()
+    (linked / ".git").write_text("gitdir: /elsewhere/.git/worktrees/linked\n", encoding="utf-8")
+    _armed(linked)
+    _no_git(monkeypatch, tmp_path)
+
+    assert gitutil.armed_root(r) == r.resolve()
+    assert gitutil.armed_root(sub) == r.resolve(), "a subdirectory resolves to the root"
+    monkeypatch.chdir(sub)
+    assert gitutil.armed_root(None) == r.resolve(), "no start means the cwd"
+    assert gitutil.armed_root(linked) == linked.resolve(), "a .git file marks a root too"
+
+
+def test_armed_root_without_git_finds_nothing_git_would_not(tmp_path, monkeypatch):
+    """Every limb that must stay None. The nearest `.git` is the root, as it
+    is for git: a repo aramid never armed, nested inside one it did, is not
+    the outer repo. A start that does not exist is not walked up from (it
+    would climb to the armed repo above it). Outside any checkout there is
+    nothing to find."""
+    r = _armed(_repo(tmp_path))
+    inner = r / "vendor" / "inner"
+    inner.mkdir(parents=True)
+    _git(inner, "init", "-b", "main")
+    (inner / "deep").mkdir()
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    assert not any((d / ".git").exists() for d in (outside, *outside.parents)), (
+        "the temp directory sits inside a git checkout; this test cannot run here")
+    _no_git(monkeypatch, tmp_path)
+
+    assert gitutil.armed_root(inner) is None, "a nested repo aramid never armed"
+    assert gitutil.armed_root(inner / "deep") is None, "below a nested unarmed repo"
+    assert gitutil.armed_root(r / "nowhere") is None, "a start that does not exist"
+    assert gitutil.armed_root(outside) is None, "a directory outside any checkout"
+
+
+def test_armed_root_with_git_never_walks_past_its_answer(tmp_path):
+    """Control for the walk: with git present, a `.git` directory git does
+    not accept as a repository is still "not a repo". Only a git that cannot
+    be started hands the question to the walk."""
+    fake = tmp_path / "fake"
+    (fake / ".git").mkdir(parents=True)
+    _armed(fake)
+    assert not any((d / ".git").exists() for d in tmp_path.parents), (
+        "the temp directory sits inside a git checkout; this control cannot run here")
+
+    assert gitutil.armed_root(fake) is None
+
 def test_resolve_range_new_branch_no_remote_returns_none(tmp_path):
     # spec §3 invariant: a brand-new branch with no upstream/origin must NOT hard-error;
     # resolve_range returns None meaning "scan all commits reachable from HEAD".

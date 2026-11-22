@@ -114,8 +114,14 @@ def _session_start(root: Path | None) -> int:
     repo = gitutil.armed_root(root)
     if repo is None:
         return 0
-    _emit(_session_context(repo))
+    _emit(_session_context(repo, git_missing=gitutil.git_not_found()))
     return 0
+
+
+# Round 341: a repo found without git (`gitutil.armed_root`) says so, once,
+# ahead of the posture block it qualifies.
+_NO_GIT = ("aramid: git was not found on PATH, so this hook found this repo from its"
+           " .git and aramid.toml instead.")
 
 
 # The harness's tool names and the shell each one runs (FN-45). The values are
@@ -262,7 +268,7 @@ def _handover_lines(repo: Path, now) -> list[str]:
                 " -- run 'aramid handover show'"]
 
 
-def _session_context(repo: Path) -> str:
+def _session_context(repo: Path, *, git_missing: bool = False) -> str:
     from datetime import datetime, timezone
 
     # Ruling R2: the handover is computed BEFORE the ledger is opened, and it
@@ -275,6 +281,8 @@ def _session_context(repo: Path) -> str:
         if not handover_lines:
             raise
         return "\n".join(handover_lines) + "\n"
+    if git_missing:
+        posture = _NO_GIT + "\n" + posture
     return "".join(ln + "\n" for ln in handover_lines) + posture
 
 

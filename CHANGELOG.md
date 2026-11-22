@@ -12,6 +12,24 @@ to publish a tag that disagrees with it.
 
 ## [Unreleased]
 
+### Fixed
+
+- **The agent hooks find the repo when git is not on their PATH.**
+  `aramid agent-hook session-start` and `pre-tool-use` found the repo with
+  `git rev-parse`, and read a git they could not start as "not an aramid
+  repo". So with no git on the hook's PATH both exited 0 and printed
+  nothing: no GATED banner, no pending-handover notice, no `--no-verify`
+  warning -- the same empty output a clean allow gives. In a repo with the
+  agent surface armed, a `git commit --no-verify` that named git by its
+  full path was allowed. Measured on 0.20.19 (interop round 341). When git
+  cannot be started, the repo is now the nearest directory holding a
+  `.git` (a directory, or a file in a linked worktree), if it also holds
+  `aramid.toml`, and the session block says so in one line. A git that
+  runs and answers "not a repository" is still believed. The MCP tools and
+  `aramid handover` find the repo the same way; without git, the MCP
+  `aramid_check` tool now fails as an internal error instead of reporting
+  the repo as not onboarded.
+
 ## [0.20.19] — 2026-11-22
 
 No `aramid init` needed: nothing it writes changed, and neither did any

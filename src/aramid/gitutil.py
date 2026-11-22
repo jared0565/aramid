@@ -103,10 +103,47 @@ def git_dir(root: Path) -> Path:
     return Path(cp.stdout.strip())
 
 
+def git_not_found() -> bool:
+    """True when a git launch has no program to start: the path
+    `toolpath.program` hands back for it is no file. That is the place it
+    looked first when no directory holds git, so this is the very lookup
+    `_run` launches by, and the answer cannot disagree with the launch."""
+    try:
+        return not Path(toolpath.program(_GIT[0])).is_file()
+    except Exception:
+        return False
+
+
+def _root_by_its_dot_git(base: Path) -> Path | None:
+    """The nearest directory from `base` up that holds a `.git` entry -- a
+    directory in a plain checkout, a file in a linked worktree or a
+    submodule -- resolved, as `repo_root` answers. The nearest one, as git
+    stops there: a repo nested inside another is its own root. A `base` that
+    is not a directory is not walked up from. Never raises."""
+    try:
+        here = base.resolve()
+        if not here.is_dir():
+            return None
+        for d in (here, *here.parents):
+            if (d / ".git").exists():
+                return d
+    except OSError:
+        return None
+    return None
+
+
 def armed_root(start: Path | None = None) -> Path | None:
     """The git root of `start` (the cwd when None), and only when it holds
     an `aramid.toml` FILE -- a repo where `aramid init` ran. None outside
     git, in a repo aramid never armed, or when git cannot answer.
+
+    When git cannot be STARTED (`git_not_found`), the root is the nearest
+    `.git` from `start` up instead (interop round 341, operator decision
+    2026-11-22). Before, a hook whose PATH held no git read that as "not an
+    aramid repo" and printed nothing: no GATED banner, no handover notice,
+    no --no-verify warning, and an armed repo let `git commit --no-verify`
+    through by absolute path. Only a missing git hands over to the walk: a
+    git that runs and says "not a repository" is believed.
 
     THE ONE COPY (FN-30). The SessionStart hook, the MCP tools and `aramid
     handover` all resolve their repo here. Since 0.20.4 this rule decides
@@ -118,7 +155,11 @@ def armed_root(start: Path | None = None) -> Path | None:
     try:
         repo = repo_root(base)
     except Exception:
-        return None
+        if not git_not_found():
+            return None
+        repo = _root_by_its_dot_git(base)
+        if repo is None:
+            return None
     if not (repo / "aramid.toml").is_file():
         return None
     return repo
