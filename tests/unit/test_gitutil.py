@@ -1,6 +1,9 @@
 import subprocess
 import sys
 from pathlib import Path
+
+import pytest
+
 from aramid import gitutil
 
 def _git(root, *a): subprocess.run(["git", *a], cwd=root, check=True,
@@ -397,6 +400,30 @@ def test_a_changed_line_that_starts_with_two_pluses_is_not_a_file_header(tmp_pat
         "a.md": {2, 9}, "c.md": {2, 11}}
 
 
+@pytest.mark.parametrize("brk", ["\x0c", "\r", " "], ids=["form-feed", "lone-cr", "u2028"])
+def test_a_line_break_git_does_not_end_lines_with_stays_inside_its_hunk_line(tmp_path, brk):
+    """git ends a patch line with `\\n` and nothing else. 0.20.16 split the
+    patch with `str.splitlines()`, which also breaks on a form feed and on
+    U+2028, and read it through a text-mode pipe, which turns a lone `\\r`
+    into `\\n`. One changed line `z<break>@@ -1,0 +1,50 @@` then counted as
+    two, the second read as a hunk header, and its 50-line "body" swallowed
+    b.md's change (drain llm-review 2026-11-21, row 74bc559a; reproduced on
+    the installed 0.20.16). 0.20.15 over-scoped the same input and kept b.md."""
+    r = _repo(tmp_path)
+    _git(r, "config", "core.autocrlf", "false")
+    (r / "a.md").write_bytes(b"l1\nl2\nl3\n")
+    (r / "b.md").write_bytes(b"x\n")
+    _git(r, "add", "-A")
+    _git(r, "commit", "-m", "c1")
+    base = gitutil.rev_sha(r, "HEAD")
+    (r / "a.md").write_bytes(("l1\nz" + brk + "@@ -1,0 +1,50 @@\nl3\n").encode("utf-8"))
+    (r / "b.md").write_bytes(b"x\ny\n")
+    _git(r, "add", "-A")
+    _git(r, "commit", "-m", "c2")
+    assert gitutil.diff_new_lines(r, base, gitutil.rev_sha(r, "HEAD")) == {
+        "a.md": {2}, "b.md": {2}}
+
+
 def test_a_no_newline_marker_inside_a_hunk_is_not_one_of_its_lines(tmp_path):
     """`\\ No newline at end of file` qualifies the hunk line before it and is
     not one of the lines the header counts, so the parse goes on past it to
@@ -463,6 +490,21 @@ def test_a_name_that_is_not_utf8_is_left_out_and_said_once(monkeypatch, capsys):
     assert capsys.readouterr().err.splitlines() == [
         "aramid: git: caf\\xe9.py is not handed to the tools: its name is not valid UTF-8",
         "aramid: git: caf\\xe9.md is not handed to the tools: its name is not valid UTF-8"]
+
+
+def test_a_listed_name_keeps_a_carriage_return_it_holds(monkeypatch):
+    """A `-z` listing ends a name with NUL, so a `\\r` inside one is part of
+    the name (Linux allows it). Read through a text-mode pipe it became `\\n`,
+    a file that does not exist; the listings now take git's bytes as they are."""
+    monkeypatch.setattr(gitutil, "_GIT", (
+        sys.executable, "-c", r'import sys; sys.stdout.buffer.write(b"a\rb.py\0c\r\nd.py\0plain.py\0")'))
+    root = Path(".")
+    want = ["a\rb.py", "c\r\nd.py", "plain.py"]
+    assert gitutil.staged_files(root) == want
+    assert gitutil.all_tracked_files(root) == want
+    assert gitutil.changed_files(root, None) == want
+    assert gitutil.diff_paths(root, None, "h") == want
+    assert gitutil.diff_paths(root, "b", "h") == want
 
 
 def test_the_left_out_name_is_printed_with_no_control_character_left_raw(monkeypatch, capsys):

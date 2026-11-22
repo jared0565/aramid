@@ -12,6 +12,28 @@ to publish a tag that disagrees with it.
 
 ## [Unreleased]
 
+### Fixed
+
+- **A form feed, a U+2028 or a lone carriage return inside a changed line
+  no longer hides other files' changes from the mutation, fuzz, `tdd` and
+  red-proof checks.** This was a regression in 0.20.16. Its fix for `++ `
+  lines counts each hunk's lines, but aramid split git's output with
+  Python's `splitlines()`, which also breaks a line at a form feed or
+  U+2028, and read it through a text-mode pipe, which turns a lone `\r`
+  into a line break. One changed line such as `z<form feed>@@ -1,0 +1,50 @@`
+  then counted as two. The second half read as a hunk header, and the 50
+  lines it claimed swallowed the changes after it: another file's changed
+  line dropped out of those checks' scope. 0.20.15 read the same line as
+  50 extra changed lines in its own file and dropped nothing. aramid now
+  reads the patch with git's line endings untouched and splits it only at
+  `\n`, which is how git ends a patch line. Found by the drain's LLM review
+  of 0.20.16 and reproduced on the published 0.20.16.
+- **On Linux, a file whose name holds a carriage return reaches the tools
+  under its real name.** The file listings end each name with a NUL byte,
+  but the same text-mode pipe turned a `\r` inside a name into `\n`, so
+  the tools were handed a file that does not exist. The listings now take
+  git's output as it is. Windows cannot create such a name.
+
 ## [0.20.16] — 2026-11-21
 
 No `aramid init` needed: nothing it writes changed, and neither did any

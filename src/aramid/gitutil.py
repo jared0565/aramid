@@ -27,7 +27,17 @@ def _git_env() -> dict[str, str]:
     env.pop("GIT_LITERAL_PATHSPECS", None)
     return env
 
-def _run(root: Path, *args: str, errors: str = "replace") -> subprocess.CompletedProcess:
+def _decoded(data: bytes, errors: str, translate: bool) -> str:
+    """git's bytes as text. `translate` reads `\\r\\n` and a lone `\\r` as
+    `\\n`, as the text-mode pipe `_run` used until 0.20.17 did for every
+    caller. The patch parser asks for git's own line ends instead: git ends
+    a patch line with `\\n` alone, and a `\\r` inside a changed line is part
+    of that line (`diff_new_lines`)."""
+    text = data.decode("utf-8", errors)
+    return text.replace("\r\n", "\n").replace("\r", "\n") if translate else text
+
+def _run(root: Path, *args: str, errors: str = "replace",
+         translate_newlines: bool = True) -> subprocess.CompletedProcess:
     """git's answer: its exit code and output, whatever the code. A git that
     did not ANSWER raises `GitTimeout` instead (FN-17) -- one that outlived
     GIT_TIMEOUT_S, one the drain's hard deadline killed, one asked for after
@@ -46,10 +56,11 @@ def _run(root: Path, *args: str, errors: str = "replace") -> subprocess.Complete
     # absolute path `toolpath.program` finds for it, never by the bare name:
     # Windows looks for a bare name in the current directory before PATH,
     # and that directory is the repo being judged (FN-47).
-    # encoding="utf-8": git emits UTF-8 by default regardless of host locale.
-    # Without this, text=True decodes with the locale-preferred codec, which
-    # mojibakes (or raises UnicodeDecodeError on undefined bytes) on cp1252
-    # Windows hosts -- the target platform, and CI's windows-latest runner.
+    # Read as bytes and decoded as UTF-8 here (`_decoded`): git emits UTF-8
+    # by default regardless of host locale, and a text-mode pipe would decode
+    # with the locale-preferred codec, which mojibakes (or raises
+    # UnicodeDecodeError on undefined bytes) on cp1252 Windows hosts -- the
+    # target platform, and CI's windows-latest runner.
     # errors="replace": never let a decode hiccup crash triage's per-commit
     # diff scan; a best-effort mangled character is acceptable, a raised
     # exception is not. The name listings pass "surrogateescape" instead, so
@@ -57,7 +68,6 @@ def _run(root: Path, *args: str, errors: str = "replace") -> subprocess.Complete
     proc = subprocess.Popen(toolpath.launchable([*_GIT, *args]),  # noqa: S603
                             cwd=str(root), env=_git_env(),
                             stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                            text=True, encoding="utf-8", errors=errors,
                             **runners_base.own_group())
     try:
         with runners_base.live_process(lambda: runners_base._kill_tree(proc)):
@@ -72,7 +82,9 @@ def _run(root: Path, *args: str, errors: str = "replace") -> subprocess.Complete
     if runners_base.closed():
         # Killed by the deadline, not finished: its exit code is the kill's.
         raise GitTimeout(f"{what} was killed at the drain's hard deadline")
-    return subprocess.CompletedProcess(proc.args, proc.returncode, out, err)
+    return subprocess.CompletedProcess(proc.args, proc.returncode,
+                                       _decoded(out, errors, translate_newlines),
+                                       _decoded(err, "replace", True))
 
 def repo_root(path: Path) -> Path:
     cp = _run(path, "rev-parse", "--show-toplevel")
@@ -204,17 +216,22 @@ def _readable(name: str) -> bool:
         return False
     return True
 
+# How every name listing and the patch parser read git: a name not UTF-8
+# stays recognisable (`_readable`), and a `\r` stays a `\r` -- inside a name
+# a `-z` listing ends with NUL, or inside a changed line (`diff_new_lines`).
+_AS_GIT_WROTE = {"errors": "surrogateescape", "translate_newlines": False}
+
 def staged_files(root: Path):
     return _names(_run(root, "diff", "--cached", "--name-only", "--diff-filter=ACMR", "-z",
-                       errors="surrogateescape"))
+                       **_AS_GIT_WROTE))
 
 def all_tracked_files(root: Path):
-    return _names(_run(root, "ls-files", "-z", errors="surrogateescape"))
+    return _names(_run(root, "ls-files", "-z", **_AS_GIT_WROTE))
 
 def changed_files(root: Path, rng):
     spec = rng if rng else "HEAD"
     return _names(_run(root, "diff", "--name-only", "--diff-filter=ACMR", "-z", spec,
-                       errors="surrogateescape"))
+                       **_AS_GIT_WROTE))
 
 def literal_pathspec(paths) -> list[str]:
     """`--` and each repo path marked `:(literal)`: the ONE spelling of a
@@ -305,10 +322,10 @@ def branches_that_held(root: Path, sha: str) -> list[tuple[str, str]] | None:
 def diff_paths(root: Path, base: str | None, head: str) -> list[str]:
     if base is None:
         cp = _run(root, "diff-tree", "--no-commit-id", "--name-only", "-r", "--root", "-z", head,
-                  errors="surrogateescape")
+                  **_AS_GIT_WROTE)
     else:
         cp = _run(root, "diff", "--name-only", "--diff-filter=ACMR", "-z", f"{base}..{head}",
-                  errors="surrogateescape")
+                  **_AS_GIT_WROTE)
     return _names(cp) if cp.returncode == 0 else []
 
 
@@ -384,15 +401,21 @@ def diff_new_lines(root: Path, base: str | None, head: str) -> dict[str, set[int
     spelling of a file header, and before 0.20.16 one was read as a header,
     crediting the file's next hunk to a path named `two`. The
     `\\ No newline at end of file` marker is not among the lines counted.
-    A name that is not UTF-8 is left out, as the listings leave it out."""
+    A name that is not UTF-8 is left out, as the listings leave it out.
+
+    The count holds only if a line is what git ends with `\\n` and nothing
+    else, so the patch is read with its line ends untouched and split on
+    `\\n` alone: in 0.20.16 a form feed, a U+2028 or a lone `\\r` inside a
+    changed line split it in two, and a second half that read as a hunk
+    header swallowed the changes after it."""
     if base is None:
-        cp = _run(root, "show", "--format=", "--unified=0", head, errors="surrogateescape")
+        cp = _run(root, "show", "--format=", "--unified=0", head, **_AS_GIT_WROTE)
     else:
-        cp = _run(root, "diff", "--unified=0", f"{base}..{head}", errors="surrogateescape")
+        cp = _run(root, "diff", "--unified=0", f"{base}..{head}", **_AS_GIT_WROTE)
     out: dict[str, set[int]] = {}
     current: str | None = None
     body = 0
-    for ln in (cp.stdout if cp.returncode == 0 else "").splitlines():
+    for ln in (cp.stdout if cp.returncode == 0 else "").split("\n"):
         if body:
             if not ln.startswith("\\"):
                 body -= 1
