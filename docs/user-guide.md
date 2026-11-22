@@ -564,7 +564,7 @@ aramid records the close only when all of this holds:
 - no tracked file has uncommitted changes, so the test runs on the commit that gets recorded;
 - the test command exits `0` from the repo root.
 
-`--test` is one string holding the whole command, split like a string `[tests].command`; on Windows, write paths in it with forward slashes. Any test runner works: `--test "npx vitest run src/orders.test.ts -t 'routes CN'"` is read the same way. Each run is bounded by `[tests].timeout_s`. One id per launch, because each finding needs the test that proves its own fix.
+`--test` is one string holding the whole command, split like a string `[tests].command`; on Windows, write paths in it with forward slashes. It runs as one program, without a shell: a `&&`, `||`, `;`, `|`, `&` or redirect outside quotes is refused (exit `3`) instead of reaching that program as an argument, so to run several steps, put them in a script and name the script. Quoted, the same characters are the argument's own text (`-t 'a|b'`). Any test runner works: `--test "npx vitest run src/orders.test.ts -t 'routes CN'"` is read the same way. Each run is bounded by `[tests].timeout_s`. One id per launch, because each finding needs the test that proves its own fix.
 
 **`--red-proof` also shows that the test fails without the fix.** aramid checks `HEAD` out into a throwaway worktree and runs the test there twice:
 

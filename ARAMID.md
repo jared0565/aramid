@@ -258,6 +258,11 @@ command and in front of `--reason`: one on another line, in a comment or
 behind `;` does not count. In PowerShell, write a `--reason` that needs
 quotes inside it in single quotes.
 
+`--test` is run as one program, without a shell. A `&&`, `||`, `;`, `|`,
+`&` or redirect outside quotes is refused rather than handed to that
+program as an argument; to run several steps, put them in a script and
+name the script.
+
 Through MCP the tool is `aramid_ledger_resolve`, with `id`, `commit`,
 `tests` and `reason`. It takes no command. `tests` is a list of committed
 test files (for pytest, `file::test` as well), which aramid appends to the

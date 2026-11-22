@@ -299,6 +299,56 @@ def test_fixed_refuses_a_test_command_that_does_not_parse(tmp_path, capsys):
              "--test does not parse as a command (No closing quotation)")
 
 
+@pytest.mark.parametrize("test, op", [
+    # interop round 340's own: the second command never ran, and the ledger
+    # recorded the whole string as if it had
+    ("npm run test -w worker -- test/a.test.ts && npm run test -w booking -- test/a.test.ts",
+     "&&"),
+    ("pytest tests/test_x.py || true", "||"),
+    ("pytest tests/test_x.py | tee out.txt", "|"),
+    ("pytest tests/test_x.py; echo done", ";"),
+    ("pytest tests/test_x.py > out.txt", ">"),
+    ("pytest tests/test_x.py 2>err.txt", ">"),
+    ("pytest tests/test_x.py < in.txt", "<"),
+    ("pytest tests/test_x.py &", "&"),
+    ("pytest a.py&&pytest b.py", "&&"),
+    # a backslash is literal inside single quotes, so the quote still closes
+    # there and what follows it is outside
+    (r"pytest -k 'a\' && b", "&&"),
+    # an escaped quote takes one character: the next quote closes the argument
+    (r'pytest -k "a\"" && b', "&&"),
+])
+def test_fixed_refuses_a_shell_operator_it_would_hand_on_as_an_argument(
+        tmp_path, capsys, test, op):
+    """Interop round 340, item 1: `--test` runs one program, with no shell,
+    so an operator reaches that program as an argument -- vitest read `&&`,
+    `npm` and `test` as file filters and ran the whole suite. Operator
+    decision 2026-11-22: refuse it, before anything runs."""
+    _seed(tmp_path, _finding())
+
+    rc = cmd_ledger_resolve_fixed(tmp_path, FID, "HEAD", test, "r")
+
+    _refused(capsys, tmp_path, rc,
+             f"--test runs one program without a shell, so `{op}` would reach it as an "
+             f"argument -- give one command, or put the steps in a script and name that")
+
+
+@pytest.mark.parametrize("test, argv", [
+    ('npx vitest run -t "a|b"', ["npx", "vitest", "run", "-t", "a|b"]),
+    ("pytest -k 'x and not y; z'", ["pytest", "-k", "x and not y; z"]),
+    ('pytest "tests/a&b.py"', ["pytest", "tests/a&b.py"]),
+    # an escaped quote does not end a double-quoted argument
+    (r'pytest -k "a \" && b"', ["pytest", "-k", 'a " && b']),
+    # outside quotes a backslash makes the next character literal
+    (r"pytest a.py \&\& b.py", ["pytest", "a.py", "&&", "b.py"]),
+])
+def test_an_operator_inside_quotes_is_part_of_its_argument(test, argv):
+    """Control: quoted or escaped, the same characters are text the program
+    is meant to get (a vitest -t pattern is a regex), as they are to a shell
+    and to `shlex.split`."""
+    assert evidenced_close.split_command(test) == argv
+
+
 def test_fixed_reports_an_unreadable_config_as_an_engine_error(tmp_path, capsys):
     _seed(tmp_path, _finding())
     (tmp_path / "aramid.toml").write_text("this is not = valid = toml\n", encoding="utf-8")

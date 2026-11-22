@@ -121,10 +121,48 @@ class Refused(Exception):
     "aramid: ledger resolve: ..." and says what to do instead."""
 
 
+# What a POSIX shell reads as an operator when it stands outside quotes.
+_SHELL_OPERATOR_CHARS = frozenset("|&;<>")
+
+
+def _unquoted_operator(test: str) -> str | None:
+    """The first shell operator in `test` that stands outside quotes, as the
+    run of operator characters it starts (`&&`, `>`, `|`), or None. Read the
+    way `shlex.split` reads the string: quotes group, a backslash outside
+    single quotes takes the next character literally."""
+    quote = None
+    i = 0
+    while i < len(test):
+        c = test[i]
+        if quote is not None:
+            if c == quote:
+                quote = None
+            elif c == "\\" and quote == '"':
+                i += 1
+        elif c in "'\"":
+            quote = c
+        elif c == "\\":
+            i += 1
+        elif c in _SHELL_OPERATOR_CHARS:
+            j = i
+            while j < len(test) and test[j] in _SHELL_OPERATOR_CHARS:
+                j += 1
+            return test[i:j]
+        i += 1
+    return None
+
+
 def split_command(test: str | None) -> list[str]:
     """`--test` as the argv the event records, split POSIX-style like a
     string `[tests].command` (`runners.tests._argv`): quotes group, and a
-    Windows path wants forward slashes."""
+    Windows path wants forward slashes.
+
+    It runs as ONE program with no shell, so an operator outside quotes is
+    refused (interop round 340, operator decision 2026-11-22): `a && b` ran
+    `a` with `&&` and `b` as its arguments -- vitest took them as file
+    filters and ran the whole suite -- `b` never ran, and the event recorded
+    the whole string as if it had. Inside quotes the same characters are the
+    argument's own text (a vitest `-t` pattern is a regex)."""
     try:
         argv = shlex.split(test or "")
     except ValueError as exc:
@@ -133,6 +171,11 @@ def split_command(test: str | None) -> list[str]:
         raise Refused("--test is required with --fixed -- the command that runs the "
                       "test proving the fix, e.g. --test \"python -m pytest "
                       "tests/test_x.py::test_y\"")
+    op = _unquoted_operator(test or "")
+    if op is not None:
+        raise Refused(f"--test runs one program without a shell, so `{op}` would reach "
+                      f"it as an argument -- give one command, or put the steps in a "
+                      f"script and name that")
     return argv
 
 

@@ -55,6 +55,16 @@ to publish a tag that disagrees with it.
   It now says `git was not found on PATH -- doctor cannot read
   core.hooksPath or check that this repo's gate hooks are installed`.
   Doctor still exits 2 there, because it cannot confirm the gate.
+- **`aramid ledger resolve --fixed` refuses a `--test` holding a shell
+  operator.** `--test` runs one program without a shell, so in
+  `--test "a && b"` the `&&` and `b` reached `a` as arguments: vitest
+  took them as file filters and ran the whole suite, `b` never ran, and
+  the close recorded the whole string as if both had (interop round 340).
+  A `&&`, `||`, `;`, `|`, `&` or redirect outside quotes is now refused
+  (exit 3) before anything runs, with `give one command, or put the steps
+  in a script and name that`. Quoted or escaped, the same characters are
+  still the argument's own text (`-t 'a|b'`). ARAMID.md and the user
+  guide now say `--test` runs without a shell.
 
 ## [0.20.19] — 2026-11-22
 
