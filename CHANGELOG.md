@@ -12,6 +12,22 @@ to publish a tag that disagrees with it.
 
 ## [Unreleased]
 
+### Added
+
+- **`aramid doctor` and `aramid status` name a program planted at the
+  repo root that the agent hooks' `python` would start instead.** The
+  hooks and the MCP entry `aramid init` writes start a bare `python` from
+  the repo root; `-P` stops a planted `aramid.py`, not a planted
+  interpreter. cmd.exe looks in its current directory before PATH, so a
+  `python.cmd` there runs in place of Python for any launcher that goes
+  through cmd.exe without `NoDefaultCurrentDirectoryInExePath` set
+  (measured: it did; with the variable set, or with no shell, the real
+  Python ran; interop round 339). On Windows, doctor's `agent hooks:`
+  section now prints `WARN launch shadowed: <file> at the repo root ...`
+  for each such file (`python` with each PATHEXT extension), and the
+  status `agent surfaces:` line adds `launch shadowed by <file>`. Advisory:
+  no exit code changes, and nothing `init` writes changed.
+
 ### Fixed
 
 - **The agent hooks find the repo when git is not on their PATH.**

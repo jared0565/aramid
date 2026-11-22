@@ -256,9 +256,13 @@ def _agent_surfaces_line(root: Path, cfg: config_mod.Config) -> str:
     states = agent_files.agent_block_states(root)
     ok = sum(1 for _, s in states if s == "ok")
     posture = "armed" if cfg.agent_block_armed else "baking"
+    # Round 339: a planted program the hooks' and the MCP entry's bare
+    # `python` would start instead, named only when there is one.
+    shadows = toolpath.cwd_shadows(root, "python")
+    shadowed = f", launch shadowed by {', '.join(shadows)}" if shadows else ""
     return (f"agent surfaces: blocks {ok}/{len(states)}, "
             f"hooks {agent_settings.settings_state(root)}, "
-            f"mcp {agent_mcp.mcp_state(root)} | {posture}")
+            f"mcp {agent_mcp.mcp_state(root)}{shadowed} | {posture}")
 
 
 def _llm_lines(cfg: config_mod.Config, state: dict) -> list[str]:

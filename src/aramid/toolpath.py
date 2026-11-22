@@ -200,6 +200,30 @@ def _spellings(name: str) -> list[str]:
     return spelled
 
 
+def cwd_shadows(root: Path, name: str) -> list[str]:
+    """The files in `root` that a launch of the bare `name` through cmd.exe,
+    started with `root` as its current directory, runs in place of the real
+    program: cmd.exe looks in its current directory before PATH, for the name
+    with each PATHEXT extension (`_spellings`), unless the launcher's
+    environment sets NoDefaultCurrentDirectoryInExePath. Interop round 339,
+    measured 2026-11-22: a planted `python.cmd` ran for `cmd.exe /c python`
+    with the variable unset, and the real python ran with it set or with no
+    shell. `aramid init` writes agent hooks and an MCP entry that start a bare
+    `python` from the repo root, so `doctor` and `status` name these files.
+
+    Sorted, names as the directory holds them, files only, `root` itself
+    only. Off Windows there is no cmd.exe, so nothing. A root that cannot be
+    listed names nothing; this never raises."""
+    if sys.platform != "win32":
+        return []
+    wanted = {s.lower() for s in _spellings(name)}
+    try:
+        entries = sorted(os.listdir(root))
+        return [e for e in entries if e.lower() in wanted and (Path(root) / e).is_file()]
+    except OSError:
+        return []
+
+
 def _default_dirs() -> list[str]:
     """Python's default search path (`os.defpath`), less the `.` that leads
     it on Windows."""

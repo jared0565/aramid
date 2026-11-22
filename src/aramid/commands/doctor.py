@@ -829,6 +829,21 @@ def agent_interpreter_lines() -> list[str]:
             f" interpreter or fix PATH"]
 
 
+def agent_launch_lines(root: Path) -> list[str]:
+    """Advisory, one line per file: a program at the repo root that a bare
+    `python` launched through cmd.exe from there would run instead
+    (`toolpath.cwd_shadows`, interop round 339). The agent hooks and the MCP
+    entry `init` writes start `python` from the repo root, and `-P` stops only
+    a planted module, never a planted interpreter. Reports; never changes the
+    exit code."""
+    return [f"  WARN {'launch':<10} shadowed: {name} at the repo root runs in place"
+            f" of `python` when a launcher starts it through cmd.exe from here"
+            f" (unless NoDefaultCurrentDirectoryInExePath is set) -- the agent"
+            f" hooks and the MCP entry start `python`; remove the file and find"
+            f" out how it got there"
+            for name in toolpath.cwd_shadows(root, "python")]
+
+
 def _fix_pip_toolchain() -> None:
     """`pip install` the owned pip toolchain into the CURRENT interpreter
     (never a different one -- doctor repairs the interpreter it is itself
@@ -1349,6 +1364,8 @@ def cmd_doctor(root: Path, fix: bool = False, during_init: bool = False) -> int:
         for line in agent_mcp_lines(root):
             print(line)
         for line in agent_interpreter_lines():
+            print(line)
+        for line in agent_launch_lines(root):
             print(line)
 
     unenforced = probe_enforcement(root)
