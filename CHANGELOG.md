@@ -12,6 +12,13 @@ to publish a tag that disagrees with it.
 
 ## [Unreleased]
 
+## [0.20.19] — 2026-11-22
+
+No `aramid init` needed: nothing it writes changed, and neither did any
+dependency. Only Linux is affected, and only a repo holding a file whose
+name is not valid UTF-8: a secret gitleaks found in it no longer drops out
+of the ledger between commits.
+
 ### Fixed
 
 - **A secret found in a file whose name is not valid UTF-8 stays open
@@ -6988,7 +6995,8 @@ Stated plainly because each one changes how you should deploy this:
 - **PyPI publishing is not set up.** Install from a GitHub Release artifact or
   from git; `pip install aramid` does not work.
 
-[Unreleased]: https://github.com/jared0565/aramid/compare/v0.20.18...HEAD
+[Unreleased]: https://github.com/jared0565/aramid/compare/v0.20.19...HEAD
+[0.20.19]: https://github.com/jared0565/aramid/releases/tag/v0.20.19
 [0.20.18]: https://github.com/jared0565/aramid/releases/tag/v0.20.18
 [0.20.17]: https://github.com/jared0565/aramid/releases/tag/v0.20.17
 [0.20.16]: https://github.com/jared0565/aramid/releases/tag/v0.20.16
