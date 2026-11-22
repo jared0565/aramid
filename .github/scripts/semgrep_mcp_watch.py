@@ -1,11 +1,12 @@
-"""Go red the day a semgrep release lets mcp or opentelemetry-api past its pin.
+"""Go red the day a semgrep release lets mcp, opentelemetry-api or wcmatch past its pin.
 
-WHY THIS EXISTS. aramid depends on semgrep, and semgrep pins two packages that
-carry advisories: `mcp==1.29.0` and `opentelemetry-api~=1.37.0`. Every install
-of aramid carries both. aramid imports neither (src/aramid/mcp.py is a
-stdlib-only stdio server, and nothing in aramid imports opentelemetry), so
-those ledger rows were overridden or suppressed as unreachable, with one plan
-for each (the operator: 2026-10-30 for mcp, 2026-11-16 for opentelemetry-api).
+WHY THIS EXISTS. aramid depends on semgrep, and semgrep pins three packages
+that carry advisories: `mcp==1.29.0`, `opentelemetry-api~=1.37.0` and
+`wcmatch~=8.3`. Every install of aramid carries all three. aramid imports none
+of them (src/aramid/mcp.py is a stdlib-only stdio server, and nothing in
+aramid imports opentelemetry or wcmatch), so those ledger rows were overridden
+or suppressed as unreachable, with one plan for each (the operator: 2026-10-30
+for mcp, 2026-11-16 for opentelemetry-api, 2026-11-21 for wcmatch).
 Once a semgrep release admits a fixed version, raise this repo's semgrep floor
 to that release, which clears the advisories for every consumer. Until this
 script, "has semgrep moved?" was a manual check at the start of each session --
@@ -42,8 +43,8 @@ not tell: PyPI unreachable, no wheels, wheels that disagree, more than one line
 for a name in a wheel (environment-split; a human judges those), anything
 unparseable. Nothing here exits 0 on "could not tell".
 
-WHEN TO DELETE IT. In the commit that raises the floor past BOTH packages,
-together with .github/workflows/semgrep-mcp-watch.yml and its test. A commit
+WHEN TO DELETE IT. In the commit that raises the floor past EVERY package in
+WATCHED, together with .github/workflows/semgrep-mcp-watch.yml and its test. A commit
 that settles one removes that package from WATCHED and its tests. Until then a
 red run, and GitHub's failure email, is the reminder.
 """
@@ -75,6 +76,11 @@ MCP_AFFECTED = ((None, Version("1.30.0")), (Version("2.0.0"), Version("2.2.0")))
 # CVE-2026-114603, fixed in 1.45.1; GHSA-mf5v-w3w3-f6cg / CVE-2026-126360,
 # fixed in 1.45.2; OSV, read 2026-11-16): 1.45.1 still carries the second.
 OTEL_AFFECTED = ((None, Version("1.45.2")),)
+# The advisory against wcmatch (GHSA-53pm-wgxf-c6qf / CVE-2026-132276:
+# polynomial-time matching of a name against a multi-star pattern, default
+# flags; affected from 0, fixed in 11.2; OSV, read 2026-11-22). semgrep 1.186.0
+# requires `wcmatch~=8.3`, which admits nothing past 8.x.
+WCMATCH_AFFECTED = ((None, Version("11.2")),)
 # package -> (the Requires-Dist names that must ALL admit a fixed version,
 #             affected ranges, how the ranges read in a message)
 WATCHED = {
@@ -82,6 +88,7 @@ WATCHED = {
     "opentelemetry-api": (("opentelemetry-api", "opentelemetry-sdk",
                            "opentelemetry-exporter-otlp-proto-http"),
                           OTEL_AFFECTED, "<1.45.2"),
+    "wcmatch": (("wcmatch",), WCMATCH_AFFECTED, "<11.2"),
 }
 ROOT = Path(__file__).resolve().parents[2]
 PYPI = "https://pypi.org"

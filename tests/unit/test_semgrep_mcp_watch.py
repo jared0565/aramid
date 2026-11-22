@@ -1,11 +1,12 @@
-"""The daily watch for the semgrep release that lets mcp or opentelemetry-api
-past its pin.
+"""The daily watch for the semgrep release that lets mcp, opentelemetry-api or
+wcmatch past its pin.
 
-semgrep pins `mcp==1.29.0` and `opentelemetry-api~=1.37.0` (with the sdk and
-the OTLP exporter in lockstep), so the advisories against both stay open for
-every install of aramid until a semgrep release admits a fixed version and
-this repo raises its semgrep floor to that release (the operator's plans of
-2026-10-30 and 2026-11-16). `.github/scripts/semgrep_mcp_watch.py` reads the
+semgrep pins `mcp==1.29.0`, `opentelemetry-api~=1.37.0` (with the sdk and the
+OTLP exporter in lockstep) and `wcmatch~=8.3`, so the advisories against all
+three stay open for every install of aramid until a semgrep release admits a
+fixed version and this repo raises its semgrep floor to that release (the
+operator's plans of 2026-10-30, 2026-11-16 and 2026-11-21).
+`.github/scripts/semgrep_mcp_watch.py` reads the
 newest semgrep's own wheel metadata on PyPI each day and goes red when the
 floor can move.
 
@@ -48,18 +49,23 @@ def _otel(spec="~=1.37.0"):
 
 
 OTEL_VERSIONS = ("1.37.0", "1.45.0", "1.45.1", "1.45.2")
+WCMATCH = "wcmatch~=8.3"
+WCMATCH_VERSIONS = ("8.3", "8.5.2", "11.1", "11.2")
 
 
 def _snapshot(mcp_line="mcp==1.29.0", version="1.183.0",
               mcp_versions=("1.28.1", "1.29.0", "1.30.0", "1.31.0"), wheels=None,
-              otel_lines=_otel(), otel_versions=OTEL_VERSIONS):
+              otel_lines=_otel(), otel_versions=OTEL_VERSIONS,
+              wcmatch_line=WCMATCH, wcmatch_versions=WCMATCH_VERSIONS):
     if wheels is None:
         requires = (["click~=8.1"] + ([mcp_line] if mcp_line is not None else [])
-                    + list(otel_lines))
+                    + list(otel_lines)
+                    + ([wcmatch_line] if wcmatch_line is not None else []))
         wheels = {name.format(v=version): requires for name in WHEELS}
     return {"semgrep_version": version, "wheels": wheels,
             "versions": {"mcp": list(mcp_versions),
-                         "opentelemetry-api": list(otel_versions)}}
+                         "opentelemetry-api": list(otel_versions),
+                         "wcmatch": list(wcmatch_versions)}}
 
 
 def _run(tmp_path, snapshot, pyproject=PYPROJECT, extra=()):
@@ -269,11 +275,58 @@ def test_one_package_that_cannot_tell_does_not_hide_the_others_verdict(tmp_path)
     assert "allows opentelemetry-api 1.45.2" in out
 
 
+# -- wcmatch: one line -----------------------------------------------------------
+# GHSA-53pm-wgxf-c6qf / CVE-2026-132276 (polynomial-time matching of a name
+# against a multi-star pattern, default flags) is fixed in 11.2 and affects
+# everything before it (OSV, read 2026-11-22). semgrep 1.186.0 requires
+# `wcmatch~=8.3`, which admits nothing past 8.x.
+
+def test_the_wcmatch_pin_semgrep_ships_today_is_still_blocked(tmp_path):
+    """What 1.186.0 says (read from PyPI 2026-11-22)."""
+    r, out = _run(tmp_path, _snapshot(version="1.186.0"))
+
+    _verdict(r, out, 0)
+    assert "still requires `wcmatch~=8.3`" in out   # the line that blocks
+    assert "every wcmatch it allows is affected (<11.2)" in out
+
+
+def test_a_wcmatch_range_that_stops_at_11_1_is_still_blocked(tmp_path):
+    """11.1 is the last affected release. 11.2 is listed and the range stops
+    just short of it, so a threshold set one release too low passes it."""
+    r, out = _run(tmp_path, _snapshot(wcmatch_line="wcmatch>=11,<11.2", version="1.190.0"))
+
+    _verdict(r, out, 0)
+    assert "every wcmatch it allows is affected" in out
+
+
+def test_a_wcmatch_range_past_the_fix_unblocks(tmp_path):
+    r, out = _run(tmp_path, _snapshot(wcmatch_line="wcmatch>=11.2", version="1.190.0"))
+
+    _verdict(r, out, 1)
+    assert "allows wcmatch 11.2" in out
+    assert "semgrep>=1.190.0" in out
+    assert "still requires `mcp==1.29.0`" in out    # the others are reported too
+
+
+def test_dropping_wcmatch_altogether_unblocks(tmp_path):
+    r, out = _run(tmp_path, _snapshot(wcmatch_line=None, version="1.190.0"))
+
+    _verdict(r, out, 1)
+    assert "no longer depends on wcmatch" in out
+
+
+def test_no_wcmatch_release_list_is_not_a_pass(tmp_path):
+    r, out = _run(tmp_path, _snapshot(wcmatch_versions=()))
+
+    _verdict(r, out, 2)
+    assert "no final wcmatch releases" in out
+
+
 # -- could not tell: red, never green ------------------------------------------
 
 def test_wheels_that_disagree_are_not_guessed_at(tmp_path):
-    wheels = {"semgrep-1.190.0-py3-none-win_amd64.whl": ["mcp==1.29.0", *_otel()],
-              "semgrep-1.190.0-py3-none-macosx_11_0_arm64.whl": ["mcp>=1.29", *_otel()]}
+    wheels = {"semgrep-1.190.0-py3-none-win_amd64.whl": ["mcp==1.29.0", *_otel(), WCMATCH],
+              "semgrep-1.190.0-py3-none-macosx_11_0_arm64.whl": ["mcp>=1.29", *_otel(), WCMATCH]}
     r, out = _run(tmp_path, _snapshot(version="1.190.0", wheels=wheels))
 
     _verdict(r, out, 2)
@@ -284,7 +337,7 @@ def test_two_mcp_lines_in_one_wheel_are_left_to_a_human(tmp_path):
     """Split by environment, one line may unblock while the other does not;
     judging only the last (or first) line read would guess."""
     requires = ['mcp==1.29.0; python_version < "3.12"', 'mcp>=1.30; python_version >= "3.12"',
-                *_otel()]
+                *_otel(), WCMATCH]
     wheels = {name.format(v="1.190.0"): requires for name in WHEELS}
     r, out = _run(tmp_path, _snapshot(version="1.190.0", wheels=wheels))
 

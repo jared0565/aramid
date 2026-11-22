@@ -1,14 +1,14 @@
-# Daily watch: has a semgrep release stopped pinning mcp at 1.29.0, or
-# opentelemetry-api at 1.37.x?
+# Daily watch: has a semgrep release stopped pinning mcp at 1.29.0,
+# opentelemetry-api at 1.37.x, or wcmatch at 8.x?
 #
-# semgrep pins `mcp==1.29.0` and `opentelemetry-api~=1.37.0` (with the sdk and
-# the OTLP exporter in lockstep), so every aramid install carries the
-# advisories against both until a semgrep release admits a fixed version and
-# this repo raises its semgrep floor to that release. The script reads the
-# newest semgrep's own wheel metadata on PyPI and prints one line per package;
-# see its docstring for the outcomes.
+# semgrep pins `mcp==1.29.0`, `opentelemetry-api~=1.37.0` (with the sdk and the
+# OTLP exporter in lockstep) and `wcmatch~=8.3`, so every aramid install
+# carries the advisories against all three until a semgrep release admits a
+# fixed version and this repo raises its semgrep floor to that release. The
+# script reads the newest semgrep's own wheel metadata on PyPI and prints one
+# line per package; see its docstring for the outcomes.
 #
-# A RED RUN IS THE ALERT. Green is the normal day (both lines "still
+# A RED RUN IS THE ALERT. Green is the normal day (every line "still
 # requires ..."). Red with "allows ..." or "no longer depends on ..." means
 # raise the floor for the package that line names; red with "could not tell"
 # means look at the log. GitHub
@@ -20,8 +20,8 @@
 # public repo GitHub pauses scheduled workflows after 60 days with no commits.
 #
 # Delete this file, the script and its test in the commit that raises the floor
-# past both packages. A commit that settles one removes that package from the
-# script's WATCHED and its tests.
+# past every watched package. A commit that settles one removes that package
+# from the script's WATCHED and its tests.
 name: semgrep-mcp-watch
 
 on:
@@ -49,5 +49,5 @@ jobs:
       - name: Install packaging (the script's only dependency)
         run: python -P -m pip install "packaging==26.3"
 
-      - name: Read the newest semgrep's mcp and opentelemetry requirements
+      - name: Read the newest semgrep's mcp, opentelemetry and wcmatch requirements
         run: python -P .github/scripts/semgrep_mcp_watch.py
