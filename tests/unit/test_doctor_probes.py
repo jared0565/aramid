@@ -318,6 +318,37 @@ def test_probe_enforcement_reports_only_an_onboarded_repo_missing_shims(tmp_path
     assert doctor.probe_enforcement(r) is None
 
 
+def test_probe_enforcement_says_git_is_missing_rather_than_not_enforced(tmp_path, monkeypatch):
+    """Interop round 334. Hooks in `core.hooksPath` (.githooks, as bytes-web
+    keeps them) are found while git runs. With no git to start, `hooks_dir`
+    cannot read core.hooksPath and looks in .git/hooks, and the probe said
+    "configured but NOT enforced ... run `aramid init .`" of a repo whose
+    hooks fire -- measured on 0.20.19 with git off PATH, the condition an
+    agent's Bash tool on that machine starts in. Operator decision
+    2026-11-22: say git is missing instead. The probe still answers (doctor
+    cannot confirm the gate), and an un-onboarded repo is still no finding.
+    `toolpath.program` is what both git launches here ask, so it is the seam."""
+    from aramid import gitutil, toolpath
+    r = _repo(tmp_path)
+    _git(r, "config", "core.hooksPath", ".githooks")
+    (r / ".githooks").mkdir()
+    for gate in ("pre-commit", "pre-push"):
+        (r / ".githooks" / gate).write_bytes(b"#!/bin/sh\nexit 0\n")
+    plain = _repo(tmp_path, onboarded=False, name="plain")
+    assert doctor.probe_enforcement(r) is None, "control: with git, core.hooksPath is read"
+
+    real = toolpath.program
+    monkeypatch.setattr(toolpath, "program", lambda name: (
+        str(tmp_path / "no-git-here" / "git.exe") if name == "git" else real(name)))
+    assert gitutil.git_not_found()
+
+    assert doctor.probe_enforcement(r) == (
+        "hooks: git was not found on PATH -- doctor cannot read core.hooksPath or"
+        " check that this repo's gate hooks are installed; run `aramid doctor`"
+        " where git is on PATH")
+    assert doctor.probe_enforcement(plain) is None
+
+
 # ---------------------------------------------------- probe_relocated_shims --
 
 TRAMPOLINE = b"#!/bin/sh\n# >>> graphite managed >>>\nexec .git/hooks/pre-commit.local\n"

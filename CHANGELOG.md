@@ -44,7 +44,17 @@ to publish a tag that disagrees with it.
   runs and answers "not a repository" is still believed. The MCP tools and
   `aramid handover` find the repo the same way; without git, the MCP
   `aramid_check` tool now fails as an internal error instead of reporting
-  the repo as not onboarded.
+  the repo as not onboarded. This also fixes `aramid handover write`
+  refusing such a repo as "not in an aramid-armed repo" (interop round
+  334).
+- **`aramid doctor` says git is missing instead of calling a gated repo
+  "NOT enforced".** Without git on PATH, doctor could not read
+  `core.hooksPath`, looked in `.git/hooks` instead, and told a repo whose
+  hooks live in `.githooks` that it was "configured but NOT enforced" and
+  should re-run `aramid init`. Measured on 0.20.19 (interop round 334).
+  It now says `git was not found on PATH -- doctor cannot read
+  core.hooksPath or check that this repo's gate hooks are installed`.
+  Doctor still exits 2 there, because it cannot confirm the gate.
 
 ## [0.20.19] — 2026-11-22
 

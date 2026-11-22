@@ -1031,6 +1031,15 @@ def probe_enforcement(root: Path) -> str | None:
     try:
         if not (root / "aramid.toml").exists():
             return None
+        from aramid import gitutil
+        if gitutil.git_not_found():
+            # Interop round 334: without git, `hooks_dir` cannot read
+            # core.hooksPath and looks in .git/hooks, so a repo whose hooks
+            # live in .githooks read as NOT enforced, with advice to re-run
+            # init. Doctor still cannot confirm the gate, so it still answers.
+            return ("hooks: git was not found on PATH -- doctor cannot read"
+                    " core.hooksPath or check that this repo's gate hooks are"
+                    " installed; run `aramid doctor` where git is on PATH")
         from aramid.hooks import GATES, hooks_dir
         hdir = hooks_dir(root)
         missing = [g.value for g in GATES if not (hdir / g.value).exists()]
