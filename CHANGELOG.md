@@ -65,6 +65,15 @@ to publish a tag that disagrees with it.
   in a script and name that`. Quoted or escaped, the same characters are
   still the argument's own text (`-t 'a|b'`). ARAMID.md and the user
   guide now say `--test` runs without a shell.
+- **A red-proof refusal for a test that fails in the clean checkout now
+  shows what that run printed.** "the test passes in the repo but exits 1
+  in a clean checkout of HEAD" said that the run failed and not why
+  (interop round 340). That refusal, its MCP form and the matching one at
+  the fix commit now end with the run's last lines -- up to 20, each
+  marked `out|` or `err|`, colour codes removed -- or say it printed
+  nothing. Known limit, now in the user guide: only the root
+  `node_modules` is linked into the checkout, so a workspace's own
+  `node_modules` in an npm-workspaces repo is not there.
 
 ## [0.20.19] — 2026-11-22
 

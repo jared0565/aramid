@@ -954,7 +954,30 @@ def test_red_proof_refuses_a_test_that_fails_in_a_clean_checkout(repo, capsys, m
              "red proof could not be run: the test passes in the repo but exits 2 in a "
              "clean checkout of HEAD -- it depends on something that is not committed "
              "(an untracked file, a build step, an install), so a failure without the fix "
-             "would prove nothing")
+             "would prove nothing. It printed nothing.")
+
+
+def test_a_clean_checkout_refusal_ends_with_what_that_run_printed(repo, capsys, monkeypatch):
+    """Interop round 340, item 3: the refusal said the run failed and not
+    why, so the cause had to be guessed. Operator decision 2026-11-22: end
+    it with the run's last lines. Both streams, each line marked with its
+    own, colour codes taken out, at most 20 lines of at most 200 characters,
+    blank lines skipped -- the last ones, where a runner puts its error."""
+    _git_stub(monkeypatch, *_TREE)
+    out = "".join(f"line {n}\n" for n in range(1, 21)) + "\n" + "x" * 250 + "\n"
+    err = "\x1b[31mError: Cannot find module 'react'\x1b[0m\n"
+    _scripted(monkeypatch, _OK, RunnerResult("python", ToolState.OK, returncode=1,
+                                             raw=out, stderr=err))
+
+    rc = cmd_ledger_resolve_fixed(repo.root, FID, repo.c2, CHECK_CN, "r", red_proof=True)
+
+    tail = "".join(f"\n  out| line {n}" for n in range(3, 21))
+    _refused(capsys, repo.root, rc,
+             "red proof could not be run: the test passes in the repo but exits 1 in a "
+             "clean checkout of HEAD -- it depends on something that is not committed "
+             "(an untracked file, a build step, an install), so a failure without the fix "
+             "would prove nothing. Its last lines:" + tail + "\n  out| " + "x" * 200
+             + "\n  err| Error: Cannot find module 'react'")
 
 
 def test_a_control_run_that_does_not_finish_is_named_as_such(repo, capsys, monkeypatch):
@@ -967,7 +990,8 @@ def test_a_control_run_that_does_not_finish_is_named_as_such(repo, capsys, monke
              "red proof could not be run: the test passes in the repo but did not run "
              "(it did not finish within 300 s) in a clean checkout of HEAD -- it depends "
              "on something that is not committed (an untracked file, a build step, an "
-             "install), so a failure without the fix would prove nothing")
+             "install), so a failure without the fix would prove nothing. Its last lines:"
+             "\n  err| killed")
 
 
 def test_a_run_without_the_fix_that_times_out_is_not_a_failing_test(repo, capsys,
@@ -1323,7 +1347,7 @@ def test_a_test_that_does_not_pass_at_the_fix_commit_is_refused_and_the_conflict
              f"red proof could not be run: {repo.c2[:12]} can no longer be backed out of "
              f"HEAD -- it conflicts with later changes to {named} -- and at "
              f"{repo.c2[:12]} itself the test exits 4: as it is at HEAD it does not run "
-             f"against the code as it stood when the fix was made")
+             f"against the code as it stood when the fix was made. It printed nothing.")
 
 
 def test_a_control_at_the_fix_commit_that_does_not_finish_is_named_as_such(
@@ -1338,7 +1362,7 @@ def test_a_control_at_the_fix_commit_that_does_not_finish_is_named_as_such(
              f"HEAD -- it conflicts with later changes to calc.py -- and at "
              f"{repo.c2[:12]} itself the test did not run (it did not finish within 300 s): "
              f"as it is at HEAD it does not run against the code as it stood when the fix "
-             f"was made")
+             f"was made. Its last lines:\n  err| killed")
 
 
 def test_at_the_fix_commit_a_test_that_never_saw_the_bug_is_refused(repo, capsys,

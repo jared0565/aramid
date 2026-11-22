@@ -92,6 +92,7 @@ closed at the fix commit 2026-10-11 (spec section 9).
 import contextlib
 import os
 import posixpath
+import re
 import shlex
 import shutil
 import sys
@@ -597,6 +598,28 @@ def _worktree(root: Path, wt: Path, rev: str, leaks: list[Path], no_hooks: Path,
                   file=sys.stderr)
 
 
+# What a refusal of a failed control run quotes of that run (`_last_lines`).
+_TAIL_LINES = 20
+_TAIL_WIDTH = 200
+_ANSI = re.compile(r"\x1b\[[0-9;?]*[A-Za-z]")
+
+
+def _last_lines(res) -> str:
+    """How a refusal of a failed control run ends: that run's last lines,
+    so the cause can be read instead of guessed (interop round 340, item 3;
+    operator decision 2026-11-22). Both streams, stdout first, each line
+    marked with its own; colour codes taken out, blank lines skipped, at
+    most `_TAIL_LINES` lines of at most `_TAIL_WIDTH` characters. A run
+    that printed nothing is said to have, rather than left unsaid."""
+    lines = [(mark, _ANSI.sub("", line).rstrip()[:_TAIL_WIDTH])
+             for mark, text in (("out", res.raw), ("err", res.stderr))
+             for line in (text or "").splitlines()]
+    lines = [(mark, line) for mark, line in lines if line.strip()][-_TAIL_LINES:]
+    if not lines:
+        return ". It printed nothing."
+    return ". Its last lines:" + "".join(f"\n  {mark}| {line}" for mark, line in lines)
+
+
 def _how(res, timeout_s: float) -> str:
     """What a control run did instead of passing."""
     if res.state is ToolState.OK:
@@ -632,12 +655,13 @@ def _at_head(root: Path, wt: Path, commit: str, head: str, argv: list[str],
             if not in_repo:
                 raise Refused(f"the test {_how(control, timeout_s)} in a clean checkout of "
                               f"HEAD -- through MCP every run is in one, never in the "
-                              f"working tree, and it must pass (exit 0) there")
+                              f"working tree, and it must pass (exit 0) there"
+                              f"{_last_lines(control)}")
             raise Refused(f"red proof could not be run: the test passes in the repo but "
                           f"{_how(control, timeout_s)} in a clean checkout of HEAD -- it "
                           f"depends on something that is not committed (an untracked "
                           f"file, a build step, an install), so a failure without the "
-                          f"fix would prove nothing")
+                          f"fix would prove nothing{_last_lines(control)}")
 
         # A merge commit is backed out against its first parent: the branch
         # the fix was merged INTO.
@@ -694,7 +718,7 @@ def _at_the_fix_commit(root: Path, wt: Path, commit: str, head: str, base: str,
                           f"of HEAD -- it conflicts with later changes to {_named(stuck)} "
                           f"-- and at {c} itself the test {_how(control, timeout_s)}: as "
                           f"it is at HEAD it does not run against the code as it stood "
-                          f"when the fix was made")
+                          f"when the fix was made{_last_lines(control)}")
         # No merge here, and so no `git revert`: every path in `backed` was
         # modified or deleted by the commit, so its parent holds it. A revert
         # would refuse once the test from HEAD is in the tree and the commit

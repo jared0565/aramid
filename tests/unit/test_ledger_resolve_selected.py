@@ -1239,9 +1239,20 @@ def test_a_test_that_fails_in_the_clean_checkout_is_refused_in_those_words(repo,
 
     rc = cmd_ledger_resolve_selected(repo.root, FID, repo.c2, [_ROUTE_TEST], "guarded")
 
-    _refused(capsys, repo.root, rc,
-             "the test exits 1 in a clean checkout of HEAD -- through MCP every run is in "
-             "one, never in the working tree, and it must pass (exit 0) there")
+    # The run's last lines follow (interop round 340, item 3): pytest's own,
+    # so they are read for the failing assert, not matched whole.
+    assert rc == 3
+    out, err = capsys.readouterr()
+    head = ("aramid: ledger resolve: the test exits 1 in a clean checkout of HEAD -- "
+            "through MCP every run is in one, never in the working tree, and it must "
+            "pass (exit 0) there. Its last lines:\n")
+    assert (out, err[:len(head)]) == ("", head)
+    tail = err[len(head):].splitlines()
+    assert 0 < len(tail) <= 20
+    assert all(line.startswith(("  out| ", "  err| ")) for line in tail)
+    assert any("assert False" in line for line in tail)
+    assert _closes(repo.root) == []
+    assert _status(repo.root) == "open"
 
 
 def test_a_close_marked_as_made_through_mcp_always_carries_red_proof(repo, capsys):
