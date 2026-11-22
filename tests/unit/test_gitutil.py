@@ -492,6 +492,21 @@ def test_a_name_that_is_not_utf8_is_left_out_and_said_once(monkeypatch, capsys):
         "aramid: git: caf\\xe9.md is not handed to the tools: its name is not valid UTF-8"]
 
 
+def test_a_listing_hands_the_names_it_left_out_to_its_caller(monkeypatch):
+    """The gate's three listings take a list to put each left-out name in,
+    so the gate can count the file as unscanned (operator decision
+    2026-11-22: a coverage gap, not only a stderr line)."""
+    monkeypatch.setattr(gitutil, "_GIT", (sys.executable, "-c", _LATIN1_GIT))
+    root = Path(".")
+    for listing in (lambda sink: gitutil.staged_files(root, left_out=sink),
+                    lambda sink: gitutil.all_tracked_files(root, left_out=sink),
+                    lambda sink: gitutil.changed_files(root, None, left_out=sink)):
+        sink: list[str] = []
+        assert listing(sink) == ["plain.py"]
+        assert sink == ["caf\udce9.py"]
+    assert gitutil.shown_name("caf\udce9.py") == "caf\\xe9.py"
+
+
 def test_a_listed_name_keeps_a_carriage_return_it_holds(monkeypatch):
     """A `-z` listing ends a name with NUL, so a `\\r` inside one is part of
     the name (Linux allows it). Read through a text-mode pipe it became `\\n`,

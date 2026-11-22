@@ -931,7 +931,7 @@ def test_graph_out_path_never_reaches_runner_or_findings(tmp_path, monkeypatch):
     ledger = _ledger(tmp_path)
 
     monkeypatch.setattr(pipeline.gitutil, "staged_files",
-                         lambda r: ["graph-out/x.json", "src/app.py"])
+                         lambda r, left_out=None: ["graph-out/x.json", "src/app.py"])
 
     captured_files: list = []
     # Simulate a range-scanning tool (like gitleaks) that reports a finding

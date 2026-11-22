@@ -12,6 +12,27 @@ to publish a tag that disagrees with it.
 
 ## [Unreleased]
 
+### Changed
+
+- **A file left out because its name is not valid UTF-8 now counts as a
+  gap in the run, not only a line on stderr.** Since 0.20.16, on Linux,
+  such a file (`caf\xe9.py`, named in Latin-1) is not handed to any tool,
+  and only a stderr line said so. The run's verdict, its ledger row and
+  `--strict` all read it as fully scanned. So anyone authoring a change
+  could keep a file from ruff and the other tools aramid hands a file list
+  by giving its name one such byte, with nothing on record. (semgrep skips
+  such a file by itself, measured on Linux, whatever aramid does.) Found by the drain's
+  LLM review and by the security review of the 0.20.16 change. The gate
+  now reports it as degraded under `non-utf8-names`, naming the first five
+  files and counting the rest. It appears in the `skipped (degraded
+  tools)` list and in the JSON report's `degraded` and `degraded_reasons`,
+  and the run row records it. The run exits 2, as for any degraded tool:
+  the default hooks let it through with the gap shown, `--strict` (CI, and
+  the pre-push hook under `[hooks].pre_push_match_ci`) refuses it, and
+  `--accept-degraded "<reason>"` lets it through on record. Renaming the
+  file closes the gap. A name under an ignored path is no gap. gitleaks'
+  commit scan reads git itself and still checks such a file.
+
 ## [0.20.17] — 2026-11-22
 
 No `aramid init` needed: nothing it writes changed, and neither did any

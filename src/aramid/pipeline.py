@@ -302,8 +302,11 @@ def _budget_key(gate, mode: str) -> str:
     return _BUDGET_KEY.get(gate, "pre_push")
 
 
-def _discover_files(root: Path, mode: str) -> tuple[list[str], str | None, str | None]:
-    """(files, rng, widened_reason).
+def _discover_files(root: Path, mode: str,
+                    left_out: list[str] | None = None) -> tuple[list[str], str | None, str | None]:
+    """(files, rng, widened_reason). `left_out` collects the names the
+    listing could not hand any tool (`gitutil._readable`); `run_gate` counts
+    them as unscanned (`UNREADABLE_NAMES`).
 
     `widened_reason` is non-None only when this run scanned MORE than the
     delta it was asked about, and it exists because the widening is otherwise
@@ -314,7 +317,7 @@ def _discover_files(root: Path, mode: str) -> tuple[list[str], str | None, str |
     moment a tag cannot be amended.
     """
     if mode == "staged":
-        return gitutil.staged_files(root), None, None
+        return gitutil.staged_files(root, left_out=left_out), None, None
     if mode == "range":
         rng = gitutil.resolve_range(root)
         if rng is None:
@@ -334,16 +337,16 @@ def _discover_files(root: Path, mode: str) -> tuple[list[str], str | None, str |
             # filter -- quoting the pre-filter total here would overstate
             # coverage in exactly the report a reader uses to decide whether an
             # absent finding means clean or unscanned.
-            return gitutil.all_tracked_files(root), FULL_HISTORY_RNG, (
+            return gitutil.all_tracked_files(root, left_out=left_out), FULL_HISTORY_RNG, (
                 "no upstream and no remote-tracking ref to diff against (a "
                 "brand-new repo's first push, or a checkout with no remote "
                 "refs). Pre-existing findings anywhere in the repo apply here")
-        return gitutil.changed_files(root, rng), rng, None
+        return gitutil.changed_files(root, rng, left_out=left_out), rng, None
     if mode == "all":
         # Deliberately silent: `--all` IS the request to scan everything, so
         # announcing it tells the operator what they just typed. The field
         # exists for the scope the operator did NOT ask for.
-        return gitutil.all_tracked_files(root), None, None
+        return gitutil.all_tracked_files(root, left_out=left_out), None, None
     raise ValueError(f"unknown mode: {mode!r}")
 
 
@@ -811,6 +814,24 @@ def _degraded_reasons(flat_results: list[RunnerResult]) -> dict[str, str]:
     return reasons
 
 
+# The `degraded` key for files no tool was handed because their name is not
+# valid UTF-8 (operator decision 2026-11-22): a gap in what the run scanned,
+# so the verdict, the run row and `--strict` see it. Not BLOCK-tier: the
+# default hooks pass it with the gap shown, `--strict` refuses it, and
+# `--accept-degraded` is the way through, as for any degraded tool.
+UNREADABLE_NAMES = "non-utf8-names"
+_NAMES_SHOWN = 5
+
+
+def _left_out_reason(names: list[str]) -> str:
+    """The `UNREADABLE_NAMES` reason: how many files, and the first few."""
+    shown = ", ".join(gitutil.shown_name(n) for n in names[:_NAMES_SHOWN])
+    more = len(names) - _NAMES_SHOWN
+    files = "file" if len(names) == 1 else "files"
+    return (f"{len(names)} {files} not handed to any tool: name not valid UTF-8: {shown}"
+            + (f" and {more} more" if more > 0 else ""))
+
+
 def _stalled_tools(flat_results: list[RunnerResult]) -> tuple[str, ...]:
     """The tools the stall watchdog killed this run, from the FIELD -- never
     from reason text, which a tool's own stderr could imitate."""
@@ -1031,8 +1052,11 @@ def run_gate(root: Path, gate: Gate, mode: str, cfg: config_mod.Config, ledger: 
     at = clock()
 
     # 1. file set for mode, then the always-on ignore-path filter (spec §8b).
-    raw_files, rng, widened_cause = _discover_files(root, mode)
+    left_out: list[str] = []
+    raw_files, rng, widened_cause = _discover_files(root, mode, left_out)
     files = config_mod.filter_paths(raw_files, cfg)
+    # A name the ignore-path filter would have dropped anyway is no gap.
+    unreadable = config_mod.filter_paths(left_out, cfg)
     # Composed AFTER the filter so the count is what the runners were actually
     # handed. `_discover_files` returns the cause; only here is the number real.
     scope_widened = (f"scanned all {len(files)} tracked file(s), not this "
@@ -1186,6 +1210,8 @@ def run_gate(root: Path, gate: Gate, mode: str, cfg: config_mod.Config, ledger: 
     # 7. record this run; enforce the pre-push no-new-warnings ratchet.
     scope_tools = {r.tool for r in flat_results if r.state is ToolState.OK}
     degraded_reasons = {**_degraded_reasons(flat_results), **producer_degraded}
+    if unreadable:
+        degraded_reasons[UNREADABLE_NAMES] = _left_out_reason(unreadable)
     stalled = _stalled_tools(flat_results)
     scope_files = set(files)
     # What each runner can VOUCH for having analyzed. `state is OK` alone

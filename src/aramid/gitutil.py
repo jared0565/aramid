@@ -178,7 +178,7 @@ def range_commits(root: Path, rng):
     cp = _run(root, "rev-list", spec)
     return [line for line in cp.stdout.splitlines() if line] if cp.returncode == 0 else []
 
-def _names(cp) -> list[str]:
+def _names(cp, left_out: list[str] | None = None) -> list[str]:
     """The names of a `-z` listing, as they are on disk. Every listing aramid
     hands its runners is `-z`: without it git C-quotes a name holding a byte
     above 0x7F (core.quotePath, on by default), a quote, a backslash or a
@@ -187,8 +187,22 @@ def _names(cp) -> list[str]:
     Measured on the published 0.20.14: `check --all` copied nothing for
     gitleaks to scan, so a secret in such a file was missed with nothing
     said, and semgrep exited 2 for the whole repo. A name that is not UTF-8
-    is left out (`_readable`)."""
-    return [name for name in cp.stdout.split("\0") if name and _readable(name)]
+    is left out (`_readable`), and put in `left_out` when the caller passes
+    one: the gate counts each as a file no tool scanned (`pipeline`)."""
+    names = []
+    for name in cp.stdout.split("\0"):
+        if not name:
+            continue
+        if _readable(name):
+            names.append(name)
+        elif left_out is not None:
+            left_out.append(name)
+    return names
+
+def shown_name(name: str) -> str:
+    """A name as a bytes literal reads it: `caf\\xe9.py` for a Latin-1 byte,
+    and a control character escaped, never raw to the terminal."""
+    return repr(name.encode("utf-8", "surrogateescape"))[2:-1]
 
 _UNREADABLE_SAID: set[str] = set()
 
@@ -208,10 +222,7 @@ def _readable(name: str) -> bool:
     except UnicodeEncodeError:
         if name not in _UNREADABLE_SAID:
             _UNREADABLE_SAID.add(name)
-            # As a bytes literal reads it: a control character in the name
-            # is printed escaped, never raw to the terminal.
-            shown = repr(name.encode("utf-8", "surrogateescape"))[2:-1]
-            print(f"aramid: git: {shown} is not handed to the tools: "
+            print(f"aramid: git: {shown_name(name)} is not handed to the tools: "
                   "its name is not valid UTF-8", file=sys.stderr)
         return False
     return True
@@ -221,17 +232,17 @@ def _readable(name: str) -> bool:
 # a `-z` listing ends with NUL, or inside a changed line (`diff_new_lines`).
 _AS_GIT_WROTE = {"errors": "surrogateescape", "translate_newlines": False}
 
-def staged_files(root: Path):
+def staged_files(root: Path, left_out: list[str] | None = None):
     return _names(_run(root, "diff", "--cached", "--name-only", "--diff-filter=ACMR", "-z",
-                       **_AS_GIT_WROTE))
+                       **_AS_GIT_WROTE), left_out)
 
-def all_tracked_files(root: Path):
-    return _names(_run(root, "ls-files", "-z", **_AS_GIT_WROTE))
+def all_tracked_files(root: Path, left_out: list[str] | None = None):
+    return _names(_run(root, "ls-files", "-z", **_AS_GIT_WROTE), left_out)
 
-def changed_files(root: Path, rng):
+def changed_files(root: Path, rng, left_out: list[str] | None = None):
     spec = rng if rng else "HEAD"
     return _names(_run(root, "diff", "--name-only", "--diff-filter=ACMR", "-z", spec,
-                       **_AS_GIT_WROTE))
+                       **_AS_GIT_WROTE), left_out)
 
 def literal_pathspec(paths) -> list[str]:
     """`--` and each repo path marked `:(literal)`: the ONE spelling of a

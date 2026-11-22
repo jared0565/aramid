@@ -284,7 +284,7 @@ Two details of the mechanism:
 | `2` | degraded / WARN — a tool skipped or timed out, nothing genuinely BLOCK-tier fired |
 | `3` | engine or config error (crash, bad args, missing prerequisite, refusal) |
 
-A degraded tool is listed with its reason -- `skipped (degraded tools):` then `  - gitleaks (timeout after 120 s)`, `  - semgrep (not found)`, or `  - ruff (crashed (exit 2))` -- and the same `{tool: reason}` map is written to the run's `run_finished` row as `degraded` (empty when every selected tool ran) and to `check --json` as `degraded_reasons`. A tool that timed out also says so in its own log under `.aramid/logs/`, which used to be empty for exactly that case.
+A degraded tool is listed with its reason -- `skipped (degraded tools):` then `  - gitleaks (timeout after 120 s)`, `  - semgrep (not found)`, or `  - ruff (crashed (exit 2))` -- and the same `{tool: reason}` map is written to the run's `run_finished` row as `degraded` (empty when every selected tool ran) and to `check --json` as `degraded_reasons`. A tool that timed out also says so in its own log under `.aramid/logs/`, which used to be empty for exactly that case. One entry there is not a tool. `  - non-utf8-names (1 file not handed to any tool: name not valid UTF-8: caf\xe9.py)` means the run left that file out, because no tool can be handed a name that is not valid UTF-8 (Linux allows one). It degrades the run like a skipped tool, so `--strict` refuses it. Renaming the file ends it.
 
 Layered on top of that base contract:
 
@@ -374,7 +374,7 @@ meanings. Top level:
 | `schema_version` | integer | The version of this document's shape, `1` today. It changes only when a key is removed, renamed or retyped. |
 | `exit_code` | integer | The code the command exits with: the final one, after the fresh-ledger rule, a certified ref that moved (which makes it `1`) and `--strict`. The codes are those of [the exit-code contract](#the-exit-code-contract). |
 | `findings` | array of objects | One object per finding the run reported; its keys are in the second table. A finding that an override or a `.aramid-suppressions.toml` entry set aside stays in the list, with `verdict` `info`. |
-| `degraded` | array of strings | The tools that could not vouch for anything this run: missing, crashed, timed out or stalled, or an armed `tdd` or `red-proof` whose git did not answer. Sorted; empty when every selected tool ran. |
+| `degraded` | array of strings | The tools that could not vouch for anything this run: missing, crashed, timed out or stalled, or an armed `tdd` or `red-proof` whose git did not answer. It also holds `non-utf8-names` when the run left out a file whose name is not valid UTF-8, which no tool can be handed. Sorted; empty when every selected tool ran. |
 | `degraded_reasons` | object (string to string) | Why each tool in `degraded` degraded, keyed like it: `{"semgrep": "not found"}`. Empty when nothing degraded. |
 | `accepted_reason` | string or null | The `--accept-degraded` reason when this run's degradation was accepted (exit `0`, with an `infrastructure_bypass` ledger row); `null` on every other run. A `0` with this set is not a clean pass. |
 | `refs_moved` | array of objects | The certified refs that moved while a pre-push gate ran (see "What the pre-push gate certifies" in [section 3](#3-the-deterministic-gate-on-commitpush)); any entry fails the gate. Empty when nothing moved, and on every other gate. |
