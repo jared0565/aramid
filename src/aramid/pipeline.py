@@ -1057,6 +1057,10 @@ def run_gate(root: Path, gate: Gate, mode: str, cfg: config_mod.Config, ledger: 
     files = config_mod.filter_paths(raw_files, cfg)
     # A name the ignore-path filter would have dropped anyway is no gap.
     unreadable = config_mod.filter_paths(left_out, cfg)
+    # What this run cannot vouch for, under the name a finding about it was
+    # recorded with: gitleaks' commit scan reads git itself and still catches
+    # a secret in such a file, so its row must not close here (record_run).
+    unvouched = frozenset(gitutil.reported_name(n) for n in left_out)
     # Composed AFTER the filter so the count is what the runners were actually
     # handed. `_discover_files` returns the cause; only here is the number real.
     scope_widened = (f"scanned all {len(files)} tracked file(s), not this "
@@ -1266,7 +1270,8 @@ def run_gate(root: Path, gate: Gate, mode: str, cfg: config_mod.Config, ledger: 
                                 # certified revisions, HEAD at pre-commit.
                                 revs=_certified_revs(certified),
                                 pushed=_certified_pushes(certified),
-                                still_found=still_found)
+                                still_found=still_found,
+                                unvouched_files=unvouched)
 
     # record_run above can NEVER resolve a whole-suite finding: those carry the
     # synthetic `<test-suite>` marker, which is not a path and so is never in

@@ -204,6 +204,14 @@ def shown_name(name: str) -> str:
     and a control character escaped, never raw to the terminal."""
     return repr(name.encode("utf-8", "surrogateescape"))[2:-1]
 
+def reported_name(name: str) -> str:
+    """A left-out name as a tool that reads git itself reports it: each byte
+    that is not UTF-8 as one U+FFFD. Measured on gitleaks 8.30.1, staged and
+    commit scans alike: `x\\xe9\\x80.py` comes back as two U+FFFD, where
+    Python's "replace" would write one for the whole cut-off sequence. The
+    ledger keeps rows under it open (`pipeline`, `Ledger.record_run`)."""
+    return re.sub("[\udc80-\udcff]", "�", name)
+
 _UNREADABLE_SAID: set[str] = set()
 
 def _readable(name: str) -> bool:

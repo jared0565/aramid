@@ -658,7 +658,8 @@ class Ledger:
                    stalled: list[str] | None = None,
                    head: str | None = None,
                    revs: tuple[str, ...] | None = None, pushed=(),
-                   still_found: frozenset[str] = frozenset()):
+                   still_found: frozenset[str] = frozenset(),
+                   unvouched_files: frozenset[str] = frozenset()):
         state, seen = _materialize(self.events())
         present = {f.id for f in findings}
         payload = {"gate": gate, "tools": sorted(scope_tools)}
@@ -730,6 +731,13 @@ class Ledger:
             # Present, so never resolved, and never detected, so they block
             # nothing the patch scan did not.
             if rec["status"] != "open" or fid in present or fid in still_found:
+                continue
+            # `unvouched_files`: files this run could hand no tool, by the name
+            # a finding about one was recorded under (pipeline: a name that is
+            # not valid UTF-8). No tool here looked, and no revision holds that
+            # name, so the departed check below would read the file as gone and
+            # close a secret that is still staged. Measured 2026-11-22.
+            if rec.get("file") in unvouched_files:
                 continue
             # THE TOOL GATE STAYS AHEAD OF THE DEPARTED CHECK. Considered
             # moving it (2026-08-09) so that producers absent from scope_tools

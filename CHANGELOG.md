@@ -12,6 +12,20 @@ to publish a tag that disagrees with it.
 
 ## [Unreleased]
 
+### Fixed
+
+- **A secret found in a file whose name is not valid UTF-8 stays open
+  while the file is left out.** On Linux, gitleaks' commit scan reads git
+  itself, so it still catches a secret in such a file (`caf\xe9.py`), and
+  aramid records it under the name gitleaks reports: one U+FFFD for each
+  byte that is not UTF-8. No commit holds that name, so the next run whose
+  gitleaks did not see the file, such as `check --all`, which leaves such
+  a file out, read it as deleted and closed the row. It printed "no
+  findings" and 0 open while the secret was still staged; the next commit
+  was refused again and the row reopened. Measured on 0.20.18. A run now
+  resolves nothing recorded under a file it left out. The row closes
+  normally once the file is renamed or removed.
+
 ## [0.20.18] — 2026-11-22
 
 No `aramid init` needed: nothing it writes changed, and neither did any

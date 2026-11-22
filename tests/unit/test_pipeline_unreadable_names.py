@@ -12,12 +12,15 @@ anyway is no gap.
 """
 import subprocess
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
 from aramid import config, gitutil, pipeline, reporter
 from aramid.ledger import Ledger
-from aramid.models import EventType, Gate
+from aramid.models import EventType, Gate, Severity, Verdict
+from aramid.normalizer import RawFinding, normalize
+from aramid.runners.base import RunnerResult, ToolState
 
 ODD = "caf\udce9.py"   # b"caf\xe9.py" as the listings decode it (surrogateescape)
 
@@ -133,6 +136,35 @@ def test_the_console_names_the_gap_beside_the_degraded_tools(tmp_path, monkeypat
         at = lines.index("skipped (degraded tools):")
         assert lines[at + 1] == (
             "  - non-utf8-names (1 file not handed to any tool: name not valid UTF-8: caf\\xe9.py)")
+    finally:
+        ledger.close()
+
+
+@pytest.mark.parametrize("left, reported", [
+    ("caf\udce9.py", "caf�.py"),
+    # A cut-off multi-byte sequence: gitleaks writes one U+FFFD per byte
+    # (measured, 8.30.1), where Python's "replace" would write one in all.
+    ("x\udce9\udc80.py", "x��.py")])
+@pytest.mark.parametrize("still_left_out, status", [(True, "open"), (False, "fixed")])
+def test_a_secret_row_under_a_left_out_file_stays_open_while_it_is_left_out(
+        tmp_path, monkeypatch, left, reported, still_left_out, status):
+    """gitleaks' commit scan records the secret under the name it reports; a
+    later whole-tree check, whose gitleaks never saw the file, must not close
+    it. Once the file is no longer left out (renamed, removed), it closes."""
+    root, cfg, ledger = _setup(tmp_path, monkeypatch, [left] if still_left_out else [])
+    monkeypatch.setitem(pipeline.RUNNERS, "gitleaks", SimpleNamespace(
+        run=lambda ctx: RunnerResult(tool="gitleaks", state=ToolState.OK, raw="[]"),
+        parse=lambda result, ctx: []))
+    monkeypatch.setitem(pipeline.GATE_RUNNER_KEYS, Gate.PRE_COMMIT, ["gitleaks"])
+    raw = RawFinding(tool="gitleaks", rule="github-pat", severity_raw="high", file=reported,
+                     line=2, message="m", line_content='TOKEN = "placeholder"')
+    found = normalize([raw], root, lambda f: "HEAD", b"salt", Gate.PRE_COMMIT,
+                      lambda *a: (Severity.HIGH, Verdict.BLOCK))[0]
+    try:
+        ledger.record_run("commit", "2026-11-22T00:00:00Z", "pre-commit", {"gitleaks"},
+                          {"a.py"}, [found], root=root)
+        pipeline.run_gate(root, Gate.PRE_COMMIT, "all", cfg, ledger, run_id="run-all")
+        assert ledger.open_findings()[found.id]["status"] == status
     finally:
         ledger.close()
 
