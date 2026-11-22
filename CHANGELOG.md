@@ -12,6 +12,14 @@ to publish a tag that disagrees with it.
 
 ## [Unreleased]
 
+## [0.20.18] — 2026-11-22
+
+No `aramid init` needed: nothing it writes changed, and neither did any
+dependency. Only Linux is affected, and only a repo holding a file whose
+name is not valid UTF-8: its runs now exit 2, and `--strict` (CI's check)
+fails, until the file is renamed or the gap accepted with
+`--accept-degraded "<reason>"`.
+
 ### Changed
 
 - **A file left out because its name is not valid UTF-8 now counts as a
@@ -6966,7 +6974,8 @@ Stated plainly because each one changes how you should deploy this:
 - **PyPI publishing is not set up.** Install from a GitHub Release artifact or
   from git; `pip install aramid` does not work.
 
-[Unreleased]: https://github.com/jared0565/aramid/compare/v0.20.17...HEAD
+[Unreleased]: https://github.com/jared0565/aramid/compare/v0.20.18...HEAD
+[0.20.18]: https://github.com/jared0565/aramid/releases/tag/v0.20.18
 [0.20.17]: https://github.com/jared0565/aramid/releases/tag/v0.20.17
 [0.20.16]: https://github.com/jared0565/aramid/releases/tag/v0.20.16
 [0.20.15]: https://github.com/jared0565/aramid/releases/tag/v0.20.15
