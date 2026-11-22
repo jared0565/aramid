@@ -1421,6 +1421,31 @@ def test_this_repos_mutation_budget_clears_the_last_drain_baseline(monkeypatch, 
     assert knobs["wall_budget_s"] - knobs["baseline_timeout_s"] >= _MUTANTS_SHARE_S, knobs
 
 
+# This repo's slowest stage-1 sets, timed 2026-11-22 18:14Z on a quiet machine
+# and run serially, as stage 1 runs them: tests/unit/test_ledger*.py took 186 s
+# (416 tests) and test_pipeline*.py 163 s (134). Under the 120 s default every
+# mutant of ledger.py and pipeline.py timed out before a verdict: 18 of 20 at
+# the 07:00Z drain that day, and 20 of 20 at 15:00Z.
+_SLOWEST_STAGE1_S = 186
+
+
+def test_this_repos_mutant_timeout_clears_its_slowest_stage1_set(monkeypatch, tmp_path):
+    """Operator decision 2026-11-22, "Raise this repo's limit". The per-mutant
+    timeout bounds only a TARGETED stage-1 run (the confirm and the
+    full-suite fallback get `baseline_timeout_s`), and a stage-1 run has no
+    `-x`, so a killed mutant runs the whole set too. Half again over the
+    slowest set measured, matching the baseline rule above. Read through
+    `_knobs`, which is what `consume` runs on."""
+    from pathlib import Path
+
+    monkeypatch.setattr(config_mod, "_user_config_path",
+                        lambda: tmp_path / "no-user.toml")
+    cfg = config_mod.load_config(Path(__file__).resolve().parents[2])
+    knobs = mut_consumer._knobs(cfg.mutation)
+
+    assert knobs["mutant_timeout_s"] >= 1.5 * _SLOWEST_STAGE1_S, knobs
+
+
 # The rest of this repo's item after mutation: llm-review's three ladder arms
 # at the 240 s call timeout, and fuzz (85 s at most in the 10-30 drains).
 _REST_OF_ITEM_S = 900

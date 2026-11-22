@@ -128,7 +128,8 @@ pre_push_match_ci = true
 # blocks no push and no commit. It only bounds how long a 4-hourly background
 # drain may spend.
 #
-# mutant_timeout_s stays at the default 120 s. It governs TARGETED stage-1
+# mutant_timeout_s stays at the default 120 s (until 2026-11-22: RAISED, see
+# the last paragraph before [mutation]). It governs TARGETED stage-1
 # runs (one test file, seconds here); the whole-command runs derive their own
 # budget from it (`* 4` = 480 s), which clears the measured 305 s with 57%
 # headroom. Re-measure before assuming that still holds -- tests/unit grows
@@ -208,6 +209,27 @@ pre_push_match_ci = true
 # the growth since 10-10 (746 s that day) is not safe either: the baseline read
 # 1,829 s and then 2,296 s in its first two runs under these limits. A faster
 # unit suite is still the fix.
+#
+# mutant_timeout_s RAISED 2026-11-22, operator decision "Raise this repo's
+# limit". The paragraph that kept it at 120 s called a targeted stage-1 run
+# "one test file, seconds here". It is not any more: stage 1 runs every
+# `test_<module>.py` and `test_<module>_*.py` file, serially and with no -x,
+# and for this repo's two largest modules that takes minutes. Timed
+# 2026-11-22 18:14Z on a quiet machine:
+#
+#   tests/unit/test_ledger*.py     16 files  416 tests  186 s
+#   tests/unit/test_pipeline*.py    5 files  134 tests  163 s
+#   tests/unit/test_gitutil*.py     5 files   63 tests   93 s
+#
+# At 120 s every mutant of ledger.py and pipeline.py timed out before a
+# verdict: 18 of 20 at the 07:00Z drain that day and 20 of 20 at 15:00Z
+# ("no mutant reached a verdict", which `aramid status` lists under
+# "consumers doing no work"). 300 s is 1.6x the slowest set. It bounds only
+# targeted runs; the confirm and the full-suite fallback keep
+# baseline_timeout_s. Cost: a ledger or pipeline mutant now takes about 3 min
+# whether it is killed or not, so an item grades about 14 of them inside
+# wall_budget_s instead of timing out 20
+# (test_this_repos_mutant_timeout_clears_its_slowest_stage1_set).
 [mutation]
 # Mutation's baseline is NOT the gate's suite -- see `mutation._full_argv`.
 # `[tests].command` is now CI's whole tree (~1141 s) and the mutation baseline
@@ -230,6 +252,7 @@ pre_push_match_ci = true
 test_command = ["python", "-m", "pytest", "-q", "-n", "6", "tests/unit"]
 wall_budget_s = 3300
 baseline_timeout_s = 2400
+mutant_timeout_s = 300
 
 [drain]
 # 2026-10-31, operator decision "Deadline now, profile next". The watchdog
