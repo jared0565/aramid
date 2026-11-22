@@ -12,6 +12,13 @@ to publish a tag that disagrees with it.
 
 ## [Unreleased]
 
+## [0.20.17] — 2026-11-22
+
+No `aramid init` needed: nothing it writes changed, and neither did any
+dependency. Upgrade from 0.20.16: its fix for `++ ` lines could hide a
+changed line from the drain's checks, in the case the first entry below
+describes.
+
 ### Fixed
 
 - **A form feed, a U+2028 or a lone carriage return inside a changed line
@@ -6938,7 +6945,8 @@ Stated plainly because each one changes how you should deploy this:
 - **PyPI publishing is not set up.** Install from a GitHub Release artifact or
   from git; `pip install aramid` does not work.
 
-[Unreleased]: https://github.com/jared0565/aramid/compare/v0.20.16...HEAD
+[Unreleased]: https://github.com/jared0565/aramid/compare/v0.20.17...HEAD
+[0.20.17]: https://github.com/jared0565/aramid/releases/tag/v0.20.17
 [0.20.16]: https://github.com/jared0565/aramid/releases/tag/v0.20.16
 [0.20.15]: https://github.com/jared0565/aramid/releases/tag/v0.20.15
 [0.20.14]: https://github.com/jared0565/aramid/releases/tag/v0.20.14
