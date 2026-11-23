@@ -127,6 +127,19 @@ to publish a tag that disagrees with it.
   A CRASHED result that aramid itself refused to start -- that range check,
   an inline pass that raised -- now gives its own reason in `skipped
   (degraded tools)` and `degraded_reasons` instead of "crashed (exit 0)".
+- **The SessionStart block leads with the gate banner and stays under
+  Claude Code's 10,000-character hook limit, however long the pending
+  handover.** The handover used to come first, and its 8,000-character cap
+  counted body characters only, while each line also carries the
+  `aramid: | ` prefix and the posture lines follow: a 7,900-character
+  handover in 40-character lines made a 10,731-character block with the
+  GATED / "NEVER pass --no-verify" banner starting at character 10,020
+  (interop round 342). Now the two fixed lines (GATED, and "aramid is a
+  tool") print first -- also when the ledger cannot be read -- then the
+  handover, then the ledger's lines, and the handover is cut so the whole
+  block is at most 9,500 characters, ending with the existing "truncated;
+  'aramid handover show' prints all of it" line. With fewer than 500
+  characters of room left, that line is all of the handover shown.
 
 ## [0.20.19] — 2026-11-22
 

@@ -87,8 +87,9 @@ def test_session_start_without_git_still_prints_the_banner(tmp_path, checkout_en
 
 
 def test_session_start_without_git_still_delivers_a_pending_handover(tmp_path, checkout_env):
-    """The handover stays first, as it is with git (0.20.4); the line saying
-    how the repo was found comes before the posture block it qualifies."""
+    """The line saying how the repo was found leads, ahead of the gate banner
+    it qualifies, and the handover follows the banner, as it does with git
+    (round 342: the fixed lines lead; 0.20.4 had the handover first)."""
     from aramid import handover
     r = _repo(tmp_path, armed=False)
     handover.write(r, "resume at step 3\n")
@@ -97,8 +98,9 @@ def test_session_start_without_git_still_delivers_a_pending_handover(tmp_path, c
 
     assert out.returncode == 0, out.stderr
     lines = out.stdout.decode("utf-8").splitlines()
-    assert lines[0].startswith("aramid: PENDING HANDOVER written "), out.stdout
-    assert lines[1:4] == ["aramid: | resume at step 3", NO_GIT, GATED], out.stdout
+    assert lines[:2] == [NO_GIT, GATED], out.stdout
+    assert lines[3].startswith("aramid: PENDING HANDOVER written "), out.stdout
+    assert lines[4] == "aramid: | resume at step 3", out.stdout
 
 
 def test_armed_pre_tool_use_without_git_denies_a_bypass_by_absolute_path(tmp_path, checkout_env):

@@ -372,14 +372,15 @@ def test_unreadable_stdin_and_non_command_payloads_are_silent(tmp_path, monkeypa
 
 # ------------------------------------------------- pending handover (0.20.4) --
 
-def test_a_pending_handover_leads_the_session_block_and_the_posture_is_intact(tmp_path):
+def test_a_pending_handover_follows_the_banner_and_the_posture_is_intact(tmp_path):
+    # round 342: the two fixed lines lead, so no handover pushes them out
     from aramid import handover
     r = _repo(tmp_path)
     handover.write(r, "resume step 3\n")
     out = ah._session_context(r)
-    assert out.startswith("aramid: PENDING HANDOVER written ")
-    assert out.splitlines()[1] == "aramid: | resume step 3"
-    assert out.splitlines()[2].startswith("aramid: this repo is GATED")
+    assert out.startswith("aramid: this repo is GATED")
+    assert out.splitlines()[2].startswith("aramid: PENDING HANDOVER written ")
+    assert out.splitlines()[3] == "aramid: | resume step 3"
     assert out.endswith('aramid: commands: aramid check --staged | aramid ledger filter'
                         ' --status open | aramid override <id> --reason "..."\n')
 
@@ -395,9 +396,12 @@ def test_the_handover_prints_even_when_the_posture_block_raises(tmp_path, monkey
     monkeypatch.setattr(Ledger, "open_findings", boom)
     assert ah.cmd_agent_hook("session-start", r) == 0
     out = capsys.readouterr().out
-    assert out.startswith("aramid: PENDING HANDOVER written ")
+    # round 342: the fixed lines need no ledger, so they still lead; the
+    # ledger's own lines are what a failed ledger costs
+    assert out.startswith("aramid: this repo is GATED")
+    assert out.splitlines()[2].startswith("aramid: PENDING HANDOVER written ")
     assert "aramid: | resume step 3" in out
-    assert "this repo is GATED" not in out
+    assert "aramid: open findings" not in out
 
 
 def test_a_raising_posture_block_with_no_handover_is_still_silent(tmp_path, monkeypatch, capsys):

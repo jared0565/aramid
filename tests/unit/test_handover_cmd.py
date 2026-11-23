@@ -559,8 +559,10 @@ def test_the_hook_mcp_and_the_cli_resolve_one_root_from_a_subdirectory(
 
     assert agent_hook.cmd_agent_hook("session-start", None) == 0
     hook = capsys.readouterr().out.splitlines()
-    assert hook[0].startswith("aramid: PENDING HANDOVER written ")
-    assert hook[1] == "aramid: | one root for all three"
+    # round 342: the two fixed posture lines lead, the handover follows
+    assert hook[0].startswith("aramid: this repo is GATED ")
+    assert hook[2].startswith("aramid: PENDING HANDOVER written ")
+    assert hook[3] == "aramid: | one root for all three"
 
     shown = mcp_tools.TOOLS["aramid_handover_show"]["handler"](None, {})
     assert shown["isError"] is False

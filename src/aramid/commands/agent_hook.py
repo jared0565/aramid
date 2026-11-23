@@ -220,6 +220,54 @@ def _decision_json(bypass, *, armed: bool) -> str:
 
 _HANDOVER_CAP = 8000
 
+# Interop round 342 (operator decision 2026-11-23). The cap above counts body
+# characters only, while every body line also carries `_BODY_PREFIX` and the
+# posture lines follow: a 7,900-character body in 40-character lines made a
+# 10,731-character block, past Claude Code's 10,000-character hook output
+# limit. So the WHOLE block is held to `_SESSION_BUDGET`, a margin under that
+# limit, by cutting the handover; with less than `_MIN_EXCERPT` characters
+# left for its body, only the pointer to `aramid handover show` is printed.
+_SESSION_BUDGET = 9500
+_MIN_EXCERPT = 500
+_BODY_PREFIX = "aramid: | "
+_TRUNCATED = _BODY_PREFIX + "... (truncated; 'aramid handover show' prints all of it)"
+
+# The two posture lines that need no ledger. They lead the block, so no
+# handover can push the gate banner out of what the agent is shown.
+_FIXED = (
+    "aramid: this repo is GATED (pre-commit + pre-push hooks)."
+    " Read ARAMID.md; NEVER pass --no-verify.",
+    # Operator mandate 2026-10-04: an installation ships the tool, never its
+    # agent. This line reaches a consumer as soon as the wheel is upgraded,
+    # before `aramid init` refreshes ARAMID.md.
+    "aramid: aramid is a tool, not an agent to talk to -- the agent"
+    " channel takes only bug reports and improvement suggestions"
+    " for aramid.",
+)
+
+
+def _fit_handover(lines: list[str], room: int) -> list[str]:
+    """A verified handover's lines (header, body, maybe the truncated line)
+    cut to `room` characters, each line counted with its newline: the header,
+    as much of the body as fits -- whole lines, the last maybe cut -- and the
+    truncated line. A single line (none, unverified, unreadable, a failed
+    check) is fixed text and is never cut.
+
+    A body already capped ends with the truncated line; the cut never reaches
+    it, since the room it is checked against is the room the truncated line
+    is reserved out of, so one truncated line ends the result either way."""
+    if len(lines) < 2 or sum(len(ln) + 1 for ln in lines) <= room:
+        return lines
+    head = lines[0]
+    left = room - (len(head) + 1) - (len(_TRUNCATED) + 1)
+    kept: list[str] = []
+    if left >= _MIN_EXCERPT:
+        # The body's first `left` characters, a newline counted per line.
+        kept = "\n".join(lines[1:])[:left - 1].split("\n")
+        if len(kept[-1]) <= len(_BODY_PREFIX):
+            kept.pop()      # a cut inside a prefix leaves nothing of the body
+    return [head, *kept, _TRUNCATED]
+
 
 def _handover_lines(repo: Path, now) -> list[str]:
     """A pending handover, FIRST in the SessionStart block (0.20.4).
@@ -259,9 +307,9 @@ def _handover_lines(repo: Path, now) -> list[str]:
         body = body[:_HANDOVER_CAP]
         if truncated and body.endswith("\n"):
             body = body[:-1]
-        lines.extend("aramid: | " + ln for ln in handover.printable_body(body).split("\n"))
+        lines.extend(_BODY_PREFIX + ln for ln in handover.printable_body(body).split("\n"))
         if truncated:
-            lines.append("aramid: | ... (truncated; 'aramid handover show' prints all of it)")
+            lines.append(_TRUNCATED)
         return lines
     except Exception as exc:  # noqa: BLE001 - a handover problem must not break the hook
         return [f"aramid: the handover check failed ({type(exc).__name__})"
@@ -280,10 +328,14 @@ def _session_context(repo: Path, *, git_missing: bool = False) -> str:
     except Exception:
         if not handover_lines:
             raise
-        return "\n".join(handover_lines) + "\n"
-    if git_missing:
-        posture = _NO_GIT + "\n" + posture
-    return "".join(ln + "\n" for ln in handover_lines) + posture
+        posture = ""
+    # Round 342: the fixed lines lead (round 341's no-git line ahead of the
+    # banner it qualifies), then the handover, cut so the whole block fits
+    # `_SESSION_BUDGET`, then the ledger's lines.
+    lead = [*([_NO_GIT] if git_missing else []), *_FIXED]
+    room = _SESSION_BUDGET - sum(len(ln) + 1 for ln in lead) - len(posture)
+    shown = _fit_handover(handover_lines, room)
+    return "".join(ln + "\n" for ln in [*lead, *shown]) + posture
 
 
 def _posture_context(repo: Path) -> str:
@@ -295,15 +347,9 @@ def _posture_context(repo: Path) -> str:
     ledger = Ledger(repo / ".aramid" / "ledger.db")
     try:
         state = ledger.open_findings()
+        # The block's fixed lines (`_FIXED`) lead it, ahead of any handover:
+        # `_session_context` prints them, and these are the ledger's lines.
         lines = [
-            "aramid: this repo is GATED (pre-commit + pre-push hooks)."
-            " Read ARAMID.md; NEVER pass --no-verify.",
-            # Operator mandate 2026-10-04: an installation ships the tool,
-            # never its agent. This line reaches a consumer as soon as the
-            # wheel is upgraded, before `aramid init` refreshes ARAMID.md.
-            "aramid: aramid is a tool, not an agent to talk to -- the agent"
-            " channel takes only bug reports and improvement suggestions"
-            " for aramid.",
             "aramid: " + status_mod._open_counts_line(state),
             "aramid: " + status_mod._new_since_baseline_line(ledger, state),
         ]
