@@ -274,6 +274,31 @@ def test_a_blocked_suite_names_a_log_that_exists_and_holds_the_failing_test(
 
 # --------------------------- (e) fresh ledger, pre-push, degraded BLOCK-tier -
 
+def test_a_tests_command_holding_a_shell_operator_refuses_the_push(tmp_path, monkeypatch,
+                                                                   capsys):
+    """Operator decision 2026-11-22 (found beside interop round 340): a
+    string `[tests].command` with `&&` ran its first program only, with the
+    rest as arguments, at every pre-push. The real tests runner now degrades
+    instead, and the BLOCK-tier slot refuses the push. Control: the same two
+    steps as a list run, pass and let it through -- so the refusal is the
+    operator's, not a runner that cannot start here."""
+    import sys
+    py = Path(sys.executable).as_posix()
+    root = _repo(tmp_path)
+    _no_user_config(tmp_path, monkeypatch)
+    monkeypatch.setitem(pipeline.GATE_RUNNER_KEYS, Gate.PRE_PUSH, ["tests"])
+
+    (root / "aramid.toml").write_text(
+        f"[tests]\ncommand = '{py} -c pass && {py} -c pass'\n", encoding="utf-8")
+    assert cmd_check(root, Gate.PRE_PUSH, "range") == 1
+    assert "runs one program without a shell, so `&&` would reach it" in \
+        capsys.readouterr().err
+
+    (root / "aramid.toml").write_text(
+        f"[tests]\ncommand = ['{py}', '-c', 'pass']\n", encoding="utf-8")
+    assert cmd_check(root, Gate.PRE_PUSH, "range") == 0
+
+
 def test_fresh_ledger_prepush_degraded_block_tier_still_blocks(tmp_path, monkeypatch):
     """`pipeline.run_gate` has a SECOND, finding-free route to exit_code==1:
     a BLOCK-tier tool (gitleaks/semgrep/tests -- pipeline.BLOCK_TIER_KEYS)

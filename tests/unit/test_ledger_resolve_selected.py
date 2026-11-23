@@ -290,6 +290,22 @@ def test_a_tests_section_that_is_not_a_table_is_no_declaration(repo):
         selected_command(repo.root, ["tests/check_cn.py"])
 
 
+def test_a_declared_string_holding_a_shell_operator_is_refused(repo):
+    """Operator decision 2026-11-22 (found beside interop round 340): the
+    declared command runs as one program without a shell, so `&&` and what
+    follows would reach it as arguments and the second step never run. A
+    list is an argv and is taken as written."""
+    _declare(repo, '"python -m pytest -q && npm test"')
+
+    with pytest.raises(Refused) as exc:
+        selected_command(repo.root, ["tests/check_cn.py"])
+
+    assert str(exc.value) == (
+        "[tests].select_command runs one program without a shell, so `&&` would reach "
+        "it as an argument and nothing after it would run -- write the command as a "
+        "list, or put the steps in a script and name that")
+
+
 def test_a_declared_string_that_does_not_split_is_refused(repo):
     _declare(repo, '"python -m pytest \'unclosed"')
 

@@ -446,7 +446,62 @@ class _Heartbeat:
                 print(f"aramid: progress reporting stopped: {exc!r}", file=sys.stderr)
 
 
+# What a POSIX shell reads as an operator when it stands outside quotes.
+_SHELL_OPERATOR_CHARS = frozenset("|&;<>")
+
+
+def unquoted_operator(command: str) -> str | None:
+    """The first shell operator in `command` that stands outside quotes, as
+    the run of operator characters it starts (`&&`, `>`, `|`), or None. Read
+    the way `shlex.split` reads the string: quotes group, a backslash outside
+    single quotes takes the next character literally."""
+    quote = None
+    i = 0
+    while i < len(command):
+        c = command[i]
+        if quote is not None:
+            if c == quote:
+                quote = None
+            elif c == "\\" and quote == '"':
+                i += 1
+        elif c in "'\"":
+            quote = c
+        elif c == "\\":
+            i += 1
+        elif c in _SHELL_OPERATOR_CHARS:
+            j = i
+            while j < len(command) and command[j] in _SHELL_OPERATOR_CHARS:
+                j += 1
+            return command[i:j]
+        i += 1
+    return None
+
+
+def shell_operator_problem(key: str, command) -> str | None:
+    """What is wrong with a configured STRING command that holds a shell
+    operator, or None. Every command here runs as one program with no shell
+    (`_argv`), so `a && b` runs `a` with `&&` and `b` as its arguments and
+    `b` never runs (measured; operator decision 2026-11-22, found beside
+    interop round 340). A list is an argv the repo wrote out, taken as it
+    stands. `key` names the setting, for the sentence."""
+    op = unquoted_operator(command) if isinstance(command, str) else None
+    if op is None:
+        return None
+    return (f"{key} runs one program without a shell, so `{op}` would reach it as an "
+            f"argument and nothing after it would run -- write the command as a list, "
+            f"or put the steps in a script and name that")
+
+
 def run_custom(ctx, command) -> RunnerResult:
+    problem = shell_operator_problem("[tests].command", command)
+    if problem is not None:
+        # The half of the suite before the operator would run and could pass
+        # the gate for all of it. MISSING degrades the BLOCK-tier slot, as a
+        # command that parses to nothing does (below): the push is refused
+        # until the command is fixed, and this line says why.
+        print(f"aramid: tests: {problem}. The tests gate is degraded until then.",
+              file=sys.stderr)
+        return RunnerResult("tests", ToolState.MISSING, stderr=problem)
     argv = _argv(command, ctx.root)
     if not argv:
         # A configured command that parses to nothing is a misconfiguration.

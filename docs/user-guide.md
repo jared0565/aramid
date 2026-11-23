@@ -166,7 +166,7 @@ command = ["pytest", "-q", "tests/unit"]   # argv form: no quoting rules
 timeout_s = 300                            # capped by [timeouts].pre_push
 ```
 
-A string (`command = "pytest -q tests/unit"`) works too and is split POSIX-style; prefer the argv form on Windows, where POSIX splitting eats backslashes. The command is never run through a shell, and setting one also makes the gate work in repos whose layout `detect_tests` doesn't recognize (a `make test` wrapper, a suite under a subpath).
+A string (`command = "pytest -q tests/unit"`) works too and is split POSIX-style; prefer the argv form on Windows, where POSIX splitting eats backslashes. The command is never run through a shell, so a string holding a shell operator outside quotes (`pytest -q && npm test`, `| tee`, `> log`) is refused: the tests gate degrades and the push is refused until the command is a list or names a script, and `aramid doctor` names the key and the operator. (Before 0.20.20 such a string ran its first program only, with the rest as its arguments.) Setting one also makes the gate work in repos whose layout `detect_tests` doesn't recognize (a `make test` wrapper, a suite under a subpath).
 
 A program of your own repo is named by its path: `command = ["./run-tests", "-q"]` or `["tools/run", "-q"]`, read from the repo root. On Windows the extension may be left out (`tools/run` finds `tools/run.cmd`). A bare word (`pytest`, `python`, `npm`) is looked for on `PATH`, in pip's script directories and in `~/.aramid/tools`, and never in the repository, even when a file of that name lies in its root. `aramid doctor` tells you when a bare word names such a file, and what to write instead.
 
@@ -619,6 +619,8 @@ The hook cuts the command up as the shell does. This rule looks for a flag that 
   [tests]
   select_command = "python -m pytest -q"   # or "npx vitest run"
   ```
+
+  As for `[tests].command`, a string holding a shell operator outside quotes is refused.
 
 - Each entry of `tests` is appended as one argument. An entry must be a test file that `HEAD` holds: a file under `tests/` or `__tests__/`, or one named `test_*.py`, `*_test.py`, `*.test.*` or `*.spec.*`. When the declared command is pytest, an entry may go on with `::` and a test in that file (`tests/test_orders.py::test_cn_is_routed`).
 - An entry is made of ASCII letters, digits and `_ . / [ ] : @ + -` only, and does not start with `-`. A backslash in the path is read as `/`. There are no spaces, so a filter such as vitest's `-t 'routes CN'` cannot be passed: name the file. The narrow set is deliberate. On Windows a command such as `npx vitest run` starts through cmd.exe, which reads `&`, `|`, `%` and quotes in an argument as its own syntax.

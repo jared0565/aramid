@@ -585,7 +585,13 @@ def _configured_argv0(command, root: Path | None = None) -> tuple[str | None, st
     Returns (argv0, None) on success, or (None, reason) -- reason is always
     a human-readable string, never an exception -- when `command` doesn't
     yield a usable argv[0]."""
-    from aramid.runners.tests import _argv
+    from aramid.runners.tests import _argv, shell_operator_problem
+    problem = shell_operator_problem("[tests].command", command)
+    if problem is not None:
+        # The gate refuses to run such a command (`run_custom`), so the
+        # toolchain row fails with the reason rather than vouching for it.
+        return None, (f"{problem}; until then the tests gate is degraded and every "
+                      f"push is refused")
     try:
         # `root` so a repo-relative argv[0] is judged the way the gate and
         # the drain judge it (anchored to the repo), not against doctor's cwd.

@@ -88,6 +88,21 @@ to publish a tag that disagrees with it.
   nothing. Known limit, now in the user guide: only the root
   `node_modules` is linked into the checkout, so a workspace's own
   `node_modules` in an npm-workspaces repo is not there.
+- **A `[tests].command` string holding a shell operator no longer runs half
+  the suite. On upgrade, such a repo has every push refused until the
+  command is fixed.** The command runs as one program without a shell, so
+  `command = "python -m pytest -q tests/unit && npm test"` ran pytest with
+  `&&`, `npm` and `test` as its arguments: `npm test` never ran, at every
+  pre-push, with no warning (measured; found beside interop round 340).
+  The tests runner now refuses a string with `&&`, `||`, `;`, `|`, `&`,
+  `<` or `>` outside quotes and comes back MISSING, so the BLOCK-tier slot
+  degrades, prints why (`aramid: tests: [tests].command runs one program
+  without a shell ...`), and the push is refused. `aramid doctor`'s `tests`
+  row fails with the same reason, and the MCP close refuses a
+  `[tests].select_command` string the same way. The fix is one line: write
+  the command as a list (`command = ["python", "-m", "pytest", "-q"]`),
+  or put the steps in a script and name that. A list is never read for
+  operators, and a quoted operator (`-k 'a or b; c'`) is text.
 
 ## [0.20.19] — 2026-11-22
 

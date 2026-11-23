@@ -131,37 +131,6 @@ class _Passes(Refused):
     fix added stayed at HEAD, and how to take one away (`--back-out`)."""
 
 
-# What a POSIX shell reads as an operator when it stands outside quotes.
-_SHELL_OPERATOR_CHARS = frozenset("|&;<>")
-
-
-def _unquoted_operator(test: str) -> str | None:
-    """The first shell operator in `test` that stands outside quotes, as the
-    run of operator characters it starts (`&&`, `>`, `|`), or None. Read the
-    way `shlex.split` reads the string: quotes group, a backslash outside
-    single quotes takes the next character literally."""
-    quote = None
-    i = 0
-    while i < len(test):
-        c = test[i]
-        if quote is not None:
-            if c == quote:
-                quote = None
-            elif c == "\\" and quote == '"':
-                i += 1
-        elif c in "'\"":
-            quote = c
-        elif c == "\\":
-            i += 1
-        elif c in _SHELL_OPERATOR_CHARS:
-            j = i
-            while j < len(test) and test[j] in _SHELL_OPERATOR_CHARS:
-                j += 1
-            return test[i:j]
-        i += 1
-    return None
-
-
 def split_command(test: str | None) -> list[str]:
     """`--test` as the argv the event records, split POSIX-style like a
     string `[tests].command` (`runners.tests._argv`): quotes group, and a
@@ -181,7 +150,7 @@ def split_command(test: str | None) -> list[str]:
         raise Refused("--test is required with --fixed -- the command that runs the "
                       "test proving the fix, e.g. --test \"python -m pytest "
                       "tests/test_x.py::test_y\"")
-    op = _unquoted_operator(test or "")
+    op = tests_runner.unquoted_operator(test or "")
     if op is not None:
         raise Refused(f"--test runs one program without a shell, so `{op}` would reach "
                       f"it as an argument -- give one command, or put the steps in a "
@@ -405,6 +374,9 @@ def _declared(root: Path, head: str) -> list[str]:
                       "select_command = \"python -m pytest -q\", commit it and call again; "
                       "or close at the command line with --test")
     if isinstance(command, str):
+        problem = tests_runner.shell_operator_problem("[tests].select_command", command)
+        if problem is not None:
+            raise Refused(problem)
         try:
             return shlex.split(command)
         except ValueError as exc:

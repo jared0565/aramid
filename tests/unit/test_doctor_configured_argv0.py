@@ -79,3 +79,30 @@ def test_only_a_bare_name_is_looked_for_in_the_repo_root(tmp_path):
     assert doctor._in_the_repo_root(tmp_path, "run") == "run"
     assert doctor._in_the_repo_root(tmp_path, "tools/run") is None
     assert doctor._in_the_repo_root(tmp_path, "nothing") is None
+
+
+# --- a string command holding a shell operator (operator decision 2026-11-22) --
+
+PROBLEM = ("[tests].command runs one program without a shell, so `&&` would reach it "
+           "as an argument and nothing after it would run -- write the command as a "
+           "list, or put the steps in a script and name that")
+
+
+def test_doctor_names_the_key_and_the_operator():
+    """The gate refuses to run such a command (`runners.tests.run_custom`),
+    so doctor's row fails with the reason instead of vouching for argv[0]."""
+    assert doctor._configured_argv0("python -m pytest -q && npm test") == (
+        None, f"{PROBLEM}; until then the tests gate is degraded and every push is "
+              f"refused")
+    assert doctor._configured_argv0(["python", "-m", "pytest", "&&"]) == ("python", None)
+
+
+def test_doctor_reports_the_tests_row_as_failing(tmp_path):
+    (tmp_path / "aramid.toml").write_text(
+        '[tests]\ncommand = "python -m pytest -q && npm test"\n', encoding="utf-8")
+
+    rows = doctor.probe_tests(tmp_path, config.load_config(tmp_path))
+
+    assert [(r.name, r.present, r.detail) for r in rows] == [
+        ("tests", False, f"{PROBLEM}; until then the tests gate is degraded and every "
+                         f"push is refused")]
