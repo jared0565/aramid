@@ -930,7 +930,9 @@ def _fetch_release_asset(url: str, asset: str) -> tuple[bytes | None, str]:
     if not isinstance(asset_id, int) or isinstance(asset_id, bool) or asset_id <= 0:
         return None, f"{why} (the release gives {asset} no numeric id)"
     try:
-        return _read_url(urllib.request.Request(
+        # S310: the URL is the https:// constant with a checked positive
+        # integer in it -- see _read_url's justification.
+        return _read_url(urllib.request.Request(  # noqa: S310
             GITLEAKS_ASSET_API_URL.format(asset_id=asset_id),
             headers={"Accept": "application/octet-stream"})), ""
     except OSError as exc:
