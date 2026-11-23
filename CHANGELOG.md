@@ -144,6 +144,22 @@ to publish a tag that disagrees with it.
   block is at most 9,500 characters, ending with the existing "truncated;
   'aramid handover show' prints all of it" line. With fewer than 500
   characters of room left, that line is all of the handover shown.
+- **Gate runs in a `git worktree` count for the repo it belongs to, and
+  `aramid init` and `aramid doctor` work in a worktree.** A gate run in a
+  linked worktree wrote its fleet row under the worktree's own path, which
+  no registry entry names, so the judge dropped it: a repo worked on
+  through a worktree read red and stale while every commit was gated
+  (interop round 343). A worktree's row now also names its main checkout
+  (`worktree_of`), and the judge counts it as that registered repo's row,
+  the newest winning; `aramid fleet` names the worktree a repo's latest
+  row came from. Rows written before this release carry no `worktree_of`
+  and still count for nothing. Measuring it showed that aramid looked for
+  hooks at `<checkout>/.git/hooks`, and in a worktree `.git` is a file:
+  `aramid init` there crashed (FileExistsError), and `aramid doctor`
+  failed with "pre-commit, pre-push missing" although the worktree's
+  commits ran the main repo's hooks. aramid now asks git where the hooks
+  are (`git rev-parse --git-path hooks`; `core.hooksPath` still wins), and
+  `init` in a worktree registers the main checkout.
 
 ## [0.20.19] — 2026-11-22
 

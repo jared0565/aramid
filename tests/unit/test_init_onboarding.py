@@ -308,6 +308,25 @@ def test_init_one_refuses_outside_a_git_repository(tmp_path, capsys, onboard):
     assert onboard["doctor"] == [] and not (target / "aramid.toml").exists()
 
 
+def test_init_one_in_a_worktree_installs_the_shared_hooks_and_registers_the_main_checkout(
+        tmp_path, onboard):
+    """Found measuring interop round 343 (operator decision 2026-11-23): in a
+    linked worktree `.git` is a file, and init crashed creating `.git/hooks`.
+    It now installs into the hooks git runs there -- the main repo's -- and
+    registers the main checkout, so the repo stays one fleet member."""
+    from aramid import registry
+    m = _repo(tmp_path, "main")
+    _git(m, "worktree", "add", "-q", str(tmp_path / "wt"), "-b", "feature")
+    wt = tmp_path / "wt"
+
+    assert init._init_one(wt) == 0
+
+    shared = m / ".git" / "hooks"
+    assert (shared / "pre-commit").is_file() and (shared / "pre-push").is_file()
+    assert (wt / ".git").is_file()
+    assert [Path(e["path"]).resolve() for e in registry.load_registry()] == [m.resolve()]
+
+
 def test_init_one_refuses_to_arm_without_the_block_tier_tools(tmp_path, capsys, onboard,
                                                               monkeypatch):
     r = _repo(tmp_path)

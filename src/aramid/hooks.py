@@ -78,15 +78,39 @@ def _git_config(root: Path, key: str) -> str | None:
     return None
 
 
+def _git_hooks_path(root: Path) -> Path | None:
+    """Where git itself runs this checkout's hooks (`git rev-parse --git-path
+    hooks`), or None when git cannot answer. In a linked worktree that is the
+    main repo's git directory: there `.git` is a file (`gitdir: ...`), and
+    `<root>/.git/hooks` named a path that cannot exist (found measuring
+    interop round 343). git prints the path relative to `root` when it is
+    under it, so a relative answer is joined to `root`."""
+    try:
+        # S603 justification: "git" and every argument are fixed literals.
+        # git is started by the absolute path it has on PATH (FN-47).
+        cp = subprocess.run(  # noqa: S603
+            toolpath.launchable(["git", "rev-parse", "--git-path", "hooks"]),
+            cwd=str(root), capture_output=True, text=True, encoding="utf-8",
+            errors="replace")
+    except OSError:
+        return None
+    out = (cp.stdout or "").strip()
+    if cp.returncode != 0 or not out:
+        return None
+    return root / out
+
+
 def hooks_dir(root: Path) -> Path:
-    """Respects `git config core.hooksPath` (husky et al.); else the
+    """Respects `git config core.hooksPath` (husky et al.); else where git
+    runs this checkout's hooks (`_git_hooks_path`: `<root>/.git/hooks`, or in
+    a linked worktree the main repo's); else, when git cannot answer, the
     standard `<root>/.git/hooks`. A relative `core.hooksPath` is resolved
     against `root` (git resolves it against the working-tree top level)."""
     configured = _git_config(root, "core.hooksPath")
     if configured:
         p = Path(configured)
         return p.resolve() if p.is_absolute() else (root / p).resolve()
-    return root / ".git" / "hooks"
+    return _git_hooks_path(root) or root / ".git" / "hooks"
 
 
 def _exit_case_lines(gate: Gate, match_ci: bool = False) -> list[str]:

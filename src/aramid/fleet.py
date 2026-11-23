@@ -129,8 +129,13 @@ def repo_key(root) -> str:
 def build_row(root, h: health_mod.Health, *, aramid_version: str, now: str) -> dict:
     """Spec section 3.1, exactly. Every row carries the full `armed` dict:
     arming is an aramid.toml edit, not a ledger event, so the SEQUENCE of
-    rows is the only place a disarm is observable (criterion 6)."""
-    return {
+    rows is the only place a disarm is observable (criterion 6).
+
+    Interop round 343: a row written in a linked `git worktree` also carries
+    `worktree_of`, its main checkout's key, so the judge can count it for
+    the registered repo (`judge`). Only there: every other row keeps the
+    spec's shape exactly."""
+    row = {
         "schema_version": SCHEMA_VERSION,
         "at": now,
         "repo": repo_key(root),
@@ -155,6 +160,23 @@ def build_row(root, h: health_mod.Health, *, aramid_version: str, now: str) -> d
             "blocking": h.blocking,
         },
     }
+    owner = _worktree_of(root)
+    if owner is not None:
+        row["worktree_of"] = owner
+    return row
+
+
+def _worktree_of(root) -> str | None:
+    """The registry key of the main checkout `root` is a linked worktree of,
+    or None. A git that does not answer in time leaves the row uncredited
+    rather than unwritten: `record_health` skips a row whose building
+    raised, and a missing row reads as a repo gone quiet."""
+    from aramid import gitutil
+    try:
+        main = gitutil.main_checkout(Path(root))
+    except Exception:  # noqa: BLE001 -- uncredited, never unwritten (docstring)
+        return None
+    return repo_key(main) if main is not None else None
 
 
 def append_line(path: Path, obj: dict) -> None:
@@ -351,8 +373,16 @@ def judge(rows: list[dict], registered: dict[str, str], policy: Policy, now: str
     live = []
     for r in rows:
         at = _parse(r.get("at"))
-        if at is None or at < cutoff or r.get("repo") not in registered:
+        if at is None or at < cutoff:
             continue
+        if r.get("repo") not in registered:
+            # Interop round 343: a row from an unregistered linked worktree
+            # of a registered repo is that repo's row, named from_worktree.
+            owner = r.get("worktree_of")
+            if owner not in registered:
+                continue
+            r = {**r, "repo": owner, "name": registered[owner],
+                 "from_worktree": r.get("name") or r.get("repo")}
         live.append((at, r))
     live.sort(key=lambda p: p[0])
 
@@ -404,6 +434,10 @@ def judge(rows: list[dict], registered: dict[str, str], policy: Policy, now: str
                           "green": health_mod.row_green(crit) and key not in vanished,
                           "red_criteria": _red_criteria(crit), "criteria": crit,
                           "stale": not _fresh(row, now_dt), "age_days": age}
+        if row.get("from_worktree"):
+            # Only when the latest row came from a worktree (round 343), so
+            # every other verdict reads as before.
+            repos_out[key]["from_worktree"] = row["from_worktree"]
     for key, v in repos_out.items():
         # Only on a vanished member, so a verdict without one reads as before.
         if key in vanished:
@@ -812,6 +846,8 @@ def render_report(verdict: dict | None, policy: Policy, *, now: str | None = Non
                      for k, _label in _COLUMNS]
         out.append((f"  {v['name']:<{width}}  {v['rows']:>4}  {latest:<25}  "
                     + "  ".join(f"{c:<10}" for c in cells)).rstrip())
+        if v.get("from_worktree"):
+            out.append(f"  {'':<{width}}  (latest row from worktree {v['from_worktree']})")
     info = verdict.get("fleet", {})
     out.append("")
     if info.get("streak_started_at"):

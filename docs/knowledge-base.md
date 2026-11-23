@@ -466,7 +466,7 @@ Entry points: console script `aramid` (`pyproject.toml` `[project.scripts]`), or
 Onboard a repo: write config, install hooks, seed baseline.
 - `path` (positional, optional, default `.`).
 - `--discover` — walk under `path` (max depth 3) for every directory containing `.git` (skipping `node_modules`, `_tools`, `.venv`, `.git`, `__pycache__`, `.aramid`, `.cache`, `graph-out`, `.graphite*`); runs the full single-repo init flow on each, returning the worst exit code seen.
-- Gates on `aramid doctor`; refuses (exit 3) if a BLOCK-tier tool (gitleaks/semgrep) is missing. Writes `aramid.toml` only if absent; always regenerates `ARAMID.md`; appends missing `.gitignore` entries (`.aramid/`, `graph-out/`, `.graphite*`, `.cache/`); installs idempotent hook shims (chains any pre-existing foreign hook to `<hook>.aramid-chained`); registers the repo in the machine-global registry; runs a one-time full-history gitleaks scan (`git log --all`, non-blocking historical findings); writes the ratchet baseline once.
+- Gates on `aramid doctor`; refuses (exit 3) if a BLOCK-tier tool (gitleaks/semgrep) is missing. Writes `aramid.toml` only if absent; always regenerates `ARAMID.md`; appends missing `.gitignore` entries (`.aramid/`, `graph-out/`, `.graphite*`, `.cache/`); installs idempotent hook shims (chains any pre-existing foreign hook to `<hook>.aramid-chained`); registers the repo in the machine-global registry (in a linked `git worktree`: the hooks git runs there, the main repo's, and the main checkout as the member); runs a one-time full-history gitleaks scan (`git log --all`, non-blocking historical findings); writes the ratchet baseline once.
 
 ### `aramid check [--gate pre-commit|pre-push|all] [--staged|--range|--all] [--strict] [--json] [--accept-degraded] [--reason REASON] [--no-record]`
 Run the gate pipeline.
@@ -569,7 +569,7 @@ Reports on the vendored, offline OWASP semgrep ruleset — performs no network f
 Removes installed hook shims, deletes `ARAMID.md`, removes the `.gitignore` entries `init` appended, deregisters the repo. The ledger (`.aramid/`) is deliberately kept. Needs the repo on disk (exit 3 otherwise) -- use `aramid fleet deregister` for a repo that has gone.
 
 ### `aramid fleet [--json]` / `aramid fleet deregister <path|name>`
-`aramid fleet` prints the fleet-health matrix and the 1.0 readiness verdict from `~/.aramid/fleet_verdict.json` (`--json`: the verdict file verbatim). A report: always exits 0.
+`aramid fleet` prints the fleet-health matrix and the 1.0 readiness verdict from `~/.aramid/fleet_verdict.json` (`--json`: the verdict file verbatim). A report: always exits 0. A row from a linked `git worktree` of a registered repo counts as that repo's (it carries `worktree_of`, its main checkout; rows from before 0.20.20 do not), and the matrix names the worktree under the repo when its latest row came from one.
 `aramid fleet deregister` removes ONE entry from `~/.aramid/repos.toml`, matched by path or by the directory name `aramid fleet` prints (case-insensitive), including a path that no longer exists. It keeps the old file as `repos.toml.bak-<UTC>-deregister`, touches nothing in the repo (hooks, `aramid.toml`, ledger stay), and re-judges at once. Exit 0 on removal; 3 when the target names no entry or more than one (nothing written) or the registry cannot be rewritten.
 
 ### `aramid schedule install|remove|status`

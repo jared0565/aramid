@@ -541,7 +541,10 @@ def _init_one(target: Path) -> int:
     hooks.install(root, interpreter)
 
     from aramid import registry
-    refused = registry.register(root, _now())
+    # Interop round 343: in a linked worktree the member is the main checkout
+    # -- its runs there count for it (`fleet.judge`) -- so one repo stays one
+    # fleet row.
+    refused = registry.register(gitutil.main_checkout(root) or root, _now())
     if refused:
         print(f"aramid: init: not registered as a fleet member -- {refused}")
 

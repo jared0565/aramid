@@ -410,6 +410,25 @@ def diff_text(root: Path, base: str | None, head: str, max_bytes: int = 400_000,
     return text.encode("utf-8", "replace")[:max_bytes].decode("utf-8", "ignore")
 
 
+def main_checkout(root: Path) -> Path | None:
+    """The main checkout a linked `git worktree` belongs to, or None: for a
+    main checkout itself, a worktree of a bare repo (it has no main checkout),
+    or a git that does not answer. A linked worktree's git directory is
+    `<common>/worktrees/<name>`; the main checkout's IS the common one, and
+    that is a `.git` inside the checkout. Interop round 343: a gate run in a
+    worktree credits its fleet row to the registered repo by this, and
+    `aramid init` in a worktree registers the main checkout. A git that
+    outlives its timeout still raises `GitTimeout` (`_run`)."""
+    cp = _run(Path(root), "rev-parse", "--git-dir", "--git-common-dir")
+    lines = (cp.stdout or "").splitlines()
+    if cp.returncode != 0 or len(lines) != 2:
+        return None
+    git_dir, common = ((Path(root) / line.strip()).resolve() for line in lines)
+    if git_dir == common or common.name != ".git":
+        return None
+    return common.parent
+
+
 def is_test_file(rel: str) -> bool:
     """True for pytest-style test files (canonical helper; the mutation/fuzz/
     js_mutation consumers keep their own local copies, left untouched)."""

@@ -318,6 +318,23 @@ def test_probe_enforcement_reports_only_an_onboarded_repo_missing_shims(tmp_path
     assert doctor.probe_enforcement(r) is None
 
 
+def test_probe_enforcement_reads_a_worktree_s_shared_hooks(tmp_path):
+    """Found measuring round 343: in a linked worktree `.git` is a file, and
+    the hooks git runs are the main repo's. Doctor looked in
+    `<worktree>/.git/hooks` and called a gated worktree NOT enforced."""
+    m = _repo(tmp_path, name="main")
+    for a in (["config", "user.email", "t@t"], ["config", "user.name", "t"],
+              ["add", "-A"], ["commit", "-q", "-m", "seed"]):
+        _git(m, *a)
+    shared = m / ".git" / "hooks"
+    shared.mkdir(parents=True, exist_ok=True)
+    for hook in ("pre-commit", "pre-push"):
+        (shared / hook).write_bytes(b"#!/bin/sh\nexit 0\n")
+    _git(m, "worktree", "add", "-q", str(tmp_path / "wt"), "-b", "feature")
+
+    assert doctor.probe_enforcement(tmp_path / "wt") is None
+
+
 def test_probe_enforcement_says_git_is_missing_rather_than_not_enforced(tmp_path, monkeypatch):
     """Interop round 334. Hooks in `core.hooksPath` (.githooks, as bytes-web
     keeps them) are found while git runs. With no git to start, `hooks_dir`
