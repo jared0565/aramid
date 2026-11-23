@@ -179,6 +179,15 @@ def _is_test_path(rel: str) -> bool:
     return gitutil.is_test_file(rel) or js_mutation._is_test_file(rel)
 
 
+def _is_test_support(rel: str) -> bool:
+    """A test path, or a `conftest.py` anywhere -- pytest loads one from the
+    repo root, which `_is_test_path` does not count. What `--back-out` must
+    not take away (finding 49124609a4b7): red proof counts any non-zero exit
+    as red, so a run that lost its conftest or helper fails on an import or
+    fixture error and reads as the missing fix."""
+    return _is_test_path(rel) or rel == "conftest.py" or rel.endswith("/conftest.py")
+
+
 def _named_paths(argv: list[str]) -> set[str]:
     """Every argv token as the repo-relative path it would name: a pytest
     node id loses its `::test` part, a leading `./` goes, separators are
@@ -777,13 +786,17 @@ def red_proof(root: Path, commit: str, head: str, argv: list[str],
         if rel in named:
             raise Refused(f"{flag} {rel}: the test command names it -- it has to stay to "
                           f"be run")
+        if _is_test_support(rel):
+            raise Refused(f"{flag} {rel}: it is test support -- taken away, the test would "
+                          f"fail for want of it rather than of the fix, and that would read "
+                          f"as red; {flag} names a file the fix is in")
         out.add(rel)
     kept = [rel for status, rel in changed if rel not in out
             and (status == "A" or _is_test_path(rel) or rel in named)]
     staying = set(kept)
     backed = [rel for _status, rel in changed if rel not in staying]
     spare = sorted(rel for rel in added & staying
-                   if not _is_test_path(rel) and rel not in named)
+                   if not _is_test_support(rel) and rel not in named)
     how = "name it with --back-out <path>" if in_repo else "name it in `back_out`"
     hint = (f" -- {commit[:12]} added {_named(spare)}, which red proof keeps at HEAD: "
             f"if the fix is in one of them, {how}") if spare else ""

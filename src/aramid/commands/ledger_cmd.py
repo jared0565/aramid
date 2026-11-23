@@ -170,6 +170,12 @@ def cmd_ledger_show(root, finding_id: str) -> int:
 EVIDENCED_CLOSE = "evidenced_close"
 
 
+def _backed_out_named(proof) -> str:
+    """The files a red proof's `--back-out` took away, comma-joined, or ""."""
+    names = proof.get("back_out") if isinstance(proof, dict) else None
+    return ", ".join(str(n) for n in names) if isinstance(names, list) else ""
+
+
 def _close_evidence(event) -> list[str]:
     """What a `resolve --fixed` close rests on, for `ledger show` (FN-36):
     the commit, who closed it and why, the test command and the HEAD it
@@ -184,18 +190,24 @@ def _close_evidence(event) -> list[str]:
             or payload.get("auto_resolved") != EVIDENCED_CLOSE:
         return []
     proof = payload.get("red_proof")
+    # Finding 49124609a4b7: the files `--back-out` took away are named, and the
+    # "stayed" clause no longer claims them.
+    went = _backed_out_named(proof)
+    among = f", among them {went}, which it added (--back-out)" if went else ""
     if isinstance(proof, dict) and proof.get("at") == "commit":
         # A different claim from a proof at HEAD, so a line of its own: the
         # test caught the bug as the code stood when the fix was made.
         red = (f"red proof at the fix commit (it can no longer be backed out of HEAD: "
                f"{proof.get('head_conflicts')} file(s) in conflict): exit "
                f"{proof.get('pre_fix_rc')} with it backed out against {proof.get('base')} "
-               f"-- {proof.get('backed_out')} of its path(s); {proof.get('brought')} test "
-               f"file(s) brought in from HEAD")
+               f"-- {proof.get('backed_out')} of its path(s){among}; {proof.get('brought')} "
+               f"test file(s) brought in from HEAD")
     elif isinstance(proof, dict):
+        other = "the other files" if went else "the files"
         red = (f"red proof: exit {proof.get('pre_fix_rc')} with that commit backed out "
-               f"against {proof.get('base')} -- {proof.get('backed_out')} of its path(s); "
-               f"its tests, the files it added and the files the command names stayed")
+               f"against {proof.get('base')} -- {proof.get('backed_out')} of its path(s)"
+               f"{among}; its tests, {other} it added and the files the command names "
+               f"stayed")
     else:
         red = "red proof: not run"
     return [f"closed as fixed in {payload.get('commit')} ({payload.get('via')}): "
@@ -838,6 +850,9 @@ def cmd_ledger_resolve_fixed(root, finding_id: str, commit: str, test, reason: s
                      f"stood at {sha[:12]}")
         else:
             shown = f"failed (exit {proof['pre_fix_rc']}) without the fix"
+        went = _backed_out_named(proof)
+        if went:
+            shown += f" -- and without {went}, which it added"
         print(f"aramid: ledger: {finding_id} closed as fixed in {sha[:12]} -- the test "
               f"passes at HEAD, {shown} ({reason})")
         return 0

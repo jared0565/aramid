@@ -1182,6 +1182,76 @@ def test_back_out_refuses_a_path_it_cannot_take_away(own_repo, capsys, path, sai
     assert len(_worktrees(repo.root)) == 1
 
 
+# Finding 49124609a4b7 (the 03:00Z drain's llm-review of 32ee2f3), operator
+# decision 2026-11-23: --back-out could name test support the fix commit
+# added. Red proof counts any non-zero exit as red, so a deleted conftest or
+# helper failed the run on an import error and closed the finding -- even a
+# confirmed critical. A root conftest.py is no test path by `_is_test_path`.
+_SUPPORT = ("tests/conftest.py", "conftest.py", "tests/helpers.py", "pkg/conftest.py",
+            "web/cart.test.js")
+
+
+def _support_said(path, flag="--back-out"):
+    return (f"{flag} {path}: it is test support -- taken away, the test would fail for "
+            f"want of it rather than of the fix, and that would read as red; {flag} "
+            f"names a file the fix is in")
+
+
+@pytest.mark.parametrize("path", _SUPPORT)
+def test_back_out_refuses_test_support_the_fix_commit_added(own_repo, capsys, path):
+    repo = own_repo
+    for rel in _SUPPORT:
+        _write(repo.root, rel, "# support\n")
+    c4 = _guard_fix(repo)
+
+    rc = cmd_ledger_resolve_fixed(repo.root, FID, c4, CHECK_GUARD, "r", red_proof=True,
+                                  back_out=[path])
+
+    _refused(capsys, repo.root, rc, _support_said(path))
+    assert len(_worktrees(repo.root)) == 1
+
+
+def test_back_out_names_the_argument_through_mcp_when_it_refuses_test_support(own_repo,
+                                                                              capsys):
+    repo = own_repo
+    _write(repo.root, "conftest.py", "# support\n")
+    c4 = _guard_fix(repo)
+
+    rc = cmd_ledger_resolve_fixed(repo.root, FID, c4, CHECK_GUARD, "r", via="mcp",
+                                  back_out=["conftest.py"])
+
+    _refused(capsys, repo.root, rc, _support_said("conftest.py", flag="back_out"))
+
+
+def test_the_back_out_hint_never_offers_test_support(own_repo, capsys):
+    """c4 also adds a root conftest.py: the "also passes" refusal still names
+    only the migration as a file --back-out could take away."""
+    repo = own_repo
+    _write(repo.root, "conftest.py", "# support\n")
+    c4 = _guard_fix(repo)
+
+    rc = cmd_ledger_resolve_fixed(repo.root, FID, c4, CHECK_GUARD, "r", red_proof=True)
+
+    _refused(capsys, repo.root, rc,
+             f"the test also passes with {c4[:12]} backed out -- it does not detect what "
+             f"that commit fixed, so it is not evidence that the finding is fixed"
+             + _hint(c4))
+
+
+def test_the_close_message_names_what_back_out_took_away(own_repo, capsys, clock):
+    repo = own_repo
+    c4 = _guard_fix(repo)
+
+    rc = cmd_ledger_resolve_fixed(repo.root, FID, c4, CHECK_GUARD, "the guard",
+                                  red_proof=True, back_out=[_MIGRATION])
+
+    out, err = capsys.readouterr()
+    assert (rc, err) == (0, "")
+    assert out.strip().endswith(
+        f"closed as fixed in {c4[:12]} -- the test passes at HEAD, failed (exit 1) "
+        f"without the fix -- and without {_MIGRATION}, which it added (the guard)")
+
+
 def test_back_out_without_red_proof_is_refused(tmp_path, capsys):
     _seed(tmp_path, _finding())
 

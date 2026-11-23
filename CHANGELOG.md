@@ -22,8 +22,12 @@ to publish a tag that disagrees with it.
   with <commit> backed out" although the test detects the fix (interop
   round 340). `--back-out <path>`, repeatable, takes a file the commit
   added away with the fix, at HEAD and at the fix commit alike; it refuses
-  a path the commit did not add or the test command names, needs
-  `--red-proof`, and is listed on the event as `red_proof.back_out`. The
+  a path the commit did not add or the test command names, and test
+  support -- a test path or any `conftest.py` -- whose loss would fail the
+  run on an import or fixture error that reads as red (finding
+  49124609a4b7, raised on the first version of this flag). It needs
+  `--red-proof`, is listed on the event as `red_proof.back_out`, and
+  `ledger show` and the close message name the files it took. The
   MCP tool `aramid_ledger_resolve` takes the same as an optional
   `back_out` list. The default is unchanged. The "also passes" and
   "changes no existing source file" refusals now name the added files

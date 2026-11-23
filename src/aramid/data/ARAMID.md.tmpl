@@ -266,8 +266,9 @@ name the script.
 Red proof keeps every file the fix commit added, because taking away a
 test helper would fake a failure. When the fix itself is a new file (a
 migration, a new module), name it: `--back-out <path>`, repeatable, takes
-a file the commit added away with the fix. Through MCP, the list is
-`back_out`.
+a file the commit added away with the fix -- never test support (a test
+path or a `conftest.py`), whose loss would fail the run for the wrong
+reason. Through MCP, the list is `back_out`.
 
 Through MCP the tool is `aramid_ledger_resolve`, with `id`, `commit`,
 `tests` and `reason`. It takes no command. `tests` is a list of committed

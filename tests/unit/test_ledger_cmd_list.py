@@ -338,6 +338,38 @@ def test_show_says_when_the_red_proof_was_shown_at_the_fix_commit(tmp_path, caps
         f"path(s); 1 test file(s) brought in from HEAD")
 
 
+def test_show_names_what_back_out_took_away_at_head(tmp_path, capsys):
+    """Finding 49124609a4b7 (operator decision 2026-11-23): with --back-out
+    the line said "the files it added ... stayed", untrue for the files named,
+    and nothing said which went. Now it names them."""
+    _seed(tmp_path, _f("f1", tool="llm-review", rule="llm/logic"))
+    _append(tmp_path, _evidenced_close("f1", red_proof={
+        "at": "head", "base": "b" * 40, "control_rc": 0, "pre_fix_rc": 1,
+        "backed_out": 3, "back_out": ["migrations/053_guard.sql", "src/new_check.py"]}))
+
+    assert cmd_ledger_show(tmp_path, "f1") == 0
+    assert capsys.readouterr().out.splitlines()[-1] == (
+        f"      red proof: exit 1 with that commit backed out against {'b' * 40} -- 3 of "
+        f"its path(s), among them migrations/053_guard.sql, src/new_check.py, which it "
+        f"added (--back-out); its tests, the other files it added and the files the "
+        f"command names stayed")
+
+
+def test_show_names_what_back_out_took_away_at_the_fix_commit(tmp_path, capsys):
+    _seed(tmp_path, _f("f1", tool="llm-review", rule="llm/logic"))
+    _append(tmp_path, _evidenced_close("f1", red_proof={
+        "at": "commit", "base": "b" * 40, "control_rc": 0, "pre_fix_rc": 1,
+        "backed_out": 2, "head_conflicts": 4, "brought": 1,
+        "back_out": ["migrations/053_guard.sql"]}))
+
+    assert cmd_ledger_show(tmp_path, "f1") == 0
+    assert capsys.readouterr().out.splitlines()[-1] == (
+        f"      red proof at the fix commit (it can no longer be backed out of HEAD: 4 "
+        f"file(s) in conflict): exit 1 with it backed out against {'b' * 40} -- 2 of its "
+        f"path(s), among them migrations/053_guard.sql, which it added (--back-out); 1 "
+        f"test file(s) brought in from HEAD")
+
+
 def test_show_adds_nothing_under_a_resolution_aramid_made_by_itself(tmp_path, capsys):
     _seed(tmp_path, _f("f1", tool="llm-review", rule="llm/logic"))
     _append(tmp_path, Event(EventType.FINDING_RESOLVED, "r2", "2026-09-14T01:00:00+00:00",
