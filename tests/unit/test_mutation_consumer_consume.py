@@ -14,6 +14,7 @@ in the worktree and answers from a script -- so a run of fourteen mutants
 with every verdict takes a second, and the counters can be asserted to the
 digit. The fixture module has one mutant per function (`x + N`), so an
 outcome is scripted by function name."""
+import os
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
@@ -132,13 +133,35 @@ OK1, OK2, PASS = Out(rc=1), Out(rc=2), Out(rc=0)
 TIMEOUT = Out(state=ToolState.TIMEOUT)
 
 
+def _write_bytecode(cwd, env):
+    """What a real interpreter under the baseline's environment leaves
+    behind (round 327): the bytecode of the worktree's sources under its
+    cache prefix, placed by CPython's own `cache_from_source`."""
+    prefix = (env or {}).get("PYTHONPYCACHEPREFIX")
+    if not prefix:
+        return
+    import importlib.util
+    import sys
+    old = sys.pycache_prefix
+    sys.pycache_prefix = prefix
+    try:
+        for src in Path(cwd).rglob("*.py"):
+            if ".git" not in src.parts:
+                pyc = Path(importlib.util.cache_from_source(str(src)))
+                pyc.parent.mkdir(parents=True, exist_ok=True)
+                pyc.touch()
+    finally:
+        sys.pycache_prefix = old
+
+
 class Oracle:
     """`run_subprocess` for a worktree whose calc.py the script names.
     `outcomes[(kind, label)]` is an Out or a callable(cwd) -> Out (side
     effects, or raise); kind is "full" (the configured suite: baseline and
     every confirm) or "s1"; label is "BASE", "f<n>", "DIR" or "?"."""
 
-    def __init__(self, full_argv, outcomes, default=PASS, original=SRC):
+    def __init__(self, full_argv, outcomes, default=PASS, original=SRC, bytecode=_write_bytecode):
+        self.bytecode = bytecode
         self.full = list(full_argv)
         self.outcomes = dict(outcomes)
         self.default = default
@@ -149,6 +172,7 @@ class Oracle:
         self.calls = []
 
     def __call__(self, argv, cwd, timeout_s, env=None, **kw):
+        self.bytecode(cwd, env)
         p = Path(cwd) / "calc.py"
         if p.is_dir():
             label = "DIR"
@@ -169,9 +193,9 @@ class Oracle:
 
 
 def _run(r, base, head, monkeypatch, outcomes, *, default=PASS, item_id="q1",
-         reasons=("t",), original=SRC):
+         reasons=("t",), original=SRC, bytecode=_write_bytecode):
     cfg = config_mod.load_config(r)
-    oracle = Oracle(mut_consumer._full_argv(cfg, r), outcomes, default, original)
+    oracle = Oracle(mut_consumer._full_argv(cfg, r), outcomes, default, original, bytecode)
     monkeypatch.setattr(mut_consumer, "run_subprocess", oracle)
     led = Ledger(r / ".aramid" / "ledger.db")
     item = QueueItem(id=item_id, base=base, head=head, score=55, reasons=tuple(reasons),
@@ -191,7 +215,8 @@ def _stats(res, **expect):
             "capped_kills": 0, "unselected_s1": 0, "truncated": False,
             "retest_candidates": 0, "retested": 0, "retest_killed": 0,
             "retest_truncated": False, "retest_skipped": 0, "claimed": 0,
-            "claimed_retested": 0, "retested_ids": []}
+            "claimed_retested": 0, "retested_ids": [], "not_exercised": 0,
+            "imports_unobserved": 0}
     want = {**zero, **expect}
     got = {k: res.extra[k] for k in want}
     assert got == want, {k: (got[k], want[k]) for k in want if got[k] != want[k]}
@@ -782,3 +807,132 @@ def test_a_stage_1_kill_alone_is_work(tmp_path, monkeypatch):
     _stats(res, generated=1, tested=1, killed_s1=1)
     assert res.note == "0 confirmed survivor(s) of 1 mutant(s) tested"
     assert not health._certified_nothing(res.note)
+
+
+# --- the import check (interop round 327; operator decisions 2026-11-23) ----
+#
+# The baseline's bytecode says which copy of calc.py the suite imported. A
+# file whose mutants were not the code under test is graded in no pass --
+# the range, the claimed re-tests, the hygiene re-tests -- and the note names
+# where it came from. No bytecode at all: nothing could be observed, graded
+# as before, said in the note. The worktree imported nothing of calc.py, but
+# ran: an untested module, graded as before.
+
+def _no_bytecode(cwd, env):
+    """A command aramid cannot observe (`python -I`): nothing is written."""
+
+
+def _imported_from(other):
+    """The suite ran in `other`: its calc.py's bytecode, none of the worktree's."""
+    return lambda cwd, env: _write_bytecode(other, env)
+
+
+def _only(rel):
+    """The suite ran from the worktree but imported only `rel` there."""
+    return lambda cwd, env: _write_bytecode_of(Path(cwd) / rel, env)
+
+
+def _write_bytecode_of(src, env):
+    if not (env or {}).get("PYTHONPYCACHEPREFIX"):
+        return      # a mutant run: bytecode is the baseline's alone
+    import importlib.util
+    import sys
+    old = sys.pycache_prefix
+    sys.pycache_prefix = env["PYTHONPYCACHEPREFIX"]
+    try:
+        pyc = Path(importlib.util.cache_from_source(str(src)))
+        pyc.parent.mkdir(parents=True, exist_ok=True)
+        pyc.touch()
+    finally:
+        sys.pycache_prefix = old
+
+
+def _main_checkout(tmp_path):
+    other = tmp_path / "main"
+    other.mkdir()
+    (other / "calc.py").write_text(SRC, encoding="utf-8")
+    return other
+
+
+def _not_graded(other):
+    return ("; 1 file(s) not graded, their mutants were not the code under test: calc.py"
+            f" (imported from {os.path.splitdrive(str(other / 'calc.py'))[1]})")
+
+
+def test_a_range_file_imported_from_another_tree_is_not_mutated(tmp_path, monkeypatch):
+    r, base, head = _repo(tmp_path)
+    other = _main_checkout(tmp_path)
+
+    res, oracle = _run(r, base, head, monkeypatch, {}, bytecode=_imported_from(other))
+
+    assert res.state == "ok", res.note
+    _stats(res, not_exercised=1)
+    assert res.findings == []
+    assert [lab for k, lab, _ in oracle.calls] == ["BASE"]
+    assert res.note == "0 confirmed survivor(s) of 0 mutant(s) tested" + _not_graded(other)
+    assert _no_worktrees(r)
+
+
+def test_claimed_survivors_of_a_file_imported_elsewhere_are_not_re_tested(tmp_path, monkeypatch):
+    """Six survivors named by the changed test: none is mutated, so none is
+    claimed killed -- the claimed pass and the hygiene pass both skip them."""
+    r, head, head2 = _claimed_repo(tmp_path)
+    other = _main_checkout(tmp_path)
+
+    res, oracle = _run(r, head, head2, monkeypatch, CLAIMED, item_id="q2",
+                       bytecode=_imported_from(other))
+
+    assert res.state == "ok", res.note
+    _stats(res, retest_candidates=6, claimed=6, not_exercised=1)
+    assert res.findings == []
+    assert res.repaired is not None and res.repaired.ids == ()
+    assert [lab for k, lab, _ in oracle.calls] == ["BASE"]
+    assert res.note.endswith(_not_graded(other)), res.note
+
+
+def test_hygiene_re_tests_of_a_file_imported_elsewhere_are_skipped(tmp_path, monkeypatch):
+    r, base, head = _repo(tmp_path)
+    _record_survivors(r, ["f1", "f2", "f3"])
+    head2 = _commit(r, "tests/test_other.py", "def test_x():\n    assert True\n")
+    other = _main_checkout(tmp_path)
+
+    res, oracle = _run(r, head, head2, monkeypatch, CLAIMED, item_id="q2",
+                       bytecode=_imported_from(other))
+
+    _stats(res, retest_candidates=3, not_exercised=1)
+    assert res.repaired is not None and res.repaired.ids == ()
+    assert [lab for k, lab, _ in oracle.calls] == ["BASE"]
+    assert res.note.endswith(_not_graded(other)), res.note
+
+
+def _graded_both_ways(tmp_path, monkeypatch, bytecode):
+    """The same item run twice, once as an interpreter would, once with
+    `bytecode`: what each graded."""
+    runs = []
+    for name, writer in (("control", _write_bytecode), ("arm", bytecode)):
+        r, base, head = _repo(tmp_path / name)
+        res, _ = _run(r, base, head, monkeypatch, {("s1", "f2"): OK1, ("full", "f3"): OK1},
+                      bytecode=writer)
+        runs.append(res)
+    return runs
+
+
+def test_a_run_aramid_could_not_observe_is_graded_as_before_and_says_so(tmp_path, monkeypatch):
+    control, arm = _graded_both_ways(tmp_path, monkeypatch, _no_bytecode)
+
+    assert control.extra["imports_unobserved"] == 0 and arm.extra["imports_unobserved"] == 1
+    assert _ids(arm) == _ids(control) and _ids(arm)
+    def rest(res):
+        return {k: v for k, v in res.extra.items() if k != "imports_unobserved"}
+    assert rest(arm) == rest(control)
+    assert arm.note == control.note + (
+        "; the import check saw no Python process under aramid's environment (a command "
+        "that runs Python isolated, or with an environment of its own, hides it), so "
+        "mutants were graded unchecked")
+
+
+def test_a_module_the_worktree_suite_never_imported_is_graded_as_before(tmp_path, monkeypatch):
+    control, arm = _graded_both_ways(tmp_path, monkeypatch, _only("conftest.py"))
+
+    assert arm.extra == control.extra and arm.note == control.note
+    assert _ids(arm) == _ids(control) and _ids(arm)

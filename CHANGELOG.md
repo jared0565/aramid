@@ -212,6 +212,30 @@ to publish a tag that disagrees with it.
   error such as an import of what the fix added, still counts as red;
   other test runners are unchanged. A test the fix commit added was never
   affected: red proof keeps every file the commit added at HEAD.
+- **The drain's mutation consumer grades only code its suite ran.** A test
+  command that runs the suite in the main checkout instead of aramid's
+  throwaway worktree (graphite's ran a dev venv whose editable install
+  named its own clone) tested none of the mutants aramid wrote, and every
+  one was recorded as a survivor (interop round 327; measured: 2 survivors
+  from such a command, on a file whose tests kill nothing only because
+  they never saw it). The baseline run now writes the bytecode of what it
+  imports into a fresh directory beside the worktree (`PYTHONPYCACHEPREFIX`,
+  for that run only; nothing lands in the worktree). A changed file the
+  suite imported from somewhere else is graded in no pass, so it gets no
+  survivor and no kill claim, and nothing reaches the ledger. The
+  consumer's note names it and where it came from (`N file(s) not graded,
+  their mutants were not the code under test: <file> (imported from
+  <path>)`), and the run's `not_exercised` count says how many. If nothing
+  ran from the worktree at all, every changed file is named. That covers
+  a wrapper that starts its suite with an environment of its own, the
+  reported shape: the wrapper's own imports show it. A file the suite ran
+  from the worktree but never imported is an untested module, graded as
+  before. When no Python process at all inherits aramid's environment
+  (`python -I` or `-E` as the command, or a non-Python launcher that
+  replaces the environment), the run is graded as before and the note says
+  the check saw nothing (`imports_unobserved`). Cost: the baseline
+  compiles what it imports afresh, about 9 s more on aramid's own
+  5,600-test suite.
 
 ## [0.20.19] — 2026-11-22
 

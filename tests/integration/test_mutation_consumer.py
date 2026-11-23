@@ -1137,6 +1137,28 @@ def test_a_drained_repair_flips_the_open_finding_to_fixed(tmp_path, monkeypatch)
 # Symmetric, and cheap -- the confirm runs only when a kill matches an id
 # that is actually open, which is almost never.
 
+def _write_bytecode(cwd, env):
+    """What a real interpreter under the baseline's environment leaves
+    behind (round 327): the bytecode of the worktree's sources under its
+    cache prefix, placed by CPython's own `cache_from_source`."""
+    prefix = (env or {}).get("PYTHONPYCACHEPREFIX")
+    if not prefix:
+        return
+    import importlib.util
+    import sys
+    from pathlib import Path
+    old = sys.pycache_prefix
+    sys.pycache_prefix = prefix
+    try:
+        for src in Path(cwd).rglob("*.py"):
+            if ".git" not in src.parts:
+                pyc = Path(importlib.util.cache_from_source(str(src)))
+                pyc.parent.mkdir(parents=True, exist_ok=True)
+                pyc.touch()
+    finally:
+        sys.pycache_prefix = old
+
+
 def _script_runs(monkeypatch, *, targeted_rc, full_rc):
     """Answer each subprocess by SHAPE: the baseline and any confirm run the
     whole command, a targeted stage-1 run does not. The baseline is forced
@@ -1146,6 +1168,7 @@ def _script_runs(monkeypatch, *, targeted_rc, full_rc):
     full = mut_consumer._full_argv(None)
 
     def fake(argv, cwd, timeout_s, env=None):
+        _write_bytecode(cwd, env)
         calls.append(list(argv))
         is_full = list(argv) == full
         rc = 0 if len(calls) == 1 else (full_rc if is_full else targeted_rc)

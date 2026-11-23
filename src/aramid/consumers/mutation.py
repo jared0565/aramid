@@ -11,12 +11,15 @@ false test-gap finding. pytest runs as [sys.executable, -m, pytest]: the
 drain must be PATH-independent (deliberate deviation from runners/tests.py's
 bare "pytest" argv). Timeouts are unattributable -- counted, never reported.
 Zero tokens; cost stays 0.0 (CPU only, bounded by [mutation] budgets)."""
+import glob
+import os
 import re
 import shutil
 import sys
 import tempfile
 import time
-from pathlib import Path
+from dataclasses import dataclass
+from pathlib import Path, PurePosixPath
 
 from aramid import config as config_mod
 from aramid import detectors, gitutil, mutation, mutation_gate, queue
@@ -780,6 +783,111 @@ def _knobs(mcfg) -> dict:
     }
 
 
+# --- does the suite run the worktree's copy? (interop round 327) ----------
+#
+# A mutant written into the worktree is graded by the suite run there, which
+# is only evidence if the suite imports the worktree's copy. graphite's test
+# command ran the main checkout's (a dev venv whose editable install named
+# it): every mutant read as a survivor although none was ever the code under
+# test. `worktree_import_env` puts the worktree first, but a command that
+# builds its own environment, or runs the suite elsewhere, drops that.
+#
+# The baseline run (and only it) gets a fresh PYTHONPYCACHEPREFIX beside the
+# worktree, so every Python process inheriting aramid's environment writes
+# the bytecode of what it imports there, mirroring each source's absolute
+# path (the drive letter dropped on Windows). Measured 2026-11-23: a child
+# started with a modified environment still writes, pytest's rewritten test
+# and conftest bytecode lands there too, `python -I`/`-E` write nothing, and
+# nothing lands in the worktree. Operator decisions 2026-11-23: a file whose
+# mutants were not the code under test is not graded -- no survivor, no kill
+# claim -- and the run's note names it and where it was imported from;
+# nothing enters the ledger. A file nothing imported, in a suite that did
+# run from the worktree, is an untested module and is graded as before. No
+# bytecode at all means no process could be observed: graded as before, and
+# the note says the check could not see.
+WORKTREE = "worktree"
+
+
+@dataclass(frozen=True)
+class ImportCheck:
+    observed: bool      # some process wrote bytecode under the probe
+    from_wt: bool       # some of it was for a file in the worktree
+    where: dict         # rel -> WORKTREE | the path it was imported from | None
+
+
+def baseline_env(wt: Path, probe: Path) -> dict[str, str]:
+    """`worktree_import_env`, with bytecode written -- to `probe` only."""
+    env = worktree_import_env(wt)
+    env["PYTHONDONTWRITEBYTECODE"] = ""
+    env["PYTHONPYCACHEPREFIX"] = str(probe)
+    return env
+
+
+_DRIVE = re.compile(r"^[A-Za-z]:")
+
+
+def _mirror(probe: Path, directory) -> Path:
+    """Where CPython writes the bytecode of a source in `directory` under a
+    cache prefix: `importlib._bootstrap_external.cache_from_source`'s rule,
+    the absolute directory with an `X:` drive stripped (a UNC share is not),
+    joined to the prefix."""
+    return probe / _DRIVE.sub("", os.path.abspath(str(directory))).lstrip("\\/")
+
+
+def _within(path: Path, root: Path) -> bool:
+    p, r = os.path.normcase(str(path)), os.path.normcase(str(root)).rstrip("\\/")
+    return p.startswith(r + os.sep)
+
+
+def import_check(probe: Path, wt: Path, rels) -> ImportCheck:
+    """What the baseline's bytecode under `probe` says about each of `rels`
+    (repo-relative sources): imported from the worktree, from somewhere else
+    (that place, as far as the mirror records it), or not at all."""
+    pycs = sorted(probe.rglob("*.pyc")) if probe.is_dir() else []
+    if not pycs:
+        return ImportCheck(observed=False, from_wt=False, where={})
+    roots = list(dict.fromkeys((_mirror(probe, wt), _mirror(probe, os.path.realpath(wt)))))
+    from_wt = any(_within(p, root) for p in pycs for root in roots)
+    where: dict = {}
+    for rel in rels:
+        rp = PurePosixPath(rel)
+        if any(next((root / rp.parent).glob(f"{glob.escape(rp.stem)}.*.pyc"), None)
+               for root in roots):
+            where[rel] = WORKTREE
+            continue
+        tail = rp.parts[1:-1] if rp.parts[0] == "src" else rp.parts[:-1]
+        where[rel] = next(
+            (os.sep + str(p.parent.relative_to(probe) / f"{rp.stem}.py") for p in pycs
+             if p.name.split(".")[0] == rp.stem
+             and p.parent.parts[len(p.parent.parts) - len(tail):] == tail
+             and not any(_within(p, root) for root in roots)), None)
+    return ImportCheck(observed=True, from_wt=from_wt, where=where)
+
+
+def ungraded(check: ImportCheck) -> dict:
+    """The files whose mutants must not be graded, each with where the suite
+    imported it from (None: from nowhere, in a suite that ran nothing from
+    the worktree)."""
+    if not check.observed:
+        return {}
+    if not check.from_wt:
+        return dict(check.where)
+    return {rel: w for rel, w in check.where.items() if w not in (WORKTREE, None)}
+
+
+def _not_graded_note(withheld: dict) -> str:
+    named = ", ".join(f"{rel} (imported from {where})" if where else
+                      f"{rel} (the tests ran nothing from the tree under test)"
+                      for rel, where in sorted(withheld.items()))
+    return (f"; {len(withheld)} file(s) not graded, their mutants were not the code under "
+            f"test: {named}")
+
+
+_UNOBSERVED_NOTE = ("; the import check saw no Python process under aramid's environment (a "
+                    "command that runs Python isolated, or with an environment of its own, "
+                    "hides it), so mutants were graded unchecked")
+
+
 def _source_files(changed) -> list[str]:
     """The changed files the range mutates: python sources, never tests."""
     return sorted(f for f in changed if f.endswith(".py") and not _is_test_file(f))
@@ -965,6 +1073,9 @@ def consume(item, ctx: DrainContext) -> ConsumerResult:
              "retest_killed": 0, "retest_truncated": False,
              "claimed": len(claimed), "claimed_retested": 0,
              "retested_ids": []}
+    # `not_exercised` / `imports_unobserved` join `stats` at the import
+    # check, which every run that reports them passes through.
+    withheld: dict = {}
     scores: dict[str, dict] = {}
     examined = _recorded_survivor_ids(ctx.ledger)
     repaired_ids: set = set()
@@ -986,8 +1097,10 @@ def consume(item, ctx: DrainContext) -> ConsumerResult:
         # of `degraded`. Healthy-looking and silent is worse than broken
         # and loud, and is the exact failure class this tool exists to stop.
         full_timeout = baseline_budget
-        base_res = run_subprocess(full_argv, wt, full_timeout,
-                                  env=worktree_import_env(wt))
+        # The baseline alone writes bytecode, to a probe beside the worktree
+        # (round 327): what it imported, and from where.
+        probe = tmp / "pyc-probe"
+        base_res = run_subprocess(full_argv, wt, full_timeout, env=baseline_env(wt, probe))
         if base_res.state is ToolState.MISSING:
             # Nothing ran. Not a red suite (head-scoped, retried per commit)
             # and not a slow one (budget-scoped): a path that does not
@@ -1066,6 +1179,14 @@ def consume(item, ctx: DrainContext) -> ConsumerResult:
         # there would be circular; this is the number that tells an operator
         # what to set the budget to.
         baseline_s = float(getattr(base_res, "duration_s", 0.0) or 0.0)
+        # Round 327: a file whose mutants would not be the code under test is
+        # not graded in any pass -- no survivor, no kill claim.
+        watched = sorted(set(files) | {rel for _f, rel, _l, _o in claimed}
+                         | {rel for _f, rel, _l, _o in retests})
+        check = import_check(probe, wt, watched)
+        withheld = ungraded(check)
+        stats["not_exercised"] = len(withheld)
+        stats["imports_unobserved"] = int(not check.observed)
 
         done = False
         tested_fps: set[str] = set()
@@ -1396,6 +1517,8 @@ def consume(item, ctx: DrainContext) -> ConsumerResult:
         # UNSPENT (`_fits_retest_budget`): the claim is atomic, so a start
         # it cannot finish would buy runs for nothing.
         for fid, rel, line, op in claimed:
+            if rel in withheld:
+                continue
             if done or stats["retested"] >= retest_cap:
                 stats["retest_truncated"] = True
                 break
@@ -1407,6 +1530,8 @@ def consume(item, ctx: DrainContext) -> ConsumerResult:
                 break
 
         for rel in files:
+            if rel in withheld:
+                continue
             if done or not _mutate(rel, changed[rel], range_budget):
                 break
 
@@ -1417,7 +1542,7 @@ def consume(item, ctx: DrainContext) -> ConsumerResult:
         # fresh mutant pays -- so it is capped on its own (`retest_cap`,
         # shared with the claimed pass) as well as by the item's budget.
         for fid, rel, line, op in retests:
-            if fid in tested_fps:
+            if fid in tested_fps or rel in withheld:
                 continue
             if done or stats["retested"] >= retest_cap:
                 stats["retest_truncated"] = True
@@ -1511,6 +1636,11 @@ def consume(item, ctx: DrainContext) -> ConsumerResult:
         if stats["retest_skipped"] - spent:
             note += (f"; {stats['retest_skipped'] - spent} survivor(s) not re-tested: "
                      f"more occurrences than the re-test slots left")
+    # Round 327, last so they read as the run's verdict on its own grading.
+    if withheld:
+        note += _not_graded_note(withheld)
+    if stats["imports_unobserved"]:
+        note += _UNOBSERVED_NOTE
     extra = dict(stats)
     # FN-43. What this run killed of a survivor it could not finish, for the
     # next re-test under the same head and suite (`_partial_kills`).

@@ -144,6 +144,27 @@ class Out:
 KILL, PASS, TIMEOUT = Out(rc=1), Out(rc=0), Out(state=ToolState.TIMEOUT)
 
 
+def _write_bytecode(cwd, env):
+    """What a real interpreter under the baseline's environment leaves
+    behind (round 327): the bytecode of the worktree's sources under its
+    cache prefix, placed by CPython's own `cache_from_source`."""
+    prefix = (env or {}).get("PYTHONPYCACHEPREFIX")
+    if not prefix:
+        return
+    import importlib.util
+    import sys
+    old = sys.pycache_prefix
+    sys.pycache_prefix = prefix
+    try:
+        for src in Path(cwd).rglob("*.py"):
+            if ".git" not in src.parts:
+                pyc = Path(importlib.util.cache_from_source(str(src)))
+                pyc.parent.mkdir(parents=True, exist_ok=True)
+                pyc.touch()
+    finally:
+        sys.pycache_prefix = old
+
+
 class Oracle:
     """Answers a run by the mutant applied to the worktree's calc.py: kind
     "full" (the baseline and every confirm) or "s1", label "BASE" or the
@@ -159,6 +180,7 @@ class Oracle:
         self.calls = []
 
     def __call__(self, argv, cwd, timeout_s, env=None, **kw):
+        _write_bytecode(cwd, env)
         src = (Path(cwd) / "calc.py").read_text(encoding="utf-8")
         if self.original is None:
             self.original = src
