@@ -172,10 +172,57 @@ def test_init_s_all_history_scan_is_scanned(tmp_path, monkeypatch, commits):
     assert (fake.calls, result.state) == (["own"], ToolState.OK)
 
 
-def test_a_full_history_scan_of_a_repo_with_no_commit_is_not_scanned(tmp_path, monkeypatch):
+@pytest.mark.parametrize("inline_pass", [False, True])
+@pytest.mark.parametrize("rng", ["", "@{u}..HEAD"])
+def test_a_range_scan_of_a_repo_with_no_commit_at_all_is_a_clean_no_op(tmp_path, monkeypatch,
+                                                                       rng, inline_pass):
+    """Interop round 346: this was CRASHED, shown as "crashed (exit 0)" on a
+    freshly onboarded repo's check. A repo with no commit and no ref has no
+    history: nothing can be pushed from it, so there is nothing to scan
+    (operator decision 2026-11-23). It runs nothing and claims to have
+    examined nothing -- a staged secret's finding must not close off it --
+    and the inline label with it."""
     fake = _Fake()
-    result = _run(monkeypatch, RunContext(root=_repo(tmp_path, commits=0), rng=""), fake)
-    assert fake.calls == [] and result.state is ToolState.CRASHED
+    ctx = RunContext(root=_repo(tmp_path, commits=0), rng=rng, inline_pass=inline_pass)
+
+    result = _run(monkeypatch, ctx, fake)
+
+    assert fake.calls == []
+    assert (result.state, result.examined, gitleaks.parse(result, ctx)) == (
+        ToolState.OK, frozenset(), [])
+    assert "no commits to scan" in result.stderr
+    if inline_pass:
+        assert [(s.tool, s.state, s.examined) for s in result.sub_results] == [
+            ("gitleaks", ToolState.OK, frozenset()),
+            ("gitleaks-inline", ToolState.OK, frozenset())]
+
+
+def test_the_first_commit_s_staged_scan_still_runs(tmp_path, monkeypatch):
+    """Control: before the first commit the staged scan is the one that
+    matters, and the no-commit no-op is for a range only."""
+    monkeypatch.delenv("GIT_INDEX_FILE", raising=False)
+    r = _repo(tmp_path, commits=0)
+    (r / "cfg.py").write_text("x = 1\n")
+    _git(r, "add", "cfg.py")
+    fake = _Fake()
+
+    result = _run(monkeypatch, RunContext(root=r), fake)
+
+    assert (fake.calls, result.state) == (["own"], ToolState.OK)
+
+
+def test_an_unborn_head_beside_other_refs_still_fails_closed(tmp_path, monkeypatch):
+    """An orphan branch: HEAD names no commit, but the repo has history that a
+    push could carry. That is FN-56's case, and stays refused."""
+    r = _repo(tmp_path, commits=2)
+    _git(r, "checkout", "-q", "--orphan", "fresh")
+    fake = _Fake()
+
+    result = _run(monkeypatch, RunContext(root=r, rng=""), fake)
+
+    assert fake.calls == []
+    assert result.state is ToolState.CRASHED
+    assert "HEAD" in result.stderr
 
 
 def test_an_index_git_named_that_does_not_exist_is_not_scanned(tmp_path, monkeypatch):

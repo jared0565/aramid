@@ -169,6 +169,15 @@ def _examined(data: dict, ctx) -> frozenset[str] | None:
 
 
 def _run_own(ctx) -> RunnerResult:
+    if not ctx.files:
+        # No file in scope (a repo that tracks none): a clean no-op, NOT a
+        # tool invocation -- semgrep handed `--` and no target falls back to
+        # scanning its cwd, untracked files and all, and raised BLOCK findings
+        # in files no push would carry while the scope line said "scanned all
+        # 0 tracked file(s)" (interop round 346, measured on 0.20.19). ruff's
+        # guard: it examined nothing, and says so, so nothing resolves off it.
+        return RunnerResult(NAME, ToolState.OK, raw='{"results": []}',
+                            examined=frozenset())
     result = run_subprocess(_build_argv(ctx), ctx.root, TIMEOUT_S)
     out = json_or_crashed(NAME, result, _OK_RETURNCODES, empty="{}")
     # A degraded semgrep vouches for nothing (see the eslint adapter).

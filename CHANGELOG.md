@@ -113,6 +113,20 @@ to publish a tag that disagrees with it.
   ...") until the command changes. `aramid doctor` warns of a string
   `[mutation].test_command` like it under `config:`; that row is new, and
   is advisory (no exit code), as every `config:` row is.
+- **A repo with no tracked file no longer gets semgrep findings for its
+  untracked files, and a repo with no commit no longer reports gitleaks as
+  "crashed (exit 0)".** Handed an empty file set, semgrep got `--` and no
+  target and scanned its working directory, so a freshly onboarded repo's
+  `aramid check --gate pre-push` raised BLOCK findings in untracked files
+  while saying "scanned all 0 tracked file(s)" (interop round 346; measured
+  with zero commits and with one empty commit). It now does what ruff,
+  eslint and typecheck already did: a clean no-op that examined nothing. In
+  a repo with no commit and no ref, gitleaks' range scan is a clean no-op
+  too ("no commits to scan"); the first commit's staged scan still runs,
+  and an unborn HEAD beside other refs (an orphan branch) is still refused.
+  A CRASHED result that aramid itself refused to start -- that range check,
+  an inline pass that raised -- now gives its own reason in `skipped
+  (degraded tools)` and `degraded_reasons` instead of "crashed (exit 0)".
 
 ## [0.20.19] — 2026-11-22
 

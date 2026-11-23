@@ -1,6 +1,8 @@
 import json
 from pathlib import Path
 
+import pytest
+
 from aramid.runners import semgrep
 from aramid.runners.base import RunContext, RunnerResult, ToolState
 
@@ -98,6 +100,32 @@ def test_argv_uses_vendored_config_and_offline_flags(tmp_path):
     assert "--quiet" in argv
     sep = argv.index("--")
     assert argv[sep + 1:] == ["app.py"]
+
+
+@pytest.mark.parametrize("inline_pass", [False, True])
+def test_run_with_no_files_launches_nothing_and_examines_nothing(tmp_path, monkeypatch,
+                                                                 inline_pass):
+    """Interop round 346: handed an empty file set -- a repo with no tracked
+    file -- semgrep got `--` and no target, fell back to scanning its cwd,
+    and raised BLOCK findings in untracked files while the scope line said
+    "scanned all 0 tracked file(s)" (measured on 0.20.19). Operator decision
+    2026-11-23: ruff's guard. A clean no-op that examined nothing, so no
+    finding resolves off it, and the inline label with it."""
+    calls = []
+    monkeypatch.setattr(semgrep, "run_subprocess", lambda argv, cwd, timeout_s, env=None: (
+        calls.append(argv) or RunnerResult(tool="semgrep", state=ToolState.OK,
+                                           raw=FIXTURE.read_text())))
+    ctx = RunContext(root=tmp_path, files=[], inline_pass=inline_pass)
+
+    result = semgrep.run(ctx)
+
+    assert calls == []
+    assert (result.state, result.examined) == (ToolState.OK, frozenset())
+    assert semgrep.parse(result, ctx) == []
+    if inline_pass:
+        assert [(s.tool, s.state, s.examined) for s in result.sub_results] == [
+            ("semgrep", ToolState.OK, frozenset()),
+            ("semgrep-inline", ToolState.OK, frozenset())]
 
 
 def test_run_missing_binary(tmp_path, monkeypatch):

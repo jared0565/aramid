@@ -199,7 +199,32 @@ def _unusable(ctx) -> str | None:
     return None
 
 
+def _no_history(root) -> bool:
+    """True for a repo with no commit and no ref at all (`git init`, nothing
+    committed or fetched): no history, so nothing a push could carry. An
+    unborn HEAD beside other refs (an orphan branch) is not this -- the repo
+    has history -- and neither is a git that could not answer."""
+    if gitutil.rev_sha(Path(root), "HEAD") is not None:
+        return False
+    cp = gitutil._run(Path(root), "for-each-ref", "--count=1")
+    return cp.returncode == 0 and not (cp.stdout or "").strip()
+
+
 def run(ctx) -> RunnerResult:
+    if ctx.rng is not None and not ctx.rng.startswith("-") and _no_history(ctx.root):
+        # Interop round 346: FN-56 refused this as a range whose HEAD does not
+        # resolve -- CRASHED, shown as "crashed (exit 0)" on a freshly
+        # onboarded repo's check. With no history there is nothing to scan
+        # (operator decision 2026-11-23). It examined nothing and says so, so
+        # a finding the staged scan raised on a file of this repo stays open.
+        # The staged scan (`rng` None), the first commit's, still runs.
+        own = RunnerResult(NAME, ToolState.OK, raw="[]", examined=frozenset(),
+                           stderr="aramid: no commits to scan -- the repo has no commit "
+                                  "and no ref, so nothing could be pushed from it")
+        if not ctx.inline_pass:
+            return own
+        return inline.bundle(own, RunnerResult(inline.GITLEAKS, ToolState.OK, raw="[]",
+                                               examined=frozenset()))
     why = _unusable(ctx)
     if why is not None:
         return RunnerResult(NAME, ToolState.CRASHED,

@@ -810,7 +810,14 @@ def _degraded_reasons(flat_results: list[RunnerResult]) -> dict[str, str]:
         elif r.state is ToolState.MISSING:
             reasons[r.tool] = "not found"
         elif r.state is ToolState.CRASHED:
-            reasons[r.tool] = f"crashed (exit {r.returncode})"
+            said = (r.stderr or "").strip()
+            if r.returncode == 0 and said.startswith("aramid: "):
+                # aramid refused before any process exited (gitleaks' range
+                # check, an inline pass that raised): its own sentence is the
+                # reason, not an exit no program made (interop round 346).
+                reasons[r.tool] = said.removeprefix("aramid: ").splitlines()[0]
+            else:
+                reasons[r.tool] = f"crashed (exit {r.returncode})"
     return reasons
 
 
