@@ -158,6 +158,13 @@ def test_rows_older_than_180_days_and_deregistered_repos_are_ignored():
     assert "f:/projects/gone" not in v["repos"]
 
 
+def test_a_row_exactly_at_the_180_day_cutoff_still_counts():
+    """The boundary of the line above: older than the cutoff is dropped, at
+    it is kept."""
+    v = fleet.judge([_row(R_A, fleet.ROW_WINDOW_DAYS)], {R_A: "a"}, POLICY, NOW)
+    assert v["repos"][R_A]["rows"] == 1
+
+
 def test_no_registered_repos_is_insufficient_data():
     v = fleet.judge([], {}, POLICY, NOW)
     assert v["verdict"] == "insufficient-data"

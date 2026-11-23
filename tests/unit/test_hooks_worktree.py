@@ -48,6 +48,18 @@ def test_outside_a_repo_the_path_is_the_conventional_one(tmp_path):
     assert hooks.hooks_dir(d) == d / ".git" / "hooks"
 
 
+def test_a_git_that_failed_is_not_believed_whatever_it_printed(tmp_path, monkeypatch):
+    """`git rev-parse` exiting non-zero with something on stdout: the
+    conventional path, not what it printed."""
+    def fake(argv, **kw):
+        if "config" in argv:
+            return subprocess.CompletedProcess(argv, 1, "", "")
+        return subprocess.CompletedProcess(argv, 128, "elsewhere/hooks\n", "fatal: no")
+    monkeypatch.setattr(hooks.subprocess, "run", fake)
+
+    assert hooks.hooks_dir(tmp_path) == tmp_path / ".git" / "hooks"
+
+
 def test_install_in_a_worktree_writes_the_shared_hooks(tmp_path):
     m, wt = _main_and_worktree(tmp_path)
 

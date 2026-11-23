@@ -53,6 +53,16 @@ def test_a_worktree_of_a_bare_repo_has_no_main_checkout(tmp_path):
     assert gitutil.main_checkout(tmp_path / "wt") is None
 
 
+def test_a_git_that_failed_is_not_believed_whatever_it_printed(tmp_path, monkeypatch):
+    """Two lines shaped like a worktree's answer, from a git that exited
+    non-zero: no answer, not a main checkout."""
+    out = f"{tmp_path / 'main' / '.git' / 'worktrees' / 'wt'}\n{tmp_path / 'main' / '.git'}\n"
+    monkeypatch.setattr(gitutil, "_run", lambda root, *a: subprocess.CompletedProcess(
+        ["git", *a], 128, out, "fatal: no"))
+
+    assert gitutil.main_checkout(tmp_path) is None
+
+
 def test_outside_a_repo_there_is_no_answer(tmp_path):
     d = tmp_path / "outside"
     d.mkdir()
