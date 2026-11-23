@@ -575,6 +575,12 @@ Making a worktree runs the repo's git hooks, as making any worktree does (`post-
 
 Only that commit is backed out; commits after it stay. Three kinds of file from the commit are kept as they are at `HEAD`: its test files, the files it added, and any file the test command names. That is how a test written together with the fix is run against the code without it. "As they are at `HEAD`" includes not being there: a file the commit added that a later commit deleted stays deleted.
 
+**When the fix is itself a new file** -- a migration that a test harness replays, a new module -- keeping the files the commit added leaves the fix in the tree that should be without it, and the test passes there. Name that file: `--back-out <path>` (repeatable) takes a file the commit added away with the fix, at `HEAD` and at the fix commit alike. It takes only a file the commit added, never one the test command names, and needs `--red-proof`; the event's `red_proof.back_out` lists what it took. A refusal that the test also passes without the fix, or that the commit changed no existing source file, names the added files that stayed (outside the test locations, not named by the command), so you can tell when to use it:
+
+```
+aramid ledger resolve <id> --fixed <commit> --test "npm run test -w worker -- test/audit-triggers.test.ts" --red-proof --back-out apps/worker/src/db/migrations/053_guards.sql --reason "..."
+```
+
 **When a later commit changed the fix's own lines again**, git can no longer back the commit out of `HEAD`. git backs out the whole commit, so one later change that overlaps it in any file that has to be backed out is enough, and a `CHANGELOG` or a guide the fix also touched counts like source. (A conflict in a file that is kept as at `HEAD` does not count.) aramid then shows red where the fix was made, in a second worktree checked out at the commit itself:
 
 1. The files the test command names are brought in as they are at `HEAD`: the test on offer is the one you have now, and it may have been written after the fix. The test must pass. This is the control again.
@@ -605,7 +611,7 @@ The proof at the fix commit has been run on one real case: this repo's own month
 
 The hook cuts the command up as the shell does. This rule looks for a flag that is missing, so a `--red-proof` that the shell never hands to aramid must not count, and nothing the shell does hand over may hide `--fixed`. A `--red-proof` does not count on the next line, after a `#` that starts a comment, behind `;`, `&&` or `|`, inside `$( )`, standing where a redirection goes (`> --red-proof`), or after a quote that never closes. It does count on a continued line (a backslash at the end of the line, or PowerShell's backtick) and after a redirection (`2>&1 --red-proof`). What the hook does not catch is listed under [Agent surfaces](#agent-surfaces).
 
-**Through MCP the close takes test selectors, not a command.** The tool is `aramid_ledger_resolve`, and its four arguments are all required: `id`, `commit`, `tests` and `reason`. At the command line `--test` is a program, and whoever can type it can run that program anyway. The same argument through MCP would have aramid's server run whatever its caller names, so the tool builds the command itself:
+**Through MCP the close takes test selectors, not a command.** The tool is `aramid_ledger_resolve`, and its four arguments are all required: `id`, `commit`, `tests` and `reason`. A fifth, `back_out`, is optional: a list of files the fix commit added, as `--back-out` takes them. At the command line `--test` is a program, and whoever can type it can run that program anyway. The same argument through MCP would have aramid's server run whatever its caller names, so the tool builds the command itself:
 
 - It starts from `[tests].select_command` in the `aramid.toml` that `HEAD` holds. Only the committed file counts: not an uncommitted edit, and not `~/.aramid/config.toml`. Declare the runner without any path, and commit it:
 

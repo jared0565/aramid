@@ -14,6 +14,20 @@ to publish a tag that disagrees with it.
 
 ### Added
 
+- **`aramid ledger resolve --fixed ... --red-proof --back-out <path>` proves
+  a fix that lands as a new file.** Red proof keeps every file the fix
+  commit added (taking away a test helper would fake a failure), so a fix
+  that IS a new file -- a migration a test harness replays -- was still in
+  the backed-out tree, and the close was refused as "the test also passes
+  with <commit> backed out" although the test detects the fix (interop
+  round 340). `--back-out <path>`, repeatable, takes a file the commit
+  added away with the fix, at HEAD and at the fix commit alike; it refuses
+  a path the commit did not add or the test command names, needs
+  `--red-proof`, and is listed on the event as `red_proof.back_out`. The
+  MCP tool `aramid_ledger_resolve` takes the same as an optional
+  `back_out` list. The default is unchanged. The "also passes" and
+  "changes no existing source file" refusals now name the added files
+  that stayed, outside the test locations and not named by the command.
 - **`aramid doctor` and `aramid status` name a program planted at the
   repo root that the agent hooks' `python` would start instead.** The
   hooks and the MCP entry `aramid init` writes start a bare `python` from

@@ -263,6 +263,12 @@ quotes inside it in single quotes.
 program as an argument; to run several steps, put them in a script and
 name the script.
 
+Red proof keeps every file the fix commit added, because taking away a
+test helper would fake a failure. When the fix itself is a new file (a
+migration, a new module), name it: `--back-out <path>`, repeatable, takes
+a file the commit added away with the fix. Through MCP, the list is
+`back_out`.
+
 Through MCP the tool is `aramid_ledger_resolve`, with `id`, `commit`,
 `tests` and `reason`. It takes no command. `tests` is a list of committed
 test files (for pytest, `file::test` as well), which aramid appends to the

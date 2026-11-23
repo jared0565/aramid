@@ -675,7 +675,7 @@ _LLM_TOOL = "llm-review"
 
 
 def cmd_ledger_resolve_selected(root, finding_id: str, commit: str, selectors,
-                                reason: str) -> int:
+                                reason: str, back_out=()) -> int:
     """The evidenced close as aramid's MCP server makes it (FN-36, spec 9.2).
 
     The caller names test selectors, never a command: the command is the
@@ -694,11 +694,13 @@ def cmd_ledger_resolve_selected(root, finding_id: str, commit: str, selectors,
     except gitutil.GitTimeout as exc:
         print(f"aramid: ledger resolve: engine error: {exc}", file=sys.stderr)
         return 3
-    return cmd_ledger_resolve_fixed(root, finding_id, commit, argv, reason, via="mcp")
+    return cmd_ledger_resolve_fixed(root, finding_id, commit, argv, reason, via="mcp",
+                                    back_out=back_out)
 
 
 def cmd_ledger_resolve_fixed(root, finding_id: str, commit: str, test, reason: str,
-                             *, red_proof: bool = False, via: str = "cli") -> int:
+                             *, red_proof: bool = False, via: str = "cli",
+                             back_out=()) -> int:
     """`aramid ledger resolve <id> --fixed <commit> --test "<command>"
     --reason R [--red-proof]`: close an OPEN llm-review finding that is
     fixed although its evidence quote never left its file (FN-36).
@@ -722,7 +724,8 @@ def cmd_ledger_resolve_fixed(root, finding_id: str, commit: str, test, reason: s
     impossible. The event's `red_proof.at` says which. A confirmed-critical
     finding closes only with red proof, and either one counts; `override`
     refuses those outright, so before this they had no exit that said
-    "fixed".
+    "fixed". `back_out` names files the commit added that red proof takes
+    away with it (`evidenced_close.red_proof`), so it needs red proof.
 
     Every refusal is exit 3 and writes nothing."""
     from aramid import evidenced_close
@@ -738,6 +741,11 @@ def cmd_ledger_resolve_fixed(root, finding_id: str, commit: str, test, reason: s
     reason = (reason or "").strip()
     if not reason:
         print("aramid: ledger resolve: --reason is required", file=sys.stderr)
+        return 3
+    if back_out and not red_proof:
+        print("aramid: ledger resolve: --back-out takes effect only with --red-proof -- "
+              "it names a file the fix commit added, for red proof to take away with "
+              "the fix", file=sys.stderr)
         return 3
     try:
         # A string is `--test`, to be split. A list is an argv aramid built
@@ -799,7 +807,7 @@ def cmd_ledger_resolve_fixed(root, finding_id: str, commit: str, test, reason: s
             if in_repo:
                 evidenced_close.passes_at_head(root, argv, timeout_s)
             proof = (evidenced_close.red_proof(root, sha, head, argv, timeout_s,
-                                               in_repo=in_repo)
+                                               in_repo=in_repo, back_out=back_out)
                      if red_proof else None)
         except evidenced_close.Refused as exc:
             print(f"aramid: ledger resolve: {exc}", file=sys.stderr)
@@ -839,16 +847,17 @@ def cmd_ledger_resolve_fixed(root, finding_id: str, commit: str, test, reason: s
 
 def cmd_ledger_resolve_args(root, ids, *, out_of_scope: bool = False,
                             fixed: str | None = None, test: str | None = None,
-                            red_proof: bool = False, reason: str = "") -> int:
+                            red_proof: bool = False, reason: str = "",
+                            back_out=None) -> int:
     """Which of `ledger resolve`'s two resolutions was asked for. They share
     a subcommand and nothing else: `--out-of-scope` retires a runner finding
     whose path left the runner's scope, `--fixed` closes an llm-review
     finding on evidence. A mix of the two is refused rather than guessed."""
     if fixed is None:
-        if test is not None or red_proof:
-            print("aramid: ledger resolve: --test and --red-proof belong to --fixed "
-                  "<commit> -- they are the evidence that an llm-review finding is "
-                  "fixed", file=sys.stderr)
+        if test is not None or red_proof or back_out:
+            print("aramid: ledger resolve: --test, --red-proof and --back-out belong to "
+                  "--fixed <commit> -- they are the evidence that an llm-review finding "
+                  "is fixed", file=sys.stderr)
             return 3
         return max(cmd_ledger_resolve(root, fid, out_of_scope, reason) for fid in ids)
     if out_of_scope:
@@ -860,4 +869,5 @@ def cmd_ledger_resolve_args(root, ids, *, out_of_scope: bool = False,
               f"ids given) -- each needs the test that proves its own fix",
               file=sys.stderr)
         return 3
-    return cmd_ledger_resolve_fixed(root, ids[0], fixed, test, reason, red_proof=red_proof)
+    return cmd_ledger_resolve_fixed(root, ids[0], fixed, test, reason, red_proof=red_proof,
+                                    back_out=back_out or [])

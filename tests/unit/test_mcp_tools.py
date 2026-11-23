@@ -241,6 +241,39 @@ def test_ledger_resolve_hands_over_selectors_and_nothing_that_could_be_a_command
         {})
 
 
+def test_ledger_resolve_hands_over_back_out_when_it_is_given(tmp_path, monkeypatch):
+    """Interop round 340, item 2: `back_out` names files the fix commit added
+    for red proof to take away with it. Paths, never a program."""
+    r = _repo(tmp_path)
+    monkeypatch.chdir(r)
+    calls = _recorded_close(monkeypatch)
+
+    out = mcp_tools.TOOLS["aramid_ledger_resolve"]["handler"](
+        None, {**_CLOSE, "back_out": ["migrations/053_guard.sql"]})
+
+    assert out["isError"] is False
+    (args, kwargs), = calls
+    assert (args[1:], kwargs) == (
+        ("abc", "c0ffee1", ["tests/test_x.py::test_y"], "guarded in the caller"),
+        {"back_out": ["migrations/053_guard.sql"]})
+
+
+@pytest.mark.parametrize("bad", ["migrations/a.sql", [], ["a.sql", ""], ["a.sql", 3], None])
+def test_ledger_resolve_rejects_a_malformed_back_out_before_anything_runs(
+        tmp_path, monkeypatch, bad):
+    r = _repo(tmp_path)
+    monkeypatch.chdir(r)
+    calls = _recorded_close(monkeypatch)
+    from aramid.mcp import _InvalidParams
+
+    with pytest.raises(_InvalidParams) as exc:
+        mcp_tools.TOOLS["aramid_ledger_resolve"]["handler"](None, {**_CLOSE, "back_out": bad})
+
+    assert str(exc.value) == ("`back_out`, when given, is a non-empty list of paths, each"
+                              " a file the fix commit added")
+    assert calls == []
+
+
 def test_ledger_resolve_reports_a_refused_close_as_an_error(tmp_path, monkeypatch):
     r = _repo(tmp_path)
     monkeypatch.chdir(r)
@@ -307,6 +340,12 @@ def test_ledger_resolve_input_schema_is_pinned():
                                      " when the declared command is pytest"},
             "reason": {"type": "string", "minLength": 1,
                        "description": "why -- recorded in the ledger"},
+            "back_out": {"type": "array", "minItems": 1,
+                         "items": {"type": "string", "minLength": 1},
+                         "description": "optional: files the fix commit ADDED that"
+                                        " red proof takes away with the fix (it keeps"
+                                        " added files otherwise) -- for a fix that"
+                                        " lands as a new file, such as a migration"},
         },
         "required": ["id", "commit", "tests", "reason"],
     }

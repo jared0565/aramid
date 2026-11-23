@@ -532,7 +532,7 @@ def test_ledger_resolve_out_of_scope_dispatch(monkeypatch):
                      "--reason", "runner scoped to .py/.pyi"]) == 0
 
     assert captured == {"ids": ["abc123"], "out_of_scope": True, "fixed": None,
-                        "test": None, "red_proof": False,
+                        "test": None, "red_proof": False, "back_out": None,
                         "reason": "runner scoped to .py/.pyi"}
 
 

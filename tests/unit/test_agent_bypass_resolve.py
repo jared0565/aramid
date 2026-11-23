@@ -85,6 +85,15 @@ def test_a_value_attached_with_an_equals_sign_takes_no_second_token():
         "aramid ledger resolve llm1 --test=t --reason=r --fixed abc --red-proof") is None
 
 
+def test_the_value_of_back_out_is_skipped_like_any_other():
+    """Interop round 340, item 2: `--back-out <path>` takes a value. A close
+    that carries one still has its `--red-proof` read; a `--red-proof` that
+    is only the value of `--back-out` is no flag (argparse refuses it as a
+    value anyway, so the screen leans to warning)."""
+    assert find_bypass(f"aramid {CLOSE} --back-out migrations/053.sql --red-proof") is None
+    assert find_bypass(f"aramid {CLOSE} --back-out --red-proof") == NO_RED
+
+
 def test_a_flag_without_a_value_takes_no_second_token():
     assert find_bypass(
         "aramid ledger resolve llm1 --out-of-scope --fixed abc --test t --reason r") == NO_RED

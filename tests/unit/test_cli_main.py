@@ -294,11 +294,11 @@ def test_ledger_resolve_hands_every_flag_to_the_one_dispatcher(monkeypatch):
     assert calls == [
         ((_root(), ["aaa", "bbb"]),
          {"out_of_scope": True, "fixed": None, "test": None, "red_proof": False,
-          "reason": "outside [tool.mypy] files"}),
+          "reason": "outside [tool.mypy] files", "back_out": None}),
         ((_root(), ["aaa"]),
          {"out_of_scope": False, "fixed": "abc123",
           "test": "python -m pytest tests/test_x.py::test_y", "red_proof": True,
-          "reason": "guard added"})]
+          "reason": "guard added", "back_out": None})]
 
 
 def test_ledger_without_a_subcommand_names_them_all_and_exits_3(capsys):

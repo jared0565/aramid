@@ -212,7 +212,8 @@ _ARG_FLAGS = {
 # token follows it. tests/unit/test_agent_bypass_resolve.py holds this equal
 # to the real parser's table, so a flag added there cannot go unread here.
 _RESOLVE_FLAGS = {"--help": False, "--out-of-scope": False, "--fixed": True,
-                  "--test": True, "--red-proof": False, "--reason": True}
+                  "--test": True, "--red-proof": False, "--back-out": True,
+                  "--reason": True}
 
 # What a token that launches aramid is called, under any directory.
 _ARAMID_NAMES = ("aramid", "aramid.exe", "aramid.cmd", "aramid.bat", "aramid.ps1",

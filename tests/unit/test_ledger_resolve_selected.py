@@ -1255,6 +1255,19 @@ def test_a_test_that_fails_in_the_clean_checkout_is_refused_in_those_words(repo,
     assert _status(repo.root) == "open"
 
 
+def test_back_out_through_mcp_is_named_as_the_argument_it_is(repo, capsys):
+    """Interop round 340, item 2: the MCP tool takes `back_out` as a list, and
+    its refusals name that argument, not the command line's flag."""
+    _with_a_pytest_test(repo)
+
+    rc = cmd_ledger_resolve_selected(repo.root, FID, repo.c2, [_ROUTE_TEST], "guarded",
+                                     back_out=["calc.py"])
+
+    _refused(capsys, repo.root, rc,
+             f"back_out calc.py: {repo.c2[:12]} did not add it -- back_out names a file "
+             f"the fix commit added, which red proof would otherwise keep at HEAD")
+
+
 def test_a_close_marked_as_made_through_mcp_always_carries_red_proof(repo, capsys):
     """`red_proof=False` cannot be combined with the MCP route: the control of
     red proof is the only run that shows the test passing at HEAD, so without

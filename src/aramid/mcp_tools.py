@@ -155,7 +155,17 @@ def _ledger_resolve(repo, args):
         raise _InvalidParams(
             "`tests` is required: a non-empty list of test selectors, each a"
             " committed test file (for pytest, optionally `file::test`)")
-    return _run(cmd_ledger_resolve_selected, repo, fid, commit, tests, reason)
+    if "back_out" not in args:
+        return _run(cmd_ledger_resolve_selected, repo, fid, commit, tests, reason)
+    # Interop round 340, item 2: files the fix commit ADDED, for red proof to
+    # take away with it. Paths, never a program; the close checks each one.
+    back_out = args["back_out"]
+    if not isinstance(back_out, list) or not back_out \
+            or not all(isinstance(p, str) and p.strip() for p in back_out):
+        raise _InvalidParams("`back_out`, when given, is a non-empty list of paths, each"
+                             " a file the fix commit added")
+    return _run(cmd_ledger_resolve_selected, repo, fid, commit, tests, reason,
+                back_out=back_out)
 
 
 @_onboarded
@@ -274,8 +284,9 @@ TOOLS: dict[str, dict] = {
             " HEAD, never in the working tree, so commit the test first. The"
             " tests must pass there and fail with the fix backed out (red"
             " proof, always): two runs of them, or three when the proof moves"
-            " to the fix commit. Ledger-logged; a later review that raises"
-            " the finding again re-opens it."),
+            " to the fix commit. Files the fix commit added stay in the"
+            " backed-out tree unless named in `back_out`. Ledger-logged; a"
+            " later review that raises the finding again re-opens it."),
         "inputSchema": {
             "type": "object",
             "properties": {
@@ -290,6 +301,12 @@ TOOLS: dict[str, dict] = {
                                          " command is pytest"},
                 "reason": {"type": "string", "minLength": 1,
                            "description": "why -- recorded in the ledger"},
+                "back_out": {"type": "array", "minItems": 1,
+                             "items": {"type": "string", "minLength": 1},
+                             "description": "optional: files the fix commit ADDED that"
+                                            " red proof takes away with the fix (it keeps"
+                                            " added files otherwise) -- for a fix that"
+                                            " lands as a new file, such as a migration"},
             },
             "required": ["id", "commit", "tests", "reason"],
         },

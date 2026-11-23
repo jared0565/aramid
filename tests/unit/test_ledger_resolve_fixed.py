@@ -930,7 +930,10 @@ def test_a_merge_commit_is_backed_out_against_the_branch_it_was_merged_into(
 
 def test_red_proof_refuses_a_test_that_never_saw_the_bug(repo, capsys, monkeypatch):
     """It passes with the fix and without it. A command that runs no test at
-    all (`true`) lands here too."""
+    all (`true`) lands here too. c2 added support/helper.py, outside every
+    test location and not named, so the refusal names it as a file
+    `--back-out` could take away (interop round 340, item 2); the two checks
+    c2 added are tests, and are not named."""
     _git_stub(monkeypatch, *_TREE)
     _scripted(monkeypatch, _OK, _OK, _OK)
 
@@ -938,7 +941,9 @@ def test_red_proof_refuses_a_test_that_never_saw_the_bug(repo, capsys, monkeypat
 
     _refused(capsys, repo.root, rc,
              f"the test also passes with {repo.c2[:12]} backed out -- it does not detect "
-             f"what that commit fixed, so it is not evidence that the finding is fixed")
+             f"what that commit fixed, so it is not evidence that the finding is fixed -- "
+             f"{repo.c2[:12]} added support/helper.py, which red proof keeps at HEAD: if "
+             f"the fix is in one of them, name it with --back-out <path>")
 
 
 def test_red_proof_refuses_a_test_that_fails_in_a_clean_checkout(repo, capsys, monkeypatch):
@@ -1023,14 +1028,16 @@ def test_the_worktree_runs_import_the_worktrees_own_source(repo, clock, monkeypa
     assert control_env["PYTHONDONTWRITEBYTECODE"] == "1"
 
 
-@pytest.mark.parametrize("rel, text", [
-    ("tests/check_more.py", "import sys\nsys.exit(0)\n"),   # a test alone
-    ("brand_new.py", "NEW = 1\n"),                           # a new file alone
+@pytest.mark.parametrize("rel, text, hint", [
+    ("tests/check_more.py", "import sys\nsys.exit(0)\n", False),   # a test alone
+    ("brand_new.py", "NEW = 1\n", True),                           # a new file alone
 ])
 def test_red_proof_refuses_a_commit_that_changes_no_existing_source(own_repo, capsys,
-                                                                    rel, text):
+                                                                    rel, text, hint):
     """Nothing the commit did can be backed out: its tests stay, and so does
-    every file it added (taking test support away would fake a failure)."""
+    every file it added (taking test support away would fake a failure). An
+    added file outside the test locations is named as one `--back-out` could
+    take away (interop round 340, item 2); a test is not."""
     repo = own_repo
     _write(repo.root, rel, text)
     c4 = _commit(repo.root, "c4")
@@ -1040,7 +1047,163 @@ def test_red_proof_refuses_a_commit_that_changes_no_existing_source(own_repo, ca
     _refused(capsys, repo.root, rc,
              f"{c4[:12]} changes no existing source file -- only tests, or only new "
              f"files. Red proof backs the commit out and reruns the test, so there is "
-             f"nothing it could take away")
+             f"nothing it could take away" + (
+                 f" -- {c4[:12]} added {rel}, which red proof keeps at HEAD: if the fix is "
+                 f"in one of them, name it with --back-out <path>" if hint else ""))
+
+
+# ------------------------------------- --back-out (interop round 340, item 2) --
+#
+# A fix that lands as a NEW file -- a migration a test harness replays -- was
+# unprovable: red proof keeps every file the fix commit added (taking away a
+# test helper would fake a failure), so the "backed-out" tree still held the
+# fix. Operator decision 2026-11-22: an opt-in `--back-out <path>` takes a
+# file the fix commit added away with the fix; the default stays.
+
+_MIGRATION = "migrations/053_guard.sql"
+# Passes when a migration declares GUARD, as a harness that replays every
+# migration would see it.
+_CHECK_GUARD = _ROOT + """
+mig = os.path.join(ROOT, "migrations")
+words = []
+for name in sorted(os.listdir(mig)) if os.path.isdir(mig) else []:
+    with open(os.path.join(mig, name), encoding="utf-8") as f:
+        words += f.read().split()
+sys.exit(0 if "GUARD" in words else 1)
+"""
+CHECK_GUARD = _run_script("tests/check_guard.py")
+_NOTE = "\n# the guards live in migrations\n"
+
+
+def _guard_fix(repo, *, edit=True):
+    """c4: the fix is a new migration; its test comes with it. With `edit`
+    it also edits an existing file, as round 340's commit edited schema.sql
+    -- that is all a back-out without --back-out takes away."""
+    _write(repo.root, _MIGRATION, "GUARD\n")
+    _write(repo.root, "tests/check_guard.py", _CHECK_GUARD)
+    if edit:
+        calc = repo.root / "calc.py"
+        calc.write_text(calc.read_text(encoding="utf-8") + _NOTE, encoding="utf-8")
+    return _commit(repo.root, "c4: the guard migration")
+
+
+def _hint(c4, how="name it with --back-out <path>"):
+    return (f" -- {c4[:12]} added {_MIGRATION}, which red proof keeps at HEAD: if "
+            f"the fix is in one of them, {how}")
+
+
+def test_a_fix_in_an_added_file_passes_with_the_commit_backed_out_and_names_that_file(
+        own_repo, capsys):
+    """Round 340's own case, refused as before, and the refusal now says
+    which added file stayed and how to take it away."""
+    repo = own_repo
+    c4 = _guard_fix(repo)
+
+    rc = cmd_ledger_resolve_fixed(repo.root, FID, c4, CHECK_GUARD, "r", red_proof=True)
+
+    _refused(capsys, repo.root, rc,
+             f"the test also passes with {c4[:12]} backed out -- it does not detect what "
+             f"that commit fixed, so it is not evidence that the finding is fixed"
+             + _hint(c4))
+
+
+def test_back_out_takes_the_added_file_away_with_the_fix_and_records_it(own_repo, capsys,
+                                                                        clock):
+    repo = own_repo
+    c4 = _guard_fix(repo)
+
+    # A whole path into the repo names the same file.
+    rc = cmd_ledger_resolve_fixed(repo.root, FID, c4, CHECK_GUARD, "r", red_proof=True,
+                                  back_out=[str(repo.root / _MIGRATION)])
+
+    assert (rc, capsys.readouterr().err) == (0, "")
+    assert _closes(repo.root)[0].payload["red_proof"] == {
+        "at": "head", "base": repo.c3, "control_rc": 0, "pre_fix_rc": 1,
+        "backed_out": 2, "back_out": [_MIGRATION]}
+    assert _git(repo.root, "status", "--porcelain") == ""
+    assert len(_worktrees(repo.root)) == 1
+
+
+def test_back_out_proves_a_fix_made_of_new_files_alone(own_repo, capsys, clock):
+    """Refused before as "changes no existing source file"; the refusal now
+    names the added file, and with --back-out it is proved."""
+    repo = own_repo
+    c4 = _guard_fix(repo, edit=False)
+
+    rc = cmd_ledger_resolve_fixed(repo.root, FID, c4, CHECK_GUARD, "r", red_proof=True)
+    _refused(capsys, repo.root, rc,
+             f"{c4[:12]} changes no existing source file -- only tests, or only new "
+             f"files. Red proof backs the commit out and reruns the test, so there is "
+             f"nothing it could take away" + _hint(c4))
+
+    rc = cmd_ledger_resolve_fixed(repo.root, FID, c4, CHECK_GUARD, "r", red_proof=True,
+                                  back_out=["./" + _MIGRATION.replace("/", "\\")])
+    assert (rc, capsys.readouterr().err) == (0, "")
+    assert _closes(repo.root)[0].payload["red_proof"]["back_out"] == [_MIGRATION]
+
+
+def test_back_out_at_the_fix_commit_deletes_the_added_file(own_repo, capsys, clock):
+    """c5 changes c4's line of calc.py again, so c4 cannot be backed out of
+    HEAD and the proof moves to c4 itself. There the backed-out paths are put
+    back as c4's parent has them -- and the parent has no migration to put
+    back, so it is deleted instead."""
+    repo = own_repo
+    c4 = _guard_fix(repo)
+    calc = repo.root / "calc.py"
+    calc.write_text(calc.read_text(encoding="utf-8").replace("migrations", "migrations/"),
+                    encoding="utf-8")
+    _commit(repo.root, "c5: c4's line again")
+
+    rc = cmd_ledger_resolve_fixed(repo.root, FID, c4, CHECK_GUARD, "r", red_proof=True,
+                                  back_out=[_MIGRATION])
+
+    assert (rc, capsys.readouterr().err) == (0, "")
+    assert _closes(repo.root)[0].payload["red_proof"] == {
+        "at": "commit", "base": repo.c3, "control_rc": 0, "pre_fix_rc": 1,
+        "backed_out": 2, "head_conflicts": 1, "brought": 1, "back_out": [_MIGRATION]}
+    assert len(_worktrees(repo.root)) == 1
+
+
+@pytest.mark.parametrize("path, said", [
+    ("calc.py", "{c} did not add it -- --back-out names a file the fix commit added, "
+                "which red proof would otherwise keep at HEAD"),
+    ("nowhere.sql", "{c} did not add it -- --back-out names a file the fix commit added, "
+                    "which red proof would otherwise keep at HEAD"),
+    ("tests/check_guard.py", "the test command names it -- it has to stay to be run"),
+])
+def test_back_out_refuses_a_path_it_cannot_take_away(own_repo, capsys, path, said):
+    repo = own_repo
+    c4 = _guard_fix(repo)
+
+    rc = cmd_ledger_resolve_fixed(repo.root, FID, c4, CHECK_GUARD, "r", red_proof=True,
+                                  back_out=[path])
+
+    _refused(capsys, repo.root, rc, f"--back-out {path}: " + said.format(c=c4[:12]))
+    assert len(_worktrees(repo.root)) == 1
+
+
+def test_back_out_without_red_proof_is_refused(tmp_path, capsys):
+    _seed(tmp_path, _finding())
+
+    rc = cmd_ledger_resolve_fixed(tmp_path, FID, "HEAD", "pytest", "r",
+                                  back_out=[_MIGRATION])
+
+    _refused(capsys, tmp_path, rc,
+             "--back-out takes effect only with --red-proof -- it names a file the fix "
+             "commit added, for red proof to take away with the fix")
+
+
+def test_back_out_reaches_the_close_from_the_command_line(monkeypatch):
+    """`aramid ledger resolve ... --back-out P --back-out Q` hands both on."""
+    from aramid import cli
+    seen = []
+    monkeypatch.setattr(cli, "cmd_ledger_resolve_args",
+                        lambda root, ids, **kw: seen.append(kw) or 0)
+
+    assert cli.main(["ledger", "resolve", FID, "--fixed", "abc", "--test", "pytest",
+                     "--red-proof", "--back-out", "a.sql", "--back-out", "b.sql",
+                     "--reason", "r"]) == 0
+    assert seen[0]["back_out"] == ["a.sql", "b.sql"]
 
 
 def test_red_proof_refuses_a_commit_with_no_parent(template, capsys, monkeypatch):
@@ -1375,7 +1538,8 @@ def test_at_the_fix_commit_a_test_that_never_saw_the_bug_is_refused(repo, capsys
     _refused(capsys, repo.root, rc,
              f"the test also passes at {repo.c2[:12]} with that commit backed out -- it "
              f"does not detect what that commit fixed, so it is not evidence that the "
-             f"finding is fixed")
+             f"finding is fixed -- {repo.c2[:12]} added support/helper.py, which red proof "
+             f"keeps at HEAD: if the fix is in one of them, name it with --back-out <path>")
 
 
 def test_at_the_fix_commit_a_run_that_times_out_is_not_a_failing_test(repo, capsys,
@@ -1533,13 +1697,26 @@ def test_the_kept_paths_are_put_back_a_hundred_at_a_time(repo, clock, monkeypatc
 
 def test_test_or_red_proof_without_fixed_is_refused(tmp_path, capsys):
     _seed(tmp_path, _finding())
-    line = ("aramid: ledger resolve: --test and --red-proof belong to --fixed <commit> -- "
-            "they are the evidence that an llm-review finding is fixed\n")
+    line = ("aramid: ledger resolve: --test, --red-proof and --back-out belong to --fixed "
+            "<commit> -- they are the evidence that an llm-review finding is fixed\n")
 
     assert cmd_ledger_resolve_args(tmp_path, [FID], test="pytest", reason="r") == 3
     assert capsys.readouterr() == ("", line)
     assert cmd_ledger_resolve_args(tmp_path, [FID], red_proof=True, reason="r") == 3
     assert capsys.readouterr() == ("", line)
+    assert cmd_ledger_resolve_args(tmp_path, [FID], back_out=["a.sql"], reason="r") == 3
+    assert capsys.readouterr() == ("", line)
+
+
+def test_back_out_reaches_the_close_with_fixed(tmp_path, monkeypatch):
+    seen = []
+    monkeypatch.setattr(lc, "cmd_ledger_resolve_fixed",
+                        lambda *a, **kw: seen.append((a, kw)) or 0)
+
+    assert cmd_ledger_resolve_args(tmp_path, [FID], fixed="abc", test="pytest",
+                                   red_proof=True, back_out=["a.sql"], reason="r") == 0
+    assert seen == [((tmp_path, FID, "abc", "pytest", "r"),
+                     {"red_proof": True, "back_out": ["a.sql"]})]
 
 
 def test_fixed_with_out_of_scope_is_refused(tmp_path, capsys):
