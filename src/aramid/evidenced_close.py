@@ -188,6 +188,52 @@ def _is_test_support(rel: str) -> bool:
     return _is_test_path(rel) or rel == "conftest.py" or rel.endswith("/conftest.py")
 
 
+# pytest's exits for a run in which the test never ran (interop round 335
+# item 3; operator decision 2026-11-23). Red proof reads any other non-zero
+# exit as red, 2 included: a collection error -- the test imports what the
+# fix added -- says the test needs the commit (the user guide's limits).
+_PYTEST_DID_NOT_RUN = {4: "a test or file the command names was not found",
+                       5: "no tests were collected"}
+_PYTEST_NAMES = frozenset({"pytest", "py.test"})
+# Launchers whose `run <program>` starts the program named after them.
+_RUN_LAUNCHERS = frozenset({"uv", "poetry", "pipenv", "pdm", "hatch", "rye"})
+
+
+def _program(token: str) -> str:
+    return token.replace("\\", "/").split("/")[-1].lower().removesuffix(".exe")
+
+
+def runs_pytest(argv) -> bool:
+    """Whether the test command's program is pytest: `pytest` or `py.test`
+    by any path, the same after `uv run` and its like, or `-m pytest`. The
+    program is read, not any word: `vitest -t pytest` is not pytest."""
+    if not argv:
+        return False
+    first = _program(argv[0])
+    if first in _PYTEST_NAMES:
+        return True
+    if first in _RUN_LAUNCHERS and argv[1:2] == ["run"] and len(argv) > 2 \
+            and _program(argv[2]) in _PYTEST_NAMES:
+        return True
+    if "-m" in argv:
+        at = argv.index("-m")
+        return argv[at + 1:at + 2] == ["pytest"]
+    return False
+
+
+def _refuse_if_it_did_not_run(argv: list[str], rc: int, commit: str, where: str) -> None:
+    """Refuse a run without the fix that pytest says never ran the test:
+    measured 2026-11-23, a test the fix added to a file it modified, outside
+    every test location, selected with -k -- backed out with the fix, pytest
+    collected nothing (exit 5), and that had read as red."""
+    why = _PYTEST_DID_NOT_RUN.get(rc)
+    if why and runs_pytest(argv):
+        raise Refused(f"red proof could not be shown: {where} pytest exited {rc} ({why}) -- "
+                      f"the test did not run there, so it proves nothing. If {commit[:12]} "
+                      f"changed the file the test is in, name that file in the command: red "
+                      f"proof then runs it as HEAD has it")
+
+
 def _named_paths(argv: list[str]) -> set[str]:
     """Every argv token as the repo-relative path it would name: a pytest
     node id loses its `::test` part, a leading `./` goes, separators are
@@ -680,6 +726,8 @@ def _at_head(root: Path, wt: Path, commit: str, head: str, argv: list[str],
             raise _Passes(f"the test also passes with {commit[:12]} backed out -- it does "
                           f"not detect what that commit fixed, so it is not evidence "
                           f"that the finding is fixed")
+        _refuse_if_it_did_not_run(argv, before.returncode, commit,
+                                  f"with {commit[:12]} backed out")
         return before.returncode
 
 
@@ -735,6 +783,8 @@ def _at_the_fix_commit(root: Path, wt: Path, commit: str, head: str, base: str,
             raise _Passes(f"the test also passes at {c} with that commit backed out -- it "
                           f"does not detect what that commit fixed, so it is not evidence "
                           f"that the finding is fixed")
+        _refuse_if_it_did_not_run(argv, before.returncode, commit,
+                                  f"at {c}, with that commit backed out,")
         return before.returncode
 
 

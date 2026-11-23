@@ -599,6 +599,8 @@ Red proof is refused, and nothing is recorded, when:
 
 With `--red-proof` the test runs three times, or four when the proof moves to the fix commit, and each run has `[tests].timeout_s`.
 
+**A pytest run that never ran the test is not red.** Without the fix, any non-zero exit counts as red, with one exception: when the command runs pytest (`pytest`, `py.test`, `python -m pytest`, or either after `uv run` and the like), exit 4 (a test or file the command names was not found) and exit 5 (no tests were collected) are refused, because the test did not run. That happens when the test is in a file the fix commit changed, the file is outside every test location aramid recognises (pytest finds it through `python_files`, say), and the command does not name it: red proof backs that file out with the fix. Name the file in the command and red proof runs it as `HEAD` has it. Exit 2, a collection error such as an import of something the fix added, still counts as red (see the limits below). Other test runners are read as before.
+
 What red proof cannot tell:
 
 - Test support that the fixing commit *modified*, outside every test location aramid recognises and not named in the command, is backed out with the fix. A failure caused by that reads as red.

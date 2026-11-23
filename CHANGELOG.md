@@ -200,6 +200,18 @@ to publish a tag that disagrees with it.
   or test, a close that already carries red proof, and a finding closed any
   other way. An older aramid skips the new event kind, and then shows the
   close as unproven.
+- **Red proof no longer reads "pytest never ran the test" as red.** A test
+  the fix added to a file it modified, outside every test location aramid
+  recognises (pytest found it through `python_files`), selected with `-k`
+  by a command that named no file, was backed out with the fix; pytest
+  then collected nothing (exit 5), and red proof accepted that as the test
+  failing (measured 2026-11-23; interop round 335). For a pytest command,
+  exit 4 (a named test or file not found) and exit 5 (nothing collected)
+  without the fix are now refused, and the refusal says to name the test's
+  file in the command, which keeps it as HEAD has it. Exit 2, a collection
+  error such as an import of what the fix added, still counts as red;
+  other test runners are unchanged. A test the fix commit added was never
+  affected: red proof keeps every file the commit added at HEAD.
 
 ## [0.20.19] — 2026-11-22
 
