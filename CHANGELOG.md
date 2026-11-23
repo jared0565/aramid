@@ -103,6 +103,16 @@ to publish a tag that disagrees with it.
   the command as a list (`command = ["python", "-m", "pytest", "-q"]`),
   or put the steps in a script and name that. A list is never read for
   operators, and a quoted operator (`-k 'a or b; c'`) is text.
+- **The drain's mutation consumer no longer grades from half a suite.** Its
+  baseline command (`[mutation].test_command`, or else the gate's
+  `[tests].command`) is split the same way, so a string with `&&` ran the
+  first program only and recorded survivors against code whose tests never
+  ran (measured: 3 confirmed survivors from such a command). Now it runs no
+  baseline and reports `degraded` naming the key and the operator, and
+  after 3 such runs gives up (`ok`, "mutation giving up after 3 attempts:
+  ...") until the command changes. `aramid doctor` warns of a string
+  `[mutation].test_command` like it under `config:`; that row is new, and
+  is advisory (no exit code), as every `config:` row is.
 
 ## [0.20.19] — 2026-11-22
 

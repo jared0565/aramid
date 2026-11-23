@@ -19,6 +19,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
+
 from aramid import config as config_mod
 from aramid import health
 from aramid import mutation
@@ -498,6 +500,45 @@ def test_a_missing_command_seen_three_times_gives_up_before_cutting_a_worktree(
     assert res.state == "ok"
     assert res.note == (f"mutation giving up: {argv0} not found after 3 attempts -- fix"
                         f" [mutation].test_command or [tests].command")
+    assert oracle.calls == []
+
+
+# A string baseline command holding a shell operator (operator decision
+# 2026-11-22, found beside interop round 340): it would run one program with
+# the rest as arguments -- half the suite, and survivors recorded against code
+# whose tests never ran. Refused before a worktree is cut, in the missing-
+# command family's shape: degraded, then a repo-scoped give-up after three.
+
+_SHELL = ("{key} runs one program without a shell, so `&&` would reach it as an argument "
+          "and nothing after it would run -- write the command as a list, or put the steps "
+          "in a script and name that")
+
+
+@pytest.mark.parametrize("extra, key", [
+    # TOML ends inside its [mutation] table, so this line lands there
+    ("test_command = 'python -m pytest -q && echo done'\n", "[mutation].test_command"),
+    # no command of mutation's own: the gate's is the one it would run
+    ("[tests]\ncommand = 'python -m pytest -q && echo done'\n", "[tests].command"),
+])
+def test_a_baseline_command_with_a_shell_operator_runs_nothing_and_says_why(
+        tmp_path, monkeypatch, extra, key):
+    r, base, head = _repo(tmp_path, toml=TOML + extra)
+
+    res, oracle = _run(r, base, head, monkeypatch, {})
+
+    assert (res.state, res.note) == (
+        "degraded", _SHELL.format(key=key) + " -- no baseline was run, so nothing was graded")
+    assert oracle.calls == []
+
+
+def test_a_shell_operator_seen_three_times_gives_up(tmp_path, monkeypatch):
+    r, base, head = _repo(tmp_path, toml=TOML + "test_command = 'python -m pytest && x'\n")
+    problem = _SHELL.format(key="[mutation].test_command")
+    _seed_notes(r, 3, problem + " -- no baseline was run, so nothing was graded")
+
+    res, oracle = _run(r, base, head, monkeypatch, {})
+
+    assert (res.state, res.note) == ("ok", f"mutation giving up after 3 attempts: {problem}")
     assert oracle.calls == []
 
 

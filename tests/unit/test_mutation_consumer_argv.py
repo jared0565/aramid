@@ -31,6 +31,29 @@ def test_full_argv_honours_mutation_test_command_over_tests_command():
     assert mut_consumer._full_argv(cfg) == ["pytest", "-q", "tests/unit"]
 
 
+def test_the_shell_problem_is_read_from_the_command_full_argv_would_run():
+    """`_shell_problem` names the setting `_full_argv` takes, by the same
+    rule: mutation's own command first, a blank one skipped, then the
+    gate's. A list is an argv and never read for operators."""
+    def cfg(own=None, gate=None):
+        return SimpleNamespace(mutation={"test_command": own}, tests={"command": gate})
+
+    shell = ("{} runs one program without a shell, so `&&` would reach it as an argument "
+             "and nothing after it would run -- write the command as a list, or put the "
+             "steps in a script and name that")
+    assert mut_consumer._shell_problem(cfg(own="pytest && x")) == shell.format(
+        "[mutation].test_command")
+    assert mut_consumer._shell_problem(cfg(gate="pytest && x")) == shell.format(
+        "[tests].command")
+    assert mut_consumer._shell_problem(cfg(own="   ", gate="pytest && x")) == shell.format(
+        "[tests].command")
+    # mutation's own command is the one run, so the gate's is not read
+    assert mut_consumer._shell_problem(cfg(own=["pytest", "&&"], gate="pytest && x")) is None
+    assert mut_consumer._shell_problem(cfg(own="pytest -q -k 'a; b'")) is None
+    assert mut_consumer._shell_problem(cfg()) is None
+    assert mut_consumer._shell_problem(None) is None
+
+
 def test_full_argv_falls_through_a_missing_section_to_the_next():
     # No `mutation` attribute at all: the lookup must read it as empty and
     # move on to [tests].command, not fail on it.

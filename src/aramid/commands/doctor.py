@@ -967,20 +967,31 @@ def _autolearn_probe_line() -> str:
         return "  OK       autolearn    probe unavailable"
 
 
-def config_lines(root: Path) -> list[str]:
+def config_lines(root: Path, cfg=None) -> list[str]:
     """One WARN row per config_keys problem in a layer a person writes, or
     one OK row (1.0 API-5; DEC-4: reported, never an exit code). load_config
     has already printed the same problems to stderr; these are the report's
-    copy, under the report's own heading."""
+    copy, under the report's own heading.
+
+    With `cfg`, also a WARN row for a string `[mutation].test_command`
+    holding a shell operator, which the drain's mutation consumer refuses to
+    run (operator decision 2026-11-22, found beside interop round 340). Not
+    a gate, so no exit code; a `[tests].command` like it fails the `tests`
+    row instead, and is not repeated here."""
     from aramid import config as config_mod
+    from aramid.runners.tests import shell_operator_problem
     try:
         found = config_mod.layer_problems(root)
     except Exception:
         return ["  WARN     config       not checked -- a config file is unparseable "
                 "(see the error reported below)"]
-    if not found:
-        return ["  OK       config       every key set is one aramid reads"]
-    return [f"  WARN     config       {path}: {problem}" for path, problem in found]
+    rows = [f"  WARN     config       {path}: {problem}" for path, problem in found]
+    own = (getattr(cfg, "mutation", None) or {}).get("test_command") if cfg else None
+    problem = shell_operator_problem("[mutation].test_command", own)
+    if problem is not None:
+        rows.append(f"  WARN     config       {problem} -- the drain's mutation testing "
+                    f"runs no baseline and grades nothing until then")
+    return rows or ["  OK       config       every key set is one aramid reads"]
 
 
 def probe_providers() -> list[str]:
@@ -1363,7 +1374,7 @@ def cmd_doctor(root: Path, fix: bool = False, during_init: bool = False) -> int:
     print(_autolearn_probe_line())
 
     print("config:")
-    for line in config_lines(root):
+    for line in config_lines(root, cfg):
         print(line)
 
     if not during_init:

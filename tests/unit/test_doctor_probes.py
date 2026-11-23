@@ -803,6 +803,34 @@ def test_doctor_reports_each_config_problem_as_a_warn_row_and_keeps_its_exit(
     assert f"aramid: config: {r / 'aramid.toml'}: unknown key `colour` -- ignored\n" in err
 
 
+def test_doctor_warns_of_a_mutation_command_holding_a_shell_operator_and_keeps_its_exit(
+        tmp_path, capsys, quiet):
+    """Operator decision 2026-11-22 (found beside interop round 340): the
+    drain's mutation consumer runs no baseline from such a string. A config
+    row, so a WARN and no exit code (DEC-4); `[tests].command` has its own
+    failing `tests` row and is not repeated here. A list is not read."""
+    r = _repo(tmp_path)
+    clean_rc = _run(r)
+    capsys.readouterr()
+
+    (r / "aramid.toml").write_text(
+        "schema_version = 1\n[mutation]\ntest_command = 'python -m pytest -q && echo x'\n",
+        encoding="utf-8")
+    assert _run(r) == clean_rc
+    assert ("config:\n  WARN     config       [mutation].test_command runs one program "
+            "without a shell, so `&&` would reach it as an argument and nothing after it "
+            "would run -- write the command as a list, or put the steps in a script and "
+            "name that -- the drain's mutation testing runs no baseline and grades "
+            "nothing until then\n") in capsys.readouterr().out
+
+    (r / "aramid.toml").write_text(
+        "schema_version = 1\n[mutation]\ntest_command = ['python', '-m', 'pytest', '&&']\n",
+        encoding="utf-8")
+    assert _run(r) == clean_rc
+    assert "config:\n  OK       config       every key set is one aramid reads\n" in (
+        capsys.readouterr().out)
+
+
 def test_doctor_exits_2_when_configured_but_not_enforced(tmp_path, capsys, quiet):
     r = _repo(tmp_path)
 

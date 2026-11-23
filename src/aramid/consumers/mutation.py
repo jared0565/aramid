@@ -404,6 +404,25 @@ def _full_argv(cfg=None, root: Path | None = None) -> list[str]:
     return [sys.executable, "-m", "pytest", "-q"]
 
 
+def _shell_problem(cfg, root: Path | None = None) -> str | None:
+    """What is wrong with the baseline command `_full_argv` would run, when
+    it is a string holding a shell operator, or None. Chosen by
+    `_full_argv`'s own rule -- mutation's command first, one that splits to
+    nothing skipped, then the gate's -- so the setting named is the one that
+    would run. Such a command runs one program with the rest as its
+    arguments: half a suite, and survivors recorded against code whose
+    tests never ran (operator decision 2026-11-22, found beside interop
+    round 340). The bare `pytest -q` fallback holds no operator."""
+    if cfg is None:
+        return None
+    own = (getattr(cfg, "mutation", None) or {}).get("test_command")
+    for key, command in (("[mutation].test_command", own),
+                         ("[tests].command", config_mod.effective_test_command(cfg))):
+        if command and tests_runner._argv(command, root):
+            return tests_runner.shell_operator_problem(key, command)
+    return None
+
+
 def _survivor_mutants(rel: str, fid: str, original: str, op: str | None = None) -> list:
     """Regenerate the recorded survivor `fid` from `original` (the file at
     the item's head): EVERY occurrence of it, in file order; empty when
@@ -912,6 +931,19 @@ def consume(item, ctx: DrainContext) -> ConsumerResult:
     # and the budget, and neither needs a checkout. `_full_argv` reads config
     # only.
     full_argv = _full_argv(ctx.cfg, ctx.root)
+    problem = _shell_problem(ctx.cfg, ctx.root)
+    if problem is not None:
+        # The missing-command family's shape: only an aramid.toml edit fixes
+        # it, so degraded (no verdict, and loud) until it has been seen
+        # `_MISSING_GIVE_UP` times since the last green baseline, then a
+        # repo-scoped give-up so the queue is not pinned. The note carries
+        # the key and the operator: changing the command is the release.
+        if base.note_count_any_item(ctx.ledger, NAME, problem) >= _MISSING_GIVE_UP:
+            return ConsumerResult(consumer=NAME, state="ok",
+                                  note=f"mutation giving up after {_MISSING_GIVE_UP} "
+                                       f"attempts: {problem}")
+        return ConsumerResult(consumer=NAME, state="degraded",
+                              note=f"{problem} -- no baseline was run, so nothing was graded")
     suite = _suite_label(full_argv)
     # A per-mutant timeout pressed into service as a whole-suite budget is a
     # guess, and for any repo whose suite is genuinely long it is the wrong
