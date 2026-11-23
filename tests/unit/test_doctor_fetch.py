@@ -75,9 +75,11 @@ class _Net:
 
 @pytest.fixture
 def wired(tmp_path, monkeypatch):
-    key = doctor._gitleaks_platform_key()
-    if key is None or "windows" not in key:
-        pytest.skip("the fake archive here is the windows zip")
+    # The platform is pinned, never read: the fake archive is the windows
+    # zip, and a skip on every other OS left the fetch unexecuted on CI's
+    # coverage leg (5 latent mutants in doctor.py, CI 45192611672).
+    key = "windows_x64"
+    monkeypatch.setattr(doctor, "_gitleaks_platform_key", lambda: key)
     exe = doctor._exe_name("gitleaks")
     data = _archive(exe)
     asset = f"gitleaks_{doctor.GITLEAKS_VERSION}_{key}.zip"
