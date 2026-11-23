@@ -63,6 +63,10 @@ class EventType(StrEnum):
     # the ledger must be able to tell "a run examined the file and it was
     # clean" from "a person said no run ever will" without reading payloads.
     FINDING_OUT_OF_SCOPE = "finding_out_of_scope"
+    # Red proof added to a `resolve --fixed` close that was made without it
+    # (interop round 335 item 2). Changes no status: `_materialize` passes
+    # over it, and `ledger show` prints what it rests on.
+    FINDING_RED_PROOF_ADDED = "finding_red_proof_added"
     # The same finding, at a new line. Its own event type rather than a
     # re-issued FINDING_DETECTED because `_materialize` rebuilds a finding's
     # WHOLE record from a detect payload and resets `status` to open -- so

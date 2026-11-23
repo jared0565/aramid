@@ -256,7 +256,11 @@ hook warns about `aramid ledger resolve --fixed` without it, and rejects
 the call once `aramid arm --agent` is set. Put the flag on the same
 command and in front of `--reason`: one on another line, in a comment or
 behind `;` does not count. In PowerShell, write a `--reason` that needs
-quotes inside it in single quotes.
+quotes inside it in single quotes. A close made without `--red-proof`
+takes it afterwards: re-run the same command, with the same commit and the
+same `--test`, adding `--red-proof`. The proof is recorded on the close
+and the finding stays `fixed`; a test that does not fail without the fix
+records nothing.
 
 `--test` is run as one program, without a shell. A `&&`, `||`, `;`, `|`,
 `&` or redirect outside quotes is refused rather than handed to that

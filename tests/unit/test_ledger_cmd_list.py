@@ -338,6 +338,33 @@ def test_show_says_when_the_red_proof_was_shown_at_the_fix_commit(tmp_path, caps
         f"path(s); 1 test file(s) brought in from HEAD")
 
 
+def test_show_prints_red_proof_added_after_the_close(tmp_path, capsys):
+    """Interop round 335 item 2 (operator decision 2026-11-23): the close
+    keeps its "red proof: not run" -- history stays as it was -- and the
+    event that added the proof prints what it rests on, under itself."""
+    _seed(tmp_path, _f("f1", tool="llm-review", rule="llm/logic"))
+    _append(tmp_path, _evidenced_close("f1"), Event(
+        EventType("finding_red_proof_added"), "r3", "2026-09-14T02:00:00+00:00",
+        finding_id="f1",
+        payload={"commit": "c" * 40,
+                 "test_argv": ["npx", "vitest", "run", "src/orders.test.ts", "-t", "routes CN"],
+                 "test_rc": 0, "head": "e" * 40, "via": "cli", "reason": "proved later",
+                 "red_proof": {"at": "head", "base": "b" * 40, "control_rc": 0,
+                               "pre_fix_rc": 1, "backed_out": 3}}))
+
+    assert cmd_ledger_show(tmp_path, "f1") == 0
+    assert capsys.readouterr().out.splitlines()[-8:] == [
+        "  2026-09-14T01:00:00+00:00  finding_resolved  run=r2",
+        f"      closed as fixed in {'c' * 40} (cli): guard added in route()",
+        f"      test: npx vitest run src/orders.test.ts -t 'routes CN' -- exit 0 at {'d' * 40}",
+        "      red proof: not run",
+        "  2026-09-14T02:00:00+00:00  finding_red_proof_added  run=r3",
+        f"      red proof added to the close in {'c' * 40} (cli): proved later",
+        f"      test: npx vitest run src/orders.test.ts -t 'routes CN' -- exit 0 at {'e' * 40}",
+        f"      red proof: exit 1 with that commit backed out against {'b' * 40} -- 3 of its "
+        f"path(s); its tests, the files it added and the files the command names stayed"]
+
+
 def test_show_names_what_back_out_took_away_at_head(tmp_path, capsys):
     """Finding 49124609a4b7 (operator decision 2026-11-23): with --back-out
     the line said "the files it added ... stayed", untrue for the files named,

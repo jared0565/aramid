@@ -186,10 +186,24 @@ def _close_evidence(event) -> list[str]:
     from one that did not, so "red proof: not run" is printed rather than
     left out."""
     payload = event.payload or {}
+    test = (f"test: {shlex.join(payload.get('test_argv') or [])} -- exit "
+            f"{payload.get('test_rc')} at {payload.get('head')}")
+    if event.type.value == EventType.FINDING_RED_PROOF_ADDED.value:
+        # Interop round 335 item 2: proof added to a close made without it.
+        return [f"red proof added to the close in {payload.get('commit')} "
+                f"({payload.get('via')}): {payload.get('reason')}",
+                test, _red_line(payload.get("red_proof"))]
     if event.type.value != "finding_resolved" \
             or payload.get("auto_resolved") != EVIDENCED_CLOSE:
         return []
-    proof = payload.get("red_proof")
+    return [f"closed as fixed in {payload.get('commit')} ({payload.get('via')}): "
+            f"{payload.get('reason')}",
+            test, _red_line(payload.get("red_proof"))]
+
+
+def _red_line(proof) -> str:
+    """The red-proof line of `ledger show`, for a close or a proof added to
+    one later."""
     # Finding 49124609a4b7: the files `--back-out` took away are named, and the
     # "stayed" clause no longer claims them.
     went = _backed_out_named(proof)
@@ -210,11 +224,7 @@ def _close_evidence(event) -> list[str]:
                f"stayed")
     else:
         red = "red proof: not run"
-    return [f"closed as fixed in {payload.get('commit')} ({payload.get('via')}): "
-            f"{payload.get('reason')}",
-            f"test: {shlex.join(payload.get('test_argv') or [])} -- exit "
-            f"{payload.get('test_rc')} at {payload.get('head')}",
-            red]
+    return red
 
 
 # ----------------------------------------------------------------- filter ---
@@ -786,7 +796,16 @@ def cmd_ledger_resolve_fixed(root, finding_id: str, commit: str, test, reason: s
                   f"closes on a verified re-test", file=sys.stderr)
             return 3
         status = rec.get("status")
-        if status != "open":
+        # Interop round 335 item 2: a `fixed` row whose close carried no red
+        # proof takes it afterwards, from the same close re-run with it.
+        kind, close = (_close_to_prove(ledger, finding_id)
+                       if status == "fixed" and red_proof else (None, None))
+        if kind == "proven":
+            print(f"aramid: ledger resolve: {finding_id} is not open (status=fixed), and "
+                  f"its close already carries red proof -- there is nothing to add",
+                  file=sys.stderr)
+            return 3
+        if status != "open" and kind is None:
             print(f"aramid: ledger resolve: {finding_id} is not open (status={status}) "
                   f"-- resolve --fixed only applies to an open finding", file=sys.stderr)
             return 3
@@ -808,6 +827,20 @@ def cmd_ledger_resolve_fixed(root, finding_id: str, commit: str, test, reason: s
                 print(f"aramid: ledger resolve: {sha[:12]} is not part of HEAD's history "
                       f"-- the fix must be in the tree the test runs on", file=sys.stderr)
                 return 3
+            if close is not None:
+                was = close.payload or {}
+                if sha != was.get("commit"):
+                    print(f"aramid: ledger resolve: {finding_id} was closed as fixed in "
+                          f"{str(was.get('commit'))[:12]} without red proof -- red proof "
+                          f"added afterwards is for that close, so give --fixed "
+                          f"{str(was.get('commit'))[:12]}", file=sys.stderr)
+                    return 3
+                if argv != was.get("test_argv"):
+                    print(f"aramid: ledger resolve: {finding_id} was closed on the test "
+                          f"`{shlex.join(was.get('test_argv') or [])}` without red proof "
+                          f"-- red proof added afterwards is for that close, so give the "
+                          f"same --test", file=sys.stderr)
+                    return 3
             raised_at = rec.get("head")
             if raised_at and gitutil.is_ancestor(root, sha, str(raised_at)):
                 print(f"aramid: ledger resolve: {sha[:12]} was already in the tree when "
@@ -832,6 +865,21 @@ def cmd_ledger_resolve_fixed(root, finding_id: str, commit: str, test, reason: s
         # may have written to this ledger meanwhile (a gate's auto-resolve,
         # an override). A close is recorded against an OPEN finding only.
         now = (ledger.open_findings().get(finding_id) or {}).get("status")
+        if close is not None:
+            # The close itself must be as it was: still `fixed` by it, and
+            # still without red proof.
+            if now != "fixed" or _close_to_prove(ledger, finding_id) != ("bare", close):
+                print(f"aramid: ledger resolve: {finding_id}'s close changed while the "
+                      f"test ran (status={now}) -- nothing was recorded", file=sys.stderr)
+                return 3
+            ledger.append(Event(EventType.FINDING_RED_PROOF_ADDED, uuid.uuid4().hex,
+                                _now(), finding_id=finding_id,
+                                payload={"commit": sha, "test_argv": argv, "test_rc": 0,
+                                         "head": head, "red_proof": proof, "via": via,
+                                         "reason": reason}))
+            print(f"aramid: ledger: {finding_id}'s close as fixed in {sha[:12]} now carries "
+                  f"red proof -- the test passes at HEAD, {_shown(proof, sha)} ({reason})")
+            return 0
         if now != "open":
             print(f"aramid: ledger resolve: {finding_id} is no longer open (status={now}) "
                   f"-- it changed while the test ran; nothing was recorded",
@@ -843,21 +891,44 @@ def cmd_ledger_resolve_fixed(root, finding_id: str, commit: str, test, reason: s
                             payload={"auto_resolved": EVIDENCED_CLOSE, "commit": sha,
                                      "test_argv": argv, "test_rc": 0, "reason": reason,
                                      "head": head, "red_proof": proof, "via": via}))
-        if not proof:
-            shown = "red proof not run"
-        elif proof["at"] == "commit":
-            shown = (f"failed (exit {proof['pre_fix_rc']}) without the fix as the code "
-                     f"stood at {sha[:12]}")
-        else:
-            shown = f"failed (exit {proof['pre_fix_rc']}) without the fix"
-        went = _backed_out_named(proof)
-        if went:
-            shown += f" -- and without {went}, which it added"
         print(f"aramid: ledger: {finding_id} closed as fixed in {sha[:12]} -- the test "
-              f"passes at HEAD, {shown} ({reason})")
+              f"passes at HEAD, {_shown(proof, sha)} ({reason})")
         return 0
     finally:
         ledger.close()
+
+
+def _shown(proof, sha: str) -> str:
+    """What a close, or red proof added to one, says the red proof showed."""
+    if not proof:
+        shown = "red proof not run"
+    elif proof["at"] == "commit":
+        shown = (f"failed (exit {proof['pre_fix_rc']}) without the fix as the code "
+                 f"stood at {sha[:12]}")
+    else:
+        shown = f"failed (exit {proof['pre_fix_rc']}) without the fix"
+    went = _backed_out_named(proof)
+    if went:
+        shown += f" -- and without {went}, which it added"
+    return shown
+
+
+def _close_to_prove(ledger, finding_id: str):
+    """For a `fixed` row (interop round 335 item 2): ("bare", close) when the
+    resolve that made it fixed is a `resolve --fixed` close without red proof
+    and none was added since; ("proven", close) when it carries red proof or
+    had it added; (None, None) when something else closed it."""
+    close, added = None, False
+    for e in ledger.events():
+        if e.finding_id != finding_id:
+            continue
+        if e.type is EventType.FINDING_RESOLVED:
+            close, added = e, False
+        elif e.type is EventType.FINDING_RED_PROOF_ADDED:
+            added = True
+    if close is None or (close.payload or {}).get("auto_resolved") != EVIDENCED_CLOSE:
+        return None, None
+    return ("proven" if added or (close.payload or {}).get("red_proof") else "bare"), close
 
 
 def cmd_ledger_resolve_args(root, ids, *, out_of_scope: bool = False,

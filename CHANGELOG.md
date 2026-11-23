@@ -187,6 +187,19 @@ to publish a tag that disagrees with it.
   route served the bytes, and a failure names each route it tried. The
   API route is unauthenticated, so GitHub's limit of 60 requests an hour
   per address applies to it.
+- **A close made without red proof can take it afterwards.** The agent
+  hook, unarmed, lets `ledger resolve --fixed` without `--red-proof`
+  through and advises re-running it with `--red-proof` added; the re-run
+  was then refused as not open, so the row read "red proof not run" for
+  good (interop round 335). Re-running the same close, with the same
+  commit and test, adding `--red-proof`, now runs the red proof and, when
+  the test fails without the fix, records it as a new
+  `finding_red_proof_added` event: the finding stays `fixed`, and `ledger
+  show` prints the proof under that event. A test that does not fail
+  without the fix records nothing. Refused, as before: a different commit
+  or test, a close that already carries red proof, and a finding closed any
+  other way. An older aramid skips the new event kind, and then shows the
+  close as unproven.
 
 ## [0.20.19] — 2026-11-22
 

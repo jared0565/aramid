@@ -1865,3 +1865,176 @@ def test_without_fixed_every_id_goes_to_out_of_scope_and_the_worst_exit_wins(
     assert cmd_ledger_resolve_args(tmp_path, ["a", "b", "c"], out_of_scope=True,
                                    reason="scoped") == 3
     assert calls == [("a", True, "scoped"), ("b", True, "scoped"), ("c", True, "scoped")]
+
+
+# ------------------------------------------- red proof added after a close --
+# Interop round 335 item 2 (operator decision 2026-11-23). The unarmed agent
+# hook lets a close without --red-proof through and advises "re-run it with
+# --red-proof added"; until now the re-run was refused (not open), and the
+# row read "red proof not run" for good. Re-running the same close with
+# --red-proof now runs red proof and records it on a new event, the status
+# unchanged; a proof that is not red records nothing.
+
+def _proofs(root):
+    led = _ledger(root)
+    try:
+        return [e for e in led.events() if e.type.value == "finding_red_proof_added"]
+    finally:
+        led.close()
+
+
+def _refused_fixed(capsys, root, rc, line):
+    """A refusal to add red proof: exit 3, this line, no proof recorded, and
+    the close and status as they were."""
+    assert rc == 3
+    assert capsys.readouterr() == ("", f"aramid: ledger resolve: {line}\n")
+    assert _proofs(root) == []
+    assert len(_closes(root)) == 1
+    assert _status(root) == "fixed"
+
+
+def test_a_close_without_red_proof_takes_it_afterwards(own_repo, capsys, clock):
+    repo = own_repo
+    assert cmd_ledger_resolve_fixed(repo.root, FID, repo.c2, CHECK_CN, "closed") == 0
+    close = _closes(repo.root)[0]
+    capsys.readouterr()
+
+    rc = cmd_ledger_resolve_fixed(repo.root, FID, repo.c2, CHECK_CN, "proved",
+                                  red_proof=True)
+
+    assert rc == 0
+    assert capsys.readouterr() == (
+        f"aramid: ledger: {FID}'s close as fixed in {repo.c2[:12]} now carries red proof "
+        f"-- the test passes at HEAD, failed (exit 1) without the fix (proved)\n", "")
+    assert _closes(repo.root) == [close]
+    assert close.payload["red_proof"] is None
+    assert [(e.finding_id, e.payload) for e in _proofs(repo.root)] == [
+        (FID, {"commit": repo.c2, "test_argv": shlex.split(CHECK_CN), "test_rc": 0,
+               "head": repo.c3, "via": "cli", "reason": "proved",
+               "red_proof": {"at": "head", "base": repo.c1, "control_rc": 0,
+                             "pre_fix_rc": 1, "backed_out": 2}})]
+    assert _status(repo.root) == "fixed"
+
+
+def _closed_bare(repo, monkeypatch, capsys, *runs):
+    """`repo` with FID closed as fixed in c2 on CHECK_CN without red proof;
+    then `runs` answer the next runs, and git makes no worktree."""
+    _scripted(monkeypatch, _OK, *runs)
+    assert cmd_ledger_resolve_fixed(repo.root, FID, repo.c2, CHECK_CN, "closed") == 0
+    capsys.readouterr()
+    _git_stub(monkeypatch, *_TREE)
+
+
+def test_red_proof_added_later_needs_the_close_s_commit(repo, capsys, monkeypatch):
+    _closed_bare(repo, monkeypatch, capsys)
+
+    rc = cmd_ledger_resolve_fixed(repo.root, FID, repo.c3, CHECK_CN, "r", red_proof=True)
+
+    _refused_fixed(capsys, repo.root, rc,
+                   f"{FID} was closed as fixed in {repo.c2[:12]} without red proof -- red "
+                   f"proof added afterwards is for that close, so give --fixed "
+                   f"{repo.c2[:12]}")
+
+
+def test_red_proof_added_later_needs_the_close_s_test(repo, capsys, monkeypatch):
+    _closed_bare(repo, monkeypatch, capsys)
+
+    rc = cmd_ledger_resolve_fixed(repo.root, FID, repo.c2, CHECK_TREE, "r", red_proof=True)
+
+    _refused_fixed(capsys, repo.root, rc,
+                   f"{FID} was closed on the test `{shlex.join(shlex.split(CHECK_CN))}` "
+                   f"without red proof -- red proof added afterwards is for that close, so "
+                   f"give the same --test")
+
+
+def test_a_proof_that_is_not_red_is_not_added(repo, capsys, monkeypatch):
+    """It passes without the fix too: refused as on an open row, nothing
+    recorded, and the close still reads "red proof: not run"."""
+    _closed_bare(repo, monkeypatch, capsys, _OK, _OK, _OK)
+
+    rc = cmd_ledger_resolve_fixed(repo.root, FID, repo.c2, CHECK_CN, "r", red_proof=True)
+
+    _refused_fixed(capsys, repo.root, rc,
+                   f"the test also passes with {repo.c2[:12]} backed out -- it does not "
+                   f"detect what that commit fixed, so it is not evidence that the finding "
+                   f"is fixed -- {repo.c2[:12]} added support/helper.py, which red proof "
+                   f"keeps at HEAD: if the fix is in one of them, name it with --back-out "
+                   f"<path>")
+
+
+def test_a_close_that_carries_red_proof_takes_no_more(repo, capsys, monkeypatch):
+    _scripted(monkeypatch, _OK, _OK, _RED)
+    _git_stub(monkeypatch, *_TREE)
+    assert cmd_ledger_resolve_fixed(repo.root, FID, repo.c2, CHECK_CN, "r",
+                                    red_proof=True) == 0
+    capsys.readouterr()
+
+    rc = cmd_ledger_resolve_fixed(repo.root, FID, repo.c2, CHECK_CN, "r", red_proof=True)
+
+    _refused_fixed(capsys, repo.root, rc,
+                   f"{FID} is not open (status=fixed), and its close already carries red "
+                   f"proof -- there is nothing to add")
+
+
+def test_red_proof_is_added_once(repo, capsys, monkeypatch):
+    _closed_bare(repo, monkeypatch, capsys, _OK, _OK, _RED)
+    assert cmd_ledger_resolve_fixed(repo.root, FID, repo.c2, CHECK_CN, "r",
+                                    red_proof=True) == 0
+    capsys.readouterr()
+
+    rc = cmd_ledger_resolve_fixed(repo.root, FID, repo.c2, CHECK_CN, "r", red_proof=True)
+
+    assert rc == 3
+    assert capsys.readouterr() == (
+        "", f"aramid: ledger resolve: {FID} is not open (status=fixed), and its close "
+            f"already carries red proof -- there is nothing to add\n")
+    assert len(_proofs(repo.root)) == 1
+
+
+def test_a_row_fixed_some_other_way_takes_no_red_proof(repo, capsys):
+    """Closed by a gate (its quote went), not by `resolve --fixed`: there is
+    no close for red proof to belong to, and the refusal is the one it was."""
+    led = _ledger(repo.root)
+    led.append(Event(EventType.FINDING_RESOLVED, "r2", AT, finding_id=FID,
+                     payload={"auto_resolved": "evidence_gone"}))
+    led.close()
+
+    rc = cmd_ledger_resolve_fixed(repo.root, FID, repo.c2, CHECK_CN, "r", red_proof=True)
+
+    assert rc == 3
+    assert capsys.readouterr() == (
+        "", f"aramid: ledger resolve: {FID} is not open (status=fixed) -- resolve "
+            f"--fixed only applies to an open finding\n")
+    assert _proofs(repo.root) == []
+
+
+def test_a_close_that_changed_while_the_proof_ran_takes_nothing(repo, capsys, monkeypatch):
+    _closed_bare(repo, monkeypatch, capsys)
+    queue = [_OK, _OK, _RED]
+
+    def overridden_meanwhile(argv, cwd, timeout_s, env=None):
+        if len(queue) == 1:
+            led = _ledger(repo.root)
+            led.append(Event(EventType.FINDING_OVERRIDDEN, "r9", AT, finding_id=FID,
+                             payload={"reason": "accepted"}))
+            led.close()
+        return queue.pop(0)
+    monkeypatch.setattr(evidenced_close, "run_subprocess", overridden_meanwhile)
+
+    rc = cmd_ledger_resolve_fixed(repo.root, FID, repo.c2, CHECK_CN, "r", red_proof=True)
+
+    assert rc == 3
+    assert capsys.readouterr() == (
+        "", f"aramid: ledger resolve: {FID}'s close changed while the test ran "
+            f"(status=overridden) -- nothing was recorded\n")
+    assert _proofs(repo.root) == []
+
+
+def test_without_red_proof_a_closed_row_is_refused_as_before(repo, capsys, monkeypatch):
+    _closed_bare(repo, monkeypatch, capsys)
+
+    rc = cmd_ledger_resolve_fixed(repo.root, FID, repo.c2, CHECK_CN, "r")
+
+    _refused_fixed(capsys, repo.root, rc,
+                   f"{FID} is not open (status=fixed) -- resolve --fixed only applies to "
+                   f"an open finding")

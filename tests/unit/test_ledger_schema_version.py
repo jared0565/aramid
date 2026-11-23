@@ -52,7 +52,11 @@ KINDS_AT_SCHEMA = {
         "consumer_run_finished", "drain_visited", "resolver_yield",
     },
 }
-IGNORE_SAFE_ADDITIONS: dict[str, str] = {}   # kind -> why an older reader may skip it
+IGNORE_SAFE_ADDITIONS: dict[str, str] = {   # kind -> why an older reader may skip it
+    "finding_red_proof_added": (
+        "it changes no status; skipped, a close reads 'red proof: not run', which "
+        "claims less evidence than there is, never more (interop round 335)"),
+}
 
 
 def test_every_event_kind_carries_an_ignore_safety_decision():
