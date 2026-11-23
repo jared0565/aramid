@@ -238,12 +238,20 @@ def test_fix_gitleaks_refuses_a_checksum_mismatch_before_touching_the_archive(
         f"nothing was installed\n"))
 
 
-def test_fix_gitleaks_reports_a_download_failure(wired, tmp_path, capsys):
-    wired("windows_x64", OSError("connection refused"), sha="00" * 32)
+def test_fix_gitleaks_reports_a_download_failure(wired, tmp_path, capsys, monkeypatch):
+    """Every route it tried is named (interop round 335): the release URL
+    three times, then the GitHub API asset endpoint."""
+    monkeypatch.setattr(doctor, "_sleep", lambda s: None, raising=False)
+    calls = wired("windows_x64", OSError("connection refused"), sha="00" * 32)
 
     assert doctor._fix_gitleaks() is False
+    url = doctor.GITLEAKS_RELEASE_URL.format(
+        asset=f"gitleaks_{doctor.GITLEAKS_VERSION}_windows_x64.zip")
     assert capsys.readouterr() == (
-        "", "aramid: doctor --fix: could not download gitleaks: connection refused\n")
+        "", f"aramid: doctor --fix: could not download gitleaks: {url} failed 3 times "
+            f"(last: connection refused); the GitHub API asset endpoint failed "
+            f"(connection refused)\n")
+    assert len(calls["urlopen"]) == 4
 
 
 @pytest.mark.parametrize("key", [None, "windows_x32"])

@@ -726,7 +726,7 @@ Two more sections print on every non-init `doctor` run (suppressed during `arami
 aramid doctor --fix
 ```
 
-Upgrades the owned toolchain (`ruff`, `semgrep`, `pip-audit`) via `pip install --upgrade` into the current interpreter, downloads a pinned gitleaks `v8.30.1` release (sha256-verified before extraction) into `~/.aramid/tools/` if missing, or over aramid's own copy there when that copy is at another version, then re-probes. A gitleaks on PATH is never replaced, whatever its version. The new binary is written beside the old one and moved into place, so a download or write that fails leaves the old one working. Without `--fix`, doctor's gitleaks line names an own copy that is off the pin.
+Upgrades the owned toolchain (`ruff`, `semgrep`, `pip-audit`) via `pip install --upgrade` into the current interpreter, downloads a pinned gitleaks `v8.30.1` release (sha256-verified before extraction) into `~/.aramid/tools/` if missing, or over aramid's own copy there when that copy is at another version, then re-probes. A gitleaks on PATH is never replaced, whatever its version. The download tries the release URL up to 3 times, about 2 s and then 8 s apart, then the same file through GitHub's API asset endpoint, and the error names each route it tried; the sha256 check holds whichever route served it. The new binary is written beside the old one and moved into place, so a download or write that fails leaves the old one working. Without `--fix`, doctor's gitleaks line names an own copy that is off the pin.
 
 ### `aramid resolvers` — is auto-resolution actually working?
 

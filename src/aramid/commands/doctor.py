@@ -34,6 +34,7 @@ import platform
 import re
 import subprocess
 import sys
+import time
 import urllib.request
 import zipfile
 from dataclasses import dataclass, replace
@@ -101,6 +102,17 @@ GITLEAKS_SHA256 = {
 GITLEAKS_RELEASE_URL = (
     f"https://github.com/gitleaks/gitleaks/releases/download/v{GITLEAKS_VERSION}/{{asset}}"
 )
+# The same assets through GitHub's REST API (interop round 335): on
+# 2026-11-08 `releases/download/` answered 504, 502 and timeouts for about
+# three hours while this endpoint served the same file. The release JSON
+# gives the asset's id; the bytes come from the asset URL built from it.
+GITLEAKS_RELEASE_API_URL = (
+    f"https://api.github.com/repos/gitleaks/gitleaks/releases/tags/v{GITLEAKS_VERSION}"
+)
+GITLEAKS_ASSET_API_URL = "https://api.github.com/repos/gitleaks/gitleaks/releases/assets/{asset_id}"
+_FETCH_TRIES = 3
+_FETCH_BACKOFF_S = (2.0, 8.0)   # before the 2nd and the 3rd try
+_sleep = time.sleep             # rebound by the tests
 
 
 @dataclass
@@ -874,6 +886,57 @@ def _gitleaks_platform_key() -> str | None:
     return None
 
 
+def _read_url(req) -> bytes:
+    # S310 justification: every URL reaching here is built in this module
+    # from the https:// constants above, the pinned version, the fixed set
+    # of platform asset names, and (for the API route) an asset id checked
+    # to be a positive integer -- never a URL taken from the network or the
+    # user -- and the bytes are sha256-verified against GITLEAKS_SHA256
+    # before anything is extracted or run.
+    with urllib.request.urlopen(req, timeout=60) as resp:  # noqa: S310
+        return resp.read()
+
+
+def _fetch_release_asset(url: str, asset: str) -> tuple[bytes | None, str]:
+    """The asset's bytes, or None and why not (interop round 335; operator
+    decision 2026-11-23). `url` up to _FETCH_TRIES times with backoff, then
+    the GitHub API: the release JSON for the asset's id, the bytes from the
+    asset endpoint. OSError covers urllib's URLError/HTTPError and socket
+    errors, so a network failure reports cleanly rather than as a traceback.
+    Nothing here trusts the bytes: the caller's sha256 check holds whichever
+    route served them."""
+    last: OSError | None = None
+    for attempt in range(_FETCH_TRIES):
+        if attempt:
+            _sleep(_FETCH_BACKOFF_S[attempt - 1])
+        try:
+            return _read_url(url), ""
+        except OSError as exc:
+            last = exc
+    why = f"{url} failed {_FETCH_TRIES} times (last: {last}); the GitHub API asset endpoint failed"
+    try:
+        release = json.loads(_read_url(urllib.request.Request(
+            GITLEAKS_RELEASE_API_URL, headers={"Accept": "application/vnd.github+json"})))
+    except OSError as exc:
+        return None, f"{why} ({exc})"
+    except ValueError:
+        return None, f"{why} (its release JSON could not be read)"
+    assets = release.get("assets") if isinstance(release, dict) else None
+    entry = next((a for a in assets if isinstance(a, dict) and a.get("name") == asset),
+                 None) if isinstance(assets, list) else None
+    if entry is None:
+        return None, f"{why} (the release lists no {asset})"
+    asset_id = entry.get("id")
+    if not isinstance(asset_id, int) or isinstance(asset_id, bool) or asset_id <= 0:
+        return None, f"{why} (the release gives {asset} no numeric id)"
+    try:
+        return _read_url(urllib.request.Request(
+            GITLEAKS_ASSET_API_URL.format(asset_id=asset_id),
+            headers={"Accept": "application/octet-stream"})), ""
+    except OSError as exc:
+        return None, f"{why} ({exc})"
+
+
 def _fix_gitleaks() -> bool:
     """Download the pinned gitleaks release for this platform into
     `~/.aramid/tools/`, verifying sha256 BEFORE ever extracting/trusting it.
@@ -887,22 +950,9 @@ def _fix_gitleaks() -> bool:
     asset = f"gitleaks_{GITLEAKS_VERSION}_{key}.{ext}"
     url = GITLEAKS_RELEASE_URL.format(asset=asset)
 
-    try:
-        # S310 justification: `url` is built a few lines above from
-        # GITLEAKS_RELEASE_URL (a hardcoded "https://github.com/..." format
-        # string), GITLEAKS_VERSION (a pinned constant), and `key`/`asset`
-        # derived from `_gitleaks_platform_key()`'s small fixed set of
-        # platform strings -- never from user/CLI/network input, so the
-        # scheme is always https:// by construction, and the downloaded
-        # bytes are sha256-verified against GITLEAKS_SHA256 below before
-        # ever being trusted/extracted/executed.
-        with urllib.request.urlopen(url, timeout=60) as resp:  # noqa: S310
-            data = resp.read()
-    except OSError as exc:
-        # covers urllib.error.URLError/HTTPError (both OSError subclasses)
-        # plus raw socket errors -- a network failure during `doctor --fix`
-        # should report cleanly, not crash with a raw traceback.
-        print(f"aramid: doctor --fix: could not download gitleaks: {exc}", file=sys.stderr)
+    data, why = _fetch_release_asset(url, asset)
+    if data is None:
+        print(f"aramid: doctor --fix: could not download gitleaks: {why}", file=sys.stderr)
         return False
 
     if hashlib.sha256(data).hexdigest() != GITLEAKS_SHA256[key]:

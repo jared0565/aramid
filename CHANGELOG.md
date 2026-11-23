@@ -176,6 +176,17 @@ to publish a tag that disagrees with it.
   defaults, so nothing changes for a repo that does not set them; a value
   that is not a whole number above 0 passes nothing, and `aramid doctor`
   names it.
+- **`doctor --fix` retries the gitleaks download, then fetches it through
+  GitHub's API.** On 2026-11-08 GitHub's `releases/download/` path
+  answered 504, 502 and timeouts for about three hours while its REST API
+  served the same file; with one attempt at one URL, gitleaks stayed
+  missing and a consumer's CI security job failed seven times (interop
+  round 335). The release URL is now tried up to 3 times, about 2 s and
+  then 8 s apart, then the asset is fetched from the API asset endpoint by
+  the id the release's JSON gives it. The sha256 check holds whichever
+  route served the bytes, and a failure names each route it tried. The
+  API route is unauthenticated, so GitHub's limit of 60 requests an hour
+  per address applies to it.
 
 ## [0.20.19] — 2026-11-22
 
