@@ -1252,6 +1252,38 @@ def test_the_close_message_names_what_back_out_took_away(own_repo, capsys, clock
         f"without the fix -- and without {_MIGRATION}, which it added (the guard)")
 
 
+# The open item 49124609a4b7 led to (operator decision 2026-11-23): the
+# default keep rule kept test paths at HEAD but backed a modified root
+# conftest.py out with the fix -- the same red that proves nothing, with no
+# --back-out at all. Every conftest.py now stays at HEAD, as tests do.
+_CHECK_CONFTEST = _ROOT + """
+with open(os.path.join(ROOT, "conftest.py"), encoding="utf-8") as f:
+    sys.exit(0 if "FIXTURE" in f.read() else 1)
+"""
+CHECK_CONFTEST = _run_script("tests/check_conftest.py")
+
+
+def test_red_proof_keeps_a_modified_root_conftest_at_head(own_repo, capsys):
+    """c4 edits calc.py (a note, no fix) and adds to the root conftest.py the
+    fixture its test needs. Backed out with calc.py, the conftest failed the
+    test for want of the fixture and read as red; kept at HEAD, the test
+    passes without c4, and red proof says so."""
+    repo = own_repo
+    _write(repo.root, "conftest.py", "# base\n")
+    _write(repo.root, "tests/check_conftest.py", _CHECK_CONFTEST)
+    _commit(repo.root, "c3b: a root conftest and its check")
+    _write(repo.root, "conftest.py", "# base\nFIXTURE = 1\n")
+    calc = repo.root / "calc.py"
+    calc.write_text(calc.read_text(encoding="utf-8") + _NOTE, encoding="utf-8")
+    c4 = _commit(repo.root, "c4: a note, and the fixture")
+
+    rc = cmd_ledger_resolve_fixed(repo.root, FID, c4, CHECK_CONFTEST, "r", red_proof=True)
+
+    _refused(capsys, repo.root, rc,
+             f"the test also passes with {c4[:12]} backed out -- it does not detect what "
+             f"that commit fixed, so it is not evidence that the finding is fixed")
+
+
 def test_back_out_without_red_proof_is_refused(tmp_path, capsys):
     _seed(tmp_path, _finding())
 

@@ -160,6 +160,12 @@ to publish a tag that disagrees with it.
   commits ran the main repo's hooks. aramid now asks git where the hooks
   are (`git rev-parse --git-path hooks`; `core.hooksPath` still wins), and
   `init` in a worktree registers the main checkout.
+- **Red proof keeps a `conftest.py` the fix commit changed at HEAD, as it
+  keeps the commit's tests.** A root `conftest.py` is no test path, so a
+  fix commit that also changed one (a fixture its new test uses) had it
+  backed out with the fix, and the run failed for want of the fixture --
+  a red that proved nothing, the same as the `--back-out` hole above but
+  with no flag at all. Every `conftest.py` now stays at HEAD.
 
 ## [0.20.19] — 2026-11-22
 

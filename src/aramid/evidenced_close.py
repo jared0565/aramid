@@ -791,8 +791,10 @@ def red_proof(root: Path, commit: str, head: str, argv: list[str],
                           f"fail for want of it rather than of the fix, and that would read "
                           f"as red; {flag} names a file the fix is in")
         out.add(rel)
+    # Test support stays at HEAD (2026-11-23): a conftest.py the fix commit
+    # also changed, backed out with it, failed the run for a missing fixture.
     kept = [rel for status, rel in changed if rel not in out
-            and (status == "A" or _is_test_path(rel) or rel in named)]
+            and (status == "A" or _is_test_support(rel) or rel in named)]
     staying = set(kept)
     backed = [rel for _status, rel in changed if rel not in staying]
     spare = sorted(rel for rel in added & staying
