@@ -128,6 +128,43 @@ def test_run_with_no_files_launches_nothing_and_examines_nothing(tmp_path, monke
             ("semgrep-inline", ToolState.OK, frozenset())]
 
 
+# Interop round 326 (operator decision 2026-11-23): semgrep's own defaults --
+# a job per core or so (10 on a 12-core machine) and no memory limit -- let
+# semgrep-core be killed for memory on a big machine, and no repo could
+# lower them. `[semgrep] jobs` / `max_memory` (MiB) pass `-j` /
+# `--max-memory`; unset or not a whole number above 0, semgrep's defaults.
+@pytest.mark.parametrize("given, args", [
+    (None, ()),
+    ({}, ()),
+    ({"jobs": 4}, ("-j", "4")),
+    ({"max_memory": 4096}, ("--max-memory", "4096")),
+    ({"jobs": 2, "max_memory": 1024}, ("-j", "2", "--max-memory", "1024")),
+    ({"jobs": 1, "max_memory": 1}, ("-j", "1", "--max-memory", "1")),
+    ({"jobs": 0, "max_memory": -1}, ()),
+    ({"jobs": 2.5, "max_memory": True}, ()),
+    ({"jobs": "4", "max_memory": None}, ()),
+])
+def test_limit_args_passes_only_whole_numbers_above_zero(given, args):
+    assert semgrep.limit_args(given) == args
+
+
+@pytest.mark.parametrize("inline", [False, True], ids=["own", "inline"])
+def test_both_passes_carry_the_limits_ahead_of_the_targets(tmp_path, inline):
+    ctx = RunContext(root=tmp_path, files=["app.py"],
+                     semgrep_limits=("-j", "2", "--max-memory", "1024"))
+
+    argv = semgrep._build_argv(ctx, disable_nosem=inline)
+
+    at = argv.index("-j")
+    assert argv[at:at + 4] == ["-j", "2", "--max-memory", "1024"]
+    assert at < argv.index("--") and argv[argv.index("--") + 1:] == ["app.py"]
+
+
+def test_no_limits_set_passes_no_limit_flags(tmp_path):
+    argv = semgrep._build_argv(RunContext(root=tmp_path, files=["app.py"]))
+    assert "-j" not in argv and "--max-memory" not in argv
+
+
 def test_run_missing_binary(tmp_path, monkeypatch):
     monkeypatch.setattr(
         semgrep, "run_subprocess",

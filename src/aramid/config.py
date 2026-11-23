@@ -54,6 +54,7 @@ class Config:
     deps: dict = field(default_factory=dict)
     hooks: dict = field(default_factory=dict)
     shadow: dict = field(default_factory=dict)
+    semgrep: dict = field(default_factory=dict)
 
 
 def stall_window_s(cfg: "Config") -> float:
@@ -288,6 +289,7 @@ def load_config(root: Path) -> Config:
         tests=merged.get("tests", {}),
         deps=merged.get("deps", {}),
         hooks=merged.get("hooks", {}),
+        semgrep=merged.get("semgrep", {}),
     )
 
 

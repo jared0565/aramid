@@ -299,6 +299,10 @@ class RunContext:
       pack and update-rules build their own ctx and must neither pay for a
       second pass nor report one. Additive: the defaults keep every existing
       construction site exactly as before.
+    semgrep_limits: the `-j` / `--max-memory` argv `[semgrep]` asks for
+      (`runners.semgrep.limit_args`), interop round 326: semgrep's own
+      defaults let semgrep-core be killed for memory on a many-core machine.
+      Set by run_gate only; the default `()` is semgrep's own defaults.
     """
     root: Path
     files: list[str] = field(default_factory=list)
@@ -317,6 +321,7 @@ class RunContext:
     progress: Callable[[str], None] | None = None
     inline_pass: bool = False
     ruff_block_rules: tuple[str, ...] = ()
+    semgrep_limits: tuple[str, ...] = ()
 
 _WIN = sys.platform == "win32"
 _POST_KILL_DRAIN_S = 5.0   # cap on the post-_kill_tree reap wait (test seam)

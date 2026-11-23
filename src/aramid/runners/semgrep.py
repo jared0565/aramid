@@ -101,12 +101,30 @@ def _canonical_rule_id(check_id: str) -> str:
     return check_id
 
 
+_LIMIT_FLAGS = (("jobs", "-j"), ("max_memory", "--max-memory"))
+
+
+def limit_args(section) -> tuple[str, ...]:
+    """The argv `[semgrep]` asks for (interop round 326): `jobs` as `-j`,
+    `max_memory` (MiB) as `--max-memory`. semgrep's own defaults -- about a
+    job per core and no memory limit -- let semgrep-core be killed for
+    memory on a many-core machine, and a degraded semgrep refuses the push.
+    A value that is not a whole number above 0 passes nothing (doctor names
+    it through the config check), so semgrep keeps its own default."""
+    out: list[str] = []
+    for key, flag in _LIMIT_FLAGS:
+        value = (section or {}).get(key)
+        if isinstance(value, int) and not isinstance(value, bool) and value > 0:
+            out += [flag, str(value)]
+    return tuple(out)
+
+
 def _build_argv(ctx, files: list[str] | None = None, *,
                 disable_nosem: bool = False) -> list[str]:
     argv = ["semgrep", "--config", str(VENDORED_RULES_PATH)]
     for extra in getattr(ctx, "extra_semgrep_configs", ()):
         argv += ["--config", extra]
-    argv += ["--json", "--metrics=off", "--quiet"]
+    argv += ["--json", "--metrics=off", "--quiet", *getattr(ctx, "semgrep_limits", ())]
     # FN-38's second pass only. semgrep's own run never carries it.
     if disable_nosem:
         argv.append("--disable-nosem")

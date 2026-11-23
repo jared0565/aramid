@@ -6,6 +6,8 @@ import time
 from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
+
 from aramid import config, gitutil, pipeline
 from aramid.ledger import Ledger
 from aramid.models import Event, EventType, Finding, Gate, Severity, Source, Verdict
@@ -1000,6 +1002,34 @@ def test_run_gate_sets_extra_semgrep_configs_when_pack_present(tmp_path, monkeyp
 
     assert captured_ctx[0].extra_semgrep_configs == (
         str(root / ".aramid-rules" / "regression.yml"),)
+    ledger.close()
+
+
+@pytest.mark.parametrize("toml, limits", [
+    ("[semgrep]\njobs = 3\nmax_memory = 2048\n", ("-j", "3", "--max-memory", "2048")),
+    ("", ()),
+], ids=["set", "unset"])
+def test_run_gate_hands_semgrep_its_limits_from_the_config(tmp_path, monkeypatch, toml,
+                                                           limits):
+    """Interop round 326 (operator decision 2026-11-23): `[semgrep]` reaches
+    the runner as argv, the only channel a runner has to config."""
+    root = _repo(tmp_path)
+    (root / "aramid.toml").write_text("schema_version = 1\n" + toml, encoding="utf-8")
+    cfg = _cfg(root, tmp_path, monkeypatch)
+    ledger = _ledger(tmp_path)
+    captured_ctx: list = []
+
+    def run(ctx):
+        captured_ctx.append(ctx)
+        return RunnerResult("fake", ToolState.OK)
+
+    monkeypatch.setitem(pipeline.RUNNERS, "fake",
+                        SimpleNamespace(run=run, parse=lambda r, c: []))
+    monkeypatch.setitem(pipeline.GATE_RUNNER_KEYS, Gate.PRE_COMMIT, ["fake"])
+
+    pipeline.run_gate(root, Gate.PRE_COMMIT, "staged", cfg, ledger, run_id="run-limits")
+
+    assert captured_ctx[0].semgrep_limits == limits
     ledger.close()
 
 

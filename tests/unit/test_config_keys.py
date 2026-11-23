@@ -50,6 +50,20 @@ def test_known_keys_takes_the_parsed_defaults_when_given():
         ("a",): "table", ("a", "b"): "number", **config_keys.OPTIONAL}
 
 
+@pytest.mark.parametrize("value", [1, 4, 4096])
+def test_semgrep_limits_that_are_whole_numbers_above_zero_pass(value):
+    """Interop round 326 (operator decision 2026-11-23): `[semgrep] jobs` and
+    `max_memory` bound semgrep on a big machine."""
+    assert config_keys.problems({"semgrep": {"jobs": value, "max_memory": value}}) == []
+
+
+@pytest.mark.parametrize("value", [0, -2, 2.5, True, "4"])
+def test_a_semgrep_limit_that_is_not_a_whole_number_above_zero_is_named(value):
+    assert config_keys.problems({"semgrep": {"jobs": value, "max_memory": value}}) == [
+        f"[semgrep].jobs should be a whole number above 0, got {value!r}",
+        f"[semgrep].max_memory should be a whole number above 0, got {value!r}"]
+
+
 def test_a_clean_layer_has_no_problems():
     assert _problems('test_command = "pytest -q"\n[tests]\ncommand = ["pytest"]\n'
                      'timeout_s = 12.5\n[mutation]\nmutation_block_armed = true\n'

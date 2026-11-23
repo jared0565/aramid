@@ -30,6 +30,11 @@ OPTIONAL: dict[tuple[str, ...], str] = {
     ("js_mutation", "baseline_timeout_s"): "number",
     ("shadow",): "table",
     ("shadow", "shadow_block_armed"): "boolean",
+    # Interop round 326: semgrep's `-j` / `--max-memory` (MiB), unset by
+    # default (runners/semgrep.limit_args).
+    ("semgrep",): "table",
+    ("semgrep", "jobs"): "count",
+    ("semgrep", "max_memory"): "count",
     ("block_rules",): "table",
 }
 
@@ -82,7 +87,8 @@ def in_bounds(path: tuple[str, ...], value) -> bool:
 
 _TYPE_WORDS = {"boolean": "true or false", "number": "a number", "string": "a string",
                "list": "a list", "table": "a table",
-               "command": "a string or a list of strings"}
+               "command": "a string or a list of strings",
+               "count": "a whole number above 0"}
 # A command is argv or one string split POSIX-style (runners/tests._argv).
 _ACCEPTS = {"command": ("string", "list")}
 
@@ -166,6 +172,10 @@ def problems(raw: dict, *, known: dict | None = None) -> list[str]:
                     out.append(f"unknown key {_where(path)} -- ignored")
                 continue
             got = _type_name(value)
+            if want == "count":
+                # A whole number above 0: not a float, not a boolean (round 326).
+                got = "count" if got == "number" and isinstance(value, int) and value > 0 \
+                    else got
             if got not in _ACCEPTS.get(want, (want,)):
                 out.append(f"{_where(path)} should be {_TYPE_WORDS[want]}, got {value!r}")
                 continue

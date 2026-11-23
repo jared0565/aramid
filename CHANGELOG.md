@@ -166,6 +166,16 @@ to publish a tag that disagrees with it.
   backed out with the fix, and the run failed for want of the fixture --
   a red that proved nothing, the same as the `--back-out` hole above but
   with no flag at all. Every `conftest.py` now stays at HEAD.
+- **`[semgrep] jobs` and `max_memory` bound semgrep on a big machine.**
+  semgrep picks its own job count, about one per core (10 on a 12-core
+  machine), and sets no memory limit; there semgrep-core could be killed
+  for memory, which degrades semgrep and refuses the push, and no repo
+  could lower either (interop round 326). Set in `aramid.toml`, `jobs`
+  is passed as `-j` and `max_memory` (MiB) as `--max-memory`, to
+  semgrep's own run and its inline pass. Unset, semgrep keeps its
+  defaults, so nothing changes for a repo that does not set them; a value
+  that is not a whole number above 0 passes nothing, and `aramid doctor`
+  names it.
 
 ## [0.20.19] — 2026-11-22
 

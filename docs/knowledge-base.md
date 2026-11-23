@@ -370,6 +370,15 @@ The dependency BLOCK threshold is not here: it is `block_severity` in `block_rul
 |---|---|---|---|
 | `pre_push_match_ci` | bool | `false` | The generated pre-push shim runs `check --gate pre-push --all --strict`, what CI's pre-push-tier step runs (ruff included, since FN-32; CI's pre-commit-tier step, `check --all --strict`, has no hook equivalent), instead of the changed-files range, and passes every exit code through instead of mapping `2` to `0`. Takes effect when the shim is regenerated (`aramid init`); turn it on together with `aramid rebaseline`, or the first full scan's never-seen findings are new and the ratchet blocks the push on them. An unreadable config yields the default shim. |
 
+### `[semgrep]`
+
+| Key | Type | Default | Meaning |
+|---|---|---|---|
+| `jobs` | int | unset | semgrep's `-j`: how many jobs it scans with. Unset, semgrep picks its own, about one per core (10 on a 12-core machine), and on a many-core machine short of memory semgrep-core can be killed, which degrades semgrep and refuses the push. A whole number above 0; anything else is named by `aramid doctor` and passes nothing. Not in `defaults.toml`. |
+| `max_memory` | int | unset | semgrep's `--max-memory`, in MiB. Unset, semgrep sets no limit. A whole number above 0; anything else is named by `aramid doctor` and passes nothing. Not in `defaults.toml`. |
+
+Both apply to semgrep's own run and to its inline pass (`semgrep-inline`).
+
 ### Key naming collisions (same name, different meaning)
 
 - **`max_items_per_drain`**: `[drain]` = `10` (total items per drain run) vs. `[llm]` = `3` (LLM reviews per drain).

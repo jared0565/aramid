@@ -804,6 +804,23 @@ def test_doctor_exits_3_for_an_unparseable_config_after_reporting_everything_els
                         "could not be probed)\n")
 
 
+def test_doctor_names_a_semgrep_limit_that_passes_nothing(tmp_path, capsys, quiet):
+    """Interop round 326 (operator decision 2026-11-23): a `[semgrep]` value
+    that is not a whole number above 0 is not passed to semgrep, and doctor
+    says so -- a WARN row, never an exit code (DEC-4)."""
+    r = _repo(tmp_path)
+    clean_rc = _run(r)
+    capsys.readouterr()
+    (r / "aramid.toml").write_text("schema_version = 1\n[semgrep]\njobs = 0\nmax_memory = 2048\n",
+                                   encoding="utf-8")
+
+    assert _run(r) == clean_rc
+    out = capsys.readouterr().out
+    assert (f"config:\n  WARN     config       {r / 'aramid.toml'}: [semgrep].jobs should be "
+            f"a whole number above 0, got 0\n") in out
+    assert "max_memory" not in out
+
+
 def test_doctor_reports_each_config_problem_as_a_warn_row_and_keeps_its_exit(
         tmp_path, capsys, quiet):
     r = _repo(tmp_path)

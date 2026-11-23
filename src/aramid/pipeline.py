@@ -1144,6 +1144,8 @@ def run_gate(root: Path, gate: Gate, mode: str, cfg: config_mod.Config, ledger: 
                       # push was typed in. Consumers build their own ctx and
                       # get the default None -- the drain stays silent.
                       progress=progress_mod.StderrReporter(),
+                      # Interop round 326: what `[semgrep]` bounds semgrep to.
+                      semgrep_limits=semgrep.limit_args(getattr(cfg, "semgrep", None)),
                       # FN-38: the gate, and only the gate, asks ruff, gitleaks
                       # and semgrep what the repo's own markers hid. The
                       # RESOLVED list, so a repo's additions are asked about
