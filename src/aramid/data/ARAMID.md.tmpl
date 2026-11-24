@@ -230,7 +230,7 @@ MCP-capable agents reach the same loop as tools, via the `.mcp.json` entry `aram
 From a subdirectory, these commands work on the repository root -- its `aramid.toml` and its ledger -- and say so on stderr.
 
 - `aramid check [--gate pre-commit|pre-push] [--staged|--range|--all]` -- run the gate manually.
-- `aramid status` -- open findings, new-since-baseline, open drain findings on commits the remote default branch does not have yet (by id; the session-start block names 3), unrotated historical secrets, unreachable candidates (see `ledger mark-rotated` / `mark-not-a-secret` / `mark-unreachable` below).
+- `aramid status` -- open findings, new-since-baseline, open drain findings on commits the remote default branch does not have yet (by id; the session-start block names 3, without their messages, which are model-written), unrotated historical secrets, unreachable candidates (see `ledger mark-rotated` / `mark-not-a-secret` / `mark-unreachable` below).
 - `aramid doctor [--fix]` -- verify/repair the toolchain and the installed hook's interpreter.
 - `aramid override <id> --reason "..."` -- suppress a WARN finding (ledger-logged).
 - `aramid ledger resolve <id> --fixed <commit> --test "<command>" --reason "..." --red-proof` -- close an `llm-review` finding that is fixed although the line it quotes never changed (see "Closing an LLM finding you fixed" below).

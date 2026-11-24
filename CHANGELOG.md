@@ -50,11 +50,15 @@ to publish a tag that disagrees with it.
   merged a defect a drain's LLM review had recorded about 2 h 45 m
   earlier: the finding was one more count in both places, and nothing put
   it in front of the merge (interop round 336). Now each such finding is
-  listed by id, `file:line` and the first line of its message, newest
-  first: 10 in `status`, 3 in the session-start block (inside its size
-  budget), then `... N more`. Control characters in the message and the
-  path are escaped, as in the handover lines, so a model-written message
-  cannot move the cursor or rewrite the terminal. The default branch is
+  listed newest first: in `status`, 10 of them by id, `file:line` and the
+  first line of the message; in the session-start block (inside its size
+  budget), 3 by id and `file:line` only, then `... N more`. The message
+  is model-written, from code that may not be trusted, and that block
+  reaches the agent under the prefix of aramid's own instructions, so it
+  is left out there (the drain's review of this change, finding
+  2a595860). Control characters in the message and the path are escaped,
+  as in the handover lines, so neither can move the cursor or rewrite the
+  terminal. The default branch is
   the one `refs/remotes/<remote>/HEAD` names (origin's, or else the only
   remote that has one). A repo with no such ref, a finding the push gate
   found (the push already printed it), and a commit git does not know

@@ -89,7 +89,12 @@ _STATUS_UNMERGED = 10
 SESSION_UNMERGED = 3
 
 
-def _unmerged_drain_lines(root: Path, ledger: Ledger, state: dict, limit: int) -> list[str]:
+_NO_MESSAGES_NOTE = ("  (their messages are model-written and not shown here: aramid ledger"
+                     " filter --status open)")
+
+
+def _unmerged_drain_lines(root: Path, ledger: Ledger, state: dict, limit: int, *,
+                          messages: bool = True) -> list[str]:
     """The open findings a DRAIN found on a commit the remote default branch
     does not have yet, newest detection first, at most `limit` of them and a
     count of the rest (interop round 336; operator 2026-11-24). graphite
@@ -99,7 +104,12 @@ def _unmerged_drain_lines(root: Path, ledger: Ledger, state: dict, limit: int) -
     carries -- the one that opened it, or reopened it: `record_run` writes
     no detection for a finding re-reported while open. Positive evidence
     only: no remote default branch, or a commit git does not know (another
-    clone's, gc'd), names nothing."""
+    clone's, gc'd), names nothing.
+
+    `messages=False` (the session-start block): no message text, one note
+    saying where to read it. The message is model-written, from code that
+    may not be trusted, and that block reaches the agent under the prefix
+    aramid's own instructions use (finding 2a595860, operator 2026-11-24)."""
     events = ledger.events()
     drain_runs = {e.run_id for e in events
                   if e.type is EventType.RUN_STARTED and e.payload.get("gate") == "drain"}
@@ -130,13 +140,19 @@ def _unmerged_drain_lines(root: Path, ledger: Ledger, state: dict, limit: int) -
     out = [f"drain findings open on commits {branch} does not have: {len(rows)}"]
     for _at, fid in rows[:limit]:
         rec = state[fid]
+        where = (f"  {fid[:12]} {printable(str(rec.get('tool')))} "
+                 f"{printable(str(rec.get('file')))}:{rec.get('line')}")
+        if not messages:
+            out.append(where)
+            continue
         msg = printable((str(rec.get("message") or "").splitlines() or [""])[0])
         if len(msg) > _MESSAGE_CHARS:
             msg = msg[:_MESSAGE_CHARS - 3] + "..."
-        out.append(f"  {fid[:12]} {printable(str(rec.get('tool')))} "
-                   f"{printable(str(rec.get('file')))}:{rec.get('line')} -- {msg}")
+        out.append(f"{where} -- {msg}")
     if len(rows) > limit:
         out.append(f"  ... {len(rows) - limit} more: aramid ledger filter --status open")
+    if not messages:
+        out.append(_NO_MESSAGES_NOTE)
     return out
 
 

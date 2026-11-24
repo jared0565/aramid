@@ -360,9 +360,10 @@ def _posture_context(repo: Path) -> str:
         lines = [
             "aramid: " + status_mod._open_counts_line(state),
             "aramid: " + status_mod._new_since_baseline_line(ledger, state),
-            # Round 336: by id, not only as a count, before anyone merges.
+            # Round 336: by id, not only as a count, before anyone merges --
+            # and no message: it is model-written (finding 2a595860).
             *("aramid: " + ln for ln in status_mod._unmerged_drain_lines(
-                repo, ledger, state, status_mod.SESSION_UNMERGED)),
+                repo, ledger, state, status_mod.SESSION_UNMERGED, messages=False)),
         ]
         streaks = status_mod._skip_streak_lines(ledger)
         if streaks:
