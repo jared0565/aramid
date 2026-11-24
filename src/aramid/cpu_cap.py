@@ -59,9 +59,18 @@ def lowest(allowed: list[int], n: int) -> list[int]:
     return sorted(allowed)[:n]
 
 
+# A Windows affinity mask covers one processor group: 64 processors at most.
+_GROUP = 64
+
+
 def mask_of(cores: list[int]) -> int:
+    """The Windows affinity mask for `cores`. A core outside one processor
+    group is a ValueError, never a shift: the OS reports none, and `1 << -1`
+    or `1 << 2**63` fails with something else (finding d27acf9f, fuzz)."""
     mask = 0
     for core in cores:
+        if not 0 <= core < _GROUP:
+            raise ValueError(f"core {core} is outside a processor group (0-{_GROUP - 1})")
         mask |= 1 << core
     return mask
 

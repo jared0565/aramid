@@ -163,6 +163,19 @@ def test_masks_and_core_lists_round_trip():
     assert cpu_cap.bits(0) == []
 
 
+def test_a_mask_holds_one_processor_group_of_64():
+    assert cpu_cap.mask_of([0, 63]) == 1 | 1 << 63
+
+
+@pytest.mark.parametrize("core", [-1, 64, 2 ** 63])
+def test_a_core_outside_a_processor_group_is_refused_not_shifted(core):
+    """The 07:00Z drain's fuzz run (finding d27acf9f): 2**63 raised
+    OverflowError out of `1 << core`, and -1 is a negative shift. The OS
+    never reports such a core; a caller that passes one gets a ValueError."""
+    with pytest.raises(ValueError, match=rf"core {core} is outside a processor group \(0-63\)"):
+        cpu_cap.mask_of([1, core])
+
+
 # ----------------------------------------------------- Linux, through a fake --
 
 def _posix(monkeypatch, cores=(0, 1, 2, 3), *, refuse=None, keep=True):
