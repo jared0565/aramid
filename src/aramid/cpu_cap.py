@@ -24,12 +24,18 @@ from typing import NamedTuple
 
 KEY = "[drain].cpu_cores"
 _WHERE = f"{KEY} in ~/.aramid/config.toml"
-_NOT_CAPPED = "the drain runs on every core it started with"
+_STOPPED = (f"a drain with {KEY} set and not applied would run on every core, so none runs"
+            " until it is fixed or removed; queued items stay queued")
 
 
 class Setting(NamedTuple):
     cores: int | None       # None: no cap
     problem: str | None     # why a value that is set is not used
+
+
+class Outcome(NamedTuple):
+    line: str | None        # what the drain prints; None: no cap is set
+    stop: bool              # True: the drain must not run
 
 
 def setting() -> Setting:
@@ -131,18 +137,21 @@ def _pin(cores: list[int]) -> None:
     os.sched_setaffinity(0, cores)
 
 
-def apply(n: int) -> str:
-    """Pin this process to its `n` lowest allowed cores; the line to print.
+def _stop(why: str) -> Outcome:
+    return Outcome(f"aramid: drain: not run -- {why}; {_STOPPED}", True)
 
-    Fails OPEN, the direction the operator chose for an OS with no affinity
-    call (round 351, 2026-11-24): a cap the OS refuses leaves the drain on
-    every core it started with, and this line says so on the drain's own
-    output. The drain is not stopped. That is the load the cap exists to
-    prevent, on a host that set it, so the line names it rather than hiding
-    it."""
+
+def apply(n: int) -> Outcome:
+    """Pin this process to its `n` lowest allowed cores.
+
+    Fails CLOSED on an OS that has the call (operator, 2026-11-24, "stop
+    the drain"): a cap the OS refuses stops the drain, because running it on
+    every core is the load the cap exists to prevent. On an OS with no
+    affinity call (macOS) the drain runs and says so -- the operator's
+    earlier ruling, and a cap there can never apply."""
     if not supported():
-        return (f"aramid: drain: {KEY} = {n} is set, but this OS has no CPU affinity call"
-                " -- the drain runs on every core")
+        return Outcome(f"aramid: drain: {KEY} = {n} is set, but this OS has no CPU affinity"
+                       " call -- the drain runs on every core", False)
     try:
         before = allowed_cores()
         if not before:
@@ -150,19 +159,22 @@ def apply(n: int) -> str:
         _pin(lowest(before, n))
         now = allowed_cores()               # what the OS kept, not what was asked
     except OSError as exc:
-        return (f"aramid: drain: {KEY} = {n} was not applied ({type(exc).__name__}: {exc})"
-                f" -- {_NOT_CAPPED}")
-    return (f"aramid: drain: held to {len(now)} of {len(before)} cores ({KEY} = {n});"
-            " every process it starts inherits that")
+        return _stop(f"{KEY} = {n} could not be applied ({type(exc).__name__}: {exc})")
+    return Outcome(f"aramid: drain: held to {len(now)} of {len(before)} cores ({KEY} = {n});"
+                   " every process it starts inherits that", False)
 
 
-def apply_configured() -> str | None:
-    """cmd_drain's first act: the line to print, or None with no cap set."""
+def apply_configured() -> Outcome:
+    """cmd_drain's first act. A value that is set and cannot be used -- not
+    a whole number above 0, or a machine config that cannot be read -- stops
+    the drain where the cap could apply, as a refused cap does."""
     s = setting()
     if s.problem:
-        return f"aramid: drain: no cpu cap applied -- {s.problem}"
+        if supported():
+            return _stop(s.problem)
+        return Outcome(f"aramid: drain: no cpu cap applied -- {s.problem}", False)
     if s.cores is None:
-        return None
+        return Outcome(None, False)
     return apply(s.cores)
 
 
@@ -171,6 +183,8 @@ def status_suffix() -> str:
     config and nothing of the OS but whether it has the call."""
     s = setting()
     if s.problem:
+        if supported():
+            return f"; drain cpu cap NOT usable -- {s.problem}; no drain runs until it is fixed"
         return f"; drain cpu cap NOT applied -- {s.problem}"
     if s.cores is None:
         return ""

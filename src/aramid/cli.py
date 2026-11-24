@@ -146,7 +146,8 @@ def build_parser() -> argparse.ArgumentParser:
         # Round 177 asked what exit 2 meant because this said nothing.
         epilog=("exit codes: 0 every popped item fully consumed; 2 a consumer degraded or "
                 "raised, or a repo could not be probed (the rest completed); 3 engine "
-                "error -- another drain holds the lock, or the registry is unusable."))
+                "error -- another drain holds the lock, the registry is unusable, or "
+                "[drain].cpu_cores is set and cannot be applied."))
     drain_scope = p_drain.add_mutually_exclusive_group()
     drain_scope.add_argument("--all", action="store_true", help="drain every registered repo")
     drain_scope.add_argument("--repo", default=None, help="drain a single repo (default: .)")

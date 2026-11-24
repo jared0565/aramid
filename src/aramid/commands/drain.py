@@ -717,9 +717,14 @@ def cmd_drain(targets: list, *, dry_run: bool = False, max_items: int | None = N
     # Interop round 351: first, before any thread or consumer starts. On
     # Linux the cap is the calling thread's, and only what starts after it
     # inherits it.
+    # A cap that is set and cannot be used stops the drain here, before the
+    # lock or the registry: uncapped, it is the load the cap exists to stop.
     capped = cpu_cap.apply_configured()
-    if capped:
-        print(capped)
+    if capped.stop:
+        print(capped.line, file=sys.stderr)
+        return 3
+    if capped.line:
+        print(capped.line)
     if targets:
         repos = [Path(t) for t in targets]
     else:

@@ -612,11 +612,11 @@ def test_drain_help_names_the_exit_codes(run_cli):
     """Round 177 asked what `drain`'s exit 2 meant because `drain --help`
     said nothing: 0 every popped item fully consumed, 2 a consumer degraded
     or raised (or a repo could not be probed) with the rest completed, 3 an
-    engine error -- another drain holds the lock, or the registry is
-    unusable."""
+    engine error -- another drain holds the lock, the registry is unusable,
+    or [drain].cpu_cores is set and cannot be applied (round 351)."""
     out = run_cli("drain", "--help")
     assert out.returncode == 0
     text = out.stdout.lower()
     assert "exit codes" in text, out.stdout
-    for phrase in ("2", "degraded", "3", "lock", "registry"):
+    for phrase in ("2", "degraded", "3", "lock", "registry", "cpu_cores"):
         assert phrase in text, (phrase, out.stdout)

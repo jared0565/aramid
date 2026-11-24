@@ -31,6 +31,12 @@ from aramid.commands import status as status_mod
 
 SRC = str(Path(cpu_cap.__file__).resolve().parents[1])
 WHOLE = "should be a whole number above 0, got"
+# Operator 2026-11-24, "stop the drain": a cap set and not usable on an OS
+# that has the call stops the drain -- running uncapped is the load it
+# exists to prevent. macOS (no call) keeps running, as ruled before.
+STOPPED = ("a drain with [drain].cpu_cores set and not applied would run on every core, so"
+           " none runs until it is fixed or removed; queued items stay queued")
+Outcome = cpu_cap.Outcome
 
 # ------------------------------------------- the pytest worker is never pinned
 
@@ -208,8 +214,9 @@ def test_linux_reads_and_pins_the_calling_thread_which_later_threads_inherit(mon
 
     assert cpu_cap.supported() is True
     assert cpu_cap.allowed_cores() == [0, 1, 2, 3]
-    assert cpu_cap.apply(2) == ("aramid: drain: held to 2 of 4 cores ([drain].cpu_cores = 2);"
-                                " every process it starts inherits that")
+    assert cpu_cap.apply(2) == Outcome(
+        "aramid: drain: held to 2 of 4 cores ([drain].cpu_cores = 2); every process it starts"
+        " inherits that", False)
     assert state["sets"] == [(0, [0, 1])]
     assert set(state["gets"]) == {0}
 
@@ -217,41 +224,44 @@ def test_linux_reads_and_pins_the_calling_thread_which_later_threads_inherit(mon
 def test_the_line_reports_what_the_os_kept_not_what_was_asked(monkeypatch):
     _posix(monkeypatch, keep=False)
 
-    assert cpu_cap.apply(1).startswith("aramid: drain: held to 4 of 4 cores "
-                                       "([drain].cpu_cores = 1)")
+    got = cpu_cap.apply(1)
+
+    assert got.line.startswith("aramid: drain: held to 4 of 4 cores ([drain].cpu_cores = 1)")
+    assert got.stop is False
 
 
 def test_a_cap_larger_than_the_machine_keeps_every_core(monkeypatch):
     state = _posix(monkeypatch, cores=(0, 1))
 
-    assert cpu_cap.apply(8).startswith("aramid: drain: held to 2 of 2 cores")
+    assert cpu_cap.apply(8).line.startswith("aramid: drain: held to 2 of 2 cores")
     assert state["sets"] == [(0, [0, 1])]
 
 
-def test_a_refused_cap_leaves_the_drain_running_and_says_so(monkeypatch):
+def test_a_refused_cap_stops_the_drain_and_says_why(monkeypatch):
     _posix(monkeypatch, refuse=OSError(22, "Invalid argument"))
 
-    assert cpu_cap.apply(1) == (
-        "aramid: drain: [drain].cpu_cores = 1 was not applied (OSError: [Errno 22] Invalid"
-        " argument) -- the drain runs on every core it started with")
+    assert cpu_cap.apply(1) == Outcome(
+        "aramid: drain: not run -- [drain].cpu_cores = 1 could not be applied (OSError:"
+        f" [Errno 22] Invalid argument); {STOPPED}", True)
 
 
 def test_no_allowed_cores_is_not_a_cap_of_zero(monkeypatch):
     state = _posix(monkeypatch, cores=())
 
-    assert cpu_cap.apply(1) == (
-        "aramid: drain: [drain].cpu_cores = 1 was not applied (OSError: the OS reported no"
-        " cores this process may use) -- the drain runs on every core it started with")
+    assert cpu_cap.apply(1) == Outcome(
+        "aramid: drain: not run -- [drain].cpu_cores = 1 could not be applied (OSError: the OS"
+        f" reported no cores this process may use); {STOPPED}", True)
     assert state["sets"] == []
 
 
-def test_an_os_without_an_affinity_call_applies_nothing(monkeypatch):
+def test_an_os_without_an_affinity_call_applies_nothing_and_the_drain_runs(monkeypatch):
     monkeypatch.setattr(cpu_cap, "os", SimpleNamespace())
     monkeypatch.setattr(cpu_cap, "_platform", lambda: "darwin")
 
     assert cpu_cap.supported() is False
-    assert cpu_cap.apply(1) == ("aramid: drain: [drain].cpu_cores = 1 is set, but this OS has"
-                                " no CPU affinity call -- the drain runs on every core")
+    assert cpu_cap.apply(1) == Outcome(
+        "aramid: drain: [drain].cpu_cores = 1 is set, but this OS has no CPU affinity call --"
+        " the drain runs on every core", False)
 
 
 # --------------------------------------------------- Windows, through a fake --
@@ -333,27 +343,26 @@ def test_windows_reads_and_pins_the_process_mask_which_children_inherit(monkeypa
 
     assert cpu_cap.supported() is True
     assert cpu_cap.allowed_cores() == [1, 2, 3, 4]
-    assert cpu_cap.apply(2) == ("aramid: drain: held to 2 of 4 cores ([drain].cpu_cores = 2);"
-                                " every process it starts inherits that")
+    assert cpu_cap.apply(2) == Outcome(
+        "aramid: drain: held to 2 of 4 cores ([drain].cpu_cores = 2); every process it starts"
+        " inherits that", False)
     assert k.set_masks == [0b110]
 
 
-def test_windows_names_a_refused_read(monkeypatch):
+def test_windows_names_a_refused_read_and_stops(monkeypatch):
     _windows(monkeypatch, _Kernel32(0b1111, refuse_get=True))
 
-    assert cpu_cap.apply(1) == (
-        "aramid: drain: [drain].cpu_cores = 1 was not applied (OSError: [Errno 87]"
-        " GetProcessAffinityMask failed (Windows error 87)) -- the drain runs on every core"
-        " it started with")
+    assert cpu_cap.apply(1) == Outcome(
+        "aramid: drain: not run -- [drain].cpu_cores = 1 could not be applied (OSError:"
+        f" [Errno 87] GetProcessAffinityMask failed (Windows error 87)); {STOPPED}", True)
 
 
-def test_windows_names_a_refused_pin(monkeypatch):
+def test_windows_names_a_refused_pin_and_stops(monkeypatch):
     k = _windows(monkeypatch, _Kernel32(0b1111, refuse_set=True))
 
-    assert cpu_cap.apply(1) == (
-        "aramid: drain: [drain].cpu_cores = 1 was not applied (OSError: [Errno 87]"
-        " SetProcessAffinityMask failed (Windows error 87)) -- the drain runs on every core"
-        " it started with")
+    assert cpu_cap.apply(1) == Outcome(
+        "aramid: drain: not run -- [drain].cpu_cores = 1 could not be applied (OSError:"
+        f" [Errno 87] SetProcessAffinityMask failed (Windows error 87)); {STOPPED}", True)
     assert k.set_masks == [0b1]
 
 
@@ -362,9 +371,9 @@ def test_windows_names_a_refused_pin(monkeypatch):
 def test_the_configured_cap_is_applied(tmp_path, monkeypatch):
     _user(tmp_path, monkeypatch, "[drain]\ncpu_cores = 3\n")
     asked = []
-    monkeypatch.setattr(cpu_cap, "apply", lambda n: asked.append(n) or "LINE")
+    monkeypatch.setattr(cpu_cap, "apply", lambda n: asked.append(n) or Outcome("LINE", False))
 
-    assert cpu_cap.apply_configured() == "LINE"
+    assert cpu_cap.apply_configured() == Outcome("LINE", False)
     assert asked == [3]
 
 
@@ -372,20 +381,39 @@ def test_with_no_cap_nothing_is_applied_or_said(tmp_path, monkeypatch):
     monkeypatch.setattr(config, "_user_config_path", lambda: tmp_path / "absent.toml")
     monkeypatch.setattr(cpu_cap, "apply", lambda n: pytest.fail("applied with no cap"))
 
-    assert cpu_cap.apply_configured() is None
+    assert cpu_cap.apply_configured() == Outcome(None, False)
 
 
-def test_a_bad_value_is_said_and_nothing_is_pinned(tmp_path, monkeypatch):
+def test_a_bad_value_stops_the_drain_and_nothing_is_pinned(tmp_path, monkeypatch):
     p = _user(tmp_path, monkeypatch, "[drain]\ncpu_cores = -2\n")
+    _posix(monkeypatch)
     monkeypatch.setattr(cpu_cap, "apply", lambda n: pytest.fail("pinned on a bad value"))
 
-    assert cpu_cap.apply_configured() == (
-        f"aramid: drain: no cpu cap applied -- {p}: [drain].cpu_cores {WHOLE} -2")
+    assert cpu_cap.apply_configured() == Outcome(
+        f"aramid: drain: not run -- {p}: [drain].cpu_cores {WHOLE} -2; {STOPPED}", True)
+
+
+def test_an_unreadable_machine_config_stops_the_drain(tmp_path, monkeypatch):
+    p = _user(tmp_path, monkeypatch, "[drain\n")
+    _posix(monkeypatch)
+
+    assert cpu_cap.apply_configured() == Outcome(
+        f"aramid: drain: not run -- {p} could not be read (TOMLDecodeError); {STOPPED}", True)
+
+
+def test_on_macos_a_bad_value_is_said_and_the_drain_runs(tmp_path, monkeypatch):
+    p = _user(tmp_path, monkeypatch, "[drain]\ncpu_cores = -2\n")
+    monkeypatch.setattr(cpu_cap, "os", SimpleNamespace())
+    monkeypatch.setattr(cpu_cap, "_platform", lambda: "darwin")
+
+    assert cpu_cap.apply_configured() == Outcome(
+        f"aramid: drain: no cpu cap applied -- {p}: [drain].cpu_cores {WHOLE} -2", False)
 
 
 def test_the_drain_pins_before_it_reads_the_registry_and_says_so(monkeypatch, capsys):
     order = []
-    monkeypatch.setattr(cpu_cap, "apply_configured", lambda: order.append("cap") or "CAP LINE")
+    monkeypatch.setattr(cpu_cap, "apply_configured",
+                        lambda: order.append("cap") or Outcome("CAP LINE", False))
     real = drain_mod.registry.load_registry
     monkeypatch.setattr(drain_mod.registry, "load_registry",
                         lambda **kw: order.append("registry") or real(**kw))
@@ -396,8 +424,21 @@ def test_the_drain_pins_before_it_reads_the_registry_and_says_so(monkeypatch, ca
     assert capsys.readouterr().out.splitlines()[0] == "CAP LINE"
 
 
+def test_a_cap_that_cannot_be_used_stops_the_drain_before_anything(monkeypatch, capsys):
+    monkeypatch.setattr(cpu_cap, "apply_configured", lambda: Outcome("STOP LINE", True))
+    monkeypatch.setattr(drain_mod.registry, "load_registry",
+                        lambda **kw: pytest.fail("the registry was read"))
+    monkeypatch.setattr(drain_mod, "_acquire_lock", lambda *a: pytest.fail("the lock was taken"))
+
+    rc = drain_mod.cmd_drain([], dry_run=False)
+
+    out, err = capsys.readouterr()
+    assert rc == 3
+    assert err == "STOP LINE\n" and out == ""
+
+
 def test_a_drain_with_no_cap_prints_nothing_about_it(monkeypatch, capsys):
-    monkeypatch.setattr(cpu_cap, "apply_configured", lambda: None)
+    monkeypatch.setattr(cpu_cap, "apply_configured", lambda: Outcome(None, False))
 
     drain_mod.cmd_drain([], dry_run=True)
 
@@ -421,8 +462,19 @@ def test_status_says_when_this_os_cannot_apply_it(tmp_path, monkeypatch):
         " CPU affinity call -- not applied")
 
 
-def test_status_names_a_bad_value(tmp_path, monkeypatch):
+def test_status_says_a_bad_value_stops_every_drain(tmp_path, monkeypatch):
     p = _user(tmp_path, monkeypatch, "[drain]\ncpu_cores = 0\n")
+    _posix(monkeypatch)
+
+    assert cpu_cap.status_suffix() == (
+        f"; drain cpu cap NOT usable -- {p}: [drain].cpu_cores {WHOLE} 0; no drain runs until"
+        " it is fixed")
+
+
+def test_status_on_macos_names_a_bad_value_as_not_applied(tmp_path, monkeypatch):
+    p = _user(tmp_path, monkeypatch, "[drain]\ncpu_cores = 0\n")
+    monkeypatch.setattr(cpu_cap, "os", SimpleNamespace())
+    monkeypatch.setattr(cpu_cap, "_platform", lambda: "darwin")
 
     assert cpu_cap.status_suffix() == (
         f"; drain cpu cap NOT applied -- {p}: [drain].cpu_cores {WHOLE} 0")
@@ -473,7 +525,7 @@ def _child(apply_line):
 
 @real
 def test_a_process_the_capped_drain_starts_runs_on_the_cap():
-    lines = _child("print(cpu_cap.apply(1))")
+    lines = _child("print(cpu_cap.apply(1).line)")
 
     assert lines[0].startswith("aramid: drain: held to 1 of ")
     assert lines[-1] == "1"

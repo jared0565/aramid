@@ -103,9 +103,12 @@ to publish a tag that disagrees with it.
   scheduled-drain line. Unset means no cap. Only the machine's file is
   read: a repo's `aramid.toml` that sets it gets a `config:` warning and
   is ignored. macOS has no affinity call, so there the cap is reported
-  and not applied. A cap the OS refuses fails open: the drain runs
-  uncapped and says so, the same choice as on macOS, even though running
-  uncapped is the load the cap exists to prevent. The round's other note,
+  and not applied. A cap that is set and cannot be
+  used -- not a whole number above 0, an unreadable machine config, or a
+  pin the OS refuses -- stops the drain before it takes the lock: it
+  exits 3 and says why, queued items stay queued, and `aramid status`
+  says no drain runs until it is fixed. Running uncapped is the load the
+  cap exists to prevent. The round's other note,
   that `aramid status` said `installed` for a disabled task, was fixed in
   0.20.14.
 
