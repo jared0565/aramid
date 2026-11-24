@@ -12,6 +12,27 @@ to publish a tag that disagrees with it.
 
 ## [Unreleased]
 
+## [0.20.20] — 2026-11-24
+
+Run `aramid init` to refresh ARAMID.md: its text changed, and nothing else
+it writes did. No dependency changed. What changes for an existing repo:
+
+- A string `[tests].command` holding a shell operator (`&&`, `||`, `;`,
+  `|`, `&`, `<`, `>`) outside quotes now gets every push refused until it
+  is fixed; before, only its first program ran. The fix is one line: write
+  it as a list (`command = ["python", "-m", "pytest", "-q"]`) or name a
+  script.
+- The session-start block now leads with the gate banner, then any pending
+  handover, then the ledger's lines.
+- A command started in a subdirectory of an armed repository works on the
+  repository root, with the root's config and ledger. Running the gate
+  from a subdirectory no longer gets that subdirectory a config or ledger
+  of its own.
+- `aramid init` judges the fleet after registering a repo, and prints the
+  readiness line.
+- Gate runs in a `git worktree` count for the repo they belong to, and
+  `aramid init` and `aramid doctor` work in a worktree.
+
 ### Added
 
 - **`aramid ledger resolve --fixed ... --red-proof --back-out <path>` proves
@@ -7336,7 +7357,8 @@ Stated plainly because each one changes how you should deploy this:
 - **PyPI publishing is not set up.** Install from a GitHub Release artifact or
   from git; `pip install aramid` does not work.
 
-[Unreleased]: https://github.com/jared0565/aramid/compare/v0.20.19...HEAD
+[Unreleased]: https://github.com/jared0565/aramid/compare/v0.20.20...HEAD
+[0.20.20]: https://github.com/jared0565/aramid/releases/tag/v0.20.20
 [0.20.19]: https://github.com/jared0565/aramid/releases/tag/v0.20.19
 [0.20.18]: https://github.com/jared0565/aramid/releases/tag/v0.20.18
 [0.20.17]: https://github.com/jared0565/aramid/releases/tag/v0.20.17
