@@ -6,10 +6,16 @@ started before a registry fix; doctor called it a relative entry and said
 its entry escaped, on one line; lookups are unchanged."""
 import os
 
+import pytest
+
 from aramid import handover, toolpath
 from aramid.commands import doctor
 
-LF_ENTRY = "C:\n    \\Users\\someone\\jdk-17\\bin"
+# The entry bytesTTS reported holds a `:`, which is POSIX's PATH separator,
+# so it can only be built as one entry on Windows (WSL caught the first
+# version splitting it in two). Every other test uses one without a colon.
+REPORTED = "C:\n    \\Users\\someone\\jdk-17\\bin"
+LF_ENTRY = "jdk\n    \\Users\\someone\\jdk-17\\bin"
 TAIL = (": a terminal started before PATH was changed keeps its old PATH -- open a new"
         " terminal, or remove the entry")
 
@@ -24,12 +30,21 @@ def _relative(entry):
             " make it absolute or remove it")
 
 
+@pytest.mark.skipif(os.pathsep != ";", reason="the reported entry holds POSIX's separator")
 def test_the_reported_entry_is_named_for_its_line_feed_not_called_relative(monkeypatch):
-    _path(monkeypatch, LF_ENTRY)
+    _path(monkeypatch, REPORTED)
 
     assert doctor.relative_path_lines() == [
         "  WARN     PATH         entry `C:\\x0a    \\Users\\someone\\jdk-17\\bin` holds a"
         " control character (LF at character 3)" + TAIL]
+
+
+def test_an_entry_with_a_line_feed_is_named_for_it_not_called_relative(monkeypatch):
+    _path(monkeypatch, LF_ENTRY)
+
+    assert doctor.relative_path_lines() == [
+        "  WARN     PATH         entry `jdk\\x0a    \\Users\\someone\\jdk-17\\bin` holds a"
+        " control character (LF at character 4)" + TAIL]
 
 
 def test_an_absolute_entry_with_a_carriage_return_is_named_too(monkeypatch, tmp_path):
@@ -57,7 +72,7 @@ def test_rows_follow_path_order_and_a_plain_relative_entry_is_as_before(monkeypa
     rows = doctor.relative_path_lines()
 
     assert rows[0] == _relative("bin") and rows[2] == _relative("tools")
-    assert rows[1].startswith("  WARN     PATH         entry `C:\\x0a ") and len(rows) == 3
+    assert rows[1].startswith("  WARN     PATH         entry `jdk\\x0a ") and len(rows) == 3
 
 
 def test_every_row_is_one_line(monkeypatch):
