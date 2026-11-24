@@ -76,6 +76,15 @@ to publish a tag that disagrees with it.
   a different sha) flagged 43, nearly all of them true notes about the
   remote. The resume offer is unchanged. It costs one git call when HEAD
   has not moved, two when it has, and only when a handover is pending.
+- **`aramid fleet` says when its snapshot was computed, and `aramid init`
+  re-judges the fleet.** bytesTTS registered at 16:07Z, and `aramid fleet`
+  at about 16:10Z left it out: the snapshot was the 15:00Z drain's, and
+  the text output showed no time until a snapshot was 12 hours old
+  (interop round 347). Now the report's second line is `snapshot computed
+  <time> (<age> ago)`. `aramid init` judges the fleet again after
+  registering a repo, as `aramid fleet deregister` already did, and prints
+  the readiness line, so the new repo is in the report and its counts at
+  once, shown as `(no rows)` until its first gate run.
 
 ### Changed
 

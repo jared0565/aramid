@@ -819,6 +819,20 @@ _COLUMNS = (("no_skip_streak", "skip"), ("consumers_healthy", "consumers"),
             ("dep_audit_ran", "dep-audit"))
 
 
+def _snapshot_line(computed_at, now: str | None) -> str:
+    """When the verdict was judged, and how long ago (interop round 347,
+    operator 2026-11-24). bytesTTS read a 15:00Z snapshot at ~16:10Z that
+    left out a repo registered at 16:07Z, and the text printed no time; it
+    did only past STALE_AFTER_H, as the verdict line's suffix."""
+    if _parse(computed_at) is None:
+        return "snapshot computed: unknown"
+    now_dt = _parse(now) if now is not None else None
+    if now_dt is None:
+        return f"snapshot computed {computed_at}"
+    from aramid.handover import age
+    return f"snapshot computed {computed_at} ({age(str(computed_at), now_dt)} ago)"
+
+
 def render_report(verdict: dict | None, policy: Policy, *, now: str | None = None) -> str:
     """`aramid fleet`: the repo x criteria matrix, the streak, the verdict
     with its reasons. `ok` / `RED` / `-` (not applicable, or no rows)."""
@@ -829,6 +843,7 @@ def render_report(verdict: dict | None, policy: Policy, *, now: str | None = Non
     if verdict is None:
         out.append("  no verdict yet -- first drain after promotion computes it")
         return "\n".join(out)
+    out.insert(1, _snapshot_line(verdict.get("computed_at"), now))
     repos = list(verdict.get("repos", {}).values())
     width = max([len(v["name"]) for v in repos] + [4])
     cells_header = "  ".join(f"{label:<10}" for _k, label in _COLUMNS)

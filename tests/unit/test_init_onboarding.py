@@ -357,6 +357,9 @@ def test_init_one_onboards_a_fresh_repo_and_summarises_it(tmp_path, capsys, onbo
         "  hooks armed:       yes\n"
         "  baseline findings: 0\n"
         "  historical secrets:0\n"
+        # round 347: registered, so the fleet is judged at once
+        "fleet: 1.0 readiness INSUFFICIENT DATA -- 0/1 repos green, streak 0.0d,"
+        " versions 0/2; no rows: repo\n"
         "aramid: init: done. Run `aramid status` any time to see open findings.\n")
     assert "aramid: init: full-history gitleaks scan skipped (missing)\n" in err
     assert onboard["gate"] == [(Gate.ALL, "all")]
@@ -389,6 +392,8 @@ def test_init_one_on_a_subdirectory_onboards_the_whole_repository(tmp_path, caps
         "  hooks armed:       yes\n"
         "  baseline findings: 0\n"
         "  historical secrets:0\n"
+        "fleet: 1.0 readiness INSUFFICIENT DATA -- 0/1 repos green, streak 0.0d,"
+        " versions 0/2; no rows: repo\n"
         "aramid: init: done. Run `aramid status` any time to see open findings.\n")
     assert "scope_subpath" not in (r / "aramid.toml").read_text(encoding="utf-8")
 

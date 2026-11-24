@@ -41,6 +41,7 @@ def _verdict(**over):
 
 REPORT = (
     "fleet health -- 1.0 readiness (policy: 14 days, 2 versions, 7-day row window)\n"
+    "snapshot computed 2026-09-20T12:00:00+00:00 (0s ago)\n"  # round 347
     "\n"
     "  repo      rows  latest                     skip        consumers   resolvers   "
     "self-block  dep-audit\n"
@@ -76,9 +77,10 @@ def test_render_report_name_column_is_never_narrower_than_its_heading():
                                      "green": True, "red_criteria": [],
                                      "criteria": {"no_skip_streak": True}}})
     lines = fleet.render_report(v, fleet.Policy()).splitlines()
-    assert lines[2] == ("  repo  rows  latest                     skip        consumers   "
+    assert lines[1] == "snapshot computed 2026-09-20T12:00:00+00:00"  # no clock: no age
+    assert lines[3] == ("  repo  rows  latest                     skip        consumers   "
                         "resolvers   self-block  dep-audit")
-    assert lines[3] == ("  ab       2  2026-09-20T12:00:00+00:00  ok          -           "
+    assert lines[4] == ("  ab       2  2026-09-20T12:00:00+00:00  ok          -           "
                         "-           -           -")
 
 
@@ -99,7 +101,8 @@ def test_render_report_streak_lines():
 def test_render_report_marks_a_stale_verdict():
     lines = fleet.render_report(_verdict(), fleet.Policy(),
                                 now="2026-09-22T12:00:00+00:00").splitlines()
-    assert lines[9] == "verdict: not-ready (stale: computed 2026-09-20T12:00:00+00:00)"
+    assert lines[1] == "snapshot computed 2026-09-20T12:00:00+00:00 (2d ago)"
+    assert lines[10] == "verdict: not-ready (stale: computed 2026-09-20T12:00:00+00:00)"
 
 
 # ------------------------------------------------------------- _read_jsonl --

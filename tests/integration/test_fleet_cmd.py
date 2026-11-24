@@ -55,16 +55,17 @@ def test_fleet_report_full_lines(capsys):
     lines = capsys.readouterr().out.splitlines()
     assert lines[0] == ("fleet health -- 1.0 readiness (policy: 14 days, 2 versions, "
                         "7-day row window)")
-    assert lines[2] == ("  repo      rows  latest                     skip        consumers   "
+    assert lines[1].startswith("snapshot computed ")  # round 347
+    assert lines[3] == ("  repo      rows  latest                     skip        consumers   "
                         "resolvers   self-block  dep-audit")
-    assert lines[3] == ("  aramid      41  2026-09-20T12:00:00+00:00  ok          ok          "
+    assert lines[4] == ("  aramid      41  2026-09-20T12:00:00+00:00  ok          ok          "
                         "ok          ok          RED")
-    assert lines[4] == ("  graphite     0  (no rows)                  -           -           "
+    assert lines[5] == ("  graphite     0  (no rows)                  -           -           "
                         "-           -           -")
-    assert lines[6] == "  streak: none (fleet not green)"
-    assert lines[7] == "  armed anywhere: no"
-    assert lines[9] == "verdict: not-ready"
-    assert lines[10:] == ["  - aramid: dep_audit_ran", "  - no repo is armed"]
+    assert lines[7] == "  streak: none (fleet not green)"
+    assert lines[8] == "  armed anywhere: no"
+    assert lines[10] == "verdict: not-ready"
+    assert lines[11:] == ["  - aramid: dep_audit_ran", "  - no repo is armed"]
 
 
 def test_fleet_report_header_says_when_the_row_window_is_disabled(capsys):

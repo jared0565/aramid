@@ -139,6 +139,39 @@ def test_init_registers_repo_in_central_registry(tmp_path, monkeypatch):
     assert any(Path(e["path"]).resolve() == r.resolve() for e in registry.load_registry())
 
 
+def test_init_rejudges_the_fleet_so_a_new_member_is_in_the_report_at_once(
+        tmp_path, monkeypatch, capsys):
+    """Interop round 347 item 2 (operator 2026-11-24): bytesTTS registered
+    at 16:07Z and `aramid fleet` at ~16:10Z left it out -- the snapshot was
+    the 15:00Z drain's. `fleet deregister` already re-judges at once; now
+    registration does too."""
+    from aramid import fleet, registry
+    monkeypatch.setattr(doctor, "probe_toolchain", _fake_present)
+    r = _repo(tmp_path)
+    monkeypatch.setattr(registry, "registry_path", lambda: tmp_path / "central" / "repos.toml")
+    assert fleet.read_verdict() is None
+
+    assert init.cmd_init(r) == 0
+
+    verdict = fleet.read_verdict()
+    assert verdict is not None
+    assert [v["name"] for v in verdict["repos"].values()] == ["repo"]
+    assert any(ln.startswith("fleet: 1.0 readiness ")
+               for ln in capsys.readouterr().out.splitlines())
+
+
+def test_init_that_registers_nothing_judges_nothing(tmp_path, monkeypatch):
+    from aramid import fleet, registry
+    monkeypatch.setattr(doctor, "probe_toolchain", _fake_present)
+    r = _repo(tmp_path)
+    monkeypatch.setattr(registry, "registry_path", lambda: tmp_path / "central" / "repos.toml")
+    monkeypatch.setenv("ARAMID_CONSUMER_WORKTREE", str(r))
+
+    assert init.cmd_init(r) == 0
+
+    assert fleet.read_verdict() is None
+
+
 def test_init_inside_a_consumer_worktree_leaves_the_registry_alone(tmp_path, monkeypatch, capsys):
     """The consumed repo's own tooling ran `aramid init` inside a fuzz
     worktree (2026-09-18) and registered the checkout as a fleet member.

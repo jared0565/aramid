@@ -614,6 +614,17 @@ def _init_one(target: Path) -> int:
     print(f"  hooks armed:       {armed}")
     print(f"  baseline findings: {baseline_count}")
     print(f"  historical secrets:{historical_count}")
+    if not refused:
+        # Interop round 347 item 2 (operator 2026-11-24): re-judged now, as
+        # `fleet deregister` does, so `aramid fleet` and its counts include
+        # this repo at once rather than after the next drain (up to 4 h:
+        # bytesTTS, registered at 16:07Z, was left out of the 15:00Z
+        # snapshot). Reads the fleet store only; never raises.
+        from aramid import __version__, fleet
+        now = _now()
+        verdict = fleet.run_judgement(now, aramid_version=__version__)
+        if verdict is not None:
+            print(fleet.readiness_line(verdict, now=now))
     if not shim_ok:
         # Exit 0 here hid the gap from anything that ran init (round 322):
         # 3, as for the other refusal to arm hooks above.
