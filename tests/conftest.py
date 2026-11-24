@@ -285,6 +285,23 @@ def _stub_installed_task_limit(request, monkeypatch):
     yield
 
 
+@pytest.fixture(autouse=True)
+def _stub_drain_job(request, monkeypatch):
+    """On Windows `cmd_drain` holds its process in a kill-on-close Job object
+    for the rest of its life (aramid.drain_job). In-process that process is
+    the pytest worker: every drain test would nest it one job deeper and
+    hand every later child the worker starts to the job. Stubbed suite-wide
+    to "not joined"; drain_job's own tests opt out with
+    @pytest.mark.real_drain_job and fake kernel32 instead, and the real job
+    is proven in a child process (tests/integration/test_drain_deadline.py)."""
+    if "real_drain_job" in request.keywords:
+        yield
+        return
+    from aramid import drain_job
+    monkeypatch.setattr(drain_job, "join", lambda: drain_job.Outcome(None, False))
+    yield
+
+
 @pytest.fixture
 def checkout_env() -> dict[str, str]:
     """`os.environ` with the aramid THIS process imported first on PYTHONPATH.

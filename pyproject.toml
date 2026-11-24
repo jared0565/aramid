@@ -177,6 +177,7 @@ pythonpath = ["src"]
 markers = [
     "real_interpreter_probe: opt out of the autouse agent_interpreter_lines stub (the probe's own tests)",
     "real_task_limit_probe: opt out of the autouse installed_task_limit_minutes stub (the reader's own tests)",
+    "real_drain_job: opt out of the autouse drain_job.join stub (the module's own tests)",
 ]
 
 # PIN THE RULE SET EXPLICITLY -- DO NOT DELETE AS "the default anyway".

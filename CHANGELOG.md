@@ -12,6 +12,10 @@ to publish a tag that disagrees with it.
 
 ## [Unreleased]
 
+### Fixed
+
+- **On Windows, a process a consumer was starting as the drain's hard deadline stopped it could outlive the drain.** The deadline kills a consumer's process tree with `taskkill /T`, which lists the tree and then kills it: a process started in between was never listed and kept running, and `taskkill` still exited 0, so nothing showed it. Measured: 16 of 20 trials left one to four processes running. `aramid drain` now holds itself in a kill-on-close Job object before it starts anything, so every process it starts, at any depth, ends when the drain does: at the deadline, on a crash, or when something outside kills it. Measured: 0 of 48 trials, nested inside another job included, as under Task Scheduler. If Windows refuses the job, the drain says so on stderr (`aramid: drain: not held in a kill-on-close job (...)`) and runs as before. Gates, hooks and every other command are unchanged; Linux and macOS already kill a consumer's whole process group at once. Found while investigating a Windows CI failure of the deadline test.
+
 ## [0.20.20] — 2026-11-24
 
 Run `aramid init` to refresh ARAMID.md: its text changed, and nothing else

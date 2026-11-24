@@ -63,7 +63,7 @@ _CHILD = textwrap.dedent('''
     # Each child starts a grandchild, records both pids, and sleeps: a kill
     # that stops only the direct child leaves the grandchild running, which
     # is what a mutant's pytest would do.
-    GRANDPARENT = (
+    GRANDPARENT = cfg.get("grandparent") or (
         "import subprocess, sys, time; "
         "g = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(%d)']); "
         "open(sys.argv[1], 'w').write('%%d %%d' %% (__import__('os').getpid(), g.pid)); "
@@ -108,10 +108,10 @@ def _repo_with_item(tmp_path):
     return r, item
 
 
-def _run_child(tmp_path, env, repo, *, deadline_s, sleep_s, loops):
+def _run_child(tmp_path, env, repo, *, deadline_s, sleep_s, loops, grandparent=None):
     (tmp_path / "shells").mkdir(exist_ok=True)
     arg = json.dumps({"tmp": str(tmp_path), "repo": str(repo), "deadline_s": deadline_s,
-                      "sleep_s": sleep_s, "loops": loops})
+                      "sleep_s": sleep_s, "loops": loops, "grandparent": grandparent})
     started = time.monotonic()
     cp = subprocess.run([sys.executable, "-c", _CHILD, arg], env=env, capture_output=True,
                         text=True, errors="replace", timeout=240)
@@ -175,3 +175,59 @@ def test_control_a_deadline_that_does_not_fall_due_drains_cleanly(tmp_path, chec
     assert rows[0]["note"] == "ok:0,ok:0"
     assert queued is None, "a clean drain left the item queued"
     assert not (tmp_path / "drain.lock").exists()
+
+
+# The consumer's child starts a burst of grandchildren around the deadline, so
+# the kill lands while it is still starting them. On Windows `taskkill /T` lists
+# the tree and THEN kills it: a grandchild started in between was never listed,
+# and it outlived the drain in 16 of 20 measured trials while taskkill exited 0
+# (2026-11-24). Each grandchild touches its own heartbeat file until a stop file
+# appears, so "still running after the drain" is read from writes, not from a
+# PID -- a reused PID cannot pass for a survivor, and none can hide behind one.
+_BURST_LEAD_S = 1.0     # the burst starts this long before the deadline...
+_BURST_GAP_S = 0.02     # ...one grandchild every 20 ms...
+_BURST_MAX = 150        # ...and stops by itself, so a missed deadline cannot run away
+_SPAWNER = textwrap.dedent('''
+    import json, os, subprocess, sys, time
+    from pathlib import Path
+    tmp = Path(sys.argv[1]).parent
+    HEART = (
+        "import sys, time\\n"
+        "from pathlib import Path\\n"
+        "hb, stop = Path(sys.argv[1]), Path(sys.argv[2])\\n"
+        "end = time.monotonic() + 120\\n"
+        "while time.monotonic() < end and not stop.exists():\\n"
+        "    hb.touch()\\n"
+        "    time.sleep(0.1)\\n")
+    lock = json.loads((tmp / "drain.lock").read_text(encoding="utf-8"))
+    start = float(lock["started_at"]) + float(lock["deadline_s"]) - LEAD
+    Path(sys.argv[1]).write_text(str(os.getpid()), encoding="utf-8")
+    while time.time() < start:
+        time.sleep(0.02)
+    for n in range(MAX):
+        subprocess.Popen([sys.executable, "-c", HEART, str(tmp / f"hb-{n}"), str(tmp / "stop")])
+        time.sleep(GAP)
+    time.sleep(600)
+''').replace("LEAD", repr(_BURST_LEAD_S)).replace("MAX", repr(_BURST_MAX)) \
+    .replace("GAP", repr(_BURST_GAP_S))
+
+
+def test_nothing_the_consumer_starts_as_the_deadline_kills_it_outlives_the_drain(
+        tmp_path, checkout_env):
+    repo, _item = _repo_with_item(tmp_path)
+    try:
+        cp, took = _run_child(tmp_path, checkout_env, repo, deadline_s=10.0, sleep_s=0,
+                              loops=1, grandparent=_SPAWNER)
+        exited = time.time()
+        assert cp.returncode == 2, (cp.returncode, cp.stdout, cp.stderr)
+        assert took < 90, f"the drain ran {took:.0f} s: the deadline did not stop it"
+        beats = sorted(tmp_path.glob("hb-*"))
+        # Teeth: the burst ran, so the kill met children being started.
+        assert len(beats) >= 5, f"only {len(beats)} grandchildren started before the kill"
+        time.sleep(1.5)
+        alive = [hb.name for hb in beats if hb.stat().st_mtime > exited + 0.5]
+        assert alive == [], (f"{len(alive)} of {len(beats)} grandchildren still running "
+                             f"after the drain exited: {alive[:10]}")
+    finally:
+        (tmp_path / "stop").touch()     # ends every survivor within 0.1 s
+        time.sleep(0.5)

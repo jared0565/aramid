@@ -27,7 +27,7 @@ from typing import Callable
 from aramid import __version__
 from aramid import autolearn
 from aramid import config as config_mod
-from aramid import cpu_cap, drain_limits
+from aramid import cpu_cap, drain_job, drain_limits
 from aramid import fleet, health
 from aramid import gitutil, leftovers, policy, queue, redact, registry, toolpath, triage
 from aramid import ledger as ledger_mod
@@ -725,6 +725,14 @@ def cmd_drain(targets: list, *, dry_run: bool = False, max_items: int | None = N
         return 3
     if capped.line:
         print(capped.line)
+    # Windows: before the drain starts anything, so every process it starts,
+    # at any depth, is in the job and ends when this process does -- however
+    # it ends (drain_job). A dry run starts nothing. A refusal is named and
+    # the drain runs as it did before the job existed.
+    if not dry_run:
+        held = drain_job.join()
+        if held.line:
+            print(held.line, file=sys.stderr)
     if targets:
         repos = [Path(t) for t in targets]
     else:
