@@ -122,14 +122,19 @@ def _unmerged_drain_lines(root: Path, ledger: Ledger, state: dict, limit: int) -
     rows = [(at, fid) for at, fid, head in found if head in unmerged]
     if not rows:
         return []
+    # The message is model-written and the path comes from the repo, and
+    # both reach a terminal and the agent's session-start context: escaped
+    # as the handover lines are, then cut, so the cut counts what prints.
+    from aramid.handover import printable
     rows.sort(reverse=True)
     out = [f"drain findings open on commits {branch} does not have: {len(rows)}"]
     for _at, fid in rows[:limit]:
         rec = state[fid]
-        msg = (str(rec.get("message") or "").splitlines() or [""])[0]
+        msg = printable((str(rec.get("message") or "").splitlines() or [""])[0])
         if len(msg) > _MESSAGE_CHARS:
             msg = msg[:_MESSAGE_CHARS - 3] + "..."
-        out.append(f"  {fid[:12]} {rec.get('tool')} {rec.get('file')}:{rec.get('line')} -- {msg}")
+        out.append(f"  {fid[:12]} {printable(str(rec.get('tool')))} "
+                   f"{printable(str(rec.get('file')))}:{rec.get('line')} -- {msg}")
     if len(rows) > limit:
         out.append(f"  ... {len(rows) - limit} more: aramid ledger filter --status open")
     return out

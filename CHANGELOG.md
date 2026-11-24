@@ -52,7 +52,9 @@ to publish a tag that disagrees with it.
   it in front of the merge (interop round 336). Now each such finding is
   listed by id, `file:line` and the first line of its message, newest
   first: 10 in `status`, 3 in the session-start block (inside its size
-  budget), then `... N more`. The default branch is the one
+  budget), then `... N more`. Control characters in the message and the
+  path are escaped, as in the handover lines, so a model-written message
+  cannot move the cursor or rewrite the terminal. The default branch is the one
   `refs/remotes/<remote>/HEAD` names (origin's, or else the only remote
   that has one). A repo with no such ref, a finding the push gate found
   (the push already printed it), and a commit git does not know list

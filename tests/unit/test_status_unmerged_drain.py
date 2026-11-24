@@ -188,6 +188,31 @@ def test_exactly_the_limit_needs_no_count_of_the_rest(tmp_path):
     assert len(lines) == 3 and not any("more:" in ln for ln in lines), lines
 
 
+def test_control_characters_in_the_message_and_path_are_escaped(tmp_path):
+    """The message is model-written and the path comes from the repo; both
+    reach a terminal and the agent's session-start context. ESC cannot
+    clear the screen or retitle the window, as with the handover lines."""
+    r, main, feat = _repo(tmp_path)
+    _detect(r, "d1", "2026-11-08T07:01:54+00:00", feat,
+            _finding(E, "a\x1b]0;owned\x07.py", message="boom\x1b[2Jgone\x85next"))
+
+    line = _lines(r)[1]
+
+    assert "\x1b" not in line and "\x07" not in line and "\x85" not in line
+    assert line == (f"  {E[:12]} llm-review a\\x1b]0;owned\\x07.py:290 -- "
+                    "boom\\x1b[2Jgone")
+
+
+def test_the_cut_counts_the_escaped_text(tmp_path):
+    r, main, feat = _repo(tmp_path)
+    _detect(r, "d1", "2026-11-08T07:01:54+00:00", feat,
+            _finding(E, "a.py", message="\x1b" * 30))
+
+    msg = _lines(r)[1].split(" -- ", 1)[1]
+
+    assert len(msg) == 100 and msg.endswith("...") and "\x1b" not in msg
+
+
 def test_the_line_helper_names_the_remote_branch_and_its_commit(tmp_path):
     r, main, feat = _repo(tmp_path)
 
