@@ -211,7 +211,8 @@ def test_the_budget_stops_past_the_limit_not_at_it(tmp_path, monkeypatch):
     _fake_git(monkeypatch, ["src/auth/handler.py"], "+exec(x)\n")
     cfg = type("C", (), {"triage": {"min_score": 40, "extra_security_paths": []},
                          "ignore_paths": []})()
-    clock = iter([0.0, 2.0, 2.0, 2.0, 2.0, 2.0]).__next__   # every check exactly at the limit
+    # The start, then one check per signal (six), every one exactly at the limit.
+    clock = iter([0.0, 2.0, 2.0, 2.0, 2.0, 2.0, 2.0]).__next__
     try:
         result = triage.score(tmp_path, "a", "b", cfg, led, budget_s=2.0, monotonic=clock)
     finally:
@@ -576,3 +577,112 @@ def test_no_root_or_an_unreadable_suppressions_file_binds_nothing(tmp_path, monk
             triage.SURVIVOR_WEIGHT
     finally:
         led.close()
+
+
+# ---------------------------------------- crash signal: the fuzz replay's ticket ---
+# A fuzz crash closes only when a drain's fuzz run replays the same cases on
+# that function and it no longer crashes (consumers.fuzz, crash_not_reproduced).
+# The commit that fixed one is small: 5815696 (cpu_cap.mask_of, finding
+# d27acf9f) scored 18 against `min_score` 40, was never queued, and nothing
+# ever replayed the crash -- the survivor signal's gap, for the fuzz
+# producer (operator decision 2026-11-24, "add a crash-retest trigger").
+
+def _crash_ledger(tmp_path, file="src/pkg/x.py", tool="fuzz", fid="c" * 64):
+    from aramid.models import Finding, Gate, Severity, Verdict
+    led = Ledger(tmp_path / "l.db")
+    f = Finding(id=fid, tool=tool, rule="crash-overflowerror", severity_raw="medium",
+                severity=Severity.MEDIUM, verdict=Verdict.WARN, file=file, line=4,
+                message="fuzz crash: f({'n': 1}) raised OverflowError: boom", evidence="",
+                gate=Gate.ALL)
+    led.record_run("r1", "2026-11-24T07:28:47+00:00", "drain", {tool}, {file}, [f])
+    return led
+
+
+def test_crash_signal_fires_for_a_changed_file_holding_an_open_fuzz_crash(tmp_path):
+    led = _crash_ledger(tmp_path)
+    try:
+        assert triage.crash_signal(led, ["src/pkg/x.py"]) == (
+            triage.CRASH_WEIGHT,
+            ["crash-retest: 1 file(s) with an open fuzz crash incl. src/pkg/x.py"])
+    finally:
+        led.close()
+
+
+def test_crash_signal_matches_paths_however_they_are_spelled(tmp_path):
+    led = _crash_ledger(tmp_path, file="src/pkg/x.py")
+    try:
+        assert triage.crash_signal(led, ["src\\pkg\\x.py"])[0] == triage.CRASH_WEIGHT
+    finally:
+        led.close()
+
+
+def test_crash_signal_counts_each_file_once_and_names_the_first(tmp_path):
+    from aramid.models import Finding, Gate, Severity, Verdict
+
+    def crash(fid, file):
+        return Finding(id=fid, tool="fuzz", rule="crash-indexerror", severity_raw="medium",
+                       severity=Severity.MEDIUM, verdict=Verdict.WARN, file=file, line=9,
+                       message="fuzz crash: g() raised IndexError", evidence="", gate=Gate.ALL)
+    led = Ledger(tmp_path / "l.db")
+    # One run, so no crash is resolved as absent from a later run's scope.
+    led.record_run("r1", "2026-11-24T07:28:47+00:00", "drain", {"fuzz"},
+                   {"src/pkg/x.py", "src/pkg/y.py"},
+                   [crash("d" * 64, "src/pkg/y.py"), crash("e" * 64, "src/pkg/x.py"),
+                    crash("f" * 64, "src/pkg/x.py")])   # two crashes in x.py
+    try:
+        assert triage.crash_signal(led, ["src/pkg/y.py", "src/pkg/x.py"]) == (
+            triage.CRASH_WEIGHT,
+            ["crash-retest: 2 file(s) with an open fuzz crash incl. src/pkg/x.py"])
+    finally:
+        led.close()
+
+
+def test_crash_signal_is_silent_off_the_crash_and_for_other_tools(tmp_path):
+    led = _crash_ledger(tmp_path)
+    try:
+        assert triage.crash_signal(led, ["src/pkg/other.py", "README.md"]) == (0, [])
+        assert triage.crash_signal(led, []) == (0, [])
+    finally:
+        led.close()
+    (tmp_path / "m").mkdir()
+    mutation = _crash_ledger(tmp_path / "m", tool="mutation")
+    try:
+        # A mutation survivor on the path is the survivor signal's, not this one's.
+        assert triage.crash_signal(mutation, ["src/pkg/x.py"]) == (0, [])
+    finally:
+        mutation.close()
+
+
+def test_crash_signal_needs_the_crash_open_and_is_silent_on_a_torn_ledger(tmp_path, monkeypatch):
+    from aramid.models import Event, EventType
+    led = _crash_ledger(tmp_path)
+    try:
+        led.append(Event(EventType.FINDING_RESOLVED, "r2", "2026-11-24T15:50:26+00:00",
+                         finding_id="c" * 64, payload={"auto_resolved": "crash_not_reproduced"}))
+        assert led.open_findings()["c" * 64]["status"] == "fixed"
+        assert triage.crash_signal(led, ["src/pkg/x.py"]) == (0, [])
+
+        def torn():
+            raise RuntimeError("torn")
+        monkeypatch.setattr(led, "open_findings", torn)
+        assert triage.crash_signal(led, ["src/pkg/x.py"]) == (0, [])
+    finally:
+        led.close()
+
+
+def test_a_small_fix_to_a_fuzz_crash_reaches_min_score(tmp_path, monkeypatch):
+    """5815696's shape: one source file, a few lines, no security path, no
+    risky content. Without this signal it was never queued."""
+    led = _crash_ledger(tmp_path)
+    _fake_git(monkeypatch, ["src/pkg/x.py"], "+    if not 0 <= core < 64:\n")
+    monkeypatch.setattr(triage, "blast_radius_signal", lambda root, paths: (0, []))
+    monkeypatch.setattr(triage, "novelty_signal", lambda seen, paths: (0, []))
+    cfg = type("C", (), {"triage": {"min_score": 40, "extra_security_paths": []},
+                         "ignore_paths": []})()
+    try:
+        result = triage.score(tmp_path, "a", "b", cfg, led)
+    finally:
+        led.close()
+    assert result.score >= 40, result
+    assert result.reasons == ("crash-retest: 1 file(s) with an open fuzz crash incl. "
+                              "src/pkg/x.py",)

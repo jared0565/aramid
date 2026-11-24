@@ -32,6 +32,9 @@ BLAST_MAX = 25
 # that maps to a recorded survivor is the one push carrying the evidence the
 # survivor needs, and it scored nothing on path, content or blast radius.
 SURVIVOR_WEIGHT = 40
+# The same for a recorded fuzz crash: the push that fixes one is small, and
+# only a drain's fuzz run can see that the crash is gone.
+CRASH_WEIGHT = 40
 
 _SECURITY_TOKENS = ("auth", "session", "login", "crypto", "token", "secret",
                     "permission", "middleware", "config")
@@ -211,6 +214,31 @@ def survivor_signal(ledger, paths: list[str],
         return 0, []
 
 
+def crash_signal(ledger, paths: list[str]) -> tuple[int, list[str]]:
+    """Does this push change a file holding an open fuzz crash? A crash
+    closes only when a drain's fuzz run replays the cases that found it and
+    it no longer crashes (consumers.fuzz, `crash_not_reproduced`), and a
+    drain runs only for a push that scores. The push that fixes a crash is
+    small: 5815696 fixed finding d27acf9f in cpu_cap.mask_of, scored 18
+    against `min_score` 40, was never queued, and the crash stayed open with
+    its fix shipped (operator decision 2026-11-24, "add a crash-retest
+    trigger"). By file, as the survivor signal is for a changed source
+    file: the fuzz run re-examines only the functions whose lines changed,
+    so a push elsewhere in the file costs one drain item that closes
+    nothing. Never raises."""
+    try:
+        crashes = {normalize_path(rec["file"]) for rec in ledger.open_findings().values()
+                   if rec.get("tool") == "fuzz" and rec.get("status") == "open"
+                   and rec.get("file")}
+        hit = sorted(crashes & {normalize_path(p) for p in paths})
+        if not hit:
+            return 0, []
+        return CRASH_WEIGHT, [f"crash-retest: {len(hit)} file(s) with an open fuzz crash "
+                              f"incl. {hit[0]}"]
+    except Exception:
+        return 0, []
+
+
 def _suppressed_ids(root: Path | None) -> set[str]:
     """Finding ids the tracked suppressions file binds; empty when there is
     no root or the file cannot be read (see `survivor_signal`)."""
@@ -248,6 +276,7 @@ def score(root: Path, base: str | None, head: str, cfg, ledger, *,
         lambda: novelty_signal(queue.triaged_paths(ledger), paths),
         lambda: blast_radius_signal(root, paths),
         lambda: survivor_signal(ledger, paths, root),
+        lambda: crash_signal(ledger, paths),
     )
     for sig in signals:
         if monotonic() - start > budget_s:

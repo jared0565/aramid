@@ -65,7 +65,7 @@ A drain-time analysis module implementing the protocol in `consumers/base.py`: e
 - A `CONSUMER_RUN_FINISHED` ledger event is appended per consumer per item: `{consumer, item_id, state, duration_s, cost, finding_count, note, **result.extra}`.
 
 ### Triage score
-A pure, git-plumbing-only, self-budgeted score (default `budget_s=2.0`, checked between signal computations and measured from the first signal, after the diff fetch -- a slow `git` no longer zeroes the score; a partial score is kept past budget with a `"triage-budget-exceeded"` reason) computed by `triage.py score()`, capped at 100 total, from four weighted signals:
+A pure, git-plumbing-only, self-budgeted score (default `budget_s=2.0`, checked between signal computations and measured from the first signal, after the diff fetch -- a slow `git` no longer zeroes the score; a partial score is kept past budget with a `"triage-budget-exceeded"` reason) computed by `triage.py score()`, capped at 100 total, from six weighted signals:
 
 | Signal | Weight | Trigger |
 |---|---|---|
@@ -74,6 +74,7 @@ A pure, git-plumbing-only, self-budgeted score (default `budget_s=2.0`, checked 
 | `novelty_signal` | 20 | any touched path never seen in a prior triage run (per `queue.triaged_paths`) |
 | `blast_radius_signal` | 0/10/18/25 | number of graphite-graph dependents of touched files: ≥10→25, ≥3→18, ≥1→10, else 0. Fails open (returns 0/`[]`) if `graph-out/graph.json` is absent, corrupt, or unexpectedly shaped |
 | `survivor_signal` | 40 | a changed file holds an open or `pending_retest` mutation survivor, or a changed test maps to its module by the `gap_addressed` stem rule; or any changed test while an `open` survivor is not bound by `.aramid-suppressions.toml` (FN-37: the drain's re-test already treats the suite as the mapping). An unreadable suppressions file counts nothing as bound |
+| `crash_signal` | 40 | a changed file holds an open `fuzz` crash. A crash closes only when a drain's fuzz run replays it without the crash (`crash_not_reproduced`), and the commit that fixes one is small: 5815696 scored 18 and was never queued. By file, so a push elsewhere in that file also queues an item that closes nothing |
 
 `run_triage()` always records a `TRIAGE_RECORDED` event (so the drain sweep can resume from its last-seen head), and enqueues (`QUEUE_ITEM_ADDED`) only at/above `[triage].min_score` (default 40).
 
