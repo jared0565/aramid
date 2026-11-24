@@ -244,6 +244,15 @@ to publish a tag that disagrees with it.
   and `aramid drain --dry-run` shows `held_not_graded=N`. Cost: the
   baseline compiles what it imports afresh, about 9 s more on aramid's
   own 5,600-test suite.
+- **A survivor re-test the wall budget dropped is named in the note.** A
+  drain's note read `re-tested 0 of 1 open survivor(s), 0 killed` and
+  nothing else when the item's clock ran out before the re-test's turn
+  (interop round 329). The row was already owed and re-tested by the next
+  drain that finds the queue empty (FN-43, 0.20.9), but nothing said so.
+  The note now adds `N survivor(s) not re-tested: the wall budget ran out
+  first, owed to the next drain with an empty queue`. A re-test that a
+  spent `retest_cap` or `max_mutants` ruled out is not reported that way,
+  even when the clock also ran out later.
 
 ## [0.20.19] — 2026-11-22
 

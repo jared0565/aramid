@@ -1007,3 +1007,73 @@ def test_an_idle_drain_does_not_pay_a_baseline_twice_for_a_row_it_cannot_grade(
         assert drain_mod._pending_retest_item(r, config_mod.load_config(r), led, "t") is None
     finally:
         led.close()
+
+
+# --- a re-test the wall budget dropped is named (interop round 329) ---------
+#
+# "re-tested 0 of 1 open survivor(s)" was the only trace of a re-test the
+# budget dropped; the row is owed (`retest_owed`, FN-43) and the next drain
+# that finds the queue empty re-tests it, but the note said neither
+# (operator 2026-11-24: "name the drop in the note"). Named only when the
+# CLOCK was what stopped it -- a spent `retest_cap` or `max_mutants` is not
+# "the wall budget ran out first".
+
+CLOCK_CUT = ("; {n} survivor(s) not re-tested: the wall budget ran out first, owed to the "
+             "next drain with an empty queue")
+
+
+def _hygiene_repo(tmp_path, toml=TOML):
+    r, base, head = _repo(tmp_path, toml)
+    _record_survivors(r, ["f1", "f2", "f3"])
+    return r, head, _commit(r, "tests/test_other.py", "def test_x():\n    assert True\n")
+
+
+def test_survivors_the_clock_kept_from_their_re_test_are_named_and_owed(tmp_path, monkeypatch):
+    r, head, head2 = _hygiene_repo(tmp_path)
+    # started, f1's one check, then past the budget at f2's
+    _clock(monkeypatch, 0.0, 0.0, 600.001)
+
+    res, oracle = _run(r, head, head2, monkeypatch, CLAIMED, item_id="q2")
+
+    _stats(res, tested=1, killed_s1=1, retest_candidates=3, retested=1, retest_killed=1,
+           retest_truncated=True, truncated=True, retested_ids=[fp("f1")])
+    assert res.note.endswith(CLOCK_CUT.format(n=2)), res.note
+    assert res.extra["retest_owed"] == sorted((fp("f2"), fp("f3")))
+
+
+def test_a_spent_retest_cap_is_not_called_the_wall_budget(tmp_path, monkeypatch):
+    r, head, head2 = _hygiene_repo(tmp_path, TOML.replace("retest_cap = 3", "retest_cap = 1"))
+    _clock(monkeypatch, 0.0, 0.0, 600.001)
+
+    res, _ = _run(r, head, head2, monkeypatch, CLAIMED, item_id="q2")
+
+    assert res.extra["retested"] == 1
+    assert "wall budget ran out first" not in res.note, res.note
+
+
+def test_a_cap_spent_before_the_clock_ran_out_is_not_called_the_wall_budget(
+        tmp_path, monkeypatch):
+    """The cap AND the clock: the claimed pass spends `retest_cap` on f1,
+    then the range runs out of clock. f2 and f3 were lost to the cap first."""
+    r, base, head = _repo(tmp_path, TOML.replace("retest_cap = 3", "retest_cap = 1"))
+    _record_survivors(r, ["f1", "f2", "f3"])
+    head2 = _commit(r, "tests/test_calc.py", TEST + "def test_two():\n    assert f1(2) == 3\n")
+    # started, the claimed f1's check, the range's first mutant, then past it
+    _clock(monkeypatch, 0.0, 0.0, 0.0, 600.001)
+
+    res, _ = _run(r, base, head2, monkeypatch, CLAIMED, item_id="q2")
+
+    assert res.extra["retested"] == 1 and res.extra["tested"] == 2 and res.extra["truncated"]
+    assert "wall budget ran out first" not in res.note, res.note
+
+
+def test_a_hygiene_pass_cut_by_max_mutants_is_not_called_the_wall_budget(tmp_path, monkeypatch):
+    r, base, head = _repo(tmp_path, TOML.replace("max_mutants = 20", "max_mutants = 2"))
+    _record_survivors(r, ["f13", "f14"])
+    head2 = _commit(r, "tests/test_other.py", "def test_x():\n    assert True\n")
+
+    res, _ = _run(r, base, head2, monkeypatch, {}, default=OK1)
+
+    assert res.extra["tested"] == 2 and res.extra["retested"] == 0
+    assert "wall budget ran out first" not in res.note, res.note
+    assert res.extra["retest_owed"] == sorted((fp("f13"), fp("f14")))

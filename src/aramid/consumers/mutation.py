@@ -1672,6 +1672,22 @@ def consume(item, ctx: DrainContext) -> ConsumerResult:
         if stats["retest_skipped"] - spent:
             note += (f"; {stats['retest_skipped'] - spent} survivor(s) not re-tested: "
                      f"more occurrences than the re-test slots left")
+    if done:
+        # Interop round 329: the clock kept these from their re-test. Each is
+        # owed (`retest_owed`, below) and the next drain that finds the queue
+        # empty re-tests it; "re-tested 0 of 1" alone said neither. The
+        # hygiene pass runs last and nothing after it sets `done`, so a
+        # candidate none of these sets holds was cut by the clock -- unless
+        # `retest_cap` was spent, which ends both passes whatever the clock.
+        # (Today a candidate is unseen only when `done`; the guard is kept
+        # nested, not `and`-ed, so the invariant costs no equivalent mutant.)
+        if stats["retested"] < retest_cap:
+            seen = (set(stats["retested_ids"]) | set(skipped_fps) | unregenerable | tested_fps)
+            cut = sum(1 for fid, rel, _line, _op in retests
+                      if rel not in withheld and fid not in seen)
+            if cut:
+                note += (f"; {cut} survivor(s) not re-tested: the wall budget ran out first, "
+                         f"owed to the next drain with an empty queue")
     # Round 327, last so they read as the run's verdict on its own grading.
     if withheld:
         note += _not_graded_note(withheld)
