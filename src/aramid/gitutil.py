@@ -330,6 +330,43 @@ def rev_sha(root: Path, rev: str) -> str | None:
     return cp.stdout.strip() if cp.returncode == 0 else None
 
 
+def remote_default_branch(root: Path) -> tuple[str, str] | None:
+    """(`<remote>/<branch>`, commit) of the remote default branch with no push
+    in flight: the ref `refs/remotes/<remote>/HEAD` names -- origin's, else
+    the only remote that has one -- as `departure` picks its line when no
+    push names a remote. None with no such HEAD, two candidates and no
+    origin, or a HEAD naming no commit (a branch since pruned). One git
+    call: `for-each-ref` prints a symref's resolved commit, and leaves a
+    dangling one out."""
+    cp = _run(root, "for-each-ref", "--format=%(refname) %(symref) %(objectname)",
+              "refs/remotes")
+    heads = {}
+    for row in cp.stdout.splitlines() if cp.returncode == 0 else ():
+        name, target, sha = (row.split(" ") + ["", ""])[:3]
+        if target and sha and name.endswith("/HEAD"):
+            heads[name[len("refs/remotes/"):-len("/HEAD")]] = (target[len("refs/remotes/"):], sha)
+    if "origin" in heads:
+        return heads["origin"]
+    if len(heads) == 1:
+        return next(iter(heads.values()))
+    return None
+
+
+def unreached_by(root: Path, commits, tip: str) -> set[str]:
+    """The `commits` that `tip` does not reach, in ONE git call however many
+    there are (a spawn costs ~0.1 s on Windows, and the session-start hook
+    pays it): `rev-list --ignore-missing <commits> --not <tip>` lists what
+    only they reach. A commit git does not know (another clone's, gc'd) is
+    left out, never called unreached. Empty when git fails."""
+    wanted = set(commits)
+    if not wanted:
+        return set()
+    cp = _run(root, "rev-list", "--ignore-missing", *sorted(wanted), "--not", tip)
+    if cp.returncode != 0:
+        return set()
+    return wanted & set(cp.stdout.split())
+
+
 def first_parent(root: Path, rev: str) -> str | None:
     cp = _run(root, "rev-parse", "--verify", f"{rev}^")
     return cp.stdout.strip() if cp.returncode == 0 else None

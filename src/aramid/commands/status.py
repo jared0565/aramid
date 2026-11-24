@@ -12,6 +12,7 @@ from datetime import date, datetime, timezone
 from pathlib import Path
 
 from aramid import config as config_mod
+from aramid import gitutil
 from aramid import health
 from aramid import review
 from aramid import toolpath
@@ -79,6 +80,59 @@ def _new_since_baseline_line(ledger: Ledger, state: dict) -> str:
     new_ids = [fid for fid, rec in state.items()
                if rec.get("status") == "open" and fid not in baseline]
     return f"NEW since baseline: {len(new_ids)}"
+
+
+_MESSAGE_CHARS = 100
+# How many `aramid status` names; the session-start block names fewer
+# (`agent_hook`), inside its 9,500-character budget.
+_STATUS_UNMERGED = 10
+SESSION_UNMERGED = 3
+
+
+def _unmerged_drain_lines(root: Path, ledger: Ledger, state: dict, limit: int) -> list[str]:
+    """The open findings a DRAIN found on a commit the remote default branch
+    does not have yet, newest detection first, at most `limit` of them and a
+    count of the rest (interop round 336; operator 2026-11-24). graphite
+    merged a defect a drain's llm-review had recorded 2 h 45 m before: the
+    finding was one more count here, and nothing put it in front of the
+    merge. A finding's commit is the `head` its newest drain detection
+    carries -- the one that opened it, or reopened it: `record_run` writes
+    no detection for a finding re-reported while open. Positive evidence
+    only: no remote default branch, or a commit git does not know (another
+    clone's, gc'd), names nothing."""
+    events = ledger.events()
+    drain_runs = {e.run_id for e in events
+                  if e.type is EventType.RUN_STARTED and e.payload.get("gate") == "drain"}
+    newest: dict[str, tuple[str, str]] = {}
+    for e in events:
+        if (e.type is EventType.FINDING_DETECTED and e.run_id in drain_runs
+                and e.payload.get("head")):
+            newest[e.finding_id] = (e.at, e.payload["head"])
+    found = [(at, fid, head) for fid, (at, head) in newest.items()
+             if state.get(fid, {}).get("status") == "open"]
+    # The ledger first: with no open drain finding (the usual case) the
+    # session-start hook spawns no git at all.
+    if not found:
+        return []
+    line = gitutil.remote_default_branch(root)
+    if line is None:
+        return []
+    branch, tip = line
+    unmerged = gitutil.unreached_by(root, {head for _at, _fid, head in found}, tip)
+    rows = [(at, fid) for at, fid, head in found if head in unmerged]
+    if not rows:
+        return []
+    rows.sort(reverse=True)
+    out = [f"drain findings open on commits {branch} does not have: {len(rows)}"]
+    for _at, fid in rows[:limit]:
+        rec = state[fid]
+        msg = (str(rec.get("message") or "").splitlines() or [""])[0]
+        if len(msg) > _MESSAGE_CHARS:
+            msg = msg[:_MESSAGE_CHARS - 3] + "..."
+        out.append(f"  {fid[:12]} {rec.get('tool')} {rec.get('file')}:{rec.get('line')} -- {msg}")
+    if len(rows) > limit:
+        out.append(f"  ... {len(rows) - limit} more: aramid ledger filter --status open")
+    return out
 
 
 def _detected_at(ledger: Ledger) -> dict[str, str]:
@@ -506,6 +560,7 @@ def cmd_status(root) -> int:
             f"  {_last_run_line(ledger)}",
             f"  {_open_counts_line(state)}",
             f"  {_new_since_baseline_line(ledger, state)}",
+            *(f"  {ln}" for ln in _unmerged_drain_lines(root, ledger, state, _STATUS_UNMERGED)),
             f"  {_aging_line(ledger, state, suppressed)}",
             *([f"  {inline_line}"] if inline_line else []),
         ]

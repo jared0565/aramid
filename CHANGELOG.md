@@ -45,6 +45,21 @@ to publish a tag that disagrees with it.
   for each such file (`python` with each PATHEXT extension), and the
   status `agent surfaces:` line adds `launch shadowed by <file>`. Advisory:
   no exit code changes, and nothing `init` writes changed.
+- **`aramid status` and the session-start block name each open drain
+  finding on a commit the default branch does not have yet.** graphite
+  merged a defect a drain's LLM review had recorded about 2 h 45 m
+  earlier: the finding was one more count in both places, and nothing put
+  it in front of the merge (interop round 336). Now each such finding is
+  listed by id, `file:line` and the first line of its message, newest
+  first: 10 in `status`, 3 in the session-start block (inside its size
+  budget), then `... N more`. The default branch is the one
+  `refs/remotes/<remote>/HEAD` names (origin's, or else the only remote
+  that has one). A repo with no such ref, a finding the push gate found
+  (the push already printed it), and a commit git does not know list
+  nothing. Nothing new blocks. With no open drain finding, no git is run;
+  with some, the session-start block took about 0.4 s longer on aramid's
+  own repo. ARAMID.md's summary of `aramid status` says so; `aramid init`
+  writes the new text.
 
 ### Fixed
 
