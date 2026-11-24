@@ -904,6 +904,42 @@ def pending_retests(ledger, root: Path) -> list[tuple[str, str, int, str | None]
     return _retest_candidates(ledger, root, statuses=PENDING_ONLY, include=_owed_ids(ledger))
 
 
+def _not_graded_record(ledger) -> dict | None:
+    """The `not_graded` of the NEWEST mutation row carrying the key -- every
+    run that reaches the import check writes one, an empty `files` included,
+    so a graded run releases what an older one held -- or None. Never
+    raises."""
+    rec = None
+    try:
+        for e in ledger.events():
+            if (e.type is EventType.CONSUMER_RUN_FINISHED
+                    and e.payload.get("consumer") == NAME
+                    and "not_graded" in e.payload):
+                rec = e.payload.get("not_graded")
+    except Exception:
+        return None
+    return rec if isinstance(rec, dict) else None
+
+
+def withheld_pending(ledger, root: Path, cfg) -> set[str]:
+    """The ids among the empty-queue item's survivors (`pending_retests`)
+    whose file the newest import check withheld at this HEAD under this
+    suite (round 327). Re-testing one would pay a baseline to withhold it
+    again, and the row would stay pending, so every idle drain cut the same
+    item (measured 2026-11-24). Held while HEAD and the configured suite are
+    what that run saw (operator 2026-11-24): a new commit or a changed test
+    command re-tries, as `_kept_kills` keys a part-kill. A malformed record
+    holds nothing -- unknown is not withheld."""
+    rec = _not_graded_record(ledger)
+    files = rec.get("files") if rec else None
+    if not isinstance(files, list):
+        return set()
+    if (rec.get("head"), rec.get("suite")) != (gitutil.rev_sha(root, "HEAD"),
+                                              _suite_label(_full_argv(cfg, root))):
+        return set()
+    return {fid for fid, rel, _line, _op in pending_retests(ledger, root) if rel in files}
+
+
 def retests_enabled(cfg) -> bool:
     """The consumer is on and the re-test knob is on -- read the way
     `consume` reads them, so the drain and the consumer cannot disagree."""
@@ -1639,9 +1675,14 @@ def consume(item, ctx: DrainContext) -> ConsumerResult:
     # Round 327, last so they read as the run's verdict on its own grading.
     if withheld:
         note += _not_graded_note(withheld)
+        # The drain holds these at this head and suite (`withheld_pending`).
+        held = sum(1 for _fid, rel, _line, _op in retests if rel in withheld)
+        if held:
+            note += f"; {held} re-test(s) held until a new commit or a change to the test command"
     if stats["imports_unobserved"]:
         note += _UNOBSERVED_NOTE
     extra = dict(stats)
+    extra["not_graded"] = {"head": item.head, "suite": suite, "files": sorted(withheld)}
     # FN-43. What this run killed of a survivor it could not finish, for the
     # next re-test under the same head and suite (`_partial_kills`).
     extra["retest_partial"] = kept

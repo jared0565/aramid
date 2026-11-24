@@ -398,3 +398,102 @@ def test_the_item_scores_min_score_and_defaults_to_the_loops_own_40(tmp_path):
     finally:
         led.close()
     assert item is not None and item.score == 40, "no [triage].min_score: the loop's own default"
+
+
+# --- a re-test the import check could not grade (round 327) ------------------
+#
+# A run whose suite imported calc.py from outside the worktree grades none of
+# its mutants and records `not_graded` = {head, suite, files}. An empty-queue
+# item for its pending rows would pay a baseline to withhold them again, every
+# idle drain (measured 2026-11-24: two such items in a row, one baseline each,
+# the row unchanged). So the drain holds them while HEAD and the configured
+# suite are what that run saw (operator 2026-11-24, "remember it per head and
+# suite"); a new commit, a changed command or a graded run releases them.
+
+def _suite(r, cfg):
+    return mut_consumer._suite_label(mut_consumer._full_argv(cfg, r))
+
+
+def _not_graded(r, cfg, files, *, head=None, suite=None):
+    return {"head": head or _head(r), "suite": suite or _suite(r, cfg), "files": list(files)}
+
+
+def test_a_pending_row_whose_file_was_not_graded_at_head_triggers_no_item(tmp_path):
+    r, cfg = _repo(tmp_path), _cfg()
+    led = _ledger(r, pending=(A,))
+    _row(led, "2026-09-01T02:00:00+00:00", not_graded=_not_graded(r, cfg, ["calc.py"]))
+    # a newer row of ANOTHER consumer says nothing about mutation's grading
+    led.append(Event(EventType.CONSUMER_RUN_FINISHED, "d", "2026-09-01T03:00:00+00:00",
+                     payload={"consumer": "llm-review", "item_id": "q", "state": "ok"}))
+    try:
+        assert mut_consumer.withheld_pending(led, r, cfg) == {A}
+        assert drain_mod._pending_retest_item(r, cfg, led, "t") is None
+        assert queue.queued_item(queue.materialize_queue(led.events())) is None
+    finally:
+        led.close()
+
+
+def test_a_changed_test_command_re_tries_a_row_not_graded(tmp_path):
+    r, cfg = _repo(tmp_path), _cfg()
+    led = _ledger(r, pending=(A,))
+    _row(led, "2026-09-01T02:00:00+00:00",
+         not_graded=_not_graded(r, cfg, ["calc.py"], suite="pytest -q tests/elsewhere"))
+    try:
+        assert mut_consumer.withheld_pending(led, r, cfg) == set()
+        assert drain_mod._pending_retest_item(r, cfg, led, "t") is not None
+    finally:
+        led.close()
+
+
+def test_a_new_commit_re_tries_a_row_not_graded(tmp_path):
+    r, cfg = _repo(tmp_path), _cfg()
+    led = _ledger(r, pending=(A,))
+    _row(led, "2026-09-01T02:00:00+00:00", not_graded=_not_graded(r, cfg, ["calc.py"]))
+    _commit(r, "notes.txt", "a commit after the run\n")
+    try:
+        assert mut_consumer.withheld_pending(led, r, cfg) == set()
+        assert drain_mod._pending_retest_item(r, cfg, led, "t") is not None
+    finally:
+        led.close()
+
+
+def test_a_later_run_that_graded_the_file_releases_its_rows(tmp_path):
+    """The NEWEST row carrying the key decides, as for `retest_owed`."""
+    r, cfg = _repo(tmp_path), _cfg()
+    led = _ledger(r, pending=(A,))
+    _row(led, "2026-09-01T02:00:00+00:00", not_graded=_not_graded(r, cfg, ["calc.py"]))
+    _row(led, "2026-09-01T03:00:00+00:00", not_graded=_not_graded(r, cfg, []))
+    _row(led, "2026-09-01T04:00:00+00:00")      # a run that never reached the check
+    try:
+        assert mut_consumer.withheld_pending(led, r, cfg) == set()
+        assert drain_mod._pending_retest_item(r, cfg, led, "t") is not None
+    finally:
+        led.close()
+
+
+def test_only_the_rows_of_the_file_not_graded_are_held(tmp_path):
+    r, cfg = _repo(tmp_path), _cfg()
+    led = _ledger(r, pending=(A,))
+    led.record_run("r2", "2026-09-01T00:02:00+00:00", "drain", {"mutation"}, {"rates.py"},
+                   [dataclasses.replace(_survivor(B, 3), file="rates.py")])
+    led.append(Event(EventType.FINDING_RESOLVED, "gate", "2026-09-01T00:03:00+00:00",
+                     finding_id=B, payload={"auto_resolved": "gap_addressed",
+                                            "pending_retest": True}))
+    _row(led, "2026-09-01T02:00:00+00:00", not_graded=_not_graded(r, cfg, ["calc.py"]))
+    try:
+        assert mut_consumer.withheld_pending(led, r, cfg) == {A}
+        item = drain_mod._pending_retest_item(r, cfg, led, "t")
+    finally:
+        led.close()
+    assert item is not None and item.reasons == (queue.pending_retest_reason(1),), \
+        "B (rates.py) is the item's; A (calc.py) is held"
+
+
+def test_a_malformed_record_holds_nothing(tmp_path):
+    r, cfg = _repo(tmp_path), _cfg()
+    led = _ledger(r, pending=(A,))
+    _row(led, "2026-09-01T02:00:00+00:00", not_graded=["calc.py"])
+    try:
+        assert mut_consumer.withheld_pending(led, r, cfg) == set()
+    finally:
+        led.close()

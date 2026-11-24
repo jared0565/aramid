@@ -492,6 +492,33 @@ def test_dry_run_previews_the_pending_re_tests_and_writes_nothing(
         led.close()
 
 
+def test_dry_run_says_how_many_re_tests_are_held_for_a_file_not_graded(
+        tmp_path, seam, fake_consumer, capsys):
+    """Round 327: the last run could not grade calc.py at this HEAD under this
+    suite, so the real drain cuts no item for its rows; the preview says so."""
+    from aramid import config as config_mod
+    from aramid.consumers import mutation as mut_consumer
+    r = _quiet_repo_with_pending_rows(tmp_path, pending=2)
+    registry.register(r, "t0")
+    cfg = config_mod.load_config(r)
+    head = subprocess.run(["git", "rev-parse", "HEAD"], cwd=r, check=True,
+                          capture_output=True, text=True).stdout.strip()
+    led = Ledger(r / ".aramid" / "ledger.db")
+    try:
+        led.append(Event(EventType.CONSUMER_RUN_FINISHED, "d", "2026-09-01T02:00:00+00:00",
+                         payload={"consumer": "mutation", "item_id": "q", "state": "ok",
+                                  "not_graded": {"head": head, "files": ["calc.py"],
+                                                 "suite": mut_consumer._suite_label(
+                                                     mut_consumer._full_argv(cfg, r))}}))
+    finally:
+        led.close()
+
+    rc = cmd_drain([], dry_run=True)
+
+    assert rc == 0
+    assert "pending_retests=2 held_not_graded=2" in capsys.readouterr().out
+
+
 def test_drain_bootstrap_sweeps_head_only(tmp_path, seam, fake_consumer):
     """Spec section 2 bootstrap rule: no triage history -> triage HEAD only,
     never the whole past."""

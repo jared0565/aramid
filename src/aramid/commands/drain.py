@@ -561,7 +561,10 @@ def _pending_retest_item(root: Path, cfg, ledger, at: str) -> queue.QueueItem | 
     if any(f.name == _mutation.NAME for f in health.stood_down(ledger)):
         return None
     unfittable = {fid for fid, _rel, _need in _mutation.unfittable_pending(ledger, root, cfg)}
-    fitting = [p for p in pending if p[0] not in unfittable]
+    # Round 327: a row whose file the last import check withheld at this
+    # HEAD under this suite would be withheld again, a baseline per drain.
+    held = _mutation.withheld_pending(ledger, root, cfg)
+    fitting = [p for p in pending if p[0] not in unfittable and p[0] not in held]
     if not fitting:
         return None
     head = gitutil.rev_sha(root, "HEAD")
@@ -766,16 +769,21 @@ def cmd_drain(targets: list, *, dry_run: bool = False, max_items: int | None = N
                             item = queue.queued_item(queue.materialize_queue(ledger.events()))
                             pending = (len(_mutation.pending_retests(ledger, root))
                                        if item is None and _mutation.retests_enabled(cfg) else 0)
+                            held = _mutation.withheld_pending(ledger, root, cfg)
                         finally:
                             ledger.close()
                     else:
-                        item, pending = None, 0
+                        item, pending, held = None, 0, set()
                     line = f"aramid drain (dry-run): {root} queued={item.score if item else 'none'}"
                     if pending:
                         # What the real drain would synthesize (an empty-queue
                         # re-test item); the stood-down guard is not applied
                         # here, so this is the upper bound.
                         line += f" pending_retests={pending}"
+                        if held:
+                            # Round 327: rows the last run could not grade at
+                            # this HEAD and suite; the real drain skips them.
+                            line += f" held_not_graded={len(held)}"
                     if item is not None and item.deferred:
                         # Why the last drain did not open it (round 177).
                         line += f" deferred={item.deferred} ({item.deferred_reason})"

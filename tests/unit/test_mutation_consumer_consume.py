@@ -887,7 +887,9 @@ def test_claimed_survivors_of_a_file_imported_elsewhere_are_not_re_tested(tmp_pa
     assert res.findings == []
     assert res.repaired is not None and res.repaired.ids == ()
     assert [lab for k, lab, _ in oracle.calls] == ["BASE"]
-    assert res.note.endswith(_not_graded(other)), res.note
+    assert res.note.endswith(_not_graded(other) + "; 6 re-test(s) held until a new commit or "
+                             "a change to the test command"), res.note
+    assert res.extra["retest_owed"] == sorted(fp(f) for f in ("f1", "f2", "f3", "f4", "f5", "f6"))
 
 
 def test_hygiene_re_tests_of_a_file_imported_elsewhere_are_skipped(tmp_path, monkeypatch):
@@ -902,7 +904,8 @@ def test_hygiene_re_tests_of_a_file_imported_elsewhere_are_skipped(tmp_path, mon
     _stats(res, retest_candidates=3, not_exercised=1)
     assert res.repaired is not None and res.repaired.ids == ()
     assert [lab for k, lab, _ in oracle.calls] == ["BASE"]
-    assert res.note.endswith(_not_graded(other)), res.note
+    assert res.note.endswith(_not_graded(other) + "; 3 re-test(s) held until a new commit or "
+                             "a change to the test command"), res.note
 
 
 def _graded_both_ways(tmp_path, monkeypatch, bytecode):
@@ -923,8 +926,10 @@ def test_a_run_aramid_could_not_observe_is_graded_as_before_and_says_so(tmp_path
     assert control.extra["imports_unobserved"] == 0 and arm.extra["imports_unobserved"] == 1
     assert _ids(arm) == _ids(control) and _ids(arm)
     def rest(res):
-        return {k: v for k, v in res.extra.items() if k != "imports_unobserved"}
+        # `not_graded` names each repo's own head: compared by its files
+        return {k: v for k, v in res.extra.items() if k not in ("imports_unobserved", "not_graded")}
     assert rest(arm) == rest(control)
+    assert arm.extra["not_graded"]["files"] == control.extra["not_graded"]["files"] == []
     assert arm.note == control.note + (
         "; the import check saw no Python process under aramid's environment (a command "
         "that runs Python isolated, or with an environment of its own, hides it), so "
@@ -934,5 +939,71 @@ def test_a_run_aramid_could_not_observe_is_graded_as_before_and_says_so(tmp_path
 def test_a_module_the_worktree_suite_never_imported_is_graded_as_before(tmp_path, monkeypatch):
     control, arm = _graded_both_ways(tmp_path, monkeypatch, _only("conftest.py"))
 
-    assert arm.extra == control.extra and arm.note == control.note
+    def rest(res):
+        return {k: v for k, v in res.extra.items() if k != "not_graded"}
+    assert rest(arm) == rest(control) and arm.note == control.note
+    assert arm.extra["not_graded"]["files"] == control.extra["not_graded"]["files"] == []
     assert _ids(arm) == _ids(control) and _ids(arm)
+
+
+# --- what a run could not grade is remembered (operator 2026-11-24) ---------
+
+def _suite_of(r):
+    cfg = config_mod.load_config(r)
+    return mut_consumer._suite_label(mut_consumer._full_argv(cfg, r))
+
+
+def _record(r, res, item_id, at):
+    """The drain's CONSUMER_RUN_FINISHED row for `res`, extra merged in."""
+    led = Ledger(r / ".aramid" / "ledger.db")
+    try:
+        led.append(Event(EventType.CONSUMER_RUN_FINISHED, "d", at,
+                         payload={**res.extra, "consumer": "mutation", "item_id": item_id,
+                                  "state": res.state, "note": res.note}))
+    finally:
+        led.close()
+
+
+def test_a_run_records_the_files_it_did_not_grade_at_its_head_and_suite(tmp_path, monkeypatch):
+    r, base, head = _repo(tmp_path)
+    other = _main_checkout(tmp_path)
+
+    res, _ = _run(r, base, head, monkeypatch, {}, bytecode=_imported_from(other))
+
+    assert res.extra["not_graded"] == {"head": head, "suite": _suite_of(r), "files": ["calc.py"]}
+
+
+def test_a_graded_run_records_that_it_withheld_nothing(tmp_path, monkeypatch):
+    """So a newer run releases what an older one held."""
+    r, base, head = _repo(tmp_path)
+
+    res, _ = _run(r, base, head, monkeypatch, {})
+
+    assert res.extra["not_graded"] == {"head": head, "suite": _suite_of(r), "files": []}
+
+
+def test_an_idle_drain_does_not_pay_a_baseline_twice_for_a_row_it_cannot_grade(
+        tmp_path, monkeypatch):
+    """The loop measured 2026-11-24: an empty-queue item re-tests a pending
+    row of a file the suite imports from elsewhere, withholds it, and the
+    row stays pending -- so every idle drain cut the same item again. Now
+    the run says the re-test is held, and the drain cuts no second item."""
+    from aramid import queue as queue_mod
+    from aramid.commands import drain as drain_mod
+    r, base, head = _repo(tmp_path)
+    _record_survivors(r, ["f1"], pending=["f1"])
+    other = _main_checkout(tmp_path)
+
+    res, oracle = _run(r, head, head, monkeypatch, {}, item_id="pr0",
+                       reasons=(queue_mod.pending_retest_reason(1),),
+                       bytecode=_imported_from(other))
+    _record(r, res, "pr0", "2026-09-02T00:00:00+00:00")
+
+    assert [lab for k, lab, _ in oracle.calls] == ["BASE"]
+    assert res.note.endswith(_not_graded(other) + "; 1 re-test(s) held until a new commit "
+                             "or a change to the test command"), res.note
+    led = Ledger(r / ".aramid" / "ledger.db")
+    try:
+        assert drain_mod._pending_retest_item(r, config_mod.load_config(r), led, "t") is None
+    finally:
+        led.close()

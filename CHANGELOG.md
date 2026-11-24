@@ -233,9 +233,17 @@ to publish a tag that disagrees with it.
   before. When no Python process at all inherits aramid's environment
   (`python -I` or `-E` as the command, or a non-Python launcher that
   replaces the environment), the run is graded as before and the note says
-  the check saw nothing (`imports_unobserved`). Cost: the baseline
-  compiles what it imports afresh, about 9 s more on aramid's own
-  5,600-test suite.
+  the check saw nothing (`imports_unobserved`). A recorded survivor's
+  re-test in such a file is held: the run records what it could not grade
+  (`not_graded`, with its head and test command), and the drain cuts no
+  re-test item for those rows while HEAD and the command are unchanged,
+  since the item would pay a baseline to withhold them again on every
+  idle drain (measured with the first version of this fix: two such items
+  in a row, one baseline each, the row unchanged). A new commit or a
+  changed command tries again. The note says how many re-tests are held,
+  and `aramid drain --dry-run` shows `held_not_graded=N`. Cost: the
+  baseline compiles what it imports afresh, about 9 s more on aramid's
+  own 5,600-test suite.
 
 ## [0.20.19] — 2026-11-22
 
