@@ -26,8 +26,9 @@ import textwrap
 import time
 from datetime import datetime, timedelta, timezone
 
+import pytest
+
 from aramid import queue
-from aramid.commands import drain as drain_mod
 from aramid.ledger import Ledger
 from aramid.models import EventType
 
@@ -60,14 +61,8 @@ _CHILD = textwrap.dedent('''
         return done
     runners_base.kill_live = slow_kill_live
 
-    # Each child starts a grandchild, records both pids, and sleeps: a kill
-    # that stops only the direct child leaves the grandchild running, which
-    # is what a mutant's pytest would do.
-    GRANDPARENT = cfg.get("grandparent") or (
-        "import subprocess, sys, time; "
-        "g = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(%d)']); "
-        "open(sys.argv[1], 'w').write('%%d %%d' %% (__import__('os').getpid(), g.pid)); "
-        "time.sleep(%d)" % (cfg["sleep_s"], cfg["sleep_s"]))
+    # What each child runs comes from the test: _heartbeats, or _SPAWNER.
+    GRANDPARENT = cfg["grandparent"]
 
     class Looping:
         @staticmethod
@@ -83,6 +78,55 @@ _CHILD = textwrap.dedent('''
     drain_mod.CONSUMERS["looping"] = Looping
     sys.exit(drain_mod.cmd_drain([cfg["repo"]]))
 ''')
+
+
+# Each child starts a grandchild, records both pids, and runs `sleep_s`
+# seconds: a kill that stops only the direct child leaves the grandchild
+# running, which is what a mutant's pytest would do. Both touch a heartbeat
+# file every 0.1 s until then, or until a stop file appears, and "still
+# running after the drain" is read from those writes. It was read from the
+# PID: Windows hands a dead process's PID to the next one soon after, and
+# under the churn of a CI gate a PID check cannot tell a survivor from a
+# stranger holding its number (2026-11-24).
+_HEART = textwrap.dedent('''
+    import sys, time
+    from pathlib import Path
+    hb, stop = Path(sys.argv[1]), Path(sys.argv[2])
+    end = time.monotonic() + float(sys.argv[3])
+    while time.monotonic() < end and not stop.exists():
+        hb.touch()
+        time.sleep(0.1)
+''')
+_HEARTBEAT_CHILD = textwrap.dedent('''
+    import os, subprocess, sys
+    from pathlib import Path
+    HEART = HEART_CODE
+    pids = Path(sys.argv[1])
+    stop = str(pids.parent / "stop")
+    g = subprocess.Popen([sys.executable, "-c", HEART,
+                          str(pids.parent / ("hb-" + pids.name + "-grandchild")), stop, SLEEP_S])
+    pids.write_text("%d %d" % (os.getpid(), g.pid), encoding="utf-8")
+    sys.argv[1:] = [str(pids.parent / ("hb-" + pids.name + "-child")), stop, SLEEP_S]
+    exec(HEART)
+''')
+
+
+def _heartbeats(sleep_s: float) -> str:
+    return _HEARTBEAT_CHILD.replace("HEART_CODE", repr(_HEART)) \
+        .replace("SLEEP_S", repr(str(float(sleep_s))))
+
+
+@pytest.fixture
+def stop_children(tmp_path):
+    """Ends every heartbeat child still running, pass or fail."""
+    yield
+    (tmp_path / "stop").touch()
+    time.sleep(0.3)
+
+
+def _beating_after(tmp_path, exited: float) -> list[str]:
+    """Heartbeat files written more than half a second after the drain exited."""
+    return sorted(hb.name for hb in tmp_path.glob("hb-*") if hb.stat().st_mtime > exited + 0.5)
 
 
 def _git(root, *a):
@@ -108,10 +152,10 @@ def _repo_with_item(tmp_path):
     return r, item
 
 
-def _run_child(tmp_path, env, repo, *, deadline_s, sleep_s, loops, grandparent=None):
+def _run_child(tmp_path, env, repo, *, deadline_s, loops, grandparent):
     (tmp_path / "shells").mkdir(exist_ok=True)
     arg = json.dumps({"tmp": str(tmp_path), "repo": str(repo), "deadline_s": deadline_s,
-                      "sleep_s": sleep_s, "loops": loops, "grandparent": grandparent})
+                      "loops": loops, "grandparent": grandparent})
     started = time.monotonic()
     cp = subprocess.run([sys.executable, "-c", _CHILD, arg], env=env, capture_output=True,
                         text=True, errors="replace", timeout=240)
@@ -138,23 +182,25 @@ def _started(tmp_path):
 
 
 def test_the_deadline_kills_everything_the_consumer_started_and_leaves_the_record(
-        tmp_path, checkout_env):
+        tmp_path, checkout_env, stop_children):
     repo, item = _repo_with_item(tmp_path)
     # Ten seconds from the lock: the drain's own start-up (config, sweep,
     # ledger) must be over and the consumer's first child up before it
     # falls due.
-    cp, took = _run_child(tmp_path, checkout_env, repo, deadline_s=10.0, sleep_s=120, loops=20)
+    cp, took = _run_child(tmp_path, checkout_env, repo, deadline_s=10.0, loops=20,
+                          grandparent=_heartbeats(120))
+    exited = time.time()
     assert cp.returncode == 2, (cp.returncode, cp.stdout, cp.stderr)
     assert took < 90, f"the drain ran {took:.0f} s: the deadline did not stop it"
     assert "hard deadline" in cp.stderr
     started = _started(tmp_path)
     assert list(started) == ["pids-0"], \
         f"the consumer's loop started more children after the deadline: {sorted(started)}"
-    pids = [pid for pair in started.values() for pid in pair]
-    deadline = time.monotonic() + 15      # taskkill /T returns before the tree is reaped
-    while time.monotonic() < deadline and any(drain_mod._pid_alive(p) for p in pids):
-        time.sleep(0.2)
-    alive = [p for p in pids if drain_mod._pid_alive(p)]
+    # Teeth: both were running, so a kill had something to stop.
+    beats = sorted(hb.name for hb in tmp_path.glob("hb-*"))
+    assert beats == ["hb-pids-0-child", "hb-pids-0-grandchild"], beats
+    # _started waited 3 s: a survivor wrote its heartbeat ~30 times since.
+    alive = _beating_after(tmp_path, exited)
     assert alive == [], f"outlived the drain: {alive} of {started}"
     assert not (tmp_path / "drain.lock").exists(), "the lock leaked"
     rows, queued = _finished_rows(repo)
@@ -164,9 +210,11 @@ def test_the_deadline_kills_everything_the_consumer_started_and_leaves_the_recor
     assert queued is not None and queued.id == item.id, "the killed item was dropped"
 
 
-def test_control_a_deadline_that_does_not_fall_due_drains_cleanly(tmp_path, checkout_env):
+def test_control_a_deadline_that_does_not_fall_due_drains_cleanly(tmp_path, checkout_env,
+                                                                  stop_children):
     repo, item = _repo_with_item(tmp_path)
-    cp, _took = _run_child(tmp_path, checkout_env, repo, deadline_s=600.0, sleep_s=1, loops=2)
+    cp, _took = _run_child(tmp_path, checkout_env, repo, deadline_s=600.0, loops=2,
+                           grandparent=_heartbeats(1))
     assert cp.returncode == 0, (cp.returncode, cp.stdout, cp.stderr)
     assert "hard deadline" not in cp.stderr
     assert sorted(_started(tmp_path)) == ["pids-0", "pids-1"]
@@ -216,8 +264,8 @@ def test_nothing_the_consumer_starts_as_the_deadline_kills_it_outlives_the_drain
         tmp_path, checkout_env):
     repo, _item = _repo_with_item(tmp_path)
     try:
-        cp, took = _run_child(tmp_path, checkout_env, repo, deadline_s=10.0, sleep_s=0,
-                              loops=1, grandparent=_SPAWNER)
+        cp, took = _run_child(tmp_path, checkout_env, repo, deadline_s=10.0, loops=1,
+                              grandparent=_SPAWNER)
         exited = time.time()
         assert cp.returncode == 2, (cp.returncode, cp.stdout, cp.stderr)
         assert took < 90, f"the drain ran {took:.0f} s: the deadline did not stop it"
