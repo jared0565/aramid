@@ -54,7 +54,14 @@ to publish a tag that disagrees with it.
   first: 10 in `status`, 3 in the session-start block (inside its size
   budget), then `... N more`. Control characters in the message and the
   path are escaped, as in the handover lines, so a model-written message
-  cannot move the cursor or rewrite the terminal.
+  cannot move the cursor or rewrite the terminal. The default branch is
+  the one `refs/remotes/<remote>/HEAD` names (origin's, or else the only
+  remote that has one). A repo with no such ref, a finding the push gate
+  found (the push already printed it), and a commit git does not know
+  list nothing. Nothing new blocks. With no open drain finding, no git is
+  run; with some, the session-start block took about 0.4 s longer on
+  aramid's own repo. ARAMID.md's summary of `aramid status` says so;
+  `aramid init` writes the new text.
 - **A pending handover is shown beside where the repo is now.** pawscout
   wrote one at HEAD 1ee6b49 whose body said `master = origin/master =
   3f48275`, an older commit. `handover show`, the MCP show tool and the
@@ -68,14 +75,7 @@ to publish a tag that disagrees with it.
   archived handovers, the rule the round proposed (a branch name next to
   a different sha) flagged 43, nearly all of them true notes about the
   remote. The resume offer is unchanged. It costs one git call when HEAD
-  has not moved, two when it has, and only when a handover is pending. The default branch is the one
-  `refs/remotes/<remote>/HEAD` names (origin's, or else the only remote
-  that has one). A repo with no such ref, a finding the push gate found
-  (the push already printed it), and a commit git does not know list
-  nothing. Nothing new blocks. With no open drain finding, no git is run;
-  with some, the session-start block took about 0.4 s longer on aramid's
-  own repo. ARAMID.md's summary of `aramid status` says so; `aramid init`
-  writes the new text.
+  has not moved, two when it has, and only when a handover is pending.
 
 ### Changed
 
