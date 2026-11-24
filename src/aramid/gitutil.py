@@ -93,6 +93,29 @@ def repo_root(path: Path) -> Path:
     return Path(cp.stdout.strip()).resolve()
 
 
+def gated_top(start: Path) -> Path | None:
+    """The top level of the work tree `start` lies BELOW, when that top is
+    where aramid keeps the repo's state -- an `aramid.toml` file or an
+    `.aramid/` directory there (interop round 333, operator 2026-11-24). None
+    at the top itself, outside git, below a top aramid never ran in, or when
+    git cannot answer: the caller keeps its cwd, as before.
+
+    "Below" is git's own `--show-prefix`, not a path comparison, so a cwd
+    reached through a junction, a subst drive or another letter case is
+    not mistaken for a subdirectory of its own top."""
+    try:
+        cp = _run(start, "rev-parse", "--show-toplevel", "--show-prefix")
+    except Exception:
+        return None
+    lines = cp.stdout.splitlines() if cp.returncode == 0 else []
+    if len(lines) != 2 or not lines[1].strip():
+        return None
+    top = Path(lines[0].strip()).resolve()
+    if (top / "aramid.toml").is_file() or (top / ".aramid").is_dir():
+        return top
+    return None
+
+
 def git_dir(root: Path) -> Path:
     """The repository's own git directory, absolute: `root/.git` in a plain
     checkout, the worktree's directory under the main `.git` in a linked one

@@ -305,6 +305,8 @@ aramid check --gate pre-commit
 aramid check --gate pre-push
 ```
 
+From a subdirectory, `check` and every other repository command work on the repository root: its `aramid.toml` and its ledger. Each says so in one stderr line, naming any `aramid.toml` or `.aramid/` the subdirectory has of its own, which is not used (a stray `.aramid/` from an older version can be deleted). This holds below a top level that has an `aramid.toml` or an `.aramid/`. Below one aramid never ran in, the current directory is still the repo. So JavaScript or Rust code in a subdirectory, with no `package.json` or `Cargo.toml` at the root, is not gated, and no run from inside it changes that.
+
 `--gate` defaults to `pre-commit`. `--gate all` runs every runner either tier runs. The pre-push gate runs every pre-commit runner too, ruff included, so it also sees both halves of an edit that annotates a line for one tool and so re-keys the other tool's committed suppression id on that same line; the pre-commit gate never runs semgrep and cannot. `--gate all` defaults to scanning the whole tree, never ratchets, and no hook invokes it; exit codes are as for any gate.
 
 ### Scan mode

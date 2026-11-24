@@ -63,6 +63,29 @@ to publish a tag that disagrees with it.
   own repo. ARAMID.md's summary of `aramid status` says so; `aramid init`
   writes the new text.
 
+### Changed
+
+- **A command started in a subdirectory of an armed repository works on
+  the repository root.** Before, every command took the current directory
+  as the repo. Bytes-Web followed aramid's own advice and ran the gate from
+  a JavaScript subdirectory. That run read no `aramid.toml`, so the
+  `[tests].command` set at the root was gone and the BLOCK-tier tests gate
+  ran nothing. It also kept a second ledger there, which disagreed with the
+  root's (interop round 333). Now, below a top level that holds an
+  `aramid.toml` or an `.aramid/` directory, `check`, `doctor`, `status`,
+  `ledger`, `override`, `drain` (with no `--repo`) and the other
+  repository commands use that top level's config and ledger, as the MCP
+  tools and `aramid handover` already did. Each says so in one stderr line,
+  naming any `aramid.toml` or `.aramid/` of the subdirectory's own that is
+  now not used; such a stray `.aramid/` can be deleted. Below a top level
+  aramid never ran in, and outside git, the current directory is used as
+  before. `init`, `uninstall` and `rebaseline` still take a path, and the
+  agent hook keeps its own rule. **The subdirectory workaround stops
+  working:** JavaScript or Rust code below the root is still not gated
+  (no setting points those gates at a subdirectory), and the notice that
+  says so no longer advises a run from there. For Rust, a root
+  `Cargo.toml` declaring a `[workspace]` is still the way to gate it.
+
 ### Fixed
 
 - **The agent hooks find the repo when git is not on their PATH.**

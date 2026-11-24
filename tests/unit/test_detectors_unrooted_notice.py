@@ -1,11 +1,15 @@
-"""FN-52 (channel round 320): the notice for a js project below the root gives
-advice that works.
+"""The notice for a js or rust project below the root gives no advice that
+fails.
 
-It said "onboard it as its own repo with `aramid init <dir>`", and `init`
-resolves a subdirectory to the repository root and re-runs the root's init:
-exit 0, "done", nothing changed (bytes-web, aramid 0.20.8). What does work is
-the gate run from the subdirectory itself, by hand; the hooks run from the
-root and never reach it. Every line is asserted whole."""
+FN-52 (channel round 320): it said "onboard it as its own repo with `aramid
+init <dir>`", and `init` resolves a subdirectory to the repository root and
+re-runs the root's init: exit 0, "done", nothing changed (bytes-web, aramid
+0.20.8). It then said to run the gate from the subdirectory by hand, and
+round 333 (bytes-web, 0.20.11) measured what that did: the run read no
+`aramid.toml`, so the root's `[tests].command` was gone, and it kept a second
+ledger. Every command now works on the repository root from any
+subdirectory (operator 2026-11-24), so neither notice offers a subdirectory
+run. Every line is asserted whole."""
 import subprocess
 
 import pytest
@@ -19,15 +23,14 @@ JS_LINE = (
     "aramid: js: found package.json under app/ but none at the repository root -- "
     "aramid's js gates (eslint, npm/pnpm/yarn) are NOT running for this repo, because "
     "they execute from the root. A clean js result here means 'not checked', not 'no "
-    "findings'. The commit and push hooks run from the root too, so they never check "
-    "that subdirectory: run `aramid check --gate pre-push --all` from it by hand.")
+    "findings'. aramid has no setting that runs them in a subdirectory, and a command "
+    "started inside one works on the repository root, so that subdirectory is not gated.")
 
 RUST_LINE = (
     "aramid: rust: found Cargo.toml under crate/ but none at the repository root -- "
     "aramid's rust gates (clippy, cargo-audit) are NOT running for this repo, because "
     "they execute from the root. A clean rust result here means 'not checked', not 'no "
-    "findings'. Add a root Cargo.toml declaring a [workspace] over these crates, or run "
-    "aramid from that subdirectory.")
+    "findings'. Add a root Cargo.toml declaring a [workspace] over these crates.")
 
 
 def _git(r, *args):
@@ -46,12 +49,12 @@ def _repo(tmp_path):
     return r
 
 
-def test_the_js_notice_says_what_works_and_drops_the_init_advice(tmp_path):
+def test_the_js_notice_says_the_subdirectory_is_not_gated(tmp_path):
     r = _repo(tmp_path)
     assert detectors.unrooted_stack_notices(r) == [JS_LINE]
 
 
-def test_the_rust_notice_is_unchanged(tmp_path):
+def test_the_rust_notice_offers_only_the_workspace(tmp_path):
     (tmp_path / "crate").mkdir()
     (tmp_path / "crate" / "Cargo.toml").write_text('[package]\nname = "c"\n')
     assert detectors.unrooted_stack_notices(tmp_path) == [RUST_LINE]
@@ -71,9 +74,11 @@ class _Recorder:
         return []
 
 
-def test_the_advice_holds_the_gate_run_from_the_subdirectory_runs_the_js_gates(
+def test_the_pipeline_runs_the_js_gates_from_whatever_root_it_is_given(
         tmp_path, monkeypatch):
-    """The CONTROL is the reported bug: from the root, no js runner is chosen."""
+    """The pipeline itself is unchanged: the CLI chooses the root it gets
+    (`cli._repo_root_of`). The CONTROL: from the root, no js runner is
+    chosen."""
     r = _repo(tmp_path)
     monkeypatch.setattr(config, "_user_config_path", lambda: tmp_path / "no-user-config.toml")
     seen: list = []

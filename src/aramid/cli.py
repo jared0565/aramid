@@ -313,6 +313,43 @@ def _force_utf8_on_redirect() -> None:
             pass
 
 
+# Commands that do not take the cwd as their repo: a path argument (`init`,
+# `uninstall`, `rebaseline`), a rule of their own (`handover` and
+# `agent-hook` resolve `gitutil.armed_root`, and a hook's stderr is not the
+# place for the line below), or no repo at all (`fleet`, `hooks`).
+_OWN_ROOT_COMMANDS = frozenset({"init", "uninstall", "rebaseline", "handover",
+                                "agent-hook", "fleet", "hooks"})
+
+
+def _repo_root_of(cwd: Path) -> Path:
+    """The repository root when `cwd` is below an armed one, else `cwd`
+    (interop round 333, operator 2026-11-24). Run from bytes-web's
+    `crm-api-worker/`, `aramid doctor` read no `aramid.toml`, so the
+    BLOCK-tier tests gate had nothing to run, and the run kept a second,
+    disagreeing ledger there. It says so on stderr, naming a config or
+    ledger of the subdirectory's own that is now left unused."""
+    from aramid import gitutil
+    top = gitutil.gated_top(cwd)
+    if top is None:
+        return cwd
+    from aramid.handover import printable_body
+
+    def shown(p: Path) -> str:
+        # Control characters escaped, backslashes kept (a Windows path is
+        # normal here), and the one thing `printable_body` keeps, LF, too.
+        return printable_body(str(p)).replace(chr(10), chr(92) + "x0a")
+
+    own = [name for name, there in (("aramid.toml", (cwd / "aramid.toml").is_file()),
+                                    (".aramid/", (cwd / ".aramid").is_dir())) if there]
+    line = (f"aramid: working on the repository root {shown(top)}, not {shown(cwd)}:"
+            " a repository has one aramid config and one ledger, at its root")
+    if own:
+        line += (f"; this directory's own {' and '.join(own)}"
+                 f" {'are' if len(own) > 1 else 'is'} not used")
+    print(line, file=sys.stderr)
+    return top
+
+
 def main(argv: list[str] | None = None) -> int:
     _force_utf8_on_redirect()
     parser = build_parser()
@@ -331,6 +368,8 @@ def main(argv: list[str] | None = None) -> int:
         return 3
 
     root = Path.cwd()
+    if args.command not in _OWN_ROOT_COMMANDS:
+        root = _repo_root_of(root)
 
     if args.command == "init":
         return cmd_init(Path(args.path), discover=args.discover)
