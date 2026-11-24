@@ -153,4 +153,5 @@ def test_session_start_delivers_a_non_ascii_handover_through_the_real_pipe(
     assert lines[0] == ("aramid: this repo is GATED (pre-commit + pre-push hooks)."
                         " Read ARAMID.md; NEVER pass --no-verify.")
     assert lines[2].startswith("aramid: PENDING HANDOVER written ")
-    assert lines[3] == "aramid: | step 3 → push — done"
+    assert lines[3].startswith("aramid: position now: HEAD ")  # round 337
+    assert lines[4] == "aramid: | step 3 → push — done"

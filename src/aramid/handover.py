@@ -16,6 +16,7 @@ import hashlib
 import hmac
 import json
 import os
+import re
 import secrets
 import stat
 import subprocess
@@ -177,6 +178,92 @@ def _head(root: Path) -> str | None:
     # written so no mutant of it is equivalent (git prints nothing to stdout
     # when this fails, which made the old `and` -> `or` unkillable)
     return (run.stdout.strip() or None) if run.returncode == 0 else None
+
+
+def _git_answer(root: Path, *args: str) -> str | None:
+    """git's stdout, or None when it did not answer (not a repo, an unknown
+    commit, no git, a timeout)."""
+    try:
+        run = subprocess.run(  # noqa: S603 - "git" is a fixed literal
+            toolpath.launchable(["git", *args]), cwd=root, capture_output=True,
+            text=True, encoding="utf-8", errors="replace", timeout=10)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    return run.stdout if run.returncode == 0 else None
+
+
+_COMMIT_ID = re.compile(r"[0-9a-f]{4,64}")
+
+
+def _short(ref: str) -> str:
+    for prefix in ("refs/heads/", "refs/remotes/"):
+        if ref.startswith(prefix):
+            return ref[len(prefix):]
+    return ref
+
+
+def position(root: Path, recorded: str | None) -> str | None:
+    """Where the repo is NOW, beside the head a handover recorded (interop
+    round 337, operator 2026-11-24): HEAD and its branch, how it stands to
+    the recorded commit, and the branch's upstream. pawscout wrote one at
+    1ee6b49 whose body said "master = origin/master = 3f48275"; show and
+    session-start printed the recorded head and compared it with nothing.
+    The body is NOT parsed (a branch-and-sha rule flagged 43 of aramid's
+    259 archived bodies, mostly true notes about the remote); the measured
+    position is printed next to it instead.
+
+    One `for-each-ref` (HEAD's branch, every sha, the upstream and git's
+    ahead/behind against it); one `rev-list --left-right --count` only
+    when HEAD has moved off the recorded commit; `rev-parse` only when HEAD
+    is detached. None outside git with nothing recorded (there is no
+    position, and nothing to compare); "unknown" when a head was recorded
+    and git does not answer now."""
+    refs = _git_answer(root, "for-each-ref",
+                       "--format=%(HEAD)%00%(refname)%00%(objectname)%00%(upstream)"
+                       "%00%(upstream:track,nobracket)", "refs/heads", "refs/remotes")
+    if refs is None:
+        return None if recorded is None else "unknown (git did not answer)"
+    shas, current = {}, None
+    for row in refs.splitlines():
+        parts = row.split("\0")
+        if len(parts) != 5:         # the format prints five fields per ref
+            continue
+        star, name, sha, upstream, track = parts
+        shas[name] = sha
+        if star == "*":
+            current = (name, sha, upstream, track)
+    head = current[1] if current else _head(root)
+    if head is None:
+        return "no commit yet"
+    where = (f"HEAD {head[:12]} on {printable(_short(current[0]))}" if current
+             else f"HEAD {head[:12]} (detached)")
+    if recorded is None:
+        rel = "no commit was recorded"
+    elif not _COMMIT_ID.fullmatch(recorded):
+        # Never handed to git: a leading `-` would be a rev-list option and a
+        # lone surrogate cannot be spawned. aramid records git's own lowercase
+        # `rev-parse` output, so anything else did not come from it.
+        rel = "the recorded head is not a commit id"
+    elif head == recorded:
+        rel = "the recorded commit"
+    else:
+        counts = _git_answer(root, "rev-list", "--left-right", "--count", f"{recorded}...{head}")
+        if counts is None:
+            rel = "the recorded commit is not in this clone"
+        else:
+            behind, ahead = (int(n) for n in counts.split())
+            rel = ("not a descendant of the recorded commit" if behind else
+                   f"{ahead} commit{'' if ahead == 1 else 's'} after the recorded commit")
+    if current is None:
+        return f"{where}, {rel}"
+    _name, _sha, upstream, track = current
+    if not upstream:
+        return f"{where}, {rel}; no upstream"
+    up = printable(_short(upstream))
+    if upstream not in shas:
+        return f"{where}, {rel}; upstream {up} (gone)"
+    stands = f"HEAD is {track}" if track else "HEAD is level with it"
+    return f"{where}, {rel}; upstream {up} at {shas[upstream][:12]} ({stands})"
 
 
 def key_path() -> Path:

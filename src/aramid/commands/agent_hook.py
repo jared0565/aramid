@@ -258,15 +258,18 @@ def _fit_handover(lines: list[str], room: int) -> list[str]:
     is reserved out of, so one truncated line ends the result either way."""
     if len(lines) < 2 or sum(len(ln) + 1 for ln in lines) <= room:
         return lines
-    head = lines[0]
-    left = room - (len(head) + 1) - (len(_TRUNCATED) + 1)
+    # The header is every line before the first body line: the PENDING line
+    # and, since round 337, the measured position under it. Never cut.
+    n = next((i for i, ln in enumerate(lines) if ln.startswith(_BODY_PREFIX)), len(lines))
+    head = lines[:n]
+    left = room - sum(len(ln) + 1 for ln in head) - (len(_TRUNCATED) + 1)
     kept: list[str] = []
     if left >= _MIN_EXCERPT:
         # The body's first `left` characters, a newline counted per line.
-        kept = "\n".join(lines[1:])[:left - 1].split("\n")
+        kept = "\n".join(lines[n:])[:left - 1].split("\n")
         if len(kept[-1]) <= len(_BODY_PREFIX):
             kept.pop()      # a cut inside a prefix leaves nothing of the body
-    return [head, *kept, _TRUNCATED]
+    return [*head, *kept, _TRUNCATED]
 
 
 def _handover_lines(repo: Path, now) -> list[str]:
@@ -297,6 +300,11 @@ def _handover_lines(repo: Path, now) -> list[str]:
         lines = [f"aramid: PENDING HANDOVER written {handover.age(p.written_at, now)}"
                  f" ago at {head} -- resume it WITHOUT asking the operator, then run"
                  " 'aramid handover done':"]
+        # Round 337: measured now, under the header and never cut with the
+        # body, so what the body claims stands beside where the repo is.
+        where = handover.position(repo, p.head)
+        if where:
+            lines.append(f"aramid: position now: {where}")
         body = p.body.replace("\r\n", "\n")
         # The cap counts body characters, and a trailing newline is not one:
         # strip it BEFORE comparing, so 8000 characters plus a newline is not

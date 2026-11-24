@@ -458,6 +458,8 @@ def test_show_of_a_verified_body_with_a_lone_surrogate_does_not_raise(tmp_path, 
     esc = chr(92) + "ud83d"
     assert raw.getvalue().decode("utf-8") == (
         f"pending handover (written 2h ago, at 01234{esc}6789ab, by me{esc}):\n"
+        # round 337: a recorded head outside git is measured as unknown
+        "position now: unknown (git did not answer)\n"
         f"a{esc}b\n").replace("\n", os.linesep)
 
 
@@ -517,7 +519,8 @@ def test_cli_write_from_a_subdirectory_lands_at_the_root_and_the_hook_sees_it(
     assert not (sub / ".aramid").exists()
     lines = agent_hook._handover_lines(repo, NOW)
     assert lines[0].startswith("aramid: PENDING HANDOVER written ")
-    assert lines[1] == "aramid: | resume from the root"
+    assert lines[1] == "aramid: position now: no commit yet"  # round 337
+    assert lines[2] == "aramid: | resume from the root"
 
 
 def test_cli_show_and_done_from_a_subdirectory_act_on_the_root_file(
@@ -562,7 +565,8 @@ def test_the_hook_mcp_and_the_cli_resolve_one_root_from_a_subdirectory(
     # round 342: the two fixed posture lines lead, the handover follows
     assert hook[0].startswith("aramid: this repo is GATED ")
     assert hook[2].startswith("aramid: PENDING HANDOVER written ")
-    assert hook[3] == "aramid: | one root for all three"
+    assert hook[3] == "aramid: position now: no commit yet"  # round 337
+    assert hook[4] == "aramid: | one root for all three"
 
     shown = mcp_tools.TOOLS["aramid_handover_show"]["handler"](None, {})
     assert shown["isError"] is False

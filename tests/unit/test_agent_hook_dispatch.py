@@ -380,7 +380,10 @@ def test_a_pending_handover_follows_the_banner_and_the_posture_is_intact(tmp_pat
     out = ah._session_context(r)
     assert out.startswith("aramid: this repo is GATED")
     assert out.splitlines()[2].startswith("aramid: PENDING HANDOVER written ")
-    assert out.splitlines()[3] == "aramid: | resume step 3"
+    # round 337: the measured position sits under the header
+    assert out.splitlines()[3].startswith("aramid: position now: HEAD ")
+    assert out.splitlines()[3].endswith(", the recorded commit; no upstream")
+    assert out.splitlines()[4] == "aramid: | resume step 3"
     assert out.endswith('aramid: commands: aramid check --staged | aramid ledger filter'
                         ' --status open | aramid override <id> --reason "..."\n')
 

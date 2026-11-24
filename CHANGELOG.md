@@ -54,7 +54,21 @@ to publish a tag that disagrees with it.
   first: 10 in `status`, 3 in the session-start block (inside its size
   budget), then `... N more`. Control characters in the message and the
   path are escaped, as in the handover lines, so a model-written message
-  cannot move the cursor or rewrite the terminal. The default branch is the one
+  cannot move the cursor or rewrite the terminal.
+- **A pending handover is shown beside where the repo is now.** pawscout
+  wrote one at HEAD 1ee6b49 whose body said `master = origin/master =
+  3f48275`, an older commit. `handover show`, the MCP show tool and the
+  session-start block printed the recorded head and compared it with
+  nothing, and session-start said to resume it without asking (interop
+  round 337). Now each prints, under the header, a `position now:` line:
+  HEAD and its branch; whether it is the recorded commit, N commits after
+  it, or not a descendant of it; and the branch's upstream, with how far
+  HEAD is ahead or behind it. `aramid handover write` prints the same for
+  the position it recorded. The body is not parsed: on aramid's own 259
+  archived handovers, the rule the round proposed (a branch name next to
+  a different sha) flagged 43, nearly all of them true notes about the
+  remote. The resume offer is unchanged. It costs one git call when HEAD
+  has not moved, two when it has, and only when a handover is pending. The default branch is the one
   `refs/remotes/<remote>/HEAD` names (origin's, or else the only remote
   that has one). A repo with no such ref, a finding the push gate found
   (the push already printed it), and a commit git does not know list

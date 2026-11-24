@@ -100,7 +100,9 @@ def test_session_start_without_git_still_delivers_a_pending_handover(tmp_path, c
     lines = out.stdout.decode("utf-8").splitlines()
     assert lines[:2] == [NO_GIT, GATED], out.stdout
     assert lines[3].startswith("aramid: PENDING HANDOVER written "), out.stdout
-    assert lines[4] == "aramid: | resume at step 3", out.stdout
+    # round 337: git is not on PATH, so the position is unknown, and says so
+    assert lines[4] == "aramid: position now: unknown (git did not answer)", out.stdout
+    assert lines[5] == "aramid: | resume at step 3", out.stdout
 
 
 def test_armed_pre_tool_use_without_git_denies_a_bypass_by_absolute_path(tmp_path, checkout_env):

@@ -56,8 +56,9 @@ def test_the_banner_leads_and_the_handover_follows_it(tmp_path):
 
     assert lines[:2] == [GATED, TOOL]
     assert lines[2].startswith("aramid: PENDING HANDOVER written ")
-    assert lines[3] == "aramid: | resume step 3"
-    assert lines[4].startswith("aramid: open findings: ")
+    assert lines[3].startswith("aramid: position now: HEAD ")  # round 337
+    assert lines[4] == "aramid: | resume step 3"
+    assert lines[5].startswith("aramid: open findings: ")
     assert lines[-1].startswith("aramid: commands: aramid check --staged")
 
 
@@ -139,7 +140,9 @@ def test_too_little_room_for_an_excerpt_leaves_only_the_pointer(tmp_path, monkey
 
     lines = ah._session_context(r).splitlines()
 
-    assert lines[lines.index(header) + 1] == TRUNCATED
+    # round 337: the position is header, kept when no body fits
+    assert lines[lines.index(header) + 1].startswith("aramid: position now: HEAD ")
+    assert lines[lines.index(header) + 2] == TRUNCATED
     assert _shown("\n".join(lines)) == []
 
 

@@ -15,14 +15,17 @@ from aramid import handover
 AUTHOR_CAP = 200
 
 
-def render_pending(p: handover.Pending, now: datetime, *, quote: bool = False) -> str:
+def render_pending(p: handover.Pending, now: datetime, *, quote: bool = False,
+                   position: str | None = None) -> str:
     """The `show` text. `head` and `author` are MAC-authenticated for a
     verified Pending but come from an UNAUTHENTICATED file on the NOT VERIFIED
     path, so both go through `printable` (a newline in either cannot forge an
     aramid line); the author is also capped. The body is multi-line by nature
     and is printed under this header with control characters escaped
     (`handover.printable_body`), so it cannot erase or rewrite the header.
-    `quote` (the NOT VERIFIED path) also prefixes every body line with `| `."""
+    `quote` (the NOT VERIFIED path) also prefixes every body line with `| `.
+    `position` (`handover.position`, measured now; round 337) is printed
+    under the header, so the body's claims stand beside the facts."""
     head = handover.printable(p.head[:12]) if p.head else "(no commit)"
     author = handover.printable(p.author) if p.author else ""
     if len(author) > AUTHOR_CAP:
@@ -33,8 +36,9 @@ def render_pending(p: handover.Pending, now: datetime, *, quote: bool = False) -
     if quote:
         body = "\n".join("| " + line for line in body.split("\n"))
     body += "\n"
+    where = f"position now: {position}\n" if position else ""
     return (f"pending handover (written {handover.age(p.written_at, now)} ago, at {head}{by}):\n"
-            f"{body}")
+            f"{where}{body}")
 
 
 def _err(msg: str) -> None:
@@ -96,6 +100,15 @@ def _write(root: Path, file, author, replace, now, stdin) -> int:
         _err(f"cannot write: {exc.strerror or exc}")
         return 2
     print(f"aramid: handover written: {path}")
+    # Round 337: the writer sees the position it recorded, beside what the
+    # body says about it. Read back, so it is the head the record holds.
+    try:
+        written = handover.read(root)
+    except Exception:  # noqa: BLE001 - the write succeeded; this is a courtesy line
+        written = None
+    where = handover.position(root, written.head) if written is not None else None
+    if where:
+        print(f"aramid: handover position: {where}")
     return 0
 
 
@@ -126,7 +139,9 @@ def _show(root: Path, now: datetime, *, for_agent: bool = False) -> int:
     if pending is None:
         print("no pending handover")
     else:
-        print(render_pending(pending, now), end="")
+        # Verified only: the NOT VERIFIED path above withholds or quotes.
+        print(render_pending(pending, now, position=handover.position(root, pending.head)),
+              end="")
     return 0
 
 

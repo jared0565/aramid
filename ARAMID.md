@@ -295,7 +295,10 @@ commands work from any subdirectory), which is never committed (`init`
 gitignores `.aramid/`). aramid signs it with a key that lives on this machine
 only, bound to this repo, so a file that arrived by a clone, a zip or a copy is
 not mistaken for one aramid wrote. The SessionStart hook and `aramid status`
-show a verified one first; resume it without asking the operator, then run
+show a verified one first, with where the repo is now under its header
+(HEAD and its branch, how it stands to the commit the handover recorded,
+and the branch's upstream), so what the body claims can be checked against
+it; resume it without asking the operator, then run
 `aramid handover done` (it is archived under `.aramid/handovers/`, never
 deleted). An unverified one is reported in a single fixed line and never framed
 as an instruction; the `aramid_handover_show` MCP tool withholds its content,
