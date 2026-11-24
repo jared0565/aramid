@@ -30,6 +30,7 @@ KNOWN = {
     "deps": "table",
     "deps.cargo_audit_warnings": "boolean",
     "drain": "table",
+    "drain.cpu_cores": "count",            # round 351; machine layer only
     "drain.hard_deadline_s": "number",
     "drain.interval_hours": "number",
     "drain.item_expiry_days": "number",

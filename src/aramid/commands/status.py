@@ -12,7 +12,7 @@ from datetime import date, datetime, timezone
 from pathlib import Path
 
 from aramid import config as config_mod
-from aramid import gitutil
+from aramid import cpu_cap, gitutil
 from aramid import health
 from aramid import review
 from aramid import toolpath
@@ -606,7 +606,7 @@ def cmd_status(root) -> int:
         lines.extend(_unfittable_retest_lines(root, cfg, ledger))
         lines.append(_last_drain_line(ledger))
         lines.append(_registry_line(root))
-        lines.append(_scheduled_drain_line())
+        lines.append(_scheduled_drain_line() + cpu_cap.status_suffix())
 
         # --- fleet health (fleet-readiness spec section 8) ---
         from aramid import fleet

@@ -35,6 +35,9 @@ OPTIONAL: dict[tuple[str, ...], str] = {
     ("semgrep",): "table",
     ("semgrep", "jobs"): "count",
     ("semgrep", "max_memory"): "count",
+    # Interop round 351: hold `aramid drain` to N cores (aramid.cpu_cap).
+    # Unset: no cap. Read from ~/.aramid/config.toml alone (MACHINE_ONLY).
+    ("drain", "cpu_cores"): "count",
     ("block_rules",): "table",
 }
 
@@ -57,6 +60,13 @@ RETIRED: dict[tuple[str, ...], str] = {
     ("dast", "block_armed"): ("it was reserved and never read -- dast findings are WARN-only, "
                               "so setting it arms nothing"),
     ("dast", "start_command"): "it was documented as reserved and never read",
+}
+
+# Read from the machine's ~/.aramid/config.toml alone. Set in a repo's
+# aramid.toml, one committed file would decide for every repo on the
+# machine. Path -> why, for the warning (machine_only_problems).
+MACHINE_ONLY: dict[tuple[str, ...], str] = {
+    ("drain", "cpu_cores"): "it caps every drain on this machine",
 }
 
 # The longest one provider call may be given. Past some such number the OS
@@ -188,6 +198,20 @@ def problems(raw: dict, *, known: dict | None = None) -> list[str]:
                 walk(value, path)
 
     walk(raw, ())
+    return out
+
+
+def machine_only_problems(raw: dict) -> list[str]:
+    """What one repo's aramid.toml sets that only the machine's config may
+    (MACHINE_ONLY). aramid ignores it there; this names it."""
+    out: list[str] = []
+    for path, why in MACHINE_ONLY.items():
+        table = raw
+        for key in path[:-1]:
+            table = table.get(key) if isinstance(table, dict) else None
+        if isinstance(table, dict) and path[-1] in table:
+            out.append(f"{_where(path)} is read only from ~/.aramid/config.toml"
+                       f" ({why}) -- ignored here")
     return out
 
 

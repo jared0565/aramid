@@ -130,12 +130,16 @@ def _read_toml_file(path: Path) -> dict:
 _WARNED: set[tuple[str, str]] = set()
 
 
-def _warn_layer(path: Path, raw: dict, known: dict) -> None:
+def _warn_layer(path: Path, raw: dict, known: dict, *, repo: bool = False) -> None:
     """Print each config_keys problem in one layer a person writes, once per
     process. WARN only (1.0 DEC-4): what load_config loads is unchanged --
     an unknown key is still ignored, a mistyped value still passes through
-    -- and no exit code moves."""
-    for problem in config_keys.problems(raw, known=known):
+    -- and no exit code moves. `repo`: the layer is a repo's aramid.toml,
+    which may not set a machine-only key (config_keys.MACHINE_ONLY)."""
+    found = config_keys.problems(raw, known=known)
+    if repo:
+        found += config_keys.machine_only_problems(raw)
+    for problem in found:
         if (str(path), problem) not in _WARNED:
             _WARNED.add((str(path), problem))
             print(f"aramid: config: {path}: {problem}", file=sys.stderr)
@@ -148,9 +152,14 @@ def layer_problems(root: Path) -> list[tuple[Path, str]]:
     raises, as it does in load_config."""
     known = config_keys.known_keys()
     out: list[tuple[Path, str]] = []
-    for path in (_user_config_path(), root / "aramid.toml"):
+    repo_path = root / "aramid.toml"
+    for path in (_user_config_path(), repo_path):
         if path.exists():
-            out.extend((path, p) for p in config_keys.problems(_read_toml_file(path), known=known))
+            raw = _read_toml_file(path)
+            found = config_keys.problems(raw, known=known)
+            if path == repo_path:
+                found += config_keys.machine_only_problems(raw)
+            out.extend((path, p) for p in found)
     return out
 
 
@@ -252,7 +261,7 @@ def load_config(root: Path) -> Config:
     repo_schema_version = None
     if repo_path.exists():
         repo_toml = _read_toml_file(repo_path)
-        _warn_layer(repo_path, repo_toml, known)
+        _warn_layer(repo_path, repo_toml, known, repo=True)
         repo_schema_version = repo_toml.get("schema_version")
         pre_repo_block_rules = merged.get("block_rules", {})
         merged = _deep_merge(merged, repo_toml)

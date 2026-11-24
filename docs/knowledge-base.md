@@ -243,6 +243,7 @@ Two invariants worth keeping in mind when touching this:
 | `item_expiry_days` | int | `30` | Items older than this are expired out of the queue. |
 | `wall_clock_budget_s` | int (s) | `600` | Whole-drain wall-clock budget. |
 | `hard_deadline_s` | int (s) | `5400` | Seconds from the drain's start to its hard deadline: the running consumer is stopped and recorded `degraded`, and the item stays queued. Capped 15 min under `interval_hours`; ≤ 0 or non-numeric reads as the default, under 60 reads as 60. |
+| `cpu_cores` | int | unset | Read from `~/.aramid/config.toml` only (a repo's `aramid.toml` setting it gets a `config:` warning, and it is ignored there). `aramid drain` pins itself to its N lowest allowed cores before anything else, so every thread and process it starts inherits the mask: Windows `SetProcessAffinityMask` on the process, Linux `sched_setaffinity` on the calling thread (cmd_drain starts its threads later). It prints the core count read back from the OS. macOS: reported, not applied. A refused cap fails open: the drain runs uncapped and says so (`aramid.cpu_cap`, interop round 351). `aramid status` appends `; drain cpu cap: N` to the scheduled-drain line. |
 
 ### `[pack]`
 

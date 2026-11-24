@@ -27,7 +27,7 @@ from typing import Callable
 from aramid import __version__
 from aramid import autolearn
 from aramid import config as config_mod
-from aramid import drain_limits
+from aramid import cpu_cap, drain_limits
 from aramid import fleet, health
 from aramid import gitutil, leftovers, policy, queue, redact, registry, toolpath, triage
 from aramid import ledger as ledger_mod
@@ -714,6 +714,12 @@ def _record_consumer_run(ledger, run_id, clock, name, item, result, findings,
 def cmd_drain(targets: list, *, dry_run: bool = False, max_items: int | None = None,
               clock: Callable[[], str] = _now,
               monotonic: Callable[[], float] = time.monotonic) -> int:
+    # Interop round 351: first, before any thread or consumer starts. On
+    # Linux the cap is the calling thread's, and only what starts after it
+    # inherits it.
+    capped = cpu_cap.apply_configured()
+    if capped:
+        print(capped)
     if targets:
         repos = [Path(t) for t in targets]
     else:

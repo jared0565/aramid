@@ -85,6 +85,25 @@ to publish a tag that disagrees with it.
   registering a repo, as `aramid fleet deregister` already did, and prints
   the readiness line, so the new repo is in the report and its counts at
   once, shown as `(no rows)` until its first gate run.
+- **A drain can be held to fewer CPU cores.** bytesTTS's host hard-resets
+  under sustained all-core load (13 Kernel-Power 41 events). The scheduled
+  drain ran at whatever parallelism its consumers chose, and the task's
+  below-normal priority does not limit load on an idle machine, so they
+  disabled the task and ran drains by hand under `start /affinity`
+  (interop round 351). Now `[drain].cpu_cores = N` in
+  `~/.aramid/config.toml` makes `aramid drain` pin itself to its N lowest
+  allowed cores before anything else, and every consumer, test run and
+  tool it starts inherits that. It is a setting, not a change to the task,
+  so `aramid schedule install` cannot undo it. The drain prints how many
+  cores the OS kept, and `aramid status` shows the cap on its
+  scheduled-drain line. Unset means no cap. Only the machine's file is
+  read: a repo's `aramid.toml` that sets it gets a `config:` warning and
+  is ignored. macOS has no affinity call, so there the cap is reported
+  and not applied. A cap the OS refuses fails open: the drain runs
+  uncapped and says so, the same choice as on macOS, even though running
+  uncapped is the load the cap exists to prevent. The round's other note,
+  that `aramid status` said `installed` for a disabled task, was fixed in
+  0.20.14.
 
 ### Changed
 
