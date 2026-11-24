@@ -33,6 +33,9 @@ def _onboarded(tmp_path, monkeypatch) -> Path:
     _git(r, "add", "app.py")
     _git(r, "commit", "-q", "-m", "seed")
     assert init.cmd_init(r) == 0
+    # Since round 347 init judges the fleet as it registers; these tests
+    # start from a fleet no drain has judged, and write their own verdict.
+    fleet.verdict_path().unlink()
     return r
 
 
