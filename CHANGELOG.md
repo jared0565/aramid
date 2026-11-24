@@ -102,6 +102,16 @@ to publish a tag that disagrees with it.
 
 ### Fixed
 
+- **`aramid doctor` names a control character in a `PATH` entry instead
+  of calling the entry relative.** bytesTTS had `C:` + LF +
+  `    \Users\...\jdk-17\bin` on `PATH`, left by a terminal started before
+  a registry fix. Doctor reported it as a relative entry ("make it
+  absolute"), which sent the reader the wrong way, and the raw line feed
+  split the row in two (interop round 347). Now such an entry, absolute or
+  not, gets its own `WARN PATH` row: it names the character and its place,
+  shows the entry escaped on one line, and says to open a new terminal or
+  remove the entry. Every `PATH` row prints its entry on one line. Lookups
+  are unchanged, and the row is advisory as before.
 - **The agent hooks find the repo when git is not on their PATH.**
   `aramid agent-hook session-start` and `pre-tool-use` found the repo with
   `git rev-parse`, and read a git they could not start as "not an aramid

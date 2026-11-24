@@ -332,14 +332,12 @@ def _repo_root_of(cwd: Path) -> Path:
     top = gitutil.gated_top(cwd)
     if top is None:
         return cwd
-    from aramid.handover import printable_body
+    from aramid.handover import printable_line
 
     def shown(p: Path) -> str:
-        # Control characters escaped, backslashes kept (a Windows path is
-        # normal here), and the one thing `printable_body` keeps, LF, too.
-        return printable_body(str(p)).replace(chr(10), chr(92) + "x0a")
+        return printable_line(str(p))  # one line; backslashes kept
 
-    own = [name for name, there in (("aramid.toml", (cwd / "aramid.toml").is_file()),
+    own =[name for name, there in (("aramid.toml", (cwd / "aramid.toml").is_file()),
                                     (".aramid/", (cwd / ".aramid").is_dir())) if there]
     line = (f"aramid: working on the repository root {shown(top)}, not {shown(cwd)}:"
             " a repository has one aramid config and one ledger, at its root")

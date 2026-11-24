@@ -404,6 +404,13 @@ def printable_body(text: str) -> str:
     return chr(10).join(out)
 
 
+def printable_line(text: str) -> str:
+    """`printable_body` for text that must stay on ONE line -- a path or a
+    PATH entry in a report row: backslashes kept (a Windows path is normal),
+    and the two things `printable_body` keeps, LF and TAB, escaped too."""
+    return printable_body(text).replace(chr(10), chr(92) + "x0a").replace(chr(9), chr(92) + "x09")
+
+
 def _verify(path: Path, root: Path, data: dict, pending: Pending) -> None:
     """Raise Unreadable unless aramid on this machine signed `data`. The MAC is
     checked over the STORED fields (stored root included) FIRST; only then is

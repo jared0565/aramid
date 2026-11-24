@@ -420,10 +420,41 @@ def relative_path_lines() -> list[str]:
     a file there can stand in for any program aramid looks up but its own
     tools, which a relative entry never supplies (`toolpath._aramids_own`).
     An absolute entry inside the repo, an activated venv's, is the user's own
-    statement and is not reported. Advice, never a failure."""
-    return [f"  WARN     PATH         relative entry `{entry}`: it names a directory of the"
-            " repo aramid is judging, which can supply any program but aramid's own tools"
-            " -- make it absolute or remove it" for entry in toolpath.relative_path_entries()]
+    statement and is not reported. Advice, never a failure.
+
+    An entry holding a character that is not printable -- LF, CR, TAB, ESC,
+    U+2028 -- gets its own row instead, absolute or not, naming the first
+    such character and where it is (interop round 347, operator 2026-11-24):
+    bytesTTS's `C:` + LF + `\\Users\\...` was called relative, "make it
+    absolute" sent the reader the wrong way, and the raw LF split the row in
+    two. Rows follow PATH's order, once per entry, each entry escaped onto
+    one line (`handover.printable_line`). Lookups are unchanged."""
+    from aramid.handover import printable_line
+    relative = set(toolpath.relative_path_entries())
+    rows, seen = [], set()
+    for entry in toolpath._path_dirs():
+        if entry in seen:
+            continue
+        seen.add(entry)
+        odd = next(((i, c) for i, c in enumerate(entry, 1) if not c.isprintable()), None)
+        if odd is not None:
+            # Interop round 347: checked FIRST, and instead of "relative" --
+            # `C:` + LF + `\Users\...` is drive-relative only by accident, and
+            # "make it absolute" sent the reader the wrong way.
+            i, c = odd
+            name = _CONTROL_NAMES.get(c, f"U+{ord(c):04X}")
+            rows.append(f"  WARN     PATH         entry `{printable_line(entry)}` holds a control"
+                        f" character ({name} at character {i}): a terminal started before PATH"
+                        " was changed keeps its old PATH -- open a new terminal, or remove the"
+                        " entry")
+        elif entry in relative:
+            rows.append(f"  WARN     PATH         relative entry `{printable_line(entry)}`: it"
+                        " names a directory of the repo aramid is judging, which can supply any"
+                        " program but aramid's own tools -- make it absolute or remove it")
+    return rows
+
+
+_CONTROL_NAMES = {"\n": "LF", "\r": "CR", "\t": "TAB"}
 
 
 def _sh_path_to_win(interp_sh: str) -> Path | None:
