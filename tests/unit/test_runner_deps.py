@@ -3,6 +3,8 @@ import os
 import time
 from pathlib import Path
 
+import pytest
+
 from aramid.runners import deps
 from aramid.runners.base import RunContext, RunnerResult, ToolState
 
@@ -282,14 +284,18 @@ def test_run_mixed_stack_runs_both_python_and_js_audits(tmp_path, monkeypatch):
     because a Python one is also possible (the Important-severity bug)."""
     (tmp_path / "requirements.txt").write_text("a==1\n")
     (tmp_path / "package-lock.json").write_text("{}")
-    monkeypatch.setattr(
-        deps, "run_subprocess",
-        lambda argv, cwd, timeout_s, env=None: RunnerResult(tool="pip-audit", state=ToolState.OK, raw="{}"),
-    )
+
+    def clean_audits(argv, cwd, timeout_s, env=None):
+        # Each tool's own clean report: a bare "{}" is not pip-audit's.
+        if argv[0] == "pip-audit":
+            return RunnerResult(tool="pip-audit", state=ToolState.OK, raw=_EMPTY_REPORT)
+        return RunnerResult(tool="npm", state=ToolState.OK, raw="{}")
+    monkeypatch.setattr(deps, "run_subprocess", clean_audits)
     result = deps.run(RunContext(root=tmp_path))
     assert result.state is ToolState.OK
     sub_tools = {sub.tool for sub in result.sub_results}
     assert sub_tools == {"pip-audit", "npm"}
+    assert all(sub.state is ToolState.OK for sub in result.sub_results)
 
 
 def test_run_mixed_stack_merges_findings_from_both_audits(tmp_path, monkeypatch):
@@ -393,6 +399,147 @@ def test_run_python_empty_output_with_error_returncode_is_crashed(tmp_path, monk
     )
     result = deps.run_python(RunContext(root=tmp_path))
     assert result.state is ToolState.CRASHED
+
+
+# pip-audit's `_fatal` logs and exits 1 -- its "vulnerabilities found" code --
+# with NOTHING on stdout. Seen 2026-11-24 in a gate run: it could not upgrade
+# pip inside its temporary venv, `json_or_crashed` read the empty stdout as
+# "{}", and the audit counted as clean: no findings, not degraded, and in the
+# run's scope, so earlier pip-audit rows could close as gone. A real report
+# always carries a `dependencies` list; pip-audit 2.10.1 audits an empty
+# requirements file as `{"dependencies": [], "fixes": []}` (measured). Operator
+# decision 2026-11-25: require that shape, retry once, then CRASHED with
+# pip-audit's own line as the reason.
+_FATAL = ("ERROR:pip_audit._cli:Failed to upgrade `pip`: ['/tmp/tmpx/bin/python', '-m', "
+          "'pip', 'install', '--upgrade', 'pip', 'wheel', 'setuptools']\n")
+_EMPTY_REPORT = '{"dependencies": [], "fixes": []}'
+
+
+def _pip_audit_runs(monkeypatch, *outcomes):
+    """Fake run_subprocess answering each pip-audit call with the next
+    outcome; returns the list of argvs it was called with."""
+    calls = []
+    queue = list(outcomes)
+
+    def fake(argv, cwd, timeout_s, env=None):
+        calls.append(argv)
+        return queue.pop(0)
+    monkeypatch.setattr(deps, "run_subprocess", fake)
+    return calls
+
+
+def _cached(root):
+    return sorted((root / ".aramid" / "cache").glob("deps-*.json")) \
+        if (root / ".aramid" / "cache").is_dir() else []
+
+
+def test_run_python_a_fatal_exit_with_no_report_is_retried_once_then_crashed(tmp_path, monkeypatch):
+    (tmp_path / "requirements.txt").write_text("requests==2.6.0\n")
+    fatal = RunnerResult(tool="pip-audit", state=ToolState.OK, raw="", stderr=_FATAL,
+                         duration_s=2.0, returncode=1)
+    calls = _pip_audit_runs(monkeypatch, fatal, fatal)
+    result = deps.run_python(RunContext(root=tmp_path))
+    assert len(calls) == 2
+    assert calls[0] == calls[1]
+    assert result.state is ToolState.CRASHED
+    assert result.tool == "pip-audit"
+    assert result.returncode == 1
+    assert result.duration_s == 4.0
+    assert result.reason == ("crashed (exit 1): no report after a retry -- Failed to upgrade "
+                             "`pip`: ['/tmp/tmpx/bin/python', '-m', 'pip', 'install', "
+                             "'--upgrade', 'pip', 'wheel', 'setuptools']")
+    assert _cached(tmp_path) == []
+
+
+def test_run_python_a_retry_that_reports_is_the_result_and_is_cached(tmp_path, monkeypatch):
+    (tmp_path / "requirements.txt").write_text("django==3.2.0\n")
+    fatal = RunnerResult(tool="pip-audit", state=ToolState.OK, raw="", stderr=_FATAL, returncode=1)
+    report = RunnerResult(tool="pip-audit", state=ToolState.OK, raw=PIP_AUDIT.read_text(),
+                          returncode=1)
+    calls = _pip_audit_runs(monkeypatch, fatal, report)
+    result = deps.run_python(RunContext(root=tmp_path))
+    assert len(calls) == 2
+    assert result.state is ToolState.OK
+    assert result.reason is None
+    assert json.loads(result.raw) == json.loads(PIP_AUDIT.read_text())
+    assert len(_cached(tmp_path)) == 1
+
+
+@pytest.mark.parametrize("raw",["{}", "[]", "null", '{"dependencies": {}}', '"x"'])
+def test_run_python_json_that_is_not_a_report_is_crashed(tmp_path, monkeypatch, raw):
+    (tmp_path / "requirements.txt").write_text("a==1\n")
+    bare = RunnerResult(tool="pip-audit", state=ToolState.OK, raw=raw, returncode=0)
+    calls = _pip_audit_runs(monkeypatch, bare, bare)
+    result = deps.run_python(RunContext(root=tmp_path))
+    assert len(calls) == 2
+    assert result.state is ToolState.CRASHED
+    assert result.reason == "crashed (exit 0): no report after a retry -- nothing on stderr"
+    assert _cached(tmp_path) == []
+
+
+def test_run_python_an_empty_requirements_report_stays_ok_without_a_retry(tmp_path, monkeypatch):
+    (tmp_path / "requirements.txt").write_text("# nothing pinned\n")
+    calls = _pip_audit_runs(monkeypatch, RunnerResult(
+        tool="pip-audit", state=ToolState.OK, raw=_EMPTY_REPORT,
+        stderr="No known vulnerabilities found\n", returncode=0))
+    result = deps.run_python(RunContext(root=tmp_path))
+    assert len(calls) == 1
+    assert result.state is ToolState.OK
+    assert deps.parse(result, RunContext(root=tmp_path)) == []
+
+
+def test_run_python_a_crash_is_retried_and_keeps_its_line(tmp_path, monkeypatch):
+    (tmp_path / "requirements.txt").write_text("a==1\n")
+    crash = RunnerResult(tool="pip-audit", state=ToolState.OK, raw="",
+                         stderr="usage: pip-audit [-h]\nERROR:pip_audit._cli:bad flag\n",
+                         returncode=2)
+    calls = _pip_audit_runs(monkeypatch, crash, crash)
+    result = deps.run_python(RunContext(root=tmp_path))
+    assert len(calls) == 2
+    assert result.state is ToolState.CRASHED
+    assert result.reason == "crashed (exit 2): no report after a retry -- bad flag"
+
+
+@pytest.mark.parametrize("state", [ToolState.TIMEOUT, ToolState.MISSING])
+def test_run_python_a_timeout_or_missing_tool_is_not_retried(tmp_path, monkeypatch, state):
+    (tmp_path / "requirements.txt").write_text("a==1\n")
+    calls = _pip_audit_runs(monkeypatch, RunnerResult(tool="pip-audit", state=state,
+                                                      duration_s=180.0))
+    result = deps.run_python(RunContext(root=tmp_path))
+    assert len(calls) == 1
+    assert result.state is state
+    assert result.reason is None
+
+
+def test_run_python_a_cached_entry_that_is_not_a_report_is_a_miss(tmp_path, monkeypatch):
+    """A `{}` cached before this fix would read as a clean audit for 24 h."""
+    (tmp_path / "requirements.txt").write_text("django==3.2.0\n")
+    sources = deps.python_sources(tmp_path)
+    path = deps._cache_path(tmp_path, b"\x00".join(s.read_bytes() for s in sources))
+    path.parent.mkdir(parents=True)
+    path.write_text("{}", encoding="utf-8")
+    calls = _pip_audit_runs(monkeypatch, RunnerResult(
+        tool="pip-audit", state=ToolState.OK, raw=PIP_AUDIT.read_text(), returncode=1))
+    result = deps.run_python(RunContext(root=tmp_path))
+    assert len(calls) == 1
+    assert result.state is ToolState.OK
+    assert json.loads(path.read_text(encoding="utf-8")) == json.loads(PIP_AUDIT.read_text())
+
+
+@pytest.mark.parametrize("stderr, said", [
+    (_FATAL, "Failed to upgrade `pip`: ['/tmp/tmpx/bin/python', '-m', 'pip', 'install', "
+             "'--upgrade', 'pip', 'wheel', 'setuptools']"),
+    # `_fatal` after a connection error logs two lines; the first names it.
+    ("ERROR:pip_audit._cli:HTTPSConnectionPool(host='pypi.org'): timed out\n"
+     "ERROR:pip_audit._cli:Tip: your network may be blocking this service.\n",
+     "HTTPSConnectionPool(host='pypi.org'): timed out"),
+    ("Traceback (most recent call last):\n  ...\nKeyError: 'x'\n", "KeyError: 'x'"),
+    ("", "nothing on stderr"),
+    ("  \n\n", "nothing on stderr"),
+    ("ERROR:" + "y" * 500, "y" * 300),
+])
+def test_what_pip_audit_said_is_its_first_error_line(stderr, said):
+    assert deps._pip_audit_said(stderr) == said
 
 
 def test_run_js_npm_empty_output_with_error_returncode_is_crashed(tmp_path, monkeypatch):

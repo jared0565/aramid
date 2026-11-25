@@ -32,3 +32,20 @@ def test_a_tool_that_exited_keeps_its_exit_code():
         "ruff": "crashed (exit 0)",
         "pip-audit": "crashed (exit 1)",
     }
+
+
+def test_a_crashed_result_that_states_its_reason_is_named_by_it():
+    """Opt-in (operator decision 2026-11-25): a pip-audit run that wrote no
+    report, twice, carries pip-audit's own line in `RunnerResult.reason`, and
+    that is the reason -- over the exit code and over an `aramid: ` sentence.
+    Only a CRASHED result's is read: a timeout keeps its measured text."""
+    rs = [RunnerResult("pip-audit", ToolState.CRASHED, stderr="aramid: x", returncode=1,
+                       reason="crashed (exit 1): no report after a retry -- Failed to "
+                              "upgrade `pip`"),
+          RunnerResult("semgrep", ToolState.TIMEOUT, duration_s=30.0, reason="ignored"),
+          RunnerResult("ruff", ToolState.CRASHED, returncode=2, reason=None)]
+    assert pipeline._degraded_reasons(rs) == {
+        "pip-audit": "crashed (exit 1): no report after a retry -- Failed to upgrade `pip`",
+        "semgrep": "timeout after 30 s",
+        "ruff": "crashed (exit 2)",
+    }

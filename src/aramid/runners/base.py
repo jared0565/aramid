@@ -163,6 +163,12 @@ class RunnerResult:
     # nothing that branches on a stall, so a run that hit its budget stays
     # a budget timeout everywhere (the mutation budget give-up among them).
     idle_s: float | None = None
+    # Why a CRASHED result could not vouch, when the runner can say it better
+    # than an exit code: pip-audit's run that wrote no report, twice, names
+    # pip-audit's own error line (operator decision 2026-11-25). Opt-in and
+    # REPORTING ONLY: `pipeline._degraded_reasons` reads it for a CRASHED
+    # result, nothing branches on it, and None keeps "crashed (exit N)".
+    reason: str | None = None
 
 @dataclass
 class RunContext:

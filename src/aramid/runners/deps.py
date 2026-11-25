@@ -60,6 +60,7 @@ still exported for exactly this reason).
 import dataclasses
 import hashlib
 import json
+import re
 import time
 import tomllib
 from pathlib import Path
@@ -199,7 +200,9 @@ def run_python(ctx) -> RunnerResult:
     cache_path = _cache_path(ctx.root, key_bytes)
     if not getattr(ctx, "force_refresh", False):
         cached = _read_cache(cache_path)
-        if cached is not None:
+        # A cached entry that is not a report (a `{}` written before the
+        # shape check) is a miss, not 24 hours of clean audits.
+        if cached is not None and _is_pip_audit_report(cached):
             return RunnerResult(NAME_PIP_AUDIT, ToolState.OK, raw=cached)
 
     argv = ["pip-audit"]
@@ -210,11 +213,72 @@ def run_python(ctx) -> RunnerResult:
         argv.append(str(ctx.root))  # project-path mode: the [project] table
     argv += ["-f", "json"]
 
-    result = run_subprocess(argv, ctx.root, TIMEOUT_S)
-    result = json_or_crashed(NAME_PIP_AUDIT, result, _OK_RETURNCODES, empty="{}")
+    result = _audit_once(argv, ctx.root)
+    if result.state is ToolState.CRASHED:
+        # One more run before it counts (operator decision 2026-11-25): the
+        # one seen failed to upgrade pip inside pip-audit's temporary venv, a
+        # one-off, and under `--strict` a crashed audit refuses the push.
+        # Not for TIMEOUT or MISSING: a second run would double a timeout,
+        # and a missing tool stays missing.
+        first = result
+        result = _audit_once(argv, ctx.root)
+        result = dataclasses.replace(result, duration_s=first.duration_s + result.duration_s)
+    if result.state is ToolState.CRASHED:
+        return dataclasses.replace(
+            result, reason=(f"crashed (exit {result.returncode}): no report after a retry -- "
+                            f"{_pip_audit_said(result.stderr)}"))
     if result.state is ToolState.OK:
         _write_cache(cache_path, result.raw)
     return result
+
+
+def _audit_once(argv: list[str], root: Path) -> RunnerResult:
+    """One pip-audit run, judged: OK only with a report on stdout. Calls the
+    module's own `run_subprocess` binding, so a test's patch reaches it."""
+    ran = run_subprocess(argv, root, TIMEOUT_S)
+    judged = json_or_crashed(NAME_PIP_AUDIT, ran, _OK_RETURNCODES, empty="{}")
+    if judged.state is ToolState.OK and not _is_pip_audit_report(judged.raw):
+        # What pip-audit printed, not the "{}" json_or_crashed read empty
+        # stdout as: the log shows the run as it was.
+        return RunnerResult(NAME_PIP_AUDIT, ToolState.CRASHED, ran.raw, ran.stderr,
+                            ran.duration_s, ran.returncode)
+    return judged
+
+
+def _is_pip_audit_report(raw: str | None) -> bool:
+    """Is this pip-audit's JSON report? An object whose `dependencies` is a
+    list, present even with nothing to audit: pip-audit 2.10.1 reports an
+    empty requirements file as `{"dependencies": [], "fixes": []}` (measured
+    2026-11-25). Its `_fatal` path exits 1 -- the code for "vulnerabilities
+    found", so in `_OK_RETURNCODES` -- with nothing on stdout, and
+    `json_or_crashed` reads empty stdout as "{}". Without this check that run
+    was a clean audit and in the run's scope, so earlier pip-audit rows could
+    close as gone (seen 2026-11-24: a gate test's baseline audit)."""
+    try:
+        data = json.loads(raw or "")
+    except ValueError:
+        return False
+    return isinstance(data, dict) and isinstance(data.get("dependencies"), list)
+
+
+_SAID_CAP = 300
+_LOGGED_ERROR = re.compile(r"^ERROR:(?:pip_audit[\w.]*:)?")
+
+
+def _pip_audit_said(stderr: str | None) -> str:
+    """What pip-audit said about a run with no report: its first logged
+    ERROR line without the `ERROR:pip_audit._cli:` prefix (after a connection
+    error `_fatal` logs two lines, and the first names the error), else its
+    last line, such as a traceback's exception. Capped at `_SAID_CAP`."""
+    lines = [ln.strip() for ln in (stderr or "").splitlines() if ln.strip()]
+    errors = [ln for ln in lines if ln.startswith("ERROR:")]
+    if errors:
+        said = _LOGGED_ERROR.sub("", errors[0]).strip()   # anchored: one match at most
+    elif lines:
+        said = lines[-1]
+    else:
+        said = "nothing on stderr"
+    return said[:_SAID_CAP]
 
 
 def parse_pip_audit(result: RunnerResult, ctx) -> list[RawFinding]:

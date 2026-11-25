@@ -811,7 +811,11 @@ def _degraded_reasons(flat_results: list[RunnerResult]) -> dict[str, str]:
             reasons[r.tool] = "not found"
         elif r.state is ToolState.CRASHED:
             said = (r.stderr or "").strip()
-            if r.returncode == 0 and said.startswith("aramid: "):
+            if r.reason:
+                # The runner stated why (`RunnerResult.reason`, opt-in): a
+                # pip-audit that wrote no report names its own error line.
+                reasons[r.tool] = r.reason
+            elif r.returncode == 0 and said.startswith("aramid: "):
                 # aramid refused before any process exited (gitleaks' range
                 # check, an inline pass that raised): its own sentence is the
                 # reason, not an exit no program made (interop round 346).
