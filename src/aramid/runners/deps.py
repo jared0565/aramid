@@ -213,23 +213,32 @@ def run_python(ctx) -> RunnerResult:
         argv.append(str(ctx.root))  # project-path mode: the [project] table
     argv += ["-f", "json"]
 
-    result = _audit_once(argv, ctx.root)
+    result = _retried(lambda: _audit_once(argv, ctx.root))
     if result.state is ToolState.CRASHED:
-        # One more run before it counts (operator decision 2026-11-25): the
-        # one seen failed to upgrade pip inside pip-audit's temporary venv, a
-        # one-off, and under `--strict` a crashed audit refuses the push.
-        # Not for TIMEOUT or MISSING: a second run would double a timeout,
-        # and a missing tool stays missing.
-        first = result
-        result = _audit_once(argv, ctx.root)
-        result = dataclasses.replace(result, duration_s=first.duration_s + result.duration_s)
-    if result.state is ToolState.CRASHED:
-        return dataclasses.replace(
-            result, reason=(f"crashed (exit {result.returncode}): no report after a retry -- "
-                            f"{_pip_audit_said(result.stderr)}"))
+        return _no_report(result, _pip_audit_said(result.stderr))
     if result.state is ToolState.OK:
         _write_cache(cache_path, result.raw)
     return result
+
+
+def _retried(once) -> RunnerResult:
+    """`once()`, and once more when it CRASHED (operator decision
+    2026-11-25): the pip-audit seen failed to upgrade pip inside its
+    temporary venv, a one-off, and under `--strict` a crashed audit refuses
+    the push. Not for TIMEOUT or MISSING: a second run would double a
+    timeout, and a missing tool stays missing. The durations add up."""
+    result = once()
+    if result.state is ToolState.CRASHED:
+        first = result
+        result = once()
+        result = dataclasses.replace(result, duration_s=first.duration_s + result.duration_s)
+    return result
+
+
+def _no_report(result: RunnerResult, said: str) -> RunnerResult:
+    """A CRASHED audit's degraded reason, in the tool's own words."""
+    return dataclasses.replace(
+        result, reason=f"crashed (exit {result.returncode}): no report after a retry -- {said}")
 
 
 def _audit_once(argv: list[str], root: Path) -> RunnerResult:
@@ -324,20 +333,89 @@ def run_js(ctx) -> RunnerResult:
     cache_path = _cache_path(ctx.root, lockfile.read_bytes())
     if not getattr(ctx, "force_refresh", False):
         cached = _read_cache(cache_path)
-        if cached is not None:
+        # yarn's clean audit is empty NDJSON, so only the JSON tools' cache
+        # can hold a placeholder.
+        if cached is not None and (pm == "yarn" or not _cached_placeholder(cached)):
             # A cached payload is still shape-checked at parse time (parse runs
             # on every result, fresh or cached), so an unrecognized shape can't
             # hide behind the cache -- it surfaces as an advisory WARN either way.
             return RunnerResult(pm, ToolState.OK, raw=cached)
 
-    result = run_subprocess(_JS_AUDIT_ARGV[pm], ctx.root, TIMEOUT_S)
-    if pm == "yarn":
-        result = _ndjson_or_crashed(pm, result, _OK_RETURNCODES)
-    else:
-        result = json_or_crashed(pm, result, _OK_RETURNCODES, empty="{}")
+    result = _retried(lambda: _js_audit_once(pm, ctx.root))
+    if result.state is ToolState.CRASHED:
+        return _no_report(result, _audit_said(result.raw, result.stderr))
     if result.state is ToolState.OK:
         _write_cache(cache_path, result.raw)
     return result
+
+
+def _js_audit_once(pm: str, root: Path) -> RunnerResult:
+    """One npm/pnpm/yarn audit, judged (see `_unless_no_report`)."""
+    ran = run_subprocess(_JS_AUDIT_ARGV[pm], root, TIMEOUT_S)
+    if pm == "yarn":
+        return _unless_no_report(pm, ran, _ndjson_or_crashed(pm, ran, _OK_RETURNCODES),
+                                 json_report=False)
+    return _unless_no_report(pm, ran, json_or_crashed(pm, ran, _OK_RETURNCODES, empty="{}"),
+                             json_report=True)
+
+
+def _unless_no_report(tool: str, ran: RunnerResult, judged: RunnerResult, *,
+                      json_report: bool) -> RunnerResult:
+    """`judged`, or CRASHED when the run reported nothing (operator decision
+    2026-11-25, "no-report rule, all four"). npm, pnpm, yarn and cargo-audit
+    exit 1 for "vulnerabilities found", so exit 1 with nothing on stdout
+    claimed findings and reported none -- and `json_or_crashed` read the
+    empty stdout as "{}", a clean audit in the run's scope and in the cache.
+    A JSON tool's object carrying `error` is a failure reply, never a report:
+    npm 11.13.0 exits 1 with `{"error": {"code", "summary", "detail"}}`
+    (measured, ENOLOCK). Exit 0 with nothing on stdout stays clean: yarn's
+    clean audit prints nothing. The CRASHED result keeps what the tool
+    printed, not the "{}" placeholder."""
+    if judged.state is not ToolState.OK:
+        return judged
+    silent = ran.returncode == 1 and not (ran.raw or "").strip()
+    if silent or (json_report and _error_reply(ran.raw) is not None):
+        return RunnerResult(tool, ToolState.CRASHED, ran.raw, ran.stderr, ran.duration_s,
+                            ran.returncode)
+    return judged
+
+
+def _error_reply(raw: str | None) -> dict | None:
+    """The parsed object when `raw` is a JSON object carrying `error`."""
+    try:
+        data = json.loads(raw or "")
+    except ValueError:
+        return None
+    return data if isinstance(data, dict) and "error" in data else None
+
+
+def _cached_placeholder(cached: str) -> bool:
+    """A JSON audit's cache entry that is not a report: `{}`, which before
+    the no-report rule was aramid's own stand-in for nothing on stdout (npm,
+    pnpm and cargo-audit write a report even when clean), or an error reply.
+    A miss, so the audit runs again rather than reading as clean for 24 h."""
+    return cached.strip() == "{}" or _error_reply(cached) is not None
+
+
+def _audit_said(raw: str | None, stderr: str | None) -> str:
+    """What an npm/pnpm/yarn/cargo-audit run with no report said: its error
+    reply's `code: summary` (or `message`, `detail`), else the first stderr
+    line naming an error, else the last stderr line. Capped at `_SAID_CAP`."""
+    reply = _error_reply(raw)
+    if reply is not None:
+        error = reply["error"]
+        if isinstance(error, dict):
+            text = error.get("summary") or error.get("message") or error.get("detail")
+            parts = [str(p).strip().splitlines()[0] for p in (error.get("code"), text)
+                     if p and str(p).strip()]
+            if parts:
+                return ": ".join(parts)[:_SAID_CAP]
+        elif isinstance(error, str) and error.strip():
+            return error.strip().splitlines()[0][:_SAID_CAP]
+    lines = [ln.strip() for ln in (stderr or "").splitlines() if ln.strip()]
+    errors = [ln for ln in lines if "error" in ln.lower()]
+    said = errors[0] if errors else (lines[-1] if lines else "nothing on stderr")
+    return said[:_SAID_CAP]
 
 
 def _ndjson_or_crashed(tool: str, result: RunnerResult, ok_returncodes: set[int]) -> RunnerResult:
@@ -527,27 +605,35 @@ def run_cargo(ctx) -> RunnerResult:
     cache_path = _cache_path(ctx.root, lockfile.read_bytes())
     if not getattr(ctx, "force_refresh", False):
         cached = _read_cache(cache_path)
-        if cached is not None:
+        if cached is not None and not _cached_placeholder(cached):
             return RunnerResult(NAME_CARGO_AUDIT, ToolState.OK, raw=cached)
 
-    result = run_subprocess(["cargo", "audit", "--json"], ctx.root, TIMEOUT_S)
-    result = json_or_crashed(NAME_CARGO_AUDIT, result, _OK_RETURNCODES, empty="{}")
+    result = _retried(lambda: _cargo_audit_once(ctx.root))
+    if result.state is ToolState.CRASHED:
+        return _no_report(result, _audit_said(result.raw, result.stderr))
     if result.state is ToolState.OK:
         _write_cache(cache_path, result.raw)
     return result
 
 
+def _cargo_audit_once(root: Path) -> RunnerResult:
+    """One cargo-audit run, judged (see `_unless_no_report`). Its own fatal
+    error exits 2 (measured, 0.22.2), already CRASHED by json_or_crashed."""
+    ran = run_subprocess(["cargo", "audit", "--json"], root, TIMEOUT_S)
+    return _unless_no_report(NAME_CARGO_AUDIT, ran,
+                             json_or_crashed(NAME_CARGO_AUDIT, ran, _OK_RETURNCODES, empty="{}"),
+                             json_report=True)
+
+
 def _cargo_shape_recognized(raw: str) -> bool:
     """cargo-audit's `--json` report has a long-stable, documented top-level
     shape: `{"vulnerabilities": {"found": bool, "count": int, "list": [...]}}`.
-    NOT a live capture -- correcting this docstring's first version, which
-    claimed cargo was absent: cargo IS installed here, but the `cargo-audit`
-    subcommand plugin is not (`toolpath.resolve("cargo-audit") is None`,
-    checked 2026-07-31), so no real `--json` payload was ever captured. This
-    is built from documented/community-known output, same honesty convention
-    as `_pnpm_shape_recognized`'s own
-    "reconstructed from documentation... flagged as an assumption to verify
-    in integration" precedent. Requires the container shape parse_cargo
+    First built from documentation, when the `cargo-audit` plugin was not
+    installed here (2026-07-31); since CAPTURED, 2026-11-25 with cargo-audit
+    0.22.2 against a one-package Cargo.lock: the clean report carries
+    `"vulnerabilities": {"found": false, "count": 0, "list": []}` beside
+    `database`, `lockfile`, `settings` and `warnings`. A report WITH findings
+    has not been captured. Requires the container shape parse_cargo
     actually reads (a dict `vulnerabilities` with a list `list`) to be
     present; anything else degrades to the shape-drift advisory rather than
     a crash or a silently empty result."""

@@ -577,6 +577,203 @@ def test_run_js_yarn_empty_output_with_error_returncode_is_crashed(tmp_path, mon
 
 # ---------------- cache (lockfile-keyed, 24h TTL) ----------------
 
+# The same hole in the other dependency audits (operator decision 2026-11-25,
+# "no-report rule, all four"). npm, pnpm, yarn and cargo-audit exit 1 for
+# "vulnerabilities found", so exit 1 with NOTHING on stdout reported nothing
+# while claiming findings; npm also fails with exit 1 and an error object on
+# stdout -- measured, npm 11.13.0 with no lockfile:
+_NPM_ENOLOCK = ('{\n  "error": {\n    "code": "ENOLOCK",\n    "summary": "This command requires '
+                'an existing lockfile.",\n    "detail": "Try creating one first with: npm i '
+                '--package-lock-only\\nOriginal error: loadVirtual requires existing shrinkwrap '
+                'file"\n  }\n}\n')
+_NPM_ENOLOCK_STDERR = ("npm error code ENOLOCK\nnpm error audit This command requires an "
+                       "existing lockfile.\n")
+# Exit 0 with nothing on stdout stays clean: yarn's clean audit prints
+# nothing (see _yarn_shape_recognized). cargo-audit's own fatal error exits 2
+# (measured, 0.22.2: "error: not found: Couldn't load Cargo.lock"), which was
+# already CRASHED; exit 1 empty is the defensive half.
+_LOCKFILE_OF = {"npm": "package-lock.json", "pnpm": "pnpm-lock.yaml", "yarn": "yarn.lock"}
+
+
+def _js_repo(tmp_path, pm):
+    (tmp_path / _LOCKFILE_OF[pm]).write_text("{}")
+    return RunContext(root=tmp_path, pkg_manager=pm)
+
+
+@pytest.mark.parametrize("pm", ["npm", "pnpm", "yarn"])
+def test_run_js_exit_1_with_nothing_on_stdout_is_retried_once_then_crashed(tmp_path, monkeypatch, pm):
+    ctx = _js_repo(tmp_path, pm)
+    silent = RunnerResult(tool=pm, state=ToolState.OK, raw="",
+                          stderr=f"{pm} error code EAI_AGAIN\n{pm} error network failed\n",
+                          duration_s=1.5, returncode=1)
+    calls = _pip_audit_runs(monkeypatch, silent, silent)
+    result = deps.run_js(ctx)
+    assert len(calls) == 2
+    assert result.tool == pm
+    assert result.state is ToolState.CRASHED
+    assert result.returncode == 1
+    assert result.duration_s == 3.0
+    assert result.raw == ""
+    assert result.reason == f"crashed (exit 1): no report after a retry -- {pm} error code EAI_AGAIN"
+    assert _cached(tmp_path) == []
+
+
+def test_run_js_npm_s_error_reply_is_retried_once_then_crashed(tmp_path, monkeypatch):
+    ctx = _js_repo(tmp_path, "npm")
+    reply = RunnerResult(tool="npm", state=ToolState.OK, raw=_NPM_ENOLOCK,
+                         stderr=_NPM_ENOLOCK_STDERR, returncode=1)
+    calls = _pip_audit_runs(monkeypatch, reply, reply)
+    result = deps.run_js(ctx)
+    assert len(calls) == 2
+    assert result.state is ToolState.CRASHED
+    assert result.reason == ("crashed (exit 1): no report after a retry -- ENOLOCK: This "
+                             "command requires an existing lockfile.")
+    assert _cached(tmp_path) == []
+
+
+def test_run_js_pnpm_s_error_reply_is_crashed(tmp_path, monkeypatch):
+    """pnpm's reply shape is not captured here (pnpm is not installed); an
+    object carrying `error` is never an audit report, whichever tool wrote it."""
+    ctx = _js_repo(tmp_path, "pnpm")
+    reply = RunnerResult(tool="pnpm", state=ToolState.OK, returncode=1, raw=json.dumps(
+        {"error": {"code": "ERR_PNPM_AUDIT_BAD_RESPONSE", "message": "The audit endpoint "
+                   "responded with 503"}}))
+    calls = _pip_audit_runs(monkeypatch, reply, reply)
+    result = deps.run_js(ctx)
+    assert len(calls) == 2
+    assert result.state is ToolState.CRASHED
+    assert result.reason == ("crashed (exit 1): no report after a retry -- "
+                             "ERR_PNPM_AUDIT_BAD_RESPONSE: The audit endpoint responded with 503")
+
+
+@pytest.mark.parametrize("pm", ["npm", "pnpm", "yarn"])
+def test_run_js_exit_0_with_nothing_on_stdout_is_still_clean(tmp_path, monkeypatch, pm):
+    ctx = _js_repo(tmp_path, pm)
+    calls = _pip_audit_runs(monkeypatch, RunnerResult(tool=pm, state=ToolState.OK, raw="",
+                                                      returncode=0))
+    result = deps.run_js(ctx)
+    assert len(calls) == 1
+    assert result.state is ToolState.OK
+    assert result.reason is None
+    assert deps.parse(result, ctx) == []
+
+
+def test_run_js_a_retry_that_reports_is_the_result_and_is_cached(tmp_path, monkeypatch):
+    ctx = _js_repo(tmp_path, "npm")
+    calls = _pip_audit_runs(
+        monkeypatch,
+        RunnerResult(tool="npm", state=ToolState.OK, raw="", returncode=1),
+        RunnerResult(tool="npm", state=ToolState.OK, raw=NPM_AUDIT.read_text(), returncode=1))
+    result = deps.run_js(ctx)
+    assert len(calls) == 2
+    assert result.state is ToolState.OK
+    assert deps.parse(result, ctx)[0].rule == "GHSA-p6mc-m468-83gw"
+    assert len(_cached(tmp_path)) == 1
+
+
+@pytest.mark.parametrize("state", [ToolState.TIMEOUT, ToolState.MISSING])
+def test_run_js_a_timeout_or_missing_tool_is_not_retried(tmp_path, monkeypatch, state):
+    ctx = _js_repo(tmp_path, "npm")
+    calls = _pip_audit_runs(monkeypatch, RunnerResult(tool="npm", state=state))
+    result = deps.run_js(ctx)
+    assert len(calls) == 1
+    assert result.state is state
+    assert result.reason is None
+
+
+def _seed_cache(root, key_bytes, content):
+    path = deps._cache_path(root, key_bytes)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(content, encoding="utf-8")
+    return path
+
+
+@pytest.mark.parametrize("cached", ["{}", " {} \n", _NPM_ENOLOCK])
+def test_run_js_a_cached_placeholder_or_error_reply_is_a_miss(tmp_path, monkeypatch, cached):
+    """A `{}` cached before this fix was aramid's stand-in for nothing on
+    stdout, not npm's report: npm writes a report even when clean."""
+    ctx = _js_repo(tmp_path, "npm")
+    path = _seed_cache(tmp_path, (tmp_path / "package-lock.json").read_bytes(), cached)
+    calls = _pip_audit_runs(monkeypatch, RunnerResult(
+        tool="npm", state=ToolState.OK, raw=NPM_AUDIT.read_text(), returncode=1))
+    result = deps.run_js(ctx)
+    assert len(calls) == 1
+    assert result.state is ToolState.OK
+    assert path.read_text(encoding="utf-8") == NPM_AUDIT.read_text()
+
+
+def test_run_js_yarn_s_cached_clean_audit_is_still_a_hit(tmp_path, monkeypatch):
+    ctx = _js_repo(tmp_path, "yarn")
+    _seed_cache(tmp_path, (tmp_path / "yarn.lock").read_bytes(), "")
+    calls = _pip_audit_runs(monkeypatch)
+    result = deps.run_js(ctx)
+    assert calls == []
+    assert result.state is ToolState.OK and result.raw == ""
+
+
+def test_run_cargo_exit_1_with_nothing_on_stdout_is_retried_once_then_crashed(tmp_path, monkeypatch):
+    (tmp_path / "Cargo.lock").write_text("version = 3\n")
+    monkeypatch.setattr(deps.toolpath, "resolve", lambda name, *a, **k: "cargo-audit")
+    silent = RunnerResult(tool="cargo", state=ToolState.OK, raw="", returncode=1,
+                          stderr="error: couldn't fetch advisory database: timed out\n")
+    calls = _pip_audit_runs(monkeypatch, silent, silent)
+    result = deps.run_cargo(RunContext(root=tmp_path))
+    assert len(calls) == 2
+    assert result.tool == "cargo-audit"
+    assert result.state is ToolState.CRASHED
+    assert result.reason == ("crashed (exit 1): no report after a retry -- error: couldn't "
+                             "fetch advisory database: timed out")
+    assert _cached(tmp_path) == []
+
+
+def test_run_cargo_a_cached_placeholder_is_a_miss(tmp_path, monkeypatch):
+    (tmp_path / "Cargo.lock").write_text("version = 3\n")
+    monkeypatch.setattr(deps.toolpath, "resolve", lambda name, *a, **k: "cargo-audit")
+    _seed_cache(tmp_path, (tmp_path / "Cargo.lock").read_bytes(), "{}")
+    clean = ('{"vulnerabilities": {"found": false, "count": 0, "list": []}, "warnings": {}}')
+    calls = _pip_audit_runs(monkeypatch, RunnerResult(tool="cargo", state=ToolState.OK,
+                                                      raw=clean, returncode=0))
+    result = deps.run_cargo(RunContext(root=tmp_path))
+    assert len(calls) == 1
+    assert result.state is ToolState.OK
+
+
+def test_run_js_an_unknown_package_manager_is_missing(tmp_path, monkeypatch):
+    (tmp_path / "package-lock.json").write_text("{}")
+    calls = _pip_audit_runs(monkeypatch)
+    result = deps.run_js(RunContext(root=tmp_path, pkg_manager="bun"))
+    assert calls == []
+    assert (result.tool, result.state) == ("deps-js", ToolState.MISSING)
+
+
+def test_run_cargo_a_cached_report_is_used(tmp_path, monkeypatch):
+    (tmp_path / "Cargo.lock").write_text("version = 3\n")
+    monkeypatch.setattr(deps.toolpath, "resolve", lambda name, *a, **k: "cargo-audit")
+    clean = ('{"vulnerabilities": {"found": false, "count": 0, "list": []}, "warnings": {}}')
+    _seed_cache(tmp_path, (tmp_path / "Cargo.lock").read_bytes(), clean)
+    calls = _pip_audit_runs(monkeypatch)
+    result = deps.run_cargo(RunContext(root=tmp_path))
+    assert calls == []
+    assert (result.state, result.raw) == (ToolState.OK, clean)
+
+
+@pytest.mark.parametrize("raw, stderr, said", [
+    (_NPM_ENOLOCK, _NPM_ENOLOCK_STDERR, "ENOLOCK: This command requires an existing lockfile."),
+    # An `error` that is neither an object nor text says nothing itself.
+    ('{"error": null}', "npm error code E1\n", "npm error code E1"),
+    ('{"error": 7}', "", "nothing on stderr"),
+    ('{"error": {"message": "boom\\nmore"}}', "", "boom"),
+    ('{"error": "registry down"}', "", "registry down"),
+    ('{"error": {}}', "npm error code E500\n", "npm error code E500"),
+    ("", "warn: slow\nError: socket hang up\nat x\n", "Error: socket hang up"),
+    ("", "something odd\nlast words\n", "last words"),
+    ("", "", "nothing on stderr"),
+    ("", "error: " + "z" * 500, ("error: " + "z" * 500)[:300]),
+])
+def test_what_an_audit_said_is_its_error_reply_else_its_error_line(raw, stderr, said):
+    assert deps._audit_said(raw, stderr) == said
+
+
 def test_js_result_is_cached_and_reused_within_ttl(tmp_path, monkeypatch):
     (tmp_path / "package-lock.json").write_text('{"lockfileVersion": 3}')
     call_count = {"n": 0}
