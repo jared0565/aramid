@@ -146,6 +146,20 @@ runner at `[timeouts].pre_push` regardless -- so raise both if you need a
 longer run. `enabled = false` removes the gate entirely. Subsetting narrows
 what the push gate covers, so keep the full suite running in CI.
 
+**Mutation baseline timing out?** Before it tests any mutant, the drain
+runs your whole suite once, under `[mutation].baseline_timeout_s` (default:
+`mutant_timeout_s` x 4, which is 480 s; `[js_mutation]` has the same key for
+the JS suite). `[tests].timeout_s` does not apply here: it bounds the gate's
+test run only. A suite that overruns shows in `aramid status` as
+`baseline timeout: ... -- attempt N of 3`. After three timeouts with no
+green baseline between them, mutation stops trying until you raise the key
+or point `[mutation].test_command` at a narrower suite:
+
+```toml
+[mutation]
+baseline_timeout_s = 900
+```
+
 **Fuzz driver timing out on, or executing, a function it should not
 touch?** The drain-time fuzz consumer calls every changed top-level
 function with generated arguments. A launcher, a `main`, or anything that

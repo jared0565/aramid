@@ -425,7 +425,26 @@ def test_a_baseline_timeout_is_degraded_with_the_budget_and_the_head(tmp_path, m
 
     assert res.state == "degraded"
     assert res.note == (f"{mut_consumer.timeout_note_prefix(480.0, suite)}"
-                        f" (last seen @ {head[:12]})")
+                        f" (last seen @ {head[:12]}) -- attempt 1 of 3: raise"
+                        " [mutation].baseline_timeout_s, or point [mutation].test_command"
+                        " at a narrower suite")
+
+
+def test_a_baseline_timeout_counts_the_timeouts_before_it_toward_the_give_up(
+        tmp_path, monkeypatch):
+    # Round 353: two drains timed out and neither said a third would give up.
+    r, base, head = _repo(tmp_path)
+    cfg = config_mod.load_config(r)
+    suite = mut_consumer._suite_label(mut_consumer._full_argv(cfg, r))
+    _seed_notes(r, 2, mut_consumer.timeout_note_prefix(480.0, suite) + " (last seen @ x)")
+
+    res, _ = _run(r, base, head, monkeypatch,
+                  {("full", "BASE"): Out(state=ToolState.TIMEOUT)})
+
+    assert res.note == (f"{mut_consumer.timeout_note_prefix(480.0, suite)}"
+                        f" (last seen @ {head[:12]}) -- attempt 3 of 3: raise"
+                        " [mutation].baseline_timeout_s, or point [mutation].test_command"
+                        " at a narrower suite")
 
 
 def test_a_baseline_idle_at_its_budget_stays_in_the_budget_give_up_family(
@@ -440,7 +459,9 @@ def test_a_baseline_idle_at_its_budget_stays_in_the_budget_give_up_family(
                   {("full", "BASE"): Out(state=ToolState.TIMEOUT, idle=470.0)})
 
     assert (res.state, res.note) == (
-        "degraded", f"{mut_consumer.timeout_note_prefix(480.0, suite)} (last seen @ {head[:12]})")
+        "degraded", f"{mut_consumer.timeout_note_prefix(480.0, suite)} (last seen @ {head[:12]})"
+                    " -- attempt 1 of 3: raise [mutation].baseline_timeout_s, or point"
+                    " [mutation].test_command at a narrower suite")
 
 
 def test_a_stalled_baseline_is_degraded_outside_the_budget_give_up_family(

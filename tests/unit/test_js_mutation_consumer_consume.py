@@ -423,9 +423,21 @@ def test_a_baseline_timeout_degrades_with_the_budget_the_suite_and_the_head(
     res, oracle = _run(r, base, head, monkeypatch, {}, {"BASE": TIMEOUT})
 
     assert res.state == "degraded"
-    assert res.note == f"{pymut.timeout_note_prefix(480.0, 'npm test')} (last seen @ {head[:12]})"
+    assert res.note == (f"{pymut.timeout_note_prefix(480.0, 'npm test')} (last seen @ "
+                        f"{head[:12]}) -- attempt 1 of 3: raise [js_mutation].baseline_timeout_s")
     assert oracle.calls == [("BASE", 480.0, ["npm", "test"])], "mutant_timeout_s x 4"
     assert _no_worktrees(r)
+
+
+def test_a_baseline_timeout_counts_the_timeouts_before_it_toward_the_give_up(
+        tmp_path, monkeypatch):
+    r, base, head = _repo(tmp_path)
+    _seed_notes(r, 2, pymut.timeout_note_prefix(480.0, "npm test") + " (last seen @ x)")
+
+    res, _ = _run(r, base, head, monkeypatch, {}, {"BASE": TIMEOUT})
+
+    assert res.note == (f"{pymut.timeout_note_prefix(480.0, 'npm test')} (last seen @ "
+                        f"{head[:12]}) -- attempt 3 of 3: raise [js_mutation].baseline_timeout_s")
 
 
 def test_a_baseline_idle_at_its_budget_stays_in_the_budget_give_up_family(
@@ -436,7 +448,8 @@ def test_a_baseline_idle_at_its_budget_stays_in_the_budget_give_up_family(
     res, _ = _run(r, base, head, monkeypatch, {}, {"BASE": idle})
 
     assert (res.state, res.note) == (
-        "degraded", f"{pymut.timeout_note_prefix(480.0, 'npm test')} (last seen @ {head[:12]})")
+        "degraded", f"{pymut.timeout_note_prefix(480.0, 'npm test')} (last seen @ {head[:12]})"
+                    " -- attempt 1 of 3: raise [js_mutation].baseline_timeout_s")
 
 
 def test_a_stalled_baseline_degrades_outside_the_budget_give_up_family(tmp_path, monkeypatch):

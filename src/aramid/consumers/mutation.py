@@ -93,6 +93,20 @@ def timeout_note_prefix(budget: float, suite: str) -> str:
     return f"baseline timeout: {suite} did not finish within the {budget:.0f}s budget"
 
 
+def timeout_note(ledger, consumer: str, budget: float, suite: str, head: str,
+                 remedy: str) -> str:
+    """The note for a baseline the budget killed, for both mutation consumers.
+    After the load-bearing prefix and the head come which attempt this is,
+    out of the `_TIMEOUT_GIVE_UP` the give-up allows, and `remedy`: the
+    config key to raise. Before, only the give-up note named either, so the
+    first two timeouts read as a loop with no end and no cure (round 353).
+    The count is the give-up's own (`base.note_count_any_item`: timeouts
+    since the last green baseline), read before this run is recorded."""
+    attempt = base.note_count_any_item(ledger, consumer, timeout_note_prefix(budget, suite)) + 1
+    return (f"{timeout_note_prefix(budget, suite)} (last seen @ {head[:12]})"
+            f" -- attempt {attempt} of {_TIMEOUT_GIVE_UP}: {remedy}")
+
+
 def failing_note_prefix(head: str) -> str:
     """The note family for "the baseline suite is RED at this commit".
 
@@ -1194,8 +1208,10 @@ def consume(item, ctx: DrainContext) -> ConsumerResult:
             # The real measurement is recorded on the runs that finish, below.
             return ConsumerResult(
                 consumer=NAME, state="degraded",
-                note=(f"{timeout_note_prefix(baseline_budget, suite)}"
-                      f" (last seen @ {item.head[:12]})"),
+                note=timeout_note(
+                    ctx.ledger, NAME, baseline_budget, suite, item.head,
+                    "raise [mutation].baseline_timeout_s, or point "
+                    "[mutation].test_command at a narrower suite"),
                 duration_s=time.monotonic() - started)
         if base_res.state is not ToolState.OK or base_res.returncode != 0:
             # Note text is load-bearing: the give-up counter above matches it

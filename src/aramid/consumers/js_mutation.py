@@ -269,8 +269,9 @@ def consume(item, ctx: DrainContext) -> ConsumerResult:
             # this commit -- see consumers/mutation.py for the full account.
             return ConsumerResult(
                 consumer=NAME, state="degraded",
-                note=(f"{mutation.timeout_note_prefix(baseline_budget, suite)}"
-                      f" (last seen @ {item.head[:12]})"),
+                note=mutation.timeout_note(
+                    ctx.ledger, NAME, baseline_budget, suite, item.head,
+                    "raise [js_mutation].baseline_timeout_s"),
                 duration_s=time.monotonic() - started)
         if base_res.state is not ToolState.OK or base_res.returncode != 0:
             # Load-bearing note prefix: the give-up counter matches it. Shared

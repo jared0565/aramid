@@ -12,6 +12,14 @@ to publish a tag that disagrees with it.
 
 ## [Unreleased]
 
+- A mutation baseline that overruns its budget now says which attempt it
+  was and what to change: `baseline timeout: ... -- attempt 1 of 3: raise
+  [mutation].baseline_timeout_s, or point [mutation].test_command at a
+  narrower suite` (`[js_mutation].baseline_timeout_s` for the JS consumer).
+  Before, only the note after the third timeout named the key. The budget
+  and the three-attempt limit are unchanged. ARAMID.md gains a "Mutation
+  baseline timing out?" section; re-run `aramid init` to get it.
+
 - Before the first fleet verdict exists, `aramid status`, `aramid fleet` and
   the session-start line say `no verdict yet -- the next `aramid drain`
   computes it`. They used to say "first drain after promotion", a word from
