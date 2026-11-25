@@ -23,6 +23,19 @@ TRUNCATED = "aramid: | ... (truncated; 'aramid handover show' prints all of it)"
 PREFIX = "aramid: | "
 
 
+@pytest.fixture(autouse=True)
+def _frozen_age(monkeypatch):
+    """Every block in this file states the same handover age. The age is in
+    the block's first handover line at one-second resolution, and these
+    tests compare one call's block with a later call's, or size a budget
+    from its length: a second ticking over between the calls changed the
+    line ("4s" -> "5s"), or its length ("9s" -> "10s"). It failed a full
+    unit run 2026-11-25 (ValueError at the header lookup) and passes alone;
+    with each age call one second later, three tests here failed exactly so.
+    Operator decision 2026-11-25, "freeze the age in that file"."""
+    monkeypatch.setattr(handover, "age", lambda written_at, now: "4s")
+
+
 def _repo(tmp_path):
     r = tmp_path / "r"
     r.mkdir()
