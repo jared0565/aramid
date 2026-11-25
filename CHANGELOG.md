@@ -12,6 +12,11 @@ to publish a tag that disagrees with it.
 
 ## [Unreleased]
 
+- Before the first fleet verdict exists, `aramid status`, `aramid fleet` and
+  the session-start line say `no verdict yet -- the next `aramid drain`
+  computes it`. They used to say "first drain after promotion", a word from
+  aramid's own release process.
+
 ## [0.20.21] — 2026-11-25
 
 No dependency changed, and nothing `aramid init` writes changed, so there is

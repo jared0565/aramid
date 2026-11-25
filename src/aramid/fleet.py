@@ -758,7 +758,7 @@ def _days(value) -> str:
 def readiness_line(verdict: dict | None, *, now: str | None = None) -> str:
     """Spec section 8's one-line verdict; the same string on every surface."""
     if verdict is None:
-        return "fleet: no verdict yet -- first drain after promotion computes it"
+        return "fleet: no verdict yet -- the next `aramid drain` computes it"
     repos = verdict.get("repos", {})
     info = verdict.get("fleet", {})
     green = sum(1 for v in repos.values() if v.get("green"))
@@ -841,7 +841,7 @@ def render_report(verdict: dict | None, policy: Policy, *, now: str | None = Non
     out = [f"fleet health -- 1.0 readiness (policy: {policy.min_days} days, "
            f"{policy.min_versions} versions, {window})", ""]
     if verdict is None:
-        out.append("  no verdict yet -- first drain after promotion computes it")
+        out.append("  no verdict yet -- the next `aramid drain` computes it")
         return "\n".join(out)
     out.insert(1, _snapshot_line(verdict.get("computed_at"), now))
     repos = list(verdict.get("repos", {}).values())

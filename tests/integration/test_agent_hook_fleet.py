@@ -111,7 +111,7 @@ def test_insufficient_data_line_full_shape():
 def test_no_verdict_yet_line_sits_before_the_commands_line(tmp_path, monkeypatch, capsys):
     r = _onboarded(tmp_path, monkeypatch)
     lines = _lines(r, capsys)
-    assert lines[-2] == "aramid: fleet: no verdict yet -- first drain after promotion computes it"
+    assert lines[-2] == "aramid: fleet: no verdict yet -- the next `aramid drain` computes it"
     assert lines[-1].startswith("aramid: commands:")
 
 
@@ -148,7 +148,7 @@ def test_a_channel_that_is_a_directory_still_prints_the_verdict_line(tmp_path, m
     r = _onboarded(tmp_path, monkeypatch)
     notices.notices_path().mkdir(parents=True)
     lines = _lines(r, capsys)
-    assert "aramid: fleet: no verdict yet -- first drain after promotion computes it" in lines
+    assert "aramid: fleet: no verdict yet -- the next `aramid drain` computes it" in lines
     assert not any("NOTICE" in ln for ln in lines)
 
 

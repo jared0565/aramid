@@ -73,7 +73,7 @@ def test_status_fleet_block_follows_scheduled_drain(tmp_path, capsys):
     root = _repo(tmp_path)
     lines = _out(root, capsys)
     i = next(i for i, ln in enumerate(lines) if ln.startswith("scheduled drain:"))
-    assert lines[i + 1] == "fleet: no verdict yet -- first drain after promotion computes it"
+    assert lines[i + 1] == "fleet: no verdict yet -- the next `aramid drain` computes it"
 
 
 def test_status_prints_the_verdict_and_a_due_notice_bare(tmp_path, capsys):

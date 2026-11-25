@@ -67,7 +67,7 @@ def test_render_report_whole():
 def test_render_report_row_window_wording_at_zero_and_one_day():
     head = fleet.render_report(None, fleet.Policy(max_row_age_days=0)).splitlines()
     assert head == ["fleet health -- 1.0 readiness (policy: 14 days, 2 versions, no row window)",
-                    "", "  no verdict yet -- first drain after promotion computes it"]
+                    "", "  no verdict yet -- the next `aramid drain` computes it"]
     assert fleet.render_report(None, fleet.Policy(max_row_age_days=1)).splitlines()[0] == \
         "fleet health -- 1.0 readiness (policy: 14 days, 2 versions, 1-day row window)"
 
@@ -142,7 +142,7 @@ def test_cmd_fleet_prints_the_report_or_the_verdict_json(capsys, monkeypatch):
     fleet.verdict_path().unlink()
     assert cmd_fleet() == 0
     assert capsys.readouterr().out.splitlines()[2] == \
-        "  no verdict yet -- first drain after promotion computes it"
+        "  no verdict yet -- the next `aramid drain` computes it"
     assert cmd_fleet(as_json=True) == 0
     assert capsys.readouterr() == ("null\n", "")
 

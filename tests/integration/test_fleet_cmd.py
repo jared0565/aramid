@@ -80,7 +80,7 @@ def test_fleet_report_header_says_when_the_row_window_is_disabled(capsys):
 def test_fleet_report_without_a_verdict(capsys):
     assert cmd_fleet() == 0
     assert capsys.readouterr().out.splitlines()[2] == \
-        "  no verdict yet -- first drain after promotion computes it"
+        "  no verdict yet -- the next `aramid drain` computes it"
 
 
 def test_fleet_json_prints_the_verdict_verbatim(capsys):
