@@ -12,6 +12,23 @@ to publish a tag that disagrees with it.
 
 ## [Unreleased]
 
+## [0.20.21] — 2026-11-25
+
+No dependency changed, and nothing `aramid init` writes changed, so there is
+no need to re-run it. What changes for an existing repo:
+
+- A dependency audit that ends without a report is degraded instead of
+  counting as a clean audit. That covers pip-audit, and npm, pnpm, yarn or
+  cargo-audit exiting 1 with nothing on stdout, or npm's error reply. It is
+  run once more first. The default hooks show it as a degraded tool and let
+  the push through; a gate run with `--strict` (hooks with CI parity on, and
+  the CI commands in ARAMID.md) refuses the push. Before, such a run passed,
+  and could close earlier findings as gone.
+- A push that changes a file holding an open fuzz crash is now queued for
+  the drain, so its fuzz run can close the crash.
+- On Windows, `aramid drain` runs inside a kill-on-close job. If Windows
+  refuses one, the drain says so on stderr and runs as before.
+
 ### Fixed
 
 - **On Windows, a process a consumer was starting as the drain's hard deadline stopped it could outlive the drain.** The deadline kills a consumer's process tree with `taskkill /T`, which lists the tree and then kills it: a process started in between was never listed and kept running, and `taskkill` still exited 0, so nothing showed it. Measured: 16 of 20 trials left one to four processes running. `aramid drain` now holds itself in a kill-on-close Job object before it starts anything, so every process it starts, at any depth, ends when the drain does: at the deadline, on a crash, or when something outside kills it. Measured: 0 of 48 trials, nested inside another job included, as under Task Scheduler. If Windows refuses the job, the drain says so on stderr (`aramid: drain: not held in a kill-on-close job (...)`) and runs as before. Gates, hooks and every other command are unchanged; Linux and macOS already kill a consumer's whole process group at once. Found while investigating a Windows CI failure of the deadline test.
@@ -7364,7 +7381,8 @@ Stated plainly because each one changes how you should deploy this:
 - **PyPI publishing is not set up.** Install from a GitHub Release artifact or
   from git; `pip install aramid` does not work.
 
-[Unreleased]: https://github.com/jared0565/aramid/compare/v0.20.20...HEAD
+[Unreleased]: https://github.com/jared0565/aramid/compare/v0.20.21...HEAD
+[0.20.21]: https://github.com/jared0565/aramid/releases/tag/v0.20.21
 [0.20.20]: https://github.com/jared0565/aramid/releases/tag/v0.20.20
 [0.20.19]: https://github.com/jared0565/aramid/releases/tag/v0.20.19
 [0.20.18]: https://github.com/jared0565/aramid/releases/tag/v0.20.18
