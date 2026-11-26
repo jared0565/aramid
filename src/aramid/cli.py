@@ -31,6 +31,7 @@ from aramid.commands.ledger_cmd import (
     cmd_ledger_mark_not_a_secret,
     cmd_ledger_mark_rotated,
     cmd_ledger_mark_unreachable,
+    cmd_ledger_reopen,
     cmd_ledger_resolve_args,
     cmd_ledger_show,
 )
@@ -182,6 +183,10 @@ def build_parser() -> argparse.ArgumentParser:
     p_unreachable = ledger_sub.add_parser("mark-unreachable")
     p_unreachable.add_argument("id")
     p_unreachable.add_argument("--reason", required=True)
+    p_reopen = ledger_sub.add_parser(
+        "reopen", help="take back a `resolve --fixed` close made without red proof")
+    p_reopen.add_argument("id", help="the finding id")
+    p_reopen.add_argument("--reason", required=True)
     p_resolve = ledger_sub.add_parser("resolve")
     p_resolve.add_argument("id", nargs="+", help="one or more finding ids")
     p_resolve.add_argument("--out-of-scope", action="store_true", dest="out_of_scope",
@@ -457,8 +462,11 @@ def main(argv: list[str] | None = None) -> int:
                                            fixed=args.fixed, test=args.test,
                                            red_proof=args.red_proof, reason=args.reason,
                                            back_out=args.back_out)
+        if args.ledger_command == "reopen":
+            return cmd_ledger_reopen(root, args.id, args.reason)
         print("aramid: ledger: a subcommand is required "
-              "(list|show|filter|consumers|mark-rotated|mark-not-a-secret|mark-unreachable|resolve)",
+              "(list|show|filter|consumers|mark-rotated|mark-not-a-secret|mark-unreachable|"
+              "resolve|reopen)",
               file=sys.stderr)
         return 3
 

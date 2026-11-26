@@ -12,6 +12,11 @@ to publish a tag that disagrees with it.
 
 ## [Unreleased]
 
+- New: `aramid ledger reopen <id> --reason "..."` takes back a
+  `resolve --fixed` close that carries no red proof, so the finding is open
+  again. It refuses a close with red proof and a finding closed any other
+  way. Before, such a close could not be undone.
+
 - `aramid ledger resolve --fixed <commit> --test ... --red-proof` can prove a fix
   whose test was rewritten since. When the commit can no longer be backed out
   of HEAD and the test as it is at HEAD does not run against the code at the

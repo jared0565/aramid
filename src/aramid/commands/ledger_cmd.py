@@ -168,6 +168,8 @@ def cmd_ledger_show(root, finding_id: str) -> int:
 
 
 EVIDENCED_CLOSE = "evidenced_close"
+# `reopened` on the detection `ledger reopen` writes (`cmd_ledger_reopen`).
+WEAK_CLOSE = "weak_close"
 
 
 def _backed_out_named(proof) -> str:
@@ -193,6 +195,12 @@ def _close_evidence(event) -> list[str]:
         return [f"red proof added to the close in {payload.get('commit')} "
                 f"({payload.get('via')}): {payload.get('reason')}",
                 test, _red_line(payload.get("red_proof"))]
+    if event.type.value == EventType.FINDING_DETECTED.value \
+            and payload.get("reopened") == WEAK_CLOSE:
+        # Channel round 352: `ledger reopen` took a close without red proof back.
+        return [f"reopened ({payload.get('via')}): its close as fixed in "
+                f"{payload.get('closed_in')} carried no red proof: "
+                f"{payload.get('reopen_reason')}"]
     if event.type.value != "finding_resolved" \
             or payload.get("auto_resolved") != EVIDENCED_CLOSE:
         return []
@@ -936,6 +944,71 @@ def _close_to_prove(ledger, finding_id: str):
     if close is None or (close.payload or {}).get("auto_resolved") != EVIDENCED_CLOSE:
         return None, None
     return ("proven" if added or (close.payload or {}).get("red_proof") else "bare"), close
+
+
+def cmd_ledger_reopen(root, finding_id: str, reason: str, *, via: str = "cli") -> int:
+    """`aramid ledger reopen <id> --reason R`: take back a `resolve --fixed`
+    close that carries no red proof (channel round 352; operator decision
+    2026-11-25).
+
+    Such a close is the weaker one: the test passed at HEAD and was never
+    shown to fail without the fix. Where the red-proof hook is not armed it
+    goes through with a warning, and the ledger is append-only, so until
+    this command it stayed. Only that close is undone. One that carries red
+    proof, with it or added since (`_close_to_prove`), stays, as does every
+    other way a finding stops being open; a review that raises the finding
+    again reopens those.
+
+    The reopen is a FINDING_DETECTED carrying the finding's last real
+    detection, as `mutation_gate.reopen_unretestable` writes one and for its
+    reason: a detect rebuilds the record from its payload, so it must not
+    carry what later transitions added. Only `line` comes from the record.
+    `reopened`, `reopen_reason`, `closed_in` and `via` say what happened
+    (`reason` is the record's override field, so it is not used here).
+
+    Every refusal is exit 3 and writes nothing."""
+    reason = (reason or "").strip()
+    if not reason:
+        print("aramid: ledger reopen: --reason is required", file=sys.stderr)
+        return 3
+    ledger = Ledger(Path(root) / ".aramid" / "ledger.db")
+    try:
+        rec = ledger.open_findings().get(finding_id)
+        if rec is None:
+            print(f"aramid: ledger reopen: unknown finding id {finding_id}", file=sys.stderr)
+            return 3
+        status = rec.get("status")
+        kind, close = (_close_to_prove(ledger, finding_id) if status == "fixed"
+                       else (None, None))
+        if kind is None:
+            print(f"aramid: ledger reopen: {finding_id} was not closed by `ledger resolve "
+                  f"--fixed` (status={status}) -- reopen undoes only such a close, made "
+                  f"without red proof", file=sys.stderr)
+            return 3
+        sha = str((close.payload or {}).get("commit"))
+        if kind == "proven":
+            print(f"aramid: ledger reopen: {finding_id}'s close as fixed in {sha[:12]} "
+                  f"carries red proof -- reopen undoes only a close made without it. A "
+                  f"review that raises the finding again reopens it", file=sys.stderr)
+            return 3
+        detected = None
+        for e in ledger.events():
+            if e.finding_id == finding_id and e.type is EventType.FINDING_DETECTED:
+                detected = e.payload
+        if detected is None:
+            print(f"aramid: ledger reopen: {finding_id} has no detection in the ledger to "
+                  f"reopen it from", file=sys.stderr)
+            return 3
+        ledger.append(Event(EventType.FINDING_DETECTED, uuid.uuid4().hex, _now(),
+                            finding_id=finding_id,
+                            payload={**detected, "line": rec.get("line"),
+                                     "reopened": WEAK_CLOSE, "reopen_reason": reason,
+                                     "closed_in": sha, "via": via}))
+        print(f"aramid: ledger: {finding_id} is open again -- its close as fixed in "
+              f"{sha[:12]} carried no red proof ({reason})")
+        return 0
+    finally:
+        ledger.close()
 
 
 def cmd_ledger_resolve_args(root, ids, *, out_of_scope: bool = False,

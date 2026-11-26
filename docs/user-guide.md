@@ -592,6 +592,8 @@ That is a different proof, and aramid says which one it showed. The line it prin
 
 **When the test was rewritten since the fix**, the one at `HEAD` may not run against the older code at all: it calls a helper whose signature changed later, say. It then fails step 1. If the fix commit holds the files the command names too, in another version, aramid puts those back and runs both steps with them: the test as it was when the fix was made. The line it prints then ends `run as that commit holds the test: as it is at HEAD it does not run there`, and `aramid ledger show <id>` says the same. This is weaker than the proof above: the test shown red without the fix is the older one, and the one at `HEAD` is only known to pass. If the commit does not hold the test files, or its version fails step 1 as well, red proof is refused.
 
+**Taking a close back.** A close made without `--red-proof` rests on less: the test passed at `HEAD` and was never shown to fail without the fix. `aramid ledger reopen <id> --reason "..."` undoes such a close, and the finding is open again; `aramid ledger show <id>` prints who reopened it and why. It refuses a close that carries red proof, whether it was made with it or took it afterwards, and a finding that anything else closed. Those reopen by themselves when a review raises the finding again.
+
 Red proof is refused, and nothing is recorded, when:
 
 - the commit changes no existing source file (only tests, or only new files);
