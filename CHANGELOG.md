@@ -12,6 +12,13 @@ to publish a tag that disagrees with it.
 
 ## [Unreleased]
 
+## [0.20.22] — 2026-11-26
+
+No dependency changed. `ARAMID.md` gained a section, so re-run `aramid init`
+in each repo to get it; nothing else `init` writes changed. Anything measured
+against an older version is a lead, not a fact. What changes for an existing
+repo:
+
 - `aramid doctor` now has a row for eslint, tsc and mypy in a repo where the
   gate selects them: eslint on a JS stack, and tsc or mypy, whichever the
   typecheck runner runs there. `OK` shows the path the gate uses. `MISSING`
@@ -7417,7 +7424,8 @@ Stated plainly because each one changes how you should deploy this:
 - **PyPI publishing is not set up.** Install from a GitHub Release artifact or
   from git; `pip install aramid` does not work.
 
-[Unreleased]: https://github.com/jared0565/aramid/compare/v0.20.21...HEAD
+[Unreleased]: https://github.com/jared0565/aramid/compare/v0.20.22...HEAD
+[0.20.22]: https://github.com/jared0565/aramid/releases/tag/v0.20.22
 [0.20.21]: https://github.com/jared0565/aramid/releases/tag/v0.20.21
 [0.20.20]: https://github.com/jared0565/aramid/releases/tag/v0.20.20
 [0.20.19]: https://github.com/jared0565/aramid/releases/tag/v0.20.19
