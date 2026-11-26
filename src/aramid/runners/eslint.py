@@ -35,8 +35,14 @@ _CMD_SHIM_HEADROOM = 1191
 _JS_SUFFIXES = (".js", ".jsx", ".mjs", ".cjs", ".ts", ".tsx", ".mts", ".cts")
 
 
+def lints(name: str) -> bool:
+    """Whether this adapter hands a file of that name to eslint. The one
+    rule, for `run` and for doctor's row, so the two cannot drift."""
+    return name.lower().endswith(_JS_SUFFIXES)
+
+
 def _js_files(ctx) -> list[str]:
-    return [f for f in ctx.files if f.lower().endswith(_JS_SUFFIXES)]
+    return [f for f in ctx.files if lints(f)]
 
 
 def _eslint_bin(root: Path) -> Path:

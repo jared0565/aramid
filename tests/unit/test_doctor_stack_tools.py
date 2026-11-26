@@ -11,15 +11,25 @@ What a row may claim is narrow, and every test asserts the whole line:
 The probe starts no process: these tools belong to the repo, and whether
 they RUN is the gate's to find out."""
 import sys
+from types import SimpleNamespace
 
 import pytest
 
-from aramid import detectors, toolpath
+from aramid import detectors, pipeline, toolpath
 from aramid.commands import doctor
 from aramid.runners import eslint as eslint_runner
 from aramid.runners import typecheck
+from aramid.runners.base import ToolState
 
 TAIL = "At pre-push it shows as a degraded tool, and a --strict gate refuses the push"
+# eslint and mypy are handed files, and with none of theirs in a push they
+# never look for their binary (independent review, 2026-11-26): the cost is
+# stated for the pushes that pay it. tsc and the Rust tools check the whole
+# project on every push, so they keep TAIL.
+TAIL_JS = ("A pre-push that holds JS/TS files shows it as a degraded tool, and a --strict "
+           "gate refuses that push")
+TAIL_PY = ("A pre-push that holds Python files in mypy's scope shows it as a degraded "
+           "tool, and a --strict gate refuses that push")
 _CMD = ".cmd" if sys.platform == "win32" else ""
 
 
@@ -47,7 +57,7 @@ def _bin(root, name):
 def _eslint_missing(root, pm):
     return (f"  MISSING  eslint       not found at {eslint_runner._eslint_bin(root)} -- JS/TS "
             f"lint is NOT being checked on this repo; the gate looks nowhere else, so "
-            f"install eslint in this repo with {pm}. {TAIL}")
+            f"install eslint in this repo with {pm}. {TAIL_JS}")
 
 
 def _tsc_missing(root, pm):
@@ -110,7 +120,52 @@ def test_a_python_repo_gets_a_mypy_row_only_with_a_mypy_config(tmp_path, monkeyp
     assert _rows(tmp_path) == [
         "  MISSING  mypy         not found on PATH -- Python is NOT being type-checked on "
         "this repo although a mypy config is present; install mypy where aramid's hooks "
-        f"can find it. {TAIL}"]
+        f"can find it. {TAIL_PY}"]
+
+
+def test_a_package_json_with_no_js_file_gets_no_eslint_row(tmp_path):
+    """A Python repo with a package.json for its tooling is on the `js`
+    stack, so the gate selects eslint, and the runner then returns OK
+    without looking for a binary because it is handed no file. MISSING there
+    told the reader to install a linter that would lint nothing."""
+    (tmp_path / "package.json").write_text('{"name": "p"}', encoding="utf-8")
+    (tmp_path / "m.py").write_text("x = 1\n", encoding="utf-8")
+    # A dependency's JS is not the repo's: no gate hands it to eslint.
+    dep = tmp_path / "node_modules" / "dep"
+    dep.mkdir(parents=True)
+    (dep / "index.js").write_text("", encoding="utf-8")
+
+    assert _rows(tmp_path) == []
+
+
+def _tree(root, layout):
+    for rel in layout:
+        path = root / rel
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("", encoding="utf-8")
+    return [rel for rel in layout if not rel.startswith("node_modules/")]
+
+
+@pytest.mark.parametrize("layout", [
+    ["package.json", "index.js"],
+    ["package.json", "src/deep/App.TSX"],
+    ["package.json", "m.py"],
+    ["package.json", "m.py", "node_modules/dep/index.js"],
+    ["pyproject.toml", "m.py", "web/index.js"],
+])
+def test_doctor_reports_eslint_missing_exactly_where_the_runner_would(tmp_path, layout):
+    """Doctor's answer and the gate's are two computations that must agree:
+    the runner, handed every file of the repo with no eslint installed, is
+    MISSING exactly when doctor prints a MISSING eslint row."""
+    files = _tree(tmp_path, layout)
+    stacks = detectors.detect_stacks(tmp_path, tmp_path)
+    ctx = SimpleNamespace(root=tmp_path, files=files, stacks=stacks)
+    gate_says = (pipeline._is_applicable("eslint", ctx)
+                 and eslint_runner.run(ctx).state is ToolState.MISSING)
+
+    doctor_says = any(r.startswith("  MISSING  eslint ") for r in _rows(tmp_path))
+
+    assert doctor_says == gate_says
 
 
 def test_a_stack_probe_that_raises_leaves_the_typecheck_rows(tmp_path, monkeypatch):

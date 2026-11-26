@@ -592,6 +592,17 @@ _STACK_TOOL_COST = ("At pre-push it shows as a degraded tool, and a --strict gat
 _JS_PACKAGE_MANAGERS = ("npm", "pnpm", "yarn")
 
 
+def _cost_when_handed(files: str) -> str:
+    """`_STACK_TOOL_COST` for a tool that is handed files. eslint and mypy
+    return OK without looking for their binary when a push holds no file of
+    theirs (`eslint.run`, `typecheck.run_mypy`), so only a push that does
+    hold one is degraded; the unconditional sentence over-claimed for every
+    other push (independent review, 2026-11-26). tsc and the Rust tools
+    check the project whatever the push holds, and keep `_STACK_TOOL_COST`."""
+    return (f"A pre-push that holds {files} shows it as a degraded tool, and a --strict "
+            f"gate refuses that push")
+
+
 def probe_stack_tools(root: Path) -> list[ToolStatus]:
     """Rows for eslint, tsc and mypy, each only where the gate selects it
     (spec 2026-11-26-doctor-stack-tool-rows; operator decision 2026-11-25).
@@ -607,9 +618,10 @@ def probe_stack_tools(root: Path) -> list[ToolStatus]:
         path. Nothing is started, so a missing eslint config or a broken
         tsconfig.json is not seen here. Present is not running;
       - not found: the path the gate looks at, what is unchecked, and
-        `_STACK_TOOL_COST`.
+        `_STACK_TOOL_COST` (tsc) or `_cost_when_handed` (eslint, mypy).
     Selection is the gate's own: eslint on the `js` stack
-    (`pipeline._is_applicable`), and for the typecheck slot whichever ONE
+    (`pipeline._is_applicable`) where the tree holds a file the runner
+    lints (`eslint.lints`), and for the typecheck slot whichever ONE
     tool `typecheck.dispatched` names. A mypy config beside a root
     tsconfig.json is never run, and gets a WARN row that says so.
 
@@ -619,7 +631,12 @@ def probe_stack_tools(root: Path) -> list[ToolStatus]:
     statuses: list[ToolStatus] = []
     try:
         from aramid import detectors
-        js_stack = "js" in detectors.detect_stacks(root, root)
+        # The `js` stack is a package.json, which a Python repo may keep for
+        # its tooling alone. The runner is handed files and returns OK
+        # without looking for eslint when none is its own, so with no such
+        # file in the tree there is nothing a missing eslint leaves unchecked.
+        js_stack = ("js" in detectors.detect_stacks(root, root)
+                    and any(eslint_runner.lints(p.name) for p in detectors._iter_files(root)))
         manager = detectors.detect_package_manager(root)
     except Exception:
         js_stack, manager = False, None
@@ -632,7 +649,7 @@ def probe_stack_tools(root: Path) -> list[ToolStatus]:
                 eslint_runner.NAME, False,
                 detail=f"not found at {binp} -- JS/TS lint is NOT being checked on this "
                        f"repo; the gate looks nowhere else, so install eslint in this "
-                       f"repo with {pm}. {_STACK_TOOL_COST}"))
+                       f"repo with {pm}. {_cost_when_handed('JS/TS files')}"))
     try:
         tool = typecheck.dispatched(root)
         starved = tool == typecheck.NAME_TSC and typecheck.has_mypy_config(root)
@@ -660,9 +677,10 @@ def probe_stack_tools(root: Path) -> list[ToolStatus]:
             if resolved is not None else
             ToolStatus(
                 typecheck.NAME_MYPY, False,
-                detail=f"not found on PATH -- Python is NOT being type-checked on this "
-                       f"repo although a mypy config is present; install mypy where "
-                       f"aramid's hooks can find it. {_STACK_TOOL_COST}"))
+                detail="not found on PATH -- Python is NOT being type-checked on this "
+                       "repo although a mypy config is present; install mypy where "
+                       "aramid's hooks can find it. "
+                       + _cost_when_handed("Python files in mypy's scope")))
     return statuses
 
 

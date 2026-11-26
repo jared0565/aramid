@@ -12,6 +12,16 @@ to publish a tag that disagrees with it.
 
 ## [Unreleased]
 
+- Fixed: `aramid doctor`'s `MISSING` rows for eslint and mypy claimed more
+  than the gate does. Both tools are handed files, and a push that holds
+  none of theirs passes without them, so the rows now say that a pre-push
+  that holds JS/TS files (for mypy: Python files in mypy's scope) shows the
+  tool as degraded and that a `--strict` gate refuses that push. A repo
+  whose `package.json` is there for tooling alone, with no JS/TS file
+  outside `node_modules`, no longer gets an eslint row at all: it used to
+  read `MISSING` and tell the reader to install a linter with nothing to
+  lint. The tsc, cargo-audit and clippy rows are unchanged.
+
 ## [0.20.22] — 2026-11-26
 
 No dependency changed. `ARAMID.md` gained a section, so re-run `aramid init`
