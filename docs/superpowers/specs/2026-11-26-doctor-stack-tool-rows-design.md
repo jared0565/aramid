@@ -41,8 +41,9 @@ Doctor already reports cargo-audit and clippy this way (`probe_deps`,
 - Calling a missing tool "non-blocking". Measured 2026-11-26 in a scratch
   JS repo with a `tsconfig.json` and no `node_modules`: `aramid check
   --gate pre-push --all --strict` exits 1 with `degraded: eslint, tsc`
-  ("not found"); without `--strict` it exits 0. Hooks with CI parity on
-  run `--strict`.
+  ("not found"); without `--strict` it exits 2, degraded. (This line said
+  0 until the same day: that was the pre-commit gate, which selects
+  neither tool.) Hooks with CI parity on run `--strict`.
 
 ## Approaches
 

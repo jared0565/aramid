@@ -530,8 +530,11 @@ def probe_deps(root: Path) -> list[ToolStatus]:
         repo never sees a spurious "cargo-audit missing".
     Unlike `probe_tests`, these statuses must NOT feed doctor's exit code:
     `deps` is not in `pipeline.BLOCK_TIER_KEYS`, so a missing cargo-audit
-    can never fail a gate, and doctor inventing a failure the gate would
-    never produce is its own kind of lie. Report, do not block.
+    does not fail the default gate, and doctor inventing a failure that
+    gate would not produce is its own kind of lie. Report, do not block.
+    (This said "can never fail a gate", and the rows said "non-blocking",
+    until 2026-11-26: a `--strict` gate refuses a degraded tool, so the
+    rows now end with `_STACK_TOOL_COST`.)
     """
     statuses: list[ToolStatus] = []
     # PRESENT is not RUNNING (interop round 149 s2): the deps runner audits
@@ -562,8 +565,8 @@ def probe_deps(root: Path) -> list[ToolStatus]:
             ToolStatus(
                 deps_runner.NAME_CARGO_AUDIT, False,
                 detail="not installed -- Rust dependency advisories are NOT being "
-                       "checked on this repo; `cargo install cargo-audit` to enable "
-                       "(non-blocking: deps is not a BLOCK-tier gate)"))
+                       "checked on this repo; `cargo install cargo-audit` to enable. "
+                       + _STACK_TOOL_COST))
     # clippy keys off Cargo.toml, not Cargo.lock: the runner analyses the
     # crate, which exists whether or not a lockfile has been generated.
     if (root / "Cargo.toml").exists():
@@ -574,15 +577,16 @@ def probe_deps(root: Path) -> list[ToolStatus]:
             ToolStatus(
                 clippy_runner.NAME, False,
                 detail="not installed -- Rust lint is NOT being checked on this "
-                       "repo; `rustup component add clippy` to enable "
-                       "(non-blocking: clippy is not a BLOCK-tier gate)"))
+                       "repo; `rustup component add clippy` to enable. "
+                       + _STACK_TOOL_COST))
     return statuses
 
 
-# What a missing stack tool costs, measured 2026-11-26 in a scratch JS repo
-# with a tsconfig.json and no node_modules: `check --gate pre-push --all`
-# exits 0 with eslint and tsc degraded ("not found"), and with `--strict`
-# it exits 1. So these rows never say "non-blocking".
+# What a missing stack tool costs, measured 2026-11-26. In a scratch JS repo
+# with a tsconfig.json and no node_modules, `check --gate pre-push --all`
+# exits 2 with eslint and tsc degraded ("not found"), and with `--strict`
+# it exits 1. A scratch crate with ~/.cargo/bin off PATH gave the same two
+# exits for cargo-audit and clippy. So no row says "non-blocking".
 _STACK_TOOL_COST = ("At pre-push it shows as a degraded tool, and a --strict gate "
                     "refuses the push")
 _JS_PACKAGE_MANAGERS = ("npm", "pnpm", "yarn")

@@ -19,6 +19,8 @@ to publish a tag that disagrees with it.
   pre-push, and that a `--strict` gate refuses the push. A mypy config beside
   a root `tsconfig.json` gets a `WARN` row, because mypy never runs there.
   Doctor's exit code is unchanged, and `--fix` does not install these tools.
+  The cargo-audit and clippy rows no longer call a missing tool
+  "non-blocking": they end with the same sentence about a `--strict` gate.
 
 - New: `aramid ledger reopen <id> --reason "..."` takes back a
   `resolve --fixed` close that carries no red proof, so the finding is open

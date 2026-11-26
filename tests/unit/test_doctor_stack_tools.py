@@ -135,6 +135,23 @@ def test_a_typecheck_probe_that_raises_leaves_the_eslint_row(tmp_path, monkeypat
     assert _rows(root) == [f"  OK       eslint        ({eslint})"]
 
 
+def test_the_rust_rows_say_what_a_missing_tool_costs_at_a_strict_gate(tmp_path, monkeypatch):
+    """They used to end "(non-blocking: ... is not a BLOCK-tier gate)".
+    Measured 2026-11-26 on a scratch crate with ~/.cargo/bin off PATH:
+    `check --gate pre-push --all` exits 2 with cargo-audit and clippy
+    degraded ("not found"), and with `--strict` it exits 1."""
+    (tmp_path / "Cargo.toml").write_text('[package]\nname = "p"\nversion = "0.1.0"\n',
+                                         encoding="utf-8")
+    (tmp_path / "Cargo.lock").write_text("version = 3\n", encoding="utf-8")
+    monkeypatch.setattr(toolpath, "resolve", lambda name: None)
+
+    assert [doctor._report_line(s) for s in doctor.probe_deps(tmp_path)] == [
+        "  MISSING  cargo-audit  not installed -- Rust dependency advisories are NOT being "
+        f"checked on this repo; `cargo install cargo-audit` to enable. {TAIL}",
+        "  MISSING  clippy       not installed -- Rust lint is NOT being checked on this "
+        f"repo; `rustup component add clippy` to enable. {TAIL}"]
+
+
 def test_a_pyproject_that_is_not_toml_does_not_break_the_probe(tmp_path):
     (tmp_path / "pyproject.toml").write_text("[tool.mypy\n", encoding="utf-8")
     (tmp_path / "m.py").write_text("x = 1\n", encoding="utf-8")
