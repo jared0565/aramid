@@ -590,6 +590,8 @@ aramid ledger resolve <id> --fixed <commit> --test "npm run test -w worker -- te
 
 That is a different proof, and aramid says which one it showed. The line it prints ends `failed (exit 1) without the fix as the code stood at <commit>`, and `aramid ledger show <id>` prints `red proof at the fix commit` with the number of files that were in conflict. It shows that your test caught the bug in the code as it was when the fix was made.
 
+**When the test was rewritten since the fix**, the one at `HEAD` may not run against the older code at all: it calls a helper whose signature changed later, say. It then fails step 1. If the fix commit holds the files the command names too, in another version, aramid puts those back and runs both steps with them: the test as it was when the fix was made. The line it prints then ends `run as that commit holds the test: as it is at HEAD it does not run there`, and `aramid ledger show <id>` says the same. This is weaker than the proof above: the test shown red without the fix is the older one, and the one at `HEAD` is only known to pass. If the commit does not hold the test files, or its version fails step 1 as well, red proof is refused.
+
 Red proof is refused, and nothing is recorded, when:
 
 - the commit changes no existing source file (only tests, or only new files);

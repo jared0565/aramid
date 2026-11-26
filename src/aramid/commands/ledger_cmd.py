@@ -211,11 +211,15 @@ def _red_line(proof) -> str:
     if isinstance(proof, dict) and proof.get("at") == "commit":
         # A different claim from a proof at HEAD, so a line of its own: the
         # test caught the bug as the code stood when the fix was made.
+        # Round 352: which test it was. The commit's own, when HEAD's did not
+        # run against the older code.
+        test = ("the test run as that commit holds it (as it is at HEAD it did not run "
+                "there)" if proof.get("test_from") == "commit"
+                else f"{proof.get('brought')} test file(s) brought in from HEAD")
         red = (f"red proof at the fix commit (it can no longer be backed out of HEAD: "
                f"{proof.get('head_conflicts')} file(s) in conflict): exit "
                f"{proof.get('pre_fix_rc')} with it backed out against {proof.get('base')} "
-               f"-- {proof.get('backed_out')} of its path(s){among}; {proof.get('brought')} "
-               f"test file(s) brought in from HEAD")
+               f"-- {proof.get('backed_out')} of its path(s){among}; {test}")
     elif isinstance(proof, dict):
         other = "the other files" if went else "the files"
         red = (f"red proof: exit {proof.get('pre_fix_rc')} with that commit backed out "
@@ -905,6 +909,9 @@ def _shown(proof, sha: str) -> str:
     elif proof["at"] == "commit":
         shown = (f"failed (exit {proof['pre_fix_rc']}) without the fix as the code "
                  f"stood at {sha[:12]}")
+        if proof.get("test_from") == "commit":
+            shown += (", run as that commit holds the test: as it is at HEAD it does not "
+                      "run there")
     else:
         shown = f"failed (exit {proof['pre_fix_rc']}) without the fix"
     went = _backed_out_named(proof)

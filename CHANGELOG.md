@@ -12,6 +12,14 @@ to publish a tag that disagrees with it.
 
 ## [Unreleased]
 
+- `aramid ledger resolve --fixed <commit> --test ... --red-proof` can prove a fix
+  whose test was rewritten since. When the commit can no longer be backed out
+  of HEAD and the test as it is at HEAD does not run against the code at the
+  fix commit, aramid now runs the test files as that commit holds them. The
+  close says so (`run as that commit holds the test`), and the event records
+  `red_proof.test_from = "commit"`. Before, this was refused with exit 3 and
+  the only close left was one without red proof.
+
 - A mutation baseline that overruns its budget now says which attempt it
   was and what to change: `baseline timeout: ... -- attempt 1 of 3: raise
   [mutation].baseline_timeout_s, or point [mutation].test_command at a

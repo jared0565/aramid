@@ -1615,6 +1615,71 @@ def test_a_test_that_does_not_pass_at_the_fix_commit_is_refused_and_the_conflict
              f"against the code as it stood when the fix was made. It printed nothing.")
 
 
+# Channel round 352: the test at HEAD uses something a later commit brought,
+# so brought into the fix commit it cannot pass there. calc.other() is 2 only
+# from c3 on; exit 6 says the test met the older code.
+_CHECK_CN_LATER = _ROOT + """
+if calc.other() != 2:
+    sys.exit(6)
+sys.exit(0 if calc.route("CN") == "ASIA" else 1)
+"""
+
+
+def _test_rewritten_after_the_fix(repo, monkeypatch):
+    """c4 rewrites tests/check_cn.py so that it needs c3, and the fix can no
+    longer be backed out of HEAD (calc.py in conflict). Returns c4."""
+    _write(repo.root, "tests/check_cn.py", _CHECK_CN_LATER)
+    c4 = _commit(repo.root, "c4: the test now needs c3")
+    _git_stub(monkeypatch, ("revert",), rc=1, stderr="error: could not revert\n")
+    _git_stub(monkeypatch, ("diff", "--name-only"), stdout="calc.py\0")
+    return c4
+
+
+def test_a_test_rewritten_since_the_fix_is_run_as_the_fix_commit_holds_it(
+        own_repo, capsys, clock, monkeypatch):
+    repo = own_repo
+    _test_rewritten_after_the_fix(repo, monkeypatch)
+
+    rc = cmd_ledger_resolve_fixed(repo.root, FID, repo.c2, CHECK_CN, "r", red_proof=True)
+
+    assert (rc, capsys.readouterr()) == (0, (
+        f"aramid: ledger: {FID} closed as fixed in {repo.c2[:12]} -- the test passes at "
+        f"HEAD, failed (exit 1) without the fix as the code stood at {repo.c2[:12]}, run "
+        f"as that commit holds the test: as it is at HEAD it does not run there (r)\n", ""))
+    assert _closes(repo.root)[0].payload["red_proof"] == {
+        "at": "commit", "base": repo.c1, "control_rc": 0, "pre_fix_rc": 1, "backed_out": 2,
+        "head_conflicts": 1, "brought": 0, "test_from": "commit"}
+    assert _git(repo.root, "status", "--porcelain") == ""
+
+
+def test_a_test_that_passes_at_the_fix_commit_in_neither_version_is_refused(
+        own_repo, capsys, monkeypatch):
+    repo = own_repo
+    _test_rewritten_after_the_fix(repo, monkeypatch)
+    _git_stub(monkeypatch, ("worktree",), ("checkout",))
+    _scripted(monkeypatch, _OK, _OK, RunnerResult("python", ToolState.OK, returncode=6),
+              RunnerResult("python", ToolState.OK, returncode=2))
+
+    rc = cmd_ledger_resolve_fixed(repo.root, FID, repo.c2, CHECK_CN, "r", red_proof=True)
+
+    _refused(capsys, repo.root, rc,
+             f"red proof could not be run: {repo.c2[:12]} can no longer be backed out of "
+             f"HEAD -- it conflicts with later changes to calc.py -- and at "
+             f"{repo.c2[:12]} itself the test exits 6 as it is at HEAD and exits 2 as "
+             f"that commit holds it: neither runs against the code as it stood when the "
+             f"fix was made. It printed nothing.")
+
+
+def test_ledger_show_says_the_proof_ran_the_test_as_the_fix_commit_holds_it():
+    line = lc._red_line({"at": "commit", "base": "b" * 40, "control_rc": 0, "pre_fix_rc": 1,
+                         "backed_out": 2, "head_conflicts": 1, "brought": 0,
+                         "test_from": "commit"})
+
+    assert line.endswith(
+        f"exit 1 with it backed out against {'b' * 40} -- 2 of its path(s); the test run "
+        f"as that commit holds it (as it is at HEAD it did not run there)")
+
+
 def test_a_control_at_the_fix_commit_that_does_not_finish_is_named_as_such(
         repo, capsys, monkeypatch):
     _revert_fails(monkeypatch, ["calc.py"])

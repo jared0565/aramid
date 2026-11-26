@@ -88,8 +88,14 @@ That is a different claim, and the event says which one was shown
 as it stood when the fix was made. It says nothing of the commits since;
 that the test passes at HEAD is the other half, checked first either way.
 A test that does not run against the older code -- it uses something a
-later commit brought -- fails the control, and the close is refused with
-the file in conflict named. The first limit above holds here as well.
+later commit brought -- fails the control. When the fix commit holds the
+named test files too, in another version, that version is then the control
+and the test (channel round 352; operator decision 2026-11-25), and the
+event says so (`red_proof.test_from`, "commit"). That is weaker again: the
+test that was red without the fix is the one of that name as it was then,
+and the one at HEAD is only known to pass. Without such a version, or when
+it fails the control as well, the close is refused with the file in
+conflict named. The first limit above holds here as well.
 Replayed on this repo's own month-old case: refused at HEAD 2026-10-10,
 closed at the fix commit 2026-10-11 (spec section 9).
 """
@@ -731,17 +737,34 @@ def _at_head(root: Path, wt: Path, commit: str, head: str, argv: list[str],
         return before.returncode
 
 
+def _older(root: Path, commit: str, head: str, brought: list[str], no_hooks: Path) -> bool:
+    """Whether the fix commit holds every file brought in from HEAD, and at
+    least one of them in another version. Only then is there an older test
+    to run in HEAD's place: a file the commit lacks was written later, and
+    the same blob twice would be the same run twice."""
+    differs = False
+    for rel in brought:
+        then = _git(root, no_hooks, "rev-parse", "--verify", "--quiet", f"{commit}:{rel}")
+        now = _git(root, no_hooks, "rev-parse", "--verify", "--quiet", f"{head}:{rel}")
+        if then.returncode != 0 or now.returncode != 0:
+            return False
+        differs = differs or then.stdout.strip() != now.stdout.strip()
+    return differs
+
+
 def _at_the_fix_commit(root: Path, wt: Path, commit: str, head: str, base: str,
                        argv: list[str], timeout_s: float, backed: list[str],
                        brought: list[str], stuck: list[str], held: set[str],
                        no_hooks: Path, leaks: list[Path], in_repo: bool,
-                       removed: list[str] = ()) -> int:
+                       removed: list[str] = ()) -> tuple[int, bool]:
     """The proof for a fix that can no longer be backed out of HEAD (see the
     module docstring): a worktree of `commit`, the files the command names
     brought in from `head`, the control, then the paths that have to be
     backed out (`backed`) put back to `base`, and the files the commit added
     that `--back-out` names (`removed`) deleted: `base` has none of them to
-    put back. Returns the exit code of the run without the fix. `in_repo` as
+    put back. Returns the exit code of the run without the fix, and whether
+    the test ran as the commit holds it (`_older`; channel round 352): HEAD's
+    version is tried first and has to fail the control for that. `in_repo` as
     for `_at_head`: through MCP the hooks are off, and a program the command
     names by a path is the checkout's own. That is HEAD's when the command
     names it as HEAD holds it, since it is then one of the files brought
@@ -754,12 +777,27 @@ def _at_the_fix_commit(root: Path, wt: Path, commit: str, head: str, base: str,
             raise Refused(f"red proof could not be run: git could not bring the test in "
                           f"from HEAD ({_said(failed)})")
         control = _run(argv, root, wt, timeout_s, env, committed)
+        own = False
         if control.state is not ToolState.OK or control.returncode != 0:
-            raise Refused(f"red proof could not be run: {c} can no longer be backed out "
-                          f"of HEAD -- it conflicts with later changes to {_named(stuck)} "
-                          f"-- and at {c} itself the test {_how(control, timeout_s)}: as "
-                          f"it is at HEAD it does not run against the code as it stood "
-                          f"when the fix was made{_last_lines(control)}")
+            cannot = (f"red proof could not be run: {c} can no longer be backed out "
+                      f"of HEAD -- it conflicts with later changes to {_named(stuck)} "
+                      f"-- and at {c} itself the test {_how(control, timeout_s)}")
+            if not _older(root, commit, head, brought, no_hooks):
+                raise Refused(f"{cannot}: as it is at HEAD it does not run against the "
+                              f"code as it stood when the fix was made"
+                              f"{_last_lines(control)}")
+            # The test was rewritten since the fix, and the commit holds the
+            # one that went with it: that one is the control instead.
+            failed = _checkout(wt, commit, brought, no_hooks)
+            if failed is not None:
+                raise Refused(f"red proof could not be run: git could not put the test "
+                              f"back as {c} holds it ({_said(failed)})")
+            again = _run(argv, root, wt, timeout_s, env, committed)
+            if again.state is not ToolState.OK or again.returncode != 0:
+                raise Refused(f"{cannot} as it is at HEAD and {_how(again, timeout_s)} as "
+                              f"that commit holds it: neither runs against the code as it "
+                              f"stood when the fix was made{_last_lines(again)}")
+            own = True
         # No merge here, and so no `git revert`: every path in `backed` was
         # modified or deleted by the commit, so its parent holds it. A revert
         # would refuse once the test from HEAD is in the tree and the commit
@@ -785,7 +823,7 @@ def _at_the_fix_commit(root: Path, wt: Path, commit: str, head: str, base: str,
                           f"that the finding is fixed")
         _refuse_if_it_did_not_run(argv, before.returncode, commit,
                                   f"at {c}, with that commit backed out,")
-        return before.returncode
+        return before.returncode, own
 
 
 def _as_repo_path(root: Path, given: str) -> str:
@@ -873,12 +911,17 @@ def red_proof(root: Path, commit: str, head: str, argv: list[str],
                 return {"at": "head", **proof, "pre_fix_rc": rc}
             except _Stuck as stuck:
                 brought = sorted(named & held)
-                rc = _at_the_fix_commit(root, tmp / "wt-fix", commit, head, base, argv,
-                                        timeout_s, [rel for rel in backed if rel not in out],
-                                        brought, stuck.paths, held, no_hooks, leaks,
-                                        in_repo, removed=sorted(out))
-                return {"at": "commit", **proof, "pre_fix_rc": rc,
-                        "head_conflicts": len(stuck.paths), "brought": len(brought)}
+                rc, own = _at_the_fix_commit(
+                    root, tmp / "wt-fix", commit, head, base, argv, timeout_s,
+                    [rel for rel in backed if rel not in out], brought, stuck.paths, held,
+                    no_hooks, leaks, in_repo, removed=sorted(out))
+                at_commit = {"at": "commit", **proof, "pre_fix_rc": rc,
+                             "head_conflicts": len(stuck.paths)}
+                if own:
+                    # Nothing of HEAD's is left in that tree, and the event
+                    # says whose test it was.
+                    return {**at_commit, "brought": 0, "test_from": "commit"}
+                return {**at_commit, "brought": len(brought)}
         except _Passes as exc:
             raise Refused(f"{exc}{hint}") from None
     finally:
