@@ -12,6 +12,12 @@ to publish a tag that disagrees with it.
 
 ## [Unreleased]
 
+## [0.20.23] — 2026-11-26
+
+No dependency changed, and nothing `aramid init` writes changed. Anything
+measured against an older version is a lead, not a fact. What changes for an
+existing repo:
+
 - Fixed: `aramid doctor`'s `MISSING` rows for eslint and mypy claimed more
   than the gate does. Both tools are handed files, and a push that holds
   none of theirs passes without them, so the rows now say that a pre-push
@@ -7434,7 +7440,8 @@ Stated plainly because each one changes how you should deploy this:
 - **PyPI publishing is not set up.** Install from a GitHub Release artifact or
   from git; `pip install aramid` does not work.
 
-[Unreleased]: https://github.com/jared0565/aramid/compare/v0.20.22...HEAD
+[Unreleased]: https://github.com/jared0565/aramid/compare/v0.20.23...HEAD
+[0.20.23]: https://github.com/jared0565/aramid/releases/tag/v0.20.23
 [0.20.22]: https://github.com/jared0565/aramid/releases/tag/v0.20.22
 [0.20.21]: https://github.com/jared0565/aramid/releases/tag/v0.20.21
 [0.20.20]: https://github.com/jared0565/aramid/releases/tag/v0.20.20
