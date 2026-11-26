@@ -991,14 +991,12 @@ def cmd_ledger_reopen(root, finding_id: str, reason: str, *, via: str = "cli") -
                   f"carries red proof -- reopen undoes only a close made without it. A "
                   f"review that raises the finding again reopens it", file=sys.stderr)
             return 3
-        detected = None
-        for e in ledger.events():
-            if e.finding_id == finding_id and e.type is EventType.FINDING_DETECTED:
-                detected = e.payload
-        if detected is None:
-            print(f"aramid: ledger reopen: {finding_id} has no detection in the ledger to "
-                  f"reopen it from", file=sys.stderr)
-            return 3
+        # A record exists only because a detection was folded into it, so
+        # there is always one to take (measured 2026-11-26: with the
+        # detections hidden, the id is unknown above).
+        detected = [e.payload for e in ledger.events()
+                    if e.finding_id == finding_id
+                    and e.type is EventType.FINDING_DETECTED][-1]
         ledger.append(Event(EventType.FINDING_DETECTED, uuid.uuid4().hex, _now(),
                             finding_id=finding_id,
                             payload={**detected, "line": rec.get("line"),
