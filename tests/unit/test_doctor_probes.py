@@ -762,6 +762,19 @@ def test_doctor_is_clean_and_exits_0_when_everything_is_present(tmp_path, capsys
     assert out.endswith("aramid: doctor: all BLOCK-tier tools present.\n")
 
 
+def test_doctor_prints_the_stack_tool_rows_and_a_missing_one_keeps_exit_0(
+        tmp_path, capsys, quiet):
+    # Report only (spec 2026-11-26): eslint is the repo's, and the default
+    # gate passes without it, so doctor may not fail on it.
+    quiet.setattr(doctor, "probe_stack_tools",
+                  lambda root: [ToolStatus("eslint", False, detail="not found at X")])
+    assert _run(tmp_path) == 0
+    out, err = capsys.readouterr()
+    assert err == ""
+    assert "\n  MISSING  eslint       not found at X\n" in out
+    assert out.endswith("aramid: doctor: all BLOCK-tier tools present.\n")
+
+
 def test_doctor_prints_a_relocated_gate_note_and_still_exits_0(tmp_path, capsys, quiet):
     # Row e46090: "blocking unconfirmed" is a warning; it never fails doctor.
     quiet.setattr(doctor, "relocated_gate_notes", lambda root: ["hooks: pre-commit: a note"])

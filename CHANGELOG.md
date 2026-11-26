@@ -12,6 +12,14 @@ to publish a tag that disagrees with it.
 
 ## [Unreleased]
 
+- `aramid doctor` now has a row for eslint, tsc and mypy in a repo where the
+  gate selects them: eslint on a JS stack, and tsc or mypy, whichever the
+  typecheck runner runs there. `OK` shows the path the gate uses. `MISSING`
+  says the check is not being made, that it shows as a degraded tool at
+  pre-push, and that a `--strict` gate refuses the push. A mypy config beside
+  a root `tsconfig.json` gets a `WARN` row, because mypy never runs there.
+  Doctor's exit code is unchanged, and `--fix` does not install these tools.
+
 - New: `aramid ledger reopen <id> --reason "..."` takes back a
   `resolve --fixed` close that carries no red proof, so the finding is open
   again. It refuses a close with red proof and a finding closed any other

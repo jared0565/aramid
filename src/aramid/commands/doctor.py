@@ -5,9 +5,9 @@ interpreter and downloads a pinned gitleaks release binary into
 
 BLOCK-tier gate (spec §3/§8): `doctor` -- and later `init`, refusing to arm
 hooks -- treat gitleaks and semgrep as tools that MUST be present; WARN-tier
-tools (ruff, pip-audit here; eslint/tsc/mypy at the runner layer) degrade
-gracefully at runtime and are reported but never fail doctor's own exit
-code.
+tools (ruff, pip-audit; eslint, tsc and mypy where the gate selects them,
+`probe_stack_tools`) degrade at runtime and are reported but never fail
+doctor's own exit code.
 
 Probing quirk this module exists to get right: aramid's "owned" pip tools
 (ruff, semgrep, pip-audit) are dependencies of the aramid package itself,
@@ -43,6 +43,8 @@ from pathlib import Path
 from aramid import toolpath
 from aramid.runners import clippy as clippy_runner
 from aramid.runners import deps as deps_runner
+from aramid.runners import eslint as eslint_runner
+from aramid.runners import typecheck
 
 # T-2: `doctor` also probes the repo's TEST toolchain (`probe_tests` below).
 # `tests` is BLOCK-tier in the gate (pipeline.BLOCK_TIER_KEYS), but neither
@@ -574,6 +576,89 @@ def probe_deps(root: Path) -> list[ToolStatus]:
                 detail="not installed -- Rust lint is NOT being checked on this "
                        "repo; `rustup component add clippy` to enable "
                        "(non-blocking: clippy is not a BLOCK-tier gate)"))
+    return statuses
+
+
+# What a missing stack tool costs, measured 2026-11-26 in a scratch JS repo
+# with a tsconfig.json and no node_modules: `check --gate pre-push --all`
+# exits 0 with eslint and tsc degraded ("not found"), and with `--strict`
+# it exits 1. So these rows never say "non-blocking".
+_STACK_TOOL_COST = ("At pre-push it shows as a degraded tool, and a --strict gate "
+                    "refuses the push")
+_JS_PACKAGE_MANAGERS = ("npm", "pnpm", "yarn")
+
+
+def probe_stack_tools(root: Path) -> list[ToolStatus]:
+    """Rows for eslint, tsc and mypy, each only where the gate selects it
+    (spec 2026-11-26-doctor-stack-tool-rows; operator decision 2026-11-25).
+
+    Until this, doctor was silent about all three: the first sign of a
+    missing one was a degraded tool at pre-push and a skip streak in
+    `status`. Like `probe_deps`' Rust rows, these are the repo's own tools,
+    so they stay out of `ALL_TOOLS` (never `--fix`ed) and out of the exit
+    code (the default gate passes without them).
+
+    What a row claims, and no more:
+      - found: the binary is where the gate looks, and the row shows that
+        path. Nothing is started, so a missing eslint config or a broken
+        tsconfig.json is not seen here. Present is not running;
+      - not found: the path the gate looks at, what is unchecked, and
+        `_STACK_TOOL_COST`.
+    Selection is the gate's own: eslint on the `js` stack
+    (`pipeline._is_applicable`), and for the typecheck slot whichever ONE
+    tool `typecheck.dispatched` names. A mypy config beside a root
+    tsconfig.json is never run, and gets a WARN row that says so.
+
+    Failure direction: a probe that cannot read the repo reports nothing
+    for its tool, as `probe_deps` does. Each lookup has its own `try`, so
+    one failing does not take the other's rows with it."""
+    statuses: list[ToolStatus] = []
+    try:
+        from aramid import detectors
+        js_stack = "js" in detectors.detect_stacks(root, root)
+        manager = detectors.detect_package_manager(root)
+    except Exception:
+        js_stack, manager = False, None
+    pm = manager if manager in _JS_PACKAGE_MANAGERS else "your package manager"
+    if js_stack:
+        binp = eslint_runner._eslint_bin(root)
+        statuses.append(
+            ToolStatus(eslint_runner.NAME, True, detail=str(binp)) if binp.exists() else
+            ToolStatus(
+                eslint_runner.NAME, False,
+                detail=f"not found at {binp} -- JS/TS lint is NOT being checked on this "
+                       f"repo; the gate looks nowhere else, so install eslint in this "
+                       f"repo with {pm}. {_STACK_TOOL_COST}"))
+    try:
+        tool = typecheck.dispatched(root)
+        starved = tool == typecheck.NAME_TSC and typecheck.has_mypy_config(root)
+    except Exception:
+        tool, starved = None, False
+    if tool == typecheck.NAME_TSC:
+        binp = typecheck._tsc_bin(root)
+        statuses.append(
+            ToolStatus(typecheck.NAME_TSC, True, detail=str(binp)) if binp.exists() else
+            ToolStatus(
+                typecheck.NAME_TSC, False,
+                detail=f"not found at {binp} -- TypeScript is NOT being type-checked on "
+                       f"this repo; the gate looks nowhere else, so install typescript "
+                       f"in this repo with {pm}. {_STACK_TOOL_COST}"))
+    if starved:
+        statuses.append(ToolStatus(
+            typecheck.NAME_MYPY, True, warn=True,
+            detail="configured, but it does NOT run in any gate: tsconfig.json is at "
+                   "the repo root, and the typecheck runner runs tsc alone"))
+    if tool == typecheck.NAME_MYPY:
+        # `run_subprocess` resolves the runner's bare `mypy` the same way.
+        resolved = toolpath.resolve(typecheck.NAME_MYPY)
+        statuses.append(
+            ToolStatus(typecheck.NAME_MYPY, True, detail=str(resolved))
+            if resolved is not None else
+            ToolStatus(
+                typecheck.NAME_MYPY, False,
+                detail=f"not found on PATH -- Python is NOT being type-checked on this "
+                       f"repo although a mypy config is present; install mypy where "
+                       f"aramid's hooks can find it. {_STACK_TOOL_COST}"))
     return statuses
 
 
@@ -1439,6 +1524,9 @@ def cmd_doctor(root: Path, fix: bool = False, during_init: bool = False) -> int:
     # `deps` is not BLOCK-tier, so a missing cargo-audit cannot fail a gate
     # and must not fail doctor. See `probe_deps`.
     for s in probe_deps(root):
+        print(_report_line(s))
+    # Reported only, like the rows above: see `probe_stack_tools`.
+    for s in probe_stack_tools(root):
         print(_report_line(s))
     print(_report_line(statuses["interpreter"]))
     direct_url = _installed_direct_url()
