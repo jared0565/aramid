@@ -241,10 +241,26 @@ def run_mypy(ctx) -> RunnerResult:
                                examined=frozenset(files))
 
 
+def dispatched(root: Path) -> str | None:
+    """Which tool `run` runs for this repo: `NAME_TSC`, `NAME_MYPY` or None.
+
+    ONE tool, never both: a root `tsconfig.json` takes the slot, and a mypy
+    config is only reached without one. `aramid doctor` reports on the
+    answer (`doctor.probe_stack_tools`), so the precedence lives here and
+    nowhere else: a second copy there once it drifted would print `OK mypy`
+    for a check no gate performs."""
+    if has_tsconfig(root):
+        return NAME_TSC
+    if has_mypy_config(root):
+        return NAME_MYPY
+    return None
+
+
 def run(ctx) -> RunnerResult:
-    if has_tsconfig(ctx.root):
+    tool = dispatched(ctx.root)
+    if tool == NAME_TSC:
         return run_tsc(ctx)
-    if has_mypy_config(ctx.root):
+    if tool == NAME_MYPY:
         return run_mypy(ctx)
     return RunnerResult("typecheck", ToolState.MISSING)
 
