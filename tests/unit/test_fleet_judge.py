@@ -2,8 +2,6 @@
 timestamps and versions. No sleeps: `now` is an argument."""
 from datetime import datetime, timedelta, timezone
 
-import pytest
-
 from aramid import fleet, health, leftovers
 
 R_A, R_B = "f:/projects/a", "f:/projects/b"

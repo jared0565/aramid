@@ -12,6 +12,38 @@ to publish a tag that disagrees with it.
 
 ## [Unreleased]
 
+Nothing here touches the compatibility surface (user guide section 13): the
+fleet verdict, the readiness line and `fleet.toml` are outside it. What
+changes for an existing machine is how `aramid fleet` reads.
+
+- Changed: a registered repo that has gone quiet no longer holds up the 1.0
+  readiness verdict. A repo whose latest gate row is green and older than
+  the freshness window (7 days) is **parked**: not counted, named on the
+  readiness line (`parked: <name> (since <date>)`) and under its row in
+  `aramid fleet`. Before, it read `stale`, the verdict was
+  `insufficient-data` and the streak reset until someone ran a gate there
+  or deregistered it, and deregistering also took it off the list the drain
+  walks. A parked repo keeps its drain. Its next gate run counts it again
+  and restarts the streak at that row; the verdict names the repo. A repo
+  whose latest row is red never parks. A repo with no rows blocks for the
+  window after `aramid init`, then is parked. `stale:` now means only a red
+  row past the window.
+
+- Changed: the readiness line counts active repos and says so: `5/6 active
+  repos green` where it said `7/8 repos green`. Anything matching the old
+  wording needs the new one. A verdict file written by an older aramid
+  renders as before until the next drain rewrites it.
+
+- Added: `[readiness].min_active_repos` in `~/.aramid/fleet.toml`, default
+  3. Fewer active repos than this cannot read `ready`, so a fleet cannot
+  shrink its way there. **A machine with one or two repos now reads `active
+  repos N < 3` once everything else holds; set the key to lower the floor.**
+  A fleet with no active repo is `insufficient-data` (`no active repos`).
+
+- Added: a `repo-parked` notice when a repo parks. It clears itself when the
+  repo gates again or is deregistered. `readiness-reached` names the active
+  repos and lists the parked ones separately.
+
 ## [0.20.24] — 2026-11-27
 
 No dependency changed, and nothing `aramid init` writes changed. Anything

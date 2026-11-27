@@ -239,3 +239,7 @@ Streak math, table-driven, no sleeps: two green rows then idle past the window -
 ### A1.6 Rollout
 
 Ships in the next MINOR (a new policy key is new surface). No tracked file in any consumer changes. Expected first reading on this machine: no change -- both registered repos' latest rows are hours old. The first observable effect is that a `ready` verdict now needs every registered repo to have pushed within the last 7 days at the moment of the drain, throughout the 14-day streak. Documented in `docs/user-guide.md` (policy block and one paragraph).
+
+## Amendment A2 (2026-11-27): parked repos
+
+A1's rule that a row past the window makes the fleet `insufficient-data` and resets the streak is replaced: a green row past the window parks its repo, which stops counting until its next row, and that row restarts the streak. Sections 3.4, 6 and 8 and A1.3 are amended by `2026-11-27-aramid-fleet-parked-repos-design.md`, which is the text to read.

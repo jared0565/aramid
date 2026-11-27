@@ -33,6 +33,18 @@ def test_user_guide_names_the_fleet_section_and_six_of_its_strings():
         assert needle in text, needle
 
 
+def test_the_guide_and_the_gate_describe_parked_repos():
+    """Amendment A2 changed what the 1.0 gate counts; the three documents a
+    maintainer reads before tagging have to say so."""
+    guide = _read("docs/user-guide.md")
+    for needle in ("min_active_repos = 3", "repo-parked", "parked since",
+                   "its next gate run restarts the streak"):
+        assert needle in guide, needle
+    assert "every active registered repo" in _read("RELEASING.md")
+    unreleased = _read("CHANGELOG.md").split("## [Unreleased]", 1)[1].split("\n## [", 1)[0]
+    assert "parked" in unreleased and "min_active_repos" in unreleased
+
+
 def test_changelog_records_the_feature():
     unreleased = _read("CHANGELOG.md").split("## [Unreleased]", 1)[1].split("## [0.8.1]", 1)[0]
     assert "aramid fleet" in unreleased and "aramid notices" in unreleased
