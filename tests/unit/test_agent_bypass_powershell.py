@@ -977,19 +977,25 @@ def test_a_word_with_many_commas_is_read_in_time():
     # runs some 85 times slower, and a 1 s budget failed there at 3.75 s. Measured
     # 2026-10-23 at 4,000 commas, best of three: 1.1 to 1.3 times the plain word,
     # bare and traced, on 3.12 and 3.14; 64 times before the fix (745bcaa).
+    # The two words are timed in turn, five rounds, best of each: a busy stretch
+    # on the machine then slows both sides, where timing all of one word and
+    # then all of the other let it fall on one side alone (CI run 46074947424,
+    # macOS, under the gate's parallel suite: both comma runs slow, 128 ms
+    # against 12 ms, 10.5 times, with the reader unchanged).
     import time
 
-    def best(text):
-        runs = []
-        for _ in range(2):
-            began = time.perf_counter()
-            assert find_bypass(text, POWERSHELL) is None
-            runs.append(time.perf_counter() - began)
-        return min(runs)
+    def once(text):
+        began = time.perf_counter()
+        assert find_bypass(text, POWERSHELL) is None
+        return time.perf_counter() - began
 
-    commas = best("Write-Output " + ",".join(["a"] * 3000))
-    plain = best("Write-Output " + "a" * 5999)
-    assert commas < 10 * plain
+    with_commas = "Write-Output " + ",".join(["a"] * 3000)
+    without = "Write-Output " + "a" * 5999
+    commas, plain = [], []
+    for _ in range(5):
+        commas.append(once(with_commas))
+        plain.append(once(without))
+    assert min(commas) < 10 * min(plain)
 
 
 def test_a_command_cut_off_keeps_what_a_pipe_feeds_it_and_nothing_else():
