@@ -552,3 +552,12 @@ def test_a_second_pass_launch_that_wrote_no_json_is_the_one_reported(tmp_path, m
     assert (second.tool, second.state, second.raw) == (
         inline.RUFF, ToolState.CRASHED, "warning: not json")
     assert second.examined == frozenset()
+
+
+def test_launches_with_no_program_still_returns_the_files(monkeypatch):
+    """The drain's fuzzer called `_launches` with an empty prefix and it
+    raised IndexError reading the program name (2026-11-27). No caller here
+    passes one, but the function has nothing to resolve in that case and
+    the files are still one launch."""
+    monkeypatch.setattr(ruff, "_line_budget", lambda: None)
+    assert ruff._launches([], ["a.py", "b.py"]) == [["a.py", "b.py"]]

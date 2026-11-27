@@ -61,7 +61,7 @@ def _launches(prefix: list[str], files: list[str]) -> list[list[str]]:
     carries each Python file in the gate's set. ruff lints file by file, so
     the launches' reports add up to the one report. The line is measured on
     the resolved program, as the launcher launches it."""
-    measured = [str(toolpath.resolve(prefix[0]) or prefix[0]), *prefix[1:]]
+    measured = [str(toolpath.resolve(p) or p) for p in prefix[:1]] + prefix[1:]
     return [prefix + batch for batch in batches(measured, files, _line_budget())]
 
 
