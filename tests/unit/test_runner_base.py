@@ -456,6 +456,9 @@ def test_a_line_over_the_windows_launch_limit_is_refused_not_launched(tmp_path, 
         raise Launched
 
     monkeypatch.setattr(base.subprocess, "Popen", popen)
+    # `_WIN` is set by hand below; the group flags it would pick are Windows's
+    # own and do not exist on the other legs.
+    monkeypatch.setattr(base, "own_group", dict)
     program = tmp_path / "tool.exe"
     program.write_text("", encoding="utf-8")
     exe = str(base.toolpath.resolve(str(program)))    # what the launcher measures
