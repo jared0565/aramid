@@ -25,17 +25,38 @@ def test_store_dir_defaults_to_home_dot_aramid(monkeypatch):
 def test_policy_defaults_when_fleet_toml_is_absent():
     assert fleet.load_policy() == fleet.Policy(min_days=14, min_versions=2,
                                                repeat_hours=24, defect_rows=3,
-                                               gate_trailer=True, max_row_age_days=7)
+                                               gate_trailer=True, max_row_age_days=7,
+                                               min_active_repos=3)
 
 
 def test_policy_reads_every_key(tmp_path):
     p = fleet.policy_path()
     p.parent.mkdir(parents=True)
     p.write_text('schema_version = 1\n[readiness]\nmin_days = 3\nmin_versions = 1\n'
-                 'max_row_age_days = 5\n'
+                 'max_row_age_days = 5\nmin_active_repos = 4\n'
                  '[notices]\nrepeat_hours = 6\ndefect_rows = 2\ngate_trailer = false\n',
                  encoding="utf-8")
-    assert fleet.load_policy() == fleet.Policy(3, 1, 6, 2, False, 5)
+    assert fleet.load_policy() == fleet.Policy(3, 1, 6, 2, False, 5, 4)
+
+
+def test_policy_min_active_repos_defaults_to_three_and_reads_the_key():
+    # Breaks if the A2 floor's default moves or `load_policy` stops reading it.
+    assert fleet.Policy().min_active_repos == 3
+    p = fleet.policy_path()
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text('[readiness]\nmin_active_repos = 1\n', encoding="utf-8")
+    assert fleet.load_policy().min_active_repos == 1
+    p.write_text('[readiness]\nmin_active_repos = 0\n', encoding="utf-8")
+    assert fleet.load_policy().min_active_repos == 0
+
+
+def test_policy_min_active_repos_negative_or_string_falls_back():
+    # Breaks if the key bypasses `_int_or` (a bool or a negative read as a floor).
+    p = fleet.policy_path()
+    p.parent.mkdir(parents=True, exist_ok=True)
+    for bad in ('-1', '"three"', 'true'):
+        p.write_text(f'[readiness]\nmin_active_repos = {bad}\n', encoding="utf-8")
+        assert fleet.load_policy().min_active_repos == 3
 
 
 def test_policy_zero_row_window_is_accepted_as_disabled():
