@@ -200,7 +200,7 @@ def test_the_streak_renders_one_way_and_never_at_the_bar_it_fails():
     assert v["fleet"]["days_held"] == 13.96
     assert v["reasons"] == ["streak 13.9d < 14d"]
     assert fleet.readiness_line(v) == (
-        "fleet: 1.0 readiness NOT READY -- 2/2 repos green, streak 13.9d, versions 2/2; "
+        "fleet: 1.0 readiness NOT READY -- 2/2 active repos green, streak 13.9d, versions 2/2; "
         "streak 13.9d < 14d")
 
 
@@ -309,12 +309,20 @@ def test_no_rows_beats_red_and_an_old_red_row_is_named_stale():
     assert v["fleet"]["stale_repos"] == ["a"] and v["fleet"]["parked_repos"] == ["b"]
 
 
-@pytest.mark.xfail(strict=True, reason="A2 plan Task 4 rewrites the readiness line")
-def test_the_readiness_line_names_stale_repos_and_the_window():
+def test_the_readiness_line_names_parked_repos():
+    # A2: both are green and quiet, so both are parked and nothing is counted.
     v = fleet.judge(_ready_rows(), REG, DEFAULT, NOW, aramid_version="0.9.0")
     assert fleet.readiness_line(v) == (
-        "fleet: 1.0 readiness INSUFFICIENT DATA -- 2/2 repos green, streak 0.0d, versions 0/2; "
-        "stale: a (10.0d), b (10.0d) -- window 7d")
+        "fleet: 1.0 readiness INSUFFICIENT DATA -- 0/0 active repos green, streak 0.0d, "
+        "versions 0/2; parked: a (since 2026-09-17), b (since 2026-09-17)")
+
+
+def test_the_readiness_line_names_an_old_red_row_as_stale_with_the_window():
+    rows = _ready_rows() + [_row(R_A, 9, red=("dep_audit_ran",), armed=ARMED, dep=False)]
+    v = fleet.judge(rows, REG, DEFAULT, NOW, aramid_version="0.9.0")
+    assert fleet.readiness_line(v) == (
+        "fleet: 1.0 readiness NOT READY -- 0/1 active repos green, streak 0.0d, versions 0/2; "
+        "red: a (dep_audit_ran); stale: a (9.0d) -- window 7d; parked: b (since 2026-09-17)")
 
 
 def test_a_verdict_written_before_a1_renders_unchanged():
@@ -322,6 +330,10 @@ def test_a_verdict_written_before_a1_renders_unchanged():
     for repo in v["repos"].values():
         del repo["stale"], repo["age_days"]
     del v["fleet"]["stale_repos"], v["policy"]["max_row_age_days"]
+    # ...and before A2: no parked keys, no active list, and the old wording.
+    for repo in v["repos"].values():
+        del repo["parked"], repo["parked_since"]
+    del v["fleet"]["active_repos"], v["fleet"]["parked_repos"], v["policy"]["min_active_repos"]
     assert fleet.readiness_line(v) == (
         "fleet: 1.0 readiness READY -- 2/2 repos green, streak 20.0d, versions 2/2")
 

@@ -204,3 +204,42 @@ def test_registration_times_maps_the_registry_key_to_its_time(tmp_path):
                {"path": str(tmp_path / "c"), "registered_at": 5}]
     assert fleet.registration_times(entries) == {
         fleet.repo_key(tmp_path / "a"): "2026-09-01T00:00:00+00:00"}
+
+
+# --- surfaces: the readiness line and `aramid fleet` -------------------------
+
+def test_the_readiness_line_counts_active_repos_and_names_the_parked():
+    # Breaks if a parked repo is counted in the line, or parked without being named.
+    rows = _weekly(R_A, 20, 0, ARMED) + _weekly(R_B, 20, 0, ARMED)
+    rows += [_row(R_C, 1, red=("consumers_healthy",))] + _weekly(R_D, 20, 10)
+    rows += [_row(R_E, 20), _row(R_E, 9)]
+    v = fleet.judge(rows, REG5, P, NOW, aramid_version="0.9.0")
+    assert fleet.readiness_line(v) == (
+        "fleet: 1.0 readiness NOT READY -- 2/3 active repos green, streak 0.0d, versions 0/2; "
+        "red: c (consumers_healthy); parked: d (since 2026-09-17), e (since 2026-09-18)")
+
+
+def test_the_readiness_line_of_a_fleet_with_nothing_parked_says_active_repos():
+    # Breaks if the wording depends on whether something happens to be parked.
+    v = fleet.judge(_abc(), REG3, P, NOW, aramid_version="0.9.0")
+    assert fleet.readiness_line(v) == (
+        "fleet: 1.0 readiness READY -- 3/3 active repos green, streak 20.0d, versions 2/2")
+
+
+def test_the_fleet_report_annotates_a_parked_repo_and_prints_the_floor():
+    # Breaks if `aramid fleet` shows a parked repo as an ordinary green row.
+    v = fleet.judge(_abc() + _weekly(R_D, 20, 10), REG4, P, NOW)
+    lines = fleet.render_report(v, P, now=NOW).splitlines()
+    at = next(i for i, ln in enumerate(lines) if ln.startswith("  d "))
+    assert lines[at + 1] == ("        (parked since 2026-09-17T12:00:00+00:00 -- no gate run in "
+                             "7 days; its next one restarts the streak)")
+    assert lines[lines.index("  armed anywhere: yes") + 1] == "  active repos: 3 (floor 3)"
+
+
+def test_a_parked_repo_without_a_date_still_renders():
+    # Breaks if either renderer indexes a parked_since that a torn verdict lacks.
+    v = fleet.judge(_abc() + _weekly(R_D, 20, 10), REG4, P, NOW)
+    v["repos"][R_D]["parked_since"] = None
+    assert fleet.readiness_line(v).endswith("versions 2/2; parked: d")
+    assert "        (parked -- its next gate run restarts the streak)" in fleet.render_report(
+        v, P, now=NOW).splitlines()

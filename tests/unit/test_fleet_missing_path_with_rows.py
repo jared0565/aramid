@@ -73,7 +73,7 @@ def test_the_readiness_line_names_the_missing_path_and_not_its_old_row():
     v = fleet.judge([_row(R_A, 2), _row(R_B, 9.3)], REG, DEFAULT, NOW, vanished={R_B})
 
     assert fleet.readiness_line(v) == (
-        "fleet: 1.0 readiness INSUFFICIENT DATA -- 1/2 repos green, streak 0.0d, versions 0/2; "
+        "fleet: 1.0 readiness INSUFFICIENT DATA -- 1/2 active repos green, streak 0.0d, versions 0/2; "
         + GONE_B)
 
 

@@ -884,9 +884,16 @@ def readiness_line(verdict: dict | None, *, now: str | None = None) -> str:
         return "fleet: no verdict yet -- the next `aramid drain` computes it"
     repos = verdict.get("repos", {})
     info = verdict.get("fleet", {})
-    green = sum(1 for v in repos.values() if v.get("green"))
+    # Amendment A2: a parked repo is not counted, on either side of the
+    # slash. A verdict written before it has no `active_repos` and keeps
+    # the wording it was written under.
+    parked = sorted((v for v in repos.values() if v.get("parked")),
+                    key=lambda v: str(v.get("name", "")).casefold())
+    green = sum(1 for v in repos.values() if v.get("green") and not v.get("parked"))
+    counted = "active repos" if "active_repos" in info else "repos"
     label = _LABELS.get(verdict.get("verdict"), str(verdict.get("verdict")).upper())
-    line = (f"fleet: 1.0 readiness {label} -- {green}/{len(repos)} repos green, "
+    line = (f"fleet: 1.0 readiness {label} -- {green}/{len(repos) - len(parked)} "
+            f"{counted} green, "
             f"streak {_days(info.get('days_held', 0.0))}, "
             f"versions {len(info.get('versions_in_streak', []))}/"
             f"{verdict.get('policy', {}).get('min_versions', 2)}")
@@ -908,6 +915,10 @@ def readiness_line(verdict: dict | None, *, now: str | None = None) -> str:
     if stale:
         window = verdict.get("policy", {}).get("max_row_age_days")
         tail.append("stale: " + ", ".join(stale) + (f" -- window {window}d" if window else ""))
+    if parked:
+        tail.append("parked: " + ", ".join(
+            f"{v['name']} (since {str(v['parked_since'])[:10]})" if v.get("parked_since")
+            else str(v["name"]) for v in parked))
     tail.extend(info.get("blockers", []))
     tail.extend(info.get("notes", []))
     line += "; " + "; ".join(tail) if tail else ""
@@ -986,6 +997,13 @@ def render_report(verdict: dict | None, policy: Policy, *, now: str | None = Non
                     + "  ".join(f"{c:<10}" for c in cells)).rstrip())
         if v.get("from_worktree"):
             out.append(f"  {'':<{width}}  (latest row from worktree {v['from_worktree']})")
+        if v.get("parked"):
+            # Amendment A2: its cells are what it last recorded, not counted.
+            days = verdict.get("policy", {}).get("max_row_age_days")
+            out.append(f"  {'':<{width}}  (parked since {v['parked_since']} -- no gate run in "
+                       f"{days} days; its next one restarts the streak)"
+                       if v.get("parked_since") and days else
+                       f"  {'':<{width}}  (parked -- its next gate run restarts the streak)")
     info = verdict.get("fleet", {})
     out.append("")
     if info.get("streak_started_at"):
@@ -995,6 +1013,10 @@ def render_report(verdict: dict | None, policy: Policy, *, now: str | None = Non
     else:
         out.append("  streak: none (fleet not green)")
     out.append(f"  armed anywhere: {'yes' if info.get('armed_anywhere') else 'no'}")
+    if "active_repos" in info:
+        floor = verdict.get("policy", {}).get("min_active_repos")
+        out.append(f"  active repos: {len(info['active_repos'])}"
+                   + (f" (floor {floor})" if floor is not None else ""))
     out.append("")
     out.append(f"verdict: {verdict.get('verdict')}"
               + _stale_suffix(verdict.get("computed_at"), now))
