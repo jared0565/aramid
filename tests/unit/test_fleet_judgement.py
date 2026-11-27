@@ -446,3 +446,19 @@ def test_readiness_reached_counts_active_repos_and_lists_the_parked_ones():
         "RELEASING.md's \"The 1.0 gate\" names the manual criterion "
         "(API freeze) still to check before tagging 1.0.0.")
     assert n["evidence"]["repos"] == ["a"]
+
+
+def test_the_park_notice_of_a_repo_that_never_gated_claims_no_green_row(tmp_path):
+    # Breaks if the notice tells a repo with no rows that its last row was green.
+    _seed([r for r in _entries_rows(_ready_rows()) if r["name"] == "a"])
+    long_ago = [ENTRIES[0], {**ENTRIES[1], "registered_at": _at(30)}]
+    v = fleet.run_judgement(NOW, aramid_version="0.9.0", entries=long_ago, policy=P2)
+    key_b = next(k for k, r in v["repos"].items() if r["name"] == "b")
+    (n,) = _parked_notices()
+    assert n["key"] == f"parked:{key_b}:2026-08-28T12:00:00+00:00"
+    assert n["title"] == "b parked -- no gate run since it was registered"
+    assert n["body"] == (
+        "b has recorded no gate run since it was registered more than 7 days ago, so it does "
+        "not count toward 1.0 readiness. The drain still walks it. Its first gate run counts "
+        "it and restarts the streak. To take it out for good: `aramid fleet deregister b`. "
+        "This notice clears itself when the repo gates.")

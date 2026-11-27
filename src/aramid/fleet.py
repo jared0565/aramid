@@ -722,13 +722,20 @@ def _post_parks(verdict: dict, now: str) -> None:
         nkey = f"parked:{key}:{since}"
         current.add(notices.notice_id("repo-parked", nkey))
         last = f"since {str(latest_at)[:10]}" if latest_at else "since it was registered"
+        out = f"To take it out for good: `aramid fleet deregister {name}`."
+        if latest_at:
+            body = (f"{name} has recorded no gate run in {window} days and its last row was "
+                    "green, so it no longer counts toward 1.0 readiness. The drain still "
+                    "walks it. Its next gate run counts it again and restarts the streak. "
+                    f"{out} This notice clears itself when the repo returns.")
+        else:
+            # Never gated: there is no row to call green, and nothing to return to.
+            body = (f"{name} has recorded no gate run since it was registered more than "
+                    f"{window} days ago, so it does not count toward 1.0 readiness. The "
+                    "drain still walks it. Its first gate run counts it and restarts the "
+                    f"streak. {out} This notice clears itself when the repo gates.")
         notices.post("repo-parked", nkey, title=f"{name} parked -- no gate run {last}",
-                     body=(f"{name} has recorded no gate run in {window} days and its last "
-                           "row was green, so it no longer counts toward 1.0 readiness. The "
-                           "drain still walks it. Its next gate run counts it again and "
-                           "restarts the streak. To take it out for good: "
-                           f"`aramid fleet deregister {name}`. This notice clears itself "
-                           "when the repo returns."),
+                     body=body,
                      evidence={"repo": key, "name": name, "parked_since": since,
                                "latest_at": latest_at}, now=now)
     for n in notices.uncleared():
