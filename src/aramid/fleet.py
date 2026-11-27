@@ -289,6 +289,16 @@ def registered_repos(entries: list[dict] | None = None) -> dict[str, str]:
             if leftovers.shell_of(e["path"]) is None}
 
 
+def registration_times(entries: list[dict] | None = None) -> dict[str, str]:
+    """registry key -> the entry's `registered_at`, for members that carry
+    one as a string. Amendment A2: the judge reads it to tell a repo that
+    has not gated yet from one that never will (`judge`). An entry without
+    one is simply absent, which the judge reads as still waiting."""
+    entries = registry.load_registry() if entries is None else entries
+    return {repo_key(e["path"]): e["registered_at"] for e in entries
+            if leftovers.shell_of(e["path"]) is None and isinstance(e.get("registered_at"), str)}
+
+
 def spurious_entries(entries: list[dict] | None = None) -> list[str]:
     """Display names of the registry entries that are consumer shells:
     `<temp>/aramid-<kind>-*/wt`, registered by an `aramid init` the consumed
@@ -345,34 +355,62 @@ def _red_detail(row: dict) -> str:
 
 def judge(rows: list[dict], registered: dict[str, str], policy: Policy, now: str,
           *, aramid_version: str = "", spurious: list[str] | tuple[str, ...] = (),
-          vanished: set[str] | frozenset[str] = frozenset()) -> dict:
+          vanished: set[str] | frozenset[str] = frozenset(),
+          registered_at: dict[str, str] | None = None) -> dict:
     """Spec section 6. Walk the registered repos' rows in time order,
     tracking each repo's latest row; the fleet is green at a row when every
-    registered repo has a row and its latest is green. The streak starts at
-    the row that turned the fleet green and resets on any red row -- or on
-    a disarm (criterion 6), which restarts it at the disarming row rather
-    than pinning the verdict forever -- or (amendment A1) on any repo's
-    latest row ageing past `policy.max_row_age_days`, so a streak is held
-    by rows, never by silence. `spurious` names the registry entries that
-    are not members (`spurious_entries`): reported for removal, counted
-    for nothing. `vanished` holds the keys of members whose path is gone
+    repo that counts there has a green latest row. The streak starts at the
+    row that turned the fleet green and resets on any red row -- or on a
+    disarm (criterion 6), which restarts it at the disarming row rather
+    than pinning the verdict forever.
+
+    Amendment A2 (parked repos) decides which repos count. With
+    `policy.max_row_age_days` as the window, a registered repo is ACTIVE
+    while its latest row is inside the window, or is red: a red repo never
+    leaves the count by going quiet. It is WAITING while it has no row and
+    was registered inside the window (`registered_at`, registry key -> ISO
+    time; a missing or unreadable time is waiting too): the verdict is
+    insufficient-data until its first row. Otherwise it is PARKED: not
+    consulted, so a quiet green repo no longer resets the streak or blocks
+    the verdict (A1 did both). The cost is paid when it comes back: a row
+    from a repo that was not active just before it -- a first row included
+    -- restarts an open streak at that row, and the verdict names the repo.
+    Only active repos can supply `armed_anywhere`, and fewer than
+    `policy.min_active_repos` of them cannot read ready, so a fleet cannot
+    shrink its way there. A window of 0 parks nothing.
+
+    `spurious` names the registry entries that are not members
+    (`spurious_entries`): reported for removal, counted for nothing.
+    `vanished` holds the keys of members whose path is gone
     (`vanished_repos`): each is reported as `missing path:` with its remedy,
-    rows or none, and marked `missing_path`; it is never green and holds no
-    streak, since no row can come from it again, and the verdict is
-    insufficient-data until it is deregistered. A vanished repo with rows
-    used to read as green while they were fresh and `stale` after."""
+    rows or none, and marked `missing_path`; it is never green, never
+    parked and holds no streak, since no row can come from it again, and
+    the verdict is insufficient-data until it is deregistered."""
     now_dt = _parse(now) or datetime.now(timezone.utc)
     cutoff = now_dt - timedelta(days=ROW_WINDOW_DAYS)
     # Amendment A1: a row is fresh at time t while t - at <= window; exactly
     # `window` old is still fresh. 0 disables the window (the spec as first
     # written, reachable on purpose).
     window = timedelta(days=policy.max_row_age_days) if policy.max_row_age_days > 0 else None
+    reg_at = registered_at if isinstance(registered_at, dict) else {}
 
     def _fresh(row: dict, at_dt: datetime) -> bool:
         if window is None:
             return True
         row_at = _parse(row.get("at"))
         return row_at is not None and at_dt - row_at <= window
+
+    def _row_green(row: dict) -> bool:
+        return health_mod.row_green(row.get("criteria", {}))
+
+    def _active(row: dict, at_dt: datetime) -> bool:
+        return _fresh(row, at_dt) or not _row_green(row)
+
+    def _registered_dt(key: str) -> datetime | None:
+        # Only a string is a time: `fromisoformat("20260901")` would read an
+        # integer written by hand as a date.
+        value = reg_at.get(key)
+        return _parse(value) if isinstance(value, str) else None
 
     live = []
     for r in rows:
@@ -391,17 +429,28 @@ def judge(rows: list[dict], registered: dict[str, str], policy: Policy, now: str
     live.sort(key=lambda p: p[0])
 
     latest: dict[str, dict] = {}
+
+    def _waiting(key: str, at_dt: datetime) -> bool:
+        if key in latest:
+            return False
+        if window is None:
+            return True
+        reg_dt = _registered_dt(key)
+        return reg_dt is None or at_dt - reg_dt <= window
+
     counts: dict[str, int] = defaultdict(int)
     streak_start: str | None = None
     versions: set[str] = set()
     disarm: dict | None = None
+    returned: dict | None = None
     for _at, r in live:
         repo = r["repo"]
         prev = latest.get(repo)
-        # A1: the gap the green check below cannot see -- some repo's latest
-        # row (this repo's previous one included) went stale before this row
-        # arrived, with no row inside the gap to evaluate. Reset like a red.
-        if streak_start is not None and not all(_fresh(x, _at) for x in latest.values()):
+        # A2 decision 1: this repo was not counted just before this row (it
+        # was parked, or had never gated), so the open streak was held
+        # without it and ends here.
+        if streak_start is not None and (prev is None or not _active(prev, _at)):
+            returned = {"name": r.get("name") or repo, "at": r["at"]}
             streak_start, versions, disarm = None, set(), None
         latest[repo] = r
         counts[repo] += 1
@@ -411,33 +460,49 @@ def judge(rows: list[dict], registered: dict[str, str], policy: Policy, now: str
             for flag, was in before.items():
                 if was and not after.get(flag, False):
                     disarm = {"name": r.get("name") or repo, "flag": flag, "at": r["at"]}
-                    streak_start, versions = None, set()
+                    streak_start, versions, returned = None, set(), None
                     break
-        green = all(k in latest and health_mod.row_green(latest[k].get("criteria", {}))
-                    and _fresh(latest[k], _at) for k in registered)
+        green = (not any(_waiting(k, _at) for k in registered)
+                 and all(_row_green(latest[k]) for k in registered
+                         if k in latest and _active(latest[k], _at)))
         if green:
             if streak_start is None:
                 streak_start, versions = r["at"], set()
             versions.add(str(r.get("aramid_version", "")))
         else:
-            streak_start, versions, disarm = None, set(), None
+            streak_start, versions, disarm, returned = None, set(), None, None
 
     repos_out: dict[str, dict] = {}
+    active_keys: list[str] = []
     for key, name in sorted(registered.items(), key=lambda kv: kv[1].casefold()):
         row = latest.get(key)
+        gone_here = key in vanished
         if row is None:
+            parked = not gone_here and not _waiting(key, now_dt)
+            reg_dt = _registered_dt(key)
             repos_out[key] = {"name": name, "rows": 0, "latest_at": None, "green": False,
                               "red_criteria": [], "criteria": {}, "stale": False,
-                              "age_days": None}
+                              "age_days": None, "parked": parked,
+                              "parked_since": ((reg_dt + window).isoformat(timespec="seconds")
+                                               if parked and reg_dt and window else None)}
             continue
         crit = dict(row.get("criteria", {}))
         row_at = _parse(row["at"])
         age = round(max(0.0, (now_dt - row_at).total_seconds() / 86400.0), 2)
+        fresh, row_green = _fresh(row, now_dt), health_mod.row_green(crit)
+        parked = not gone_here and not fresh and row_green
+        if not gone_here and not parked:
+            active_keys.append(key)
         repos_out[key] = {"name": row.get("name") or name, "rows": counts[key],
                           "latest_at": row["at"],
-                          "green": health_mod.row_green(crit) and key not in vanished,
+                          "green": row_green and not gone_here,
                           "red_criteria": _red_criteria(crit), "criteria": crit,
-                          "stale": not _fresh(row, now_dt), "age_days": age}
+                          # A2: only a RED row past the window is stale; a
+                          # green one is parked.
+                          "stale": not fresh and not row_green, "age_days": age,
+                          "parked": parked,
+                          "parked_since": ((row_at + window).isoformat(timespec="seconds")
+                                           if parked and window else None)}
         if row.get("from_worktree"):
             # Only when the latest row came from a worktree (round 343), so
             # every other verdict reads as before.
@@ -446,21 +511,27 @@ def judge(rows: list[dict], registered: dict[str, str], policy: Policy, now: str
         # Only on a vanished member, so a verdict without one reads as before.
         if key in vanished:
             v["missing_path"] = True
-    missing = sorted((v["name"] for v in repos_out.values() if v["rows"] == 0), key=str.casefold)
+    waiting = sorted((v["name"] for v in repos_out.values()
+                      if v["rows"] == 0 and not v["parked"] and not v.get("missing_path")),
+                     key=str.casefold)
     gone = sorted((v["name"] for v in repos_out.values() if v.get("missing_path")),
                   key=str.casefold)
     stale = sorted((v["name"] for v in repos_out.values() if v["stale"]), key=str.casefold)
-    all_green_now = (bool(registered) and not missing and not stale
-                     and all(v["green"] for v in repos_out.values()))
-    if stale or gone:
-        # A1 step 3: an idle fleet holds no streak, and a repo that has left
-        # the disk is idle for good.
-        streak_start, versions, disarm = None, set(), None
+    active = sorted((repos_out[k]["name"] for k in active_keys), key=str.casefold)
+    parked_names = sorted((v["name"] for v in repos_out.values() if v["parked"]),
+                          key=str.casefold)
+    all_green_now = (bool(registered) and not waiting and not gone and bool(active_keys)
+                     and all(repos_out[k]["green"] for k in active_keys))
+    if gone or not active_keys:
+        # A repo that has left the disk is idle for good, and a fleet with
+        # nothing counted holds no streak (A1 step 3, kept for these two).
+        streak_start, versions, disarm, returned = None, set(), None, None
     # Spec section 4 criterion 6: ANY `*_armed` flag true on some repo's latest
     # row -- a semgrep or pack arm counts, not only a drain consumer's
     # (channel round 165 read the old wording "armed consumer" as narrower).
-    armed_anywhere = any(any((r.get("evidence", {}).get("armed") or {}).values())
-                         for r in latest.values())
+    # A2: an ACTIVE repo's; a parked repo's old row arms nothing.
+    armed_anywhere = any(any((latest[k].get("evidence", {}).get("armed") or {}).values())
+                         for k in active_keys)
     days_held = 0.0
     if streak_start is not None:
         start_dt = _parse(streak_start)
@@ -482,22 +553,22 @@ def judge(rows: list[dict], registered: dict[str, str], policy: Policy, now: str
     if not registered:
         verdict = INSUFFICIENT
         reasons.append("no repos registered")
-    elif missing or gone:
+    elif waiting or gone:
         verdict = INSUFFICIENT
-        waiting = sorted((v["name"] for v in repos_out.values()
-                          if v["rows"] == 0 and not v.get("missing_path")), key=str.casefold)
         if waiting:
             reasons.append("no rows: " + ", ".join(waiting))
         reasons.extend(f"missing path: {n} (`aramid fleet deregister {n}`)" for n in gone)
-    elif stale:
-        # A1: an old row is not evidence of the current state either way, so
-        # this outranks red (both reasons stay listed) and yields to no-rows.
+    elif not active_keys:
         verdict = INSUFFICIENT
-        reasons.append("stale: " + ", ".join(f"{v['name']} ({v['age_days']:.1f}d)"
-                                             for v in repos_out.values() if v["stale"])
-                       + f" -- window {policy.max_row_age_days}d")
+        reasons.append("no active repos")
     elif not all_green_now:
         verdict = NOT_READY
+        if stale:
+            # A red row past the window: still red, and old. Named with its
+            # age so the reader knows the evidence is not recent.
+            reasons.append("stale: " + ", ".join(f"{v['name']} ({v['age_days']:.1f}d)"
+                                                 for v in repos_out.values() if v["stale"])
+                           + f" -- window {policy.max_row_age_days}d")
     else:
         if days_held < policy.min_days:
             blockers.append(f"streak {_days(days_held)} < {policy.min_days}d")
@@ -505,10 +576,14 @@ def judge(rows: list[dict], registered: dict[str, str], policy: Policy, now: str
             blockers.append(f"versions {len(versions)}/{policy.min_versions} in streak")
         if not armed_anywhere:
             blockers.append("no repo is armed")
+        if len(active_keys) < policy.min_active_repos:
+            blockers.append(f"active repos {len(active_keys)} < {policy.min_active_repos}")
         verdict = READY if not blockers else NOT_READY
         if disarm is not None:
             notes.append(f"streak restarted by {disarm['name']} disarming "
                          f"{disarm['flag']} at {disarm['at']}")
+        if returned is not None:
+            notes.append(f"streak restarted by {returned['name']} returning at {returned['at']}")
     if spurious:
         notes.append(f"spurious: {', '.join(spurious)} "
                      "(consumer worktree; remove from ~/.aramid/repos.toml)")
@@ -518,13 +593,16 @@ def judge(rows: list[dict], registered: dict[str, str], policy: Policy, now: str
     return {"schema_version": SCHEMA_VERSION, "computed_at": now,
             "aramid_version": aramid_version,
             "policy": {"min_days": policy.min_days, "min_versions": policy.min_versions,
-                       "max_row_age_days": policy.max_row_age_days},
+                       "max_row_age_days": policy.max_row_age_days,
+                       "min_active_repos": policy.min_active_repos},
             "repos": repos_out,
             "fleet": {"all_green_now": all_green_now, "streak_started_at": streak_start,
                       "days_held": days_held, "versions_in_streak": sorted(versions),
                       "armed_anywhere": armed_anywhere, "stale_repos": stale,
+                      "active_repos": active, "parked_repos": parked_names,
                       "spurious": list(spurious),
                       "disarm_in_streak": disarm is not None,
+                      "returned_in_streak": returned is not None,
                       "blockers": blockers, "notes": notes, "breaking_row": breaking},
             "verdict": verdict, "reasons": reasons}
 
@@ -717,7 +795,8 @@ def run_judgement(now: str, *, aramid_version: str, entries: list[dict] | None =
         previous = read_verdict()
         rows = read_rows()
         verdict = judge(rows, registered, policy, now, aramid_version=aramid_version,
-                        spurious=spurious, vanished=vanished_repos(entries))
+                        spurious=spurious, vanished=vanished_repos(entries),
+                        registered_at=registration_times(entries))
         if _monotonic() - started > JUDGE_BUDGET_S:
             print(f"aramid: fleet: judgement over the {JUDGE_BUDGET_S:.0f}s budget; "
                   "verdict not written", file=sys.stderr)

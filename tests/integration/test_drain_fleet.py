@@ -59,6 +59,10 @@ def test_drain_judges_the_fleet_and_posts_transitions(tmp_path, seam):
     registry.register(a, "t0")
     registry.register(b, "t0")
     armed = {"semgrep_block_armed": True}
+    # Two repos: amendment A2's floor of 3 active repos is lowered in the
+    # isolated store's own policy file, the way an operator would.
+    fleet.policy_path().parent.mkdir(parents=True, exist_ok=True)
+    fleet.policy_path().write_text("[readiness]\nmin_active_repos = 2\n", encoding="utf-8")
     # An active fleet: rows 6 days apart, inside the default freshness window
     # (amendment A1), so readiness is earned by rows rather than by silence.
     for row in (_row(a, 20, "0.8.0", armed=armed), _row(b, 20, "0.8.0"),

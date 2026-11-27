@@ -2,6 +2,8 @@
 timestamps and versions. No sleeps: `now` is an argument."""
 from datetime import datetime, timedelta, timezone
 
+import pytest
+
 from aramid import fleet, health, leftovers
 
 R_A, R_B = "f:/projects/a", "f:/projects/b"
@@ -12,8 +14,10 @@ NOW = NOW_DT.isoformat()
 # predate amendment A1: they run with the freshness window DISABLED so they
 # keep testing streak math alone. The A1 tests at the bottom use the
 # production default (7 days).
-POLICY = fleet.Policy(min_days=14, min_versions=2, max_row_age_days=0)
-DEFAULT = fleet.Policy()
+# Two-repo fixtures: amendment A2's floor of 3 active repos has its own
+# tests (test_fleet_parked.py), so it is lowered to 2 here.
+POLICY = fleet.Policy(min_days=14, min_versions=2, max_row_age_days=0, min_active_repos=2)
+DEFAULT = fleet.Policy(min_active_repos=2)
 
 
 def _at(days_ago: float) -> str:
@@ -55,11 +59,13 @@ def test_ready_when_every_condition_holds():
     assert v["fleet"]["all_green_now"] is True
     assert v["repos"][R_A] == {"name": "a", "rows": 2, "latest_at": _at(10), "green": True,
                                "red_criteria": [], "stale": False, "age_days": 10.0,
+                               "parked": False, "parked_since": None,
                                "criteria": {**{k: True for k in health.CRITERIA},
                                             "dep_audit_ran": None}}
     assert v["fleet"]["stale_repos"] == []
     assert v["schema_version"] == 1 and v["computed_at"] == NOW
-    assert v["policy"] == {"min_days": 14, "min_versions": 2, "max_row_age_days": 0}
+    assert v["policy"] == {"min_days": 14, "min_versions": 2, "max_row_age_days": 0,
+                           "min_active_repos": 2}
 
 
 def test_a_red_row_resets_the_streak_and_names_the_criterion():
@@ -93,7 +99,8 @@ def test_a_registered_repo_without_rows_is_insufficient_data():
     assert v["fleet"]["streak_started_at"] is None
     assert v["repos"]["f:/projects/c"] == {"name": "c", "rows": 0, "latest_at": None,
                                            "green": False, "red_criteria": [],
-                                           "criteria": {}, "stale": False, "age_days": None}
+                                           "criteria": {}, "stale": False, "age_days": None,
+                                           "parked": False, "parked_since": None}
 
 
 def test_versions_count_only_inside_the_streak():
@@ -229,18 +236,22 @@ def test_default_window_lets_an_active_fleet_reach_ready():
     assert v["fleet"]["streak_started_at"] == _at(20) and v["fleet"]["days_held"] == 20.0
     assert v["fleet"]["stale_repos"] == []
     assert v["repos"][R_A]["stale"] is False and v["repos"][R_A]["age_days"] == 2.0
-    assert v["policy"] == {"min_days": 14, "min_versions": 2, "max_row_age_days": 7}
+    assert v["policy"] == {"min_days": 14, "min_versions": 2, "max_row_age_days": 7,
+                           "min_active_repos": 2}
 
 
 def test_idle_past_the_window_is_insufficient_data_and_resets_the_streak():
+    # Amendment A2: both repos are parked (green and quiet), so nothing is
+    # counted; A1 called them stale. Still no verdict by silence.
     rows = _ready_rows()      # latest rows 10 days ago: green, two versions, 20 idle-held days
     v = fleet.judge(rows, REG, DEFAULT, NOW)
     assert v["verdict"] == "insufficient-data"
-    assert v["reasons"] == ["stale: a (10.0d), b (10.0d) -- window 7d"]
-    assert v["fleet"]["stale_repos"] == ["a", "b"]
+    assert v["reasons"] == ["no active repos"]
+    assert v["fleet"]["stale_repos"] == [] and v["fleet"]["parked_repos"] == ["a", "b"]
     assert v["fleet"]["streak_started_at"] is None and v["fleet"]["days_held"] == 0.0
     assert v["fleet"]["all_green_now"] is False and v["fleet"]["blockers"] == []
-    assert v["repos"][R_A]["stale"] is True and v["repos"][R_A]["age_days"] == 10.0
+    assert v["repos"][R_A]["stale"] is False and v["repos"][R_A]["parked"] is True
+    assert v["repos"][R_A]["age_days"] == 10.0
     # The same rows with the window disabled are the spec as first written: ready by silence.
     assert fleet.judge(rows, REG, POLICY, NOW)["verdict"] == "ready"
 
@@ -253,45 +264,52 @@ def test_exactly_window_old_is_still_fresh():
     assert v["fleet"]["stale_repos"] == [] and v["verdict"] == "ready"
     rows[-1]["at"] = rows[-2]["at"] = _at(7.01)
     v = fleet.judge(rows, REG, DEFAULT, NOW)
-    assert v["verdict"] == "insufficient-data" and v["fleet"]["stale_repos"] == ["a", "b"]
+    assert v["verdict"] == "insufficient-data" and v["fleet"]["parked_repos"] == ["a", "b"]
 
 
 def test_a_cross_repo_gap_inside_the_walk_restarts_the_streak_at_the_return():
-    # a pushes every 5 days; b is silent from day 20 to day 2, so the fleet
-    # was stale from day 13 to day 2 and the streak cannot predate b's return.
+    # a pushes every 5 days; b is silent from day 20 to day 2, so b was parked
+    # from day 13 (A2) and the streak cannot predate b's return.
     rows = [_row(R_A, d, "0.9.0", armed=ARMED) for d in (20, 15, 10, 5, 2)]
     rows += [_row(R_B, 20, "0.9.0"), _row(R_B, 2, "0.9.0")]
     v = fleet.judge(rows, REG, DEFAULT, NOW)
     assert v["fleet"]["stale_repos"] == []
     assert v["fleet"]["streak_started_at"] == _at(2)
     assert v["verdict"] == "not-ready"
-    assert v["reasons"] == ["streak 2.0d < 14d", "versions 1/2 in streak"]
+    assert v["reasons"] == ["streak 2.0d < 14d", "versions 1/2 in streak",
+                            f"streak restarted by b returning at {_at(2)}"]
 
 
 def test_a_same_repo_gap_in_a_single_repo_fleet_restarts_the_streak():
     # No row falls inside the gap, so only the pre-apply check can see it.
     reg = {R_A: "a"}
+    one = {"min_active_repos": 1}       # a one-repo fleet: A2's floor is not the subject
     rows = [_row(R_A, 20, "0.8.0", armed=ARMED), _row(R_A, 2, "0.9.0", armed=ARMED)]
-    v = fleet.judge(rows, reg, DEFAULT, NOW)
+    v = fleet.judge(rows, reg, fleet.Policy(**one), NOW)
     assert v["fleet"]["streak_started_at"] == _at(2)
     assert v["fleet"]["versions_in_streak"] == ["0.9.0"]
     assert v["verdict"] == "not-ready"
-    assert v["reasons"] == ["streak 2.0d < 14d", "versions 1/2 in streak"]
-    assert fleet.judge(rows, reg, POLICY, NOW)["verdict"] == "ready"
+    assert v["reasons"] == ["streak 2.0d < 14d", "versions 1/2 in streak",
+                            f"streak restarted by a returning at {_at(2)}"]
+    off = fleet.Policy(min_days=14, min_versions=2, max_row_age_days=0, **one)
+    assert fleet.judge(rows, reg, off, NOW)["verdict"] == "ready"
 
 
-def test_no_rows_beats_stale_and_stale_beats_red():
+def test_no_rows_beats_red_and_an_old_red_row_is_named_stale():
+    # A2: a's red row never parks, however old, so the verdict is not-ready
+    # and names its age; b (green, quiet) is parked and not named.
     stale_and_red = _ready_rows() + [_row(R_A, 9, red=("dep_audit_ran",), armed=ARMED, dep=False)]
     v = fleet.judge(stale_and_red, REG, DEFAULT, NOW)
-    assert v["verdict"] == "insufficient-data"
-    assert v["reasons"] == ["a: dep_audit_ran", "stale: a (9.0d), b (10.0d) -- window 7d"]
+    assert v["verdict"] == "not-ready"
+    assert v["reasons"] == ["a: dep_audit_ran", "stale: a (9.0d) -- window 7d"]
     assert v["fleet"]["breaking_row"]["run_id"] == "a-9"
     v = fleet.judge(stale_and_red, {**REG, "f:/projects/c": "c"}, DEFAULT, NOW)
     assert v["verdict"] == "insufficient-data"
     assert v["reasons"] == ["a: dep_audit_ran", "no rows: c"]
-    assert v["fleet"]["stale_repos"] == ["a", "b"]
+    assert v["fleet"]["stale_repos"] == ["a"] and v["fleet"]["parked_repos"] == ["b"]
 
 
+@pytest.mark.xfail(strict=True, reason="A2 plan Task 4 rewrites the readiness line")
 def test_the_readiness_line_names_stale_repos_and_the_window():
     v = fleet.judge(_ready_rows(), REG, DEFAULT, NOW, aramid_version="0.9.0")
     assert fleet.readiness_line(v) == (

@@ -19,7 +19,8 @@ NOW_DT = datetime(2026, 11, 23, 12, 0, 0, tzinfo=timezone.utc)
 NOW = NOW_DT.isoformat()
 MAIN, WT = "f:/projects/pivot-parlor", "f:/projects/pp-showcase"
 REG = {MAIN: "pivot-parlor"}
-POLICY = fleet.Policy(min_days=14, min_versions=2, max_row_age_days=7)
+# A2's floor of 3 active repos is lowered: these fixtures register one or two.
+POLICY = fleet.Policy(min_days=14, min_versions=2, max_row_age_days=7, min_active_repos=1)
 
 
 def _row(repo, days_ago, *, red=(), worktree_of=None):
@@ -138,7 +139,8 @@ def test_a_row_written_before_worktree_of_counts_for_nothing():
 
     repo = fleet.judge(rows, REG, POLICY, NOW)["repos"][MAIN]
 
-    assert (repo["rows"], repo["stale"]) == (1, True)
+    # A2: the main checkout's own old green row parks it (A1 said stale).
+    assert (repo["rows"], repo["parked"], repo["stale"]) == (1, True, False)
 
 
 def test_the_report_names_the_worktree_a_counted_row_came_from():

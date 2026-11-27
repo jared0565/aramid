@@ -15,7 +15,9 @@ R_A, R_B = "f:/projects/a", "f:/projects/b"
 REG = {R_A: "a", R_B: "b"}
 NOW_DT = datetime(2026, 10, 30, 12, 0, 0, tzinfo=timezone.utc)
 NOW = NOW_DT.isoformat()
-DEFAULT = fleet.Policy()
+# Two-repo fixtures: amendment A2's floor of 3 active repos has its own
+# tests (test_fleet_parked.py), so it is lowered to 2 here.
+DEFAULT = fleet.Policy(min_active_repos=2)
 GONE_B = "missing path: b (`aramid fleet deregister b`)"
 
 
@@ -57,8 +59,9 @@ def test_a_vanished_repo_with_fresh_green_rows_is_missing_path_not_green():
 
 def test_a_vanished_repo_with_old_rows_is_missing_path_not_stale():
     rows = [_row(R_A, 2), _row(R_B, 9.3)]
-    assert fleet.judge(rows, REG, DEFAULT, NOW)["reasons"] == [
-        "stale: b (9.3d) -- window 7d"]  # control: what the 10-30 verdict said
+    # control: without `vanished` its old green rows park it (A2; the 10-30
+    # verdict, under A1, said `stale: b (9.3d)`)
+    assert fleet.judge(rows, REG, DEFAULT, NOW)["fleet"]["parked_repos"] == ["b"]
 
     v = fleet.judge(rows, REG, DEFAULT, NOW, vanished={R_B})
 

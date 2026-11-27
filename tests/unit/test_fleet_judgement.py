@@ -35,6 +35,8 @@ def _row(repo, days_ago, version="0.9.0", *, red=(), armed=None, run_id=None,
                          "no_work": [], "resolver_defects": list(defects),
                          "bad_tools": [], "degraded_block_tier": False,
                          "armed": dict(armed or {}), "open": 0, "blocking": 0}}
+# A2: two members here, so the floor of 3 active repos is lowered to 2.
+P2 = fleet.Policy(min_active_repos=2)
 ENTRIES = [{"path": "F:/projects/a", "registered_at": "t"},
            {"path": "F:/projects/b", "registered_at": "t"}]
 
@@ -75,7 +77,7 @@ def _registered():
 def _judge(now=NOW):
     # `registered_repos` resolves paths; the fixture rows use the same keys
     # `repo_key` produces for these entries on this machine.
-    return fleet.run_judgement(now, aramid_version="0.9.0", entries=ENTRIES)
+    return fleet.run_judgement(now, aramid_version="0.9.0", entries=ENTRIES, policy=P2)
 
 
 def _entries_rows(rows):
@@ -309,7 +311,7 @@ def test_the_no_breaking_row_readiness_broken_key_is_stable_across_retries():
     is exactly what keeps re-triggering the READY -> non-READY transition."""
     rows = _entries_rows(_ready_rows())
     registered = fleet.registered_repos(ENTRIES)
-    prior = fleet.judge(rows, registered, fleet.load_policy(), NOW, aramid_version="0.9.0")
+    prior = fleet.judge(rows, registered, P2, NOW, aramid_version="0.9.0")
     assert prior["verdict"] == "ready"
     fleet.write_verdict(prior)
     prev_start = prior["fleet"]["streak_started_at"]
@@ -317,28 +319,28 @@ def test_the_no_breaking_row_readiness_broken_key_is_stable_across_retries():
     _seed([r for r in rows if r["repo"] == a_key])   # b has zero rows: insufficient-data, no breaking row
     tmp = fleet.verdict_path().with_name(fleet.verdict_path().name + ".tmp")
     tmp.mkdir(parents=True)                          # write_verdict's tmp target is a directory: every write fails
-    assert fleet.run_judgement(NOW, aramid_version="0.9.0", entries=ENTRIES) is None
-    assert fleet.run_judgement(LATER, aramid_version="0.9.0", entries=ENTRIES) is None
+    assert _judge(NOW) is None
+    assert _judge(LATER) is None
     broken = [n for n in notices.pending() if n["notice_kind"] == "readiness-broken"]
     assert len(broken) == 1
     assert broken[0]["key"] == f"streak:{prev_start}"
 
 
-def test_going_stale_from_ready_posts_readiness_broken_on_the_prior_streak():
-    """Amendment A1: a READY fleet left idle past the window reads
-    insufficient-data with no breaking row, so the notice keys on the prior
-    verdict's streak start (the existing no-breaking-row branch)."""
+def test_going_idle_from_ready_posts_readiness_broken_on_the_prior_streak():
+    """Amendment A2: a READY fleet left idle past the window has every repo
+    parked and reads insufficient-data with no breaking row, so the notice
+    keys on the prior verdict's streak start (the no-breaking-row branch)."""
     _seed(_entries_rows(_ready_rows()))
     prior = _judge()
     assert prior["verdict"] == "ready"
     later = (NOW_DT + timedelta(days=6)).isoformat()      # latest rows are now 8 days old
     v = _judge(later)
     assert v["verdict"] == "insufficient-data"
-    assert v["reasons"] == ["stale: a (8.0d), b (8.0d) -- window 7d"]
+    assert v["reasons"] == ["no active repos"]
     broken = [n for n in notices.pending() if n["notice_kind"] == "readiness-broken"]
     assert len(broken) == 1
     assert broken[0]["key"] == "streak:" + prior["fleet"]["streak_started_at"]
-    assert broken[0]["title"] == "fleet readiness lost -- stale: a (8.0d), b (8.0d) -- window 7d"
+    assert broken[0]["title"] == "fleet readiness lost -- no active repos"
 
 
 def test_a_consumer_shell_entry_is_reported_and_never_waited_on():
@@ -347,7 +349,7 @@ def test_a_consumer_shell_entry_is_reported_and_never_waited_on():
     The verdict is the members' own; the shell is named for removal."""
     _seed(_entries_rows(_ready_rows()))
     shell = leftovers.temp_root() / "aramid-fuzz-3cvlqu0b" / "wt"
-    v = fleet.run_judgement(NOW, aramid_version="0.9.0",
+    v = fleet.run_judgement(NOW, aramid_version="0.9.0", policy=P2,
                             entries=ENTRIES + [{"path": str(shell), "registered_at": "t"}])
     assert v["verdict"] == "ready"
     assert v["reasons"] == ["spurious: wt (consumer worktree; remove from ~/.aramid/repos.toml)"]
