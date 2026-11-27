@@ -482,15 +482,19 @@ def test_shared_budget_caps_the_second_suites_timeout(tmp_path, monkeypatch):
         return RunnerResult(tool=argv[0], state=ToolState.OK, returncode=0)
 
     monkeypatch.setattr(tests_runner, "run_subprocess", fake)
-    deadline = time.monotonic() + 5.0
+    started = time.monotonic()
+    deadline = started + 5.0
     tests_runner.run(RunContext(root=tmp_path, gate_deadline=deadline))
 
     (first, first_timeout, first_in, first_out), (second, second_timeout, second_in, _) = captured
     assert (first, second) == ("pytest", "npm")
     # The first suite is handed what was left of the shared budget as it
     # started: never more than the whole budget, never less than what was
-    # left when the fake was entered.
-    assert deadline - first_in <= first_timeout <= 5.0
+    # left when the fake was entered. The whole budget is `deadline -
+    # started`, not the literal 5.0: `(t + 5.0) - t` can round to just over
+    # 5.0, and on a clock that had not ticked since `started` the suite was
+    # handed 5.000000000000227 (windows CI, 2026-11-27).
+    assert deadline - first_in <= first_timeout <= deadline - started
     # The second suite gets only what is left AFTER the first suite's sleep.
     # The upper bound rules out the 300 s per-tool default, a fresh 5 s
     # budget, and a remaining value read once before both suites (that one
