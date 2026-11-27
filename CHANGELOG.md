@@ -12,6 +12,12 @@ to publish a tag that disagrees with it.
 
 ## [Unreleased]
 
+## [0.20.24] — 2026-11-27
+
+No dependency changed, and nothing `aramid init` writes changed. Anything
+measured against an older version is a lead, not a fact. What changes for an
+existing repo:
+
 - Fixed: on Windows, a whole-tree gate (`--all`, `--gate all`, `rebaseline`)
   over a large repo could not run semgrep at all. aramid hands semgrep every
   file in the gate's set on one command line, and Windows starts no program
@@ -7456,7 +7462,8 @@ Stated plainly because each one changes how you should deploy this:
 - **PyPI publishing is not set up.** Install from a GitHub Release artifact or
   from git; `pip install aramid` does not work.
 
-[Unreleased]: https://github.com/jared0565/aramid/compare/v0.20.23...HEAD
+[Unreleased]: https://github.com/jared0565/aramid/compare/v0.20.24...HEAD
+[0.20.24]: https://github.com/jared0565/aramid/releases/tag/v0.20.24
 [0.20.23]: https://github.com/jared0565/aramid/releases/tag/v0.20.23
 [0.20.22]: https://github.com/jared0565/aramid/releases/tag/v0.20.22
 [0.20.21]: https://github.com/jared0565/aramid/releases/tag/v0.20.21
