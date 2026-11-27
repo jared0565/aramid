@@ -15,7 +15,7 @@ from aramid import fleet
 
 SCHEMA_VERSION = fleet.SCHEMA_VERSION
 NOTICES_FILE = "notices.jsonl"
-KINDS = ("readiness-reached", "readiness-broken", "fleet-defect")
+KINDS = ("readiness-reached", "readiness-broken", "fleet-defect", "repo-parked")
 
 
 def notices_path() -> Path:

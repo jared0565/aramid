@@ -354,3 +354,95 @@ def test_a_consumer_shell_entry_is_reported_and_never_waited_on():
     assert v["verdict"] == "ready"
     assert v["reasons"] == ["spurious: wt (consumer worktree; remove from ~/.aramid/repos.toml)"]
     assert [r["name"] for r in v["repos"].values()] == ["a", "b"]
+
+
+# --- amendment A2: the repo-parked notice -----------------------------------
+
+def _parked_notices():
+    return [n for n in notices.pending() if n["notice_kind"] == "repo-parked"]
+
+
+def _b_quiet_rows():
+    return _entries_rows(_ready_rows()[:-1])      # b's last row is 8 days old; a's is 2
+
+
+def test_a_park_posts_one_notice_and_not_again_at_the_next_judgement():
+    # Breaks if a park is silent, or is posted afresh by every drain.
+    _seed(_b_quiet_rows())
+    v = _judge()
+    key_b = next(k for k, r in v["repos"].items() if r["name"] == "b")
+    (n,) = _parked_notices()
+    assert n["key"] == f"parked:{key_b}:2026-09-19T12:00:00+00:00"
+    assert n["title"] == "b parked -- no gate run since 2026-09-12"
+    assert n["body"] == (
+        "b has recorded no gate run in 7 days and its last row was green, so it no longer "
+        "counts toward 1.0 readiness. The drain still walks it. Its next gate run counts it "
+        "again and restarts the streak. To take it out for good: `aramid fleet deregister b`. "
+        "This notice clears itself when the repo returns.")
+    assert n["evidence"] == {"repo": key_b, "name": "b",
+                             "parked_since": "2026-09-19T12:00:00+00:00",
+                             "latest_at": _at(8)}
+    _judge(LATER)
+    assert len(_parked_notices()) == 1
+
+
+def test_the_notice_clears_when_the_repo_returns_and_a_second_park_posts_again():
+    # Breaks if an acked park hides the next one, or a returned repo stays noticed.
+    _seed(_b_quiet_rows())
+    _judge()
+    first = _parked_notices()[0]["id"]
+    notices.ack(first, repo="x", now=NOW)
+    _seed(_entries_rows([_row(R_B, -1), _row(R_A, -1)]))        # both gate a day after NOW
+    _judge((NOW_DT + timedelta(days=1, hours=1)).isoformat())
+    assert [n for n in notices.uncleared() if n["notice_kind"] == "repo-parked"] == []
+    _seed(_entries_rows([_row(R_A, -8)]))       # a keeps gating; b goes quiet a second time
+    _judge((NOW_DT + timedelta(days=9)).isoformat())
+    (second,) = _parked_notices()
+    assert second["id"] != first
+
+
+def test_the_notice_clears_when_the_parked_repo_is_deregistered():
+    # Breaks if a repo taken out of the fleet keeps its park notice for ever.
+    _seed(_b_quiet_rows())
+    _judge()
+    assert len(_parked_notices()) == 1
+    fleet.run_judgement(LATER, aramid_version="0.9.0", entries=ENTRIES[:1], policy=P2)
+    assert [n for n in notices.uncleared() if n["notice_kind"] == "repo-parked"] == []
+
+
+def test_a_previous_verdict_without_parked_keys_is_judged_normally():
+    # Breaks if the first drain after an upgrade reads A2 keys off a 0.20.24 verdict.
+    _seed(_b_quiet_rows())
+    v = _judge()
+    for r in v["repos"].values():
+        del r["parked"], r["parked_since"]
+    del v["fleet"]["active_repos"], v["fleet"]["parked_repos"], v["policy"]["min_active_repos"]
+    fleet.write_verdict(v)
+    assert _judge(LATER) is not None
+    assert fleet.read_verdict()["fleet"]["parked_repos"] == ["b"]
+    assert len(_parked_notices()) == 1
+
+
+def test_a_vanished_repo_with_old_green_rows_gets_no_park_notice(tmp_path):
+    # Breaks if a repo whose path is gone is noticed as parked instead of missing.
+    _seed(_b_quiet_rows())
+    gone = [ENTRIES[0], {"path": str(tmp_path / "projects" / "b"), "registered_at": "t"}]
+    (tmp_path / "projects" / "b").rmdir()
+    v = fleet.run_judgement(NOW, aramid_version="0.9.0", entries=gone, policy=P2)
+    assert v["verdict"] == "insufficient-data" and _parked_notices() == []
+
+
+def test_readiness_reached_counts_active_repos_and_lists_the_parked_ones():
+    # Breaks if the notice still claims every registered repo was green.
+    _seed(_b_quiet_rows())
+    fleet.run_judgement(NOW, aramid_version="0.9.0", entries=ENTRIES,
+                        policy=fleet.Policy(min_active_repos=1))
+    (n,) = [x for x in notices.pending() if x["notice_kind"] == "readiness-reached"]
+    assert n["title"] == (f"1.0 readiness reached -- streak since {_at(20)} "
+                          "(20.0d, versions 0.8.0, 0.9.0) across 1 repos")
+    assert n["body"] == (
+        f"Every active repo has been green on every criterion since {_at(20)}: a. "
+        "Parked, not counted: b. `aramid fleet` prints the matrix. "
+        "RELEASING.md's \"The 1.0 gate\" names the manual criterion "
+        "(API freeze) still to check before tagging 1.0.0.")
+    assert n["evidence"]["repos"] == ["a"]

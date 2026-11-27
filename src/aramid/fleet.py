@@ -655,14 +655,21 @@ def _post_transitions(previous: dict | None, verdict: dict, now: str) -> None:
     info = verdict["fleet"]
     if new_v == READY and prev_v != READY:
         start = info["streak_started_at"]
-        names = sorted(v["name"] for v in verdict["repos"].values())
+        # A2: the repos that were counted. A verdict from before it has no
+        # such list, and then every repo was.
+        names = info.get("active_repos")
+        if names is None:
+            names = sorted(v["name"] for v in verdict["repos"].values())
+        parked = info.get("parked_repos") or []
+        parked_text = f" Parked, not counted: {', '.join(parked)}." if parked else ""
         versions = ", ".join(info["versions_in_streak"])
         notices.post("readiness-reached", f"streak:{start}",
                      title=(f"1.0 readiness reached -- streak since {start} "
                             f"({_days(info['days_held'])}, versions {versions}) across "
                             f"{len(names)} repos"),
-                     body=("Every registered repo has been green on every criterion since "
-                           f"{start}: {', '.join(names)}. `aramid fleet` prints the matrix. "
+                     body=("Every active repo has been green on every criterion since "
+                           f"{start}: {', '.join(names)}.{parked_text} "
+                           "`aramid fleet` prints the matrix. "
                            "RELEASING.md's \"The 1.0 gate\" names the manual criterion "
                            "(API freeze) still to check before tagging 1.0.0."),
                      evidence={"streak_started_at": start, "days_held": info["days_held"],
@@ -697,6 +704,38 @@ def _post_transitions(previous: dict | None, verdict: dict, now: str) -> None:
         for n in notices.pending():
             if n.get("notice_kind") == "readiness-reached":
                 notices.clear(n["id"], reason="readiness lost", now=now)
+
+
+def _post_parks(verdict: dict, now: str) -> None:
+    """Amendment A2's log: one `repo-parked` notice per park, cleared by
+    itself when the repo counts again or leaves the registry. The key holds
+    `parked_since`, so the same park is never posted twice (`notices.post`
+    de-duplicates, an ack included) and a later park is a new notice."""
+    from aramid import notices
+    repos = verdict.get("repos", {})
+    window = verdict.get("policy", {}).get("max_row_age_days")
+    current: set[str] = set()
+    for key, v in repos.items():
+        if not v.get("parked"):
+            continue
+        name, since, latest_at = v["name"], v.get("parked_since"), v.get("latest_at")
+        nkey = f"parked:{key}:{since}"
+        current.add(notices.notice_id("repo-parked", nkey))
+        last = f"since {str(latest_at)[:10]}" if latest_at else "since it was registered"
+        notices.post("repo-parked", nkey, title=f"{name} parked -- no gate run {last}",
+                     body=(f"{name} has recorded no gate run in {window} days and its last "
+                           "row was green, so it no longer counts toward 1.0 readiness. The "
+                           "drain still walks it. Its next gate run counts it again and "
+                           "restarts the streak. To take it out for good: "
+                           f"`aramid fleet deregister {name}`. This notice clears itself "
+                           "when the repo returns."),
+                     evidence={"repo": key, "name": name, "parked_since": since,
+                               "latest_at": latest_at}, now=now)
+    for n in notices.uncleared():
+        if n.get("notice_kind") != "repo-parked" or n["id"] in current:
+            continue
+        gone = n.get("evidence", {}).get("repo") not in repos
+        notices.clear(n["id"], reason="deregistered" if gone else "returned", now=now)
 
 
 def _post_defects(rows: list[dict], registered: dict[str, str], policy: Policy,
@@ -803,6 +842,7 @@ def run_judgement(now: str, *, aramid_version: str, entries: list[dict] | None =
             return None
         _post_transitions(previous, verdict, now)
         _post_defects(rows, registered, policy, now)
+        _post_parks(verdict, now)
         verdict["compacted_at"] = _maybe_compact(previous, now)
         write_verdict(verdict)
         return verdict
