@@ -9,13 +9,17 @@ import json
 import re
 from dataclasses import replace
 
+from aramid import toolpath
 from aramid.normalizer import RawFinding
 from aramid.runners import inline
-from aramid.runners.base import (RunnerResult, ToolState, run_subprocess,
-                                  scanned_line_reader)
+from aramid.runners.base import (RunnerResult, ToolState, batches, launch_line_budget,
+                                  run_subprocess, scanned_line_reader)
 from aramid.runners._util import json_or_crashed, relativize
 
 NAME = "ruff"
+# Per launch. A file list too long for one command line is linted in several
+# launches (see `_launches`), each with this timeout; the gate's own runner
+# budget still bounds the whole.
 TIMEOUT_S = 30.0
 
 # ruff check's documented exit codes: 0 = clean, 1 = violations found.
@@ -32,16 +36,46 @@ def _py_files(ctx) -> list[str]:
     return [f for f in ctx.files if f.lower().endswith(_PY_SUFFIXES)]
 
 
-def _build_argv(ctx) -> list[str]:
+def _build_argv(ctx, files: list[str] | None = None) -> list[str]:
     return [
         "ruff", "check", "--output-format", "json", "--force-exclude",
-        "--extend-select", "S", "--", *_py_files(ctx),
+        "--extend-select", "S", "--", *(_py_files(ctx) if files is None else files),
     ]
 
 
-def _show_files_argv(ctx) -> list[str]:
+def _show_files_argv(ctx, files: list[str] | None = None) -> list[str]:
     """The files ruff WILL check, honouring `--force-exclude`."""
-    return ["ruff", "check", "--force-exclude", "--show-files", "--", *_py_files(ctx)]
+    return ["ruff", "check", "--force-exclude", "--show-files", "--",
+            *(_py_files(ctx) if files is None else files)]
+
+
+def _line_budget() -> int | None:
+    return launch_line_budget()
+
+
+def _launches(prefix: list[str], files: list[str]) -> list[list[str]]:
+    """The argv of each launch that hands ruff `files` after `prefix`: one
+    where the line fits, several where it does not. Windows starts no program
+    whose command line is over 32,766 characters (the semgrep adapter met it
+    first, on a whole-tree gate, 2026-11-27), and every ruff invocation here
+    carries each Python file in the gate's set. ruff lints file by file, so
+    the launches' reports add up to the one report. The line is measured on
+    the resolved program, as the launcher launches it."""
+    measured = [str(toolpath.resolve(prefix[0]) or prefix[0]), *prefix[1:]]
+    return [prefix + batch for batch in batches(measured, files, _line_budget())]
+
+
+def _joined(tool: str, outs: list[RunnerResult]) -> RunnerResult:
+    """Several launches' JSON reports as one; a single launch's is returned
+    as ruff wrote it."""
+    if len(outs) == 1:
+        return outs[0]
+    items = [item for out in outs for item in json.loads(out.raw or "[]")]
+    return RunnerResult(
+        tool, ToolState.OK, raw=json.dumps(items),
+        stderr="\n".join(out.stderr for out in outs if out.stderr),
+        duration_s=sum(out.duration_s or 0.0 for out in outs),
+        returncode=max(out.returncode or 0 for out in outs))
 
 
 def _examined(ctx) -> frozenset[str]:
@@ -55,15 +89,17 @@ def _examined(ctx) -> frozenset[str]:
     Costs one extra invocation. That is the price of being able to tell
     "clean" from "never looked", and resolution now depends on the difference.
     On any failure this returns the empty set -- the safe direction, since an
-    unproven examination leaves findings open rather than clearing them.
+    unproven examination leaves findings open rather than clearing them. That
+    holds for each launch of a list too long for one line: one failed probe
+    and nothing is vouched for.
     """
-    probe = run_subprocess(_show_files_argv(ctx), ctx.root, TIMEOUT_S)
-    if probe.state is not ToolState.OK or probe.returncode != 0:
-        return frozenset()
-    return frozenset(
-        relativize(line.strip(), ctx.root)
-        for line in (probe.raw or "").splitlines() if line.strip()
-    )
+    lines: list[str] = []
+    for argv in _launches(_show_files_argv(ctx, []), _py_files(ctx)):
+        probe = run_subprocess(argv, ctx.root, TIMEOUT_S)
+        if probe.state is not ToolState.OK or probe.returncode != 0:
+            return frozenset()
+        lines += (probe.raw or "").splitlines()
+    return frozenset(relativize(line.strip(), ctx.root) for line in lines if line.strip())
 
 
 def _run_own(ctx) -> RunnerResult:
@@ -72,11 +108,15 @@ def _run_own(ctx) -> RunnerResult:
         # given zero paths would fall back to scanning the whole cwd. It
         # examined nothing, and says so, so nothing resolves off this run.
         return RunnerResult(NAME, ToolState.OK, raw="[]", examined=frozenset())
-    result = run_subprocess(_build_argv(ctx), ctx.root, TIMEOUT_S)
-    out = json_or_crashed(NAME, result, _OK_RETURNCODES)
-    if out.state is not ToolState.OK:
-        return out
-    return replace(out, examined=_examined(ctx))
+    outs = []
+    for argv in _launches(_build_argv(ctx, []), _py_files(ctx)):
+        out = json_or_crashed(NAME, run_subprocess(argv, ctx.root, TIMEOUT_S), _OK_RETURNCODES)
+        if out.state is not ToolState.OK:
+            # A lint with a hole in it is no verdict, so nothing after the
+            # first launch that is not one is started.
+            return out
+        outs.append(out)
+    return replace(_joined(NAME, outs), examined=_examined(ctx))
 
 
 def _inline_argv(codes: list[str], files: list[str]) -> list[str]:
@@ -106,23 +146,52 @@ def _inline_subprocess(ctx, files: list[str]) -> RunnerResult:
     result's stderr, which reaches the run's log."""
     codes, dropped = list(ctx.ruff_block_rules), []
     while True:
-        timeout = inline.second_pass_timeout(ctx, TIMEOUT_S)
-        if timeout is None:
+        if inline.second_pass_timeout(ctx, TIMEOUT_S) is None:
             return inline.skipped(inline.RUFF)
         if not codes:
             return RunnerResult(inline.RUFF, ToolState.OK, raw="[]", stderr=(
                 f"aramid: this ruff knows none of {', '.join(dropped)}"))
-        result = run_subprocess(_inline_argv(codes, files), ctx.root, timeout)
-        unknown = (_UNKNOWN_SELECTOR.search(result.stderr or "")
-                   if result.returncode == 2 else None)
-        if unknown is None or unknown.group(1) not in codes:
+        result, unknown = _inline_launches(ctx, codes, files)
+        if unknown is None:
             if dropped:
                 result = replace(result, stderr=(
                     f"aramid: this ruff does not know {', '.join(dropped)}; not asked "
                     f"about them\n{result.stderr or ''}"))
             return result
-        codes.remove(unknown.group(1))
-        dropped.append(unknown.group(1))
+        # Start the pass again without the code: a launch already made asked
+        # about it too, and its hits must not be counted twice.
+        codes.remove(unknown)
+        dropped.append(unknown)
+
+
+def _inline_launches(ctx, codes: list[str], files: list[str]) -> tuple[RunnerResult, str | None]:
+    """One second pass over `files` asking about `codes`, in as many launches
+    as the line allows: its result, or the code a launch said this ruff does
+    not know. The first launch that is no verdict is the result, as it is --
+    the caller judges it -- and nothing after it is started."""
+    results = []
+    for argv in _launches(_inline_argv(codes, []), files):
+        timeout = inline.second_pass_timeout(ctx, TIMEOUT_S)
+        if timeout is None:
+            return inline.skipped(inline.RUFF), None
+        result = run_subprocess(argv, ctx.root, timeout)
+        unknown = (_UNKNOWN_SELECTOR.search(result.stderr or "")
+                   if result.returncode == 2 else None)
+        if unknown is not None and unknown.group(1) in codes:
+            return result, unknown.group(1)
+        if (result.state is not ToolState.OK or result.returncode not in _OK_RETURNCODES
+                or not _parses(result.raw)):
+            return result, None
+        results.append(result)
+    return _joined(results[0].tool, results), None
+
+
+def _parses(raw: str | None) -> bool:
+    try:
+        json.loads(raw or "[]")
+    except json.JSONDecodeError:
+        return False
+    return True
 
 
 def _key(item, root) -> tuple:

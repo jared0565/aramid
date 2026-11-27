@@ -9,13 +9,17 @@ import json
 from dataclasses import replace
 from pathlib import Path
 
+from aramid import toolpath
 from aramid.normalizer import RawFinding
 from aramid.runners import inline
-from aramid.runners.base import (RunnerResult, ToolState, run_subprocess,
-                                  scanned_line_reader)
+from aramid.runners.base import (RunnerResult, ToolState, batches, launch_line_budget,
+                                  run_subprocess, scanned_line_reader)
 from aramid.runners._util import json_or_crashed, relativize
 
 NAME = "semgrep"
+# Per launch. A file list too long for one command line is scanned in several
+# launches (see `_scan`), each with this timeout; the gate's own runner budget
+# still bounds the whole.
 TIMEOUT_S = 120.0
 
 # semgrep's documented exit codes: 0 = clean, 1 = findings reported.
@@ -132,6 +136,66 @@ def _build_argv(ctx, files: list[str] | None = None, *,
     return argv
 
 
+def _line_budget() -> int | None:
+    return launch_line_budget()
+
+
+def _launches(ctx, files: list[str], *, disable_nosem: bool = False) -> list[list[str]]:
+    """The argv of each launch that scans `files`: one where the line fits,
+    several where it does not. Windows starts no program whose command line
+    is over 32,766 characters, and this adapter hands semgrep every file in
+    the gate's set: a whole-tree gate over 937 files built a line of about
+    38,800, semgrep was never started, and the BLOCK-tier scan was degraded
+    on every `--all` run of that repo (2026-11-27). The line is measured on
+    the resolved program, as the launcher launches it."""
+    prefix = _build_argv(ctx, [], disable_nosem=disable_nosem)
+    measured = [str(toolpath.resolve(prefix[0]) or prefix[0]), *prefix[1:]]
+    return [prefix + batch for batch in batches(measured, files, _line_budget())]
+
+
+def _merged(reports: list[dict]) -> dict:
+    """Several launches' reports as one. `paths` survives only when every
+    report has it: one without is an old semgrep, which cannot say what it
+    scanned, and then neither can the whole."""
+    out = {"results": [item for data in reports for item in data.get("results") or []],
+           "errors": [err for data in reports for err in data.get("errors") or []]}
+    scanned = [(data.get("paths") or {}).get("scanned") for data in reports]
+    if all(paths is not None for paths in scanned):
+        out["paths"] = {"scanned": [p for paths in scanned for p in paths]}
+    return out
+
+
+def _scan(tool: str, ctx, files: list[str], timeout, *,
+          disable_nosem: bool = False) -> tuple[RunnerResult, bool]:
+    """semgrep over `files` under the label `tool`, and whether EVERY launch
+    wrote a report. `timeout` is asked before each launch and None stops the
+    scan (the second pass's deadline). One launch returns what semgrep wrote,
+    untouched. Several return their reports merged, exit 1 if any found
+    something; the first that is not a verdict is returned as it is, and
+    nothing after it is launched -- a scan with a hole in it vouches for
+    nothing, so there is nothing for the rest to add."""
+    outs, reported = [], True
+    for argv in _launches(ctx, files, disable_nosem=disable_nosem):
+        timeout_s = timeout()
+        if timeout_s is None:
+            return inline.skipped(tool), False
+        result = run_subprocess(argv, ctx.root, timeout_s)
+        out = json_or_crashed(tool, result, _OK_RETURNCODES, empty="{}")
+        if out.state is not ToolState.OK:
+            return out, False
+        # NO REPORT AT ALL is not an old semgrep (see `_run_own`).
+        reported = reported and bool((result.raw or "").strip())
+        outs.append(out)
+    if len(outs) == 1:
+        return outs[0], reported
+    merged = _merged([json.loads(out.raw or "{}") for out in outs])
+    return RunnerResult(
+        tool, ToolState.OK, raw=json.dumps(merged),
+        stderr="\n".join(out.stderr for out in outs if out.stderr),
+        duration_s=sum(out.duration_s or 0.0 for out in outs),
+        returncode=max(out.returncode or 0 for out in outs)), reported
+
+
 def _error_paths(data: dict) -> set[str]:
     """Files semgrep reported an error against, as semgrep spells them."""
     out = set()
@@ -196,8 +260,7 @@ def _run_own(ctx) -> RunnerResult:
         # guard: it examined nothing, and says so, so nothing resolves off it.
         return RunnerResult(NAME, ToolState.OK, raw='{"results": []}',
                             examined=frozenset())
-    result = run_subprocess(_build_argv(ctx), ctx.root, TIMEOUT_S)
-    out = json_or_crashed(NAME, result, _OK_RETURNCODES, empty="{}")
+    out, reported = _scan(NAME, ctx, list(ctx.files), lambda: TIMEOUT_S)
     # A degraded semgrep vouches for nothing (see the eslint adapter).
     if out.state is not ToolState.OK:
         return replace(out, examined=frozenset())
@@ -211,7 +274,7 @@ def _run_own(ctx) -> RunnerResult:
     # a2e101f those are BLOCK-tier findings that stop a push. An old semgrep
     # is distinguishable without a version probe: it still emits a real JSON
     # report, just without `paths`. `{}` is only ever aramid's own placeholder.
-    if not (result.raw or "").strip():
+    if not reported:
         return replace(out, examined=frozenset())
     try:
         data = json.loads(out.raw or "{}")
@@ -258,14 +321,14 @@ def _run_inline(own: RunnerResult, ctx) -> RunnerResult:
     if not files:
         return RunnerResult(inline.SEMGREP, ToolState.OK, raw='{"results": []}',
                             examined=own.examined)
-    timeout = inline.second_pass_timeout(ctx, TIMEOUT_S)
-    if timeout is None:
+    if inline.second_pass_timeout(ctx, TIMEOUT_S) is None:
         return inline.skipped(inline.SEMGREP)
-    result = run_subprocess(_build_argv(ctx, files, disable_nosem=True), ctx.root, timeout)
-    out = json_or_crashed(inline.SEMGREP, result, _OK_RETURNCODES, empty="{}")
+    out, reported = _scan(inline.SEMGREP, ctx, files,
+                          lambda: inline.second_pass_timeout(ctx, TIMEOUT_S),
+                          disable_nosem=True)
     if out.state is not ToolState.OK:
         return replace(out, examined=frozenset())
-    if not (result.raw or "").strip():
+    if not reported:
         # As for the own run: no report is not "nothing hidden".
         return replace(out, raw='{"results": []}', examined=frozenset())
     data = json.loads(out.raw or "{}")

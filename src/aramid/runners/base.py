@@ -73,6 +73,48 @@ def cmd_exe_line_budget() -> int:
     return CMD_EXE_LINE_LIMIT - cmd_line_length([comspec]) - len(" /c ")
 
 
+# The longest command line Windows starts ANY program with, in
+# `cmd_line_length`'s units. CreateProcess's documented maximum is 32,767
+# including the terminating null. Measured 2026-11-27, Windows 11, launching
+# python.exe directly: a line of 32,766 runs and 32,767 fails with
+# `[WinError 206] The filename or extension is too long`.
+CREATE_PROCESS_LINE_LIMIT = 32766
+
+# Room under that for a pip console script (`semgrep.exe`): it is a launcher
+# that starts python with the interpreter's path in front of the same line.
+_LAUNCHER_HEADROOM = 2766
+
+
+def launch_line_budget() -> int | None:
+    """The longest line a runner that batches its file list hands one direct
+    launch, or None where no limit is worth batching for (POSIX: the limit
+    is far beyond any file list a gate builds)."""
+    return CREATE_PROCESS_LINE_LIMIT - _LAUNCHER_HEADROOM if _WIN else None
+
+
+def batches(prefix: list[str], files: list[str], budget: int | None) -> list[list[str]]:
+    """`files` split, in order, so that every `prefix + batch` stays within
+    `budget` as `cmd_line_length` counts it -- the exact line CreateProcess
+    receives, quoting included, in UTF-16 units, as the launcher measures it.
+    A file that alone does not fit gets a batch of its own; the launcher
+    refuses that one, visibly. No budget is one batch."""
+    if budget is None:
+        return [files]
+    out: list[list[str]] = []
+    batch: list[str] = []
+    length = cmd_line_length(prefix)
+    for f in files:
+        cost = 1 + cmd_line_length([f])     # a space, then the quoted path
+        if batch and length + cost > budget:
+            out.append(batch)
+            batch, length = [], cmd_line_length(prefix)
+        batch.append(f)
+        length += cost
+    if batch:
+        out.append(batch)
+    return out
+
+
 def scanned_line_reader(root):
     """A cached `(path, row) -> line` reader over the bytes a runner scanned.
 
@@ -726,6 +768,14 @@ def run_subprocess(argv, cwd: Path, timeout_s: float, env=None, *,
                                         f"{line:,} characters, over the {budget:,} cmd.exe "
                                         f"allows a .cmd/.bat program ({CMD_EXE_LINE_LIMIT:,} "
                                         f"less its own `%COMSPEC% /c `)"))
+    # Not started rather than failed to start: CreateProcess refuses the line
+    # with WinError 206, which read `crashed (exit 0)` over a log of one line
+    # (a whole-tree gate handing semgrep 937 files, 2026-11-27).
+    elif _WIN and (line := cmd_line_length(argv)) > CREATE_PROCESS_LINE_LIMIT:
+        return RunnerResult(tool, ToolState.CRASHED,
+                            stderr=(f"aramid: {tool} not started: its command line is "
+                                    f"{line:,} characters, over the "
+                                    f"{CREATE_PROCESS_LINE_LIMIT:,} Windows allows any program"))
     kwargs = own_group()
     start = time.monotonic()
     # S603 justification: this is aramid's single generic subprocess

@@ -436,3 +436,96 @@ def test_the_budget_counts_what_cmd_exe_counts(tmp_path, monkeypatch):
 
     monkeypatch.setenv("COMSPEC", r"C:\Program Files\x\cmd.exe")      # 26, quoted 28
     assert base.cmd_exe_line_budget() == 8191 - 28 - 4
+
+
+def test_a_line_over_the_windows_launch_limit_is_refused_not_launched(tmp_path, monkeypatch):
+    """Windows starts no program whose command line is over 32,766 characters:
+    CreateProcess fails with WinError 206 (measured 2026-11-27: 32,766 starts,
+    32,767 does not). A whole-tree gate handed semgrep 937 files on one line
+    of about 38,800; it read `crashed (exit 0)` with a log of one line, and
+    nothing said the program had not been started. The launch is stubbed, so
+    every leg runs the comparison: a line at the limit starts, one more does
+    not, and off Windows no line is held to it."""
+    class Launched(Exception):
+        pass
+
+    launched = []
+
+    def popen(argv, *args, **kwargs):
+        launched.append(base.cmd_line_length(argv))
+        raise Launched
+
+    monkeypatch.setattr(base.subprocess, "Popen", popen)
+    program = tmp_path / "tool.exe"
+    program.write_text("", encoding="utf-8")
+    exe = str(base.toolpath.resolve(str(program)))    # what the launcher measures
+
+    def argv_of(length):
+        arg = "y" * (length - base.cmd_line_length([exe]) - 1)
+        assert base.cmd_line_length([exe, arg]) == length
+        return [str(program), arg]
+
+    assert base.CREATE_PROCESS_LINE_LIMIT == 32766
+    monkeypatch.setattr(base, "_WIN", True)
+    with pytest.raises(Launched):
+        run_subprocess(argv_of(32766), tmp_path, 30)
+    assert launched == [32766], "a line AT the limit is within it"
+
+    over = run_subprocess(argv_of(32767), tmp_path, 30)
+    assert over.state is ToolState.CRASHED
+    assert over.stderr == ("aramid: tool.exe not started: its command line is 32,767 characters, "
+                           "over the 32,766 Windows allows any program")
+    assert launched == [32766], "a line over the limit is never started"
+
+    monkeypatch.setattr(base, "_WIN", False)
+    with pytest.raises(Launched):
+        run_subprocess(argv_of(40000), tmp_path, 30)
+    assert launched == [32766, 40000], "the limit is Windows's alone"
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="CreateProcess's limit is Windows's")
+def test_the_windows_launch_limit_is_the_one_windows_enforces(tmp_path):
+    """The number above, against the real CreateProcess, on both sides."""
+    exe = str(base.toolpath.resolve(sys.executable))
+
+    def argv_of(length):
+        head = [exe, "-c", "import sys; print(len(sys.argv[1]))"]
+        arg = "y" * (length - base.cmd_line_length(head) - 1)
+        assert base.cmd_line_length([*head, arg]) == length
+        return [*head, arg]
+
+    limit = base.CREATE_PROCESS_LINE_LIMIT
+    at = run_subprocess(argv_of(limit), tmp_path, 60)
+    assert at.state is ToolState.OK and at.returncode == 0
+    assert at.raw.strip() == str(len(argv_of(limit)[-1]))
+
+    # The control: launched directly, Windows itself refuses one more.
+    with pytest.raises(OSError) as refused:
+        subprocess.run(argv_of(limit + 1), capture_output=True)
+    assert refused.value.winerror == 206
+
+    over = run_subprocess(argv_of(limit + 1), tmp_path, 60)
+    assert over.state is ToolState.CRASHED
+    assert f"{limit + 1:,} characters, over the {limit:,} Windows allows" in over.stderr
+
+
+def test_a_direct_launch_is_batched_under_the_windows_limit_with_headroom(monkeypatch):
+    """A pip console script (`semgrep.exe`) is a launcher that starts python
+    with its own path in front of the same arguments, so a runner that
+    batches leaves room under the limit. Off Windows there is no limit worth
+    batching for."""
+    monkeypatch.setattr(base, "_WIN", True)
+    assert base.launch_line_budget() == 30000
+    monkeypatch.setattr(base, "_WIN", False)
+    assert base.launch_line_budget() is None
+
+
+def test_batches_split_a_file_list_to_fit_the_line_budget():
+    prefix = ["C:/tools/semgrep.exe", "--json", "--"]
+    files = ["a b.py", "c.py", "d.py"]
+    exact = base.cmd_line_length([*prefix, *files])
+    assert base.batches(prefix, files, None) == [files]
+    assert base.batches(prefix, files, exact) == [files]
+    assert base.batches(prefix, files, exact - 1) == [files[:2], files[2:]]
+    alone = base.batches(prefix, files, base.cmd_line_length([*prefix, "a b.py"]) - 1)
+    assert alone[0] == ["a b.py"], "a file that does not fit alone still gets its own launch"

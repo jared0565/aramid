@@ -337,3 +337,218 @@ def test_a_code_this_ruff_does_not_know_is_dropped_not_fatal(tmp_path, monkeypat
     assert retry[0][retry[0].index("--select") + 1] == "S105"
     assert "S9999" in second.stderr
     assert [(f.tool, f.line) for f in ruff.parse(result, ctx)] == [(inline.RUFF, 1)]
+
+
+# --- a file list longer than one command line -------------------------------
+#
+# Windows starts no program whose command line is over 32,766 characters (see
+# the semgrep adapter, where a whole-tree gate met it first). ruff is handed
+# every Python file in the gate's set on one line, in all three invocations.
+
+from aramid.runners.base import cmd_line_length  # noqa: E402
+
+_EXE = Path("C:/tools/ruff.exe")
+
+
+class _BatchedRuff:
+    """Answers each launch from the files it was handed: `hits` are files the
+    own check reports, `hidden` files only the second pass reports, and
+    `fail(kind, handed)` makes a launch exit 2 with nothing written."""
+
+    def __init__(self, root, hits=(), hidden=(), fail=lambda kind, handed: False):
+        self.root, self.hits, self.hidden, self.fail = root, hits, hidden, fail
+        self.calls = []
+
+    @staticmethod
+    def kind(argv):
+        return ("probe" if "--show-files" in argv else
+                "second" if "--isolated" in argv else "own")
+
+    def __call__(self, argv, cwd, timeout_s, env=None):
+        self.calls.append(list(argv))
+        kind, handed = self.kind(argv), argv[argv.index("--") + 1:]
+        if self.fail(kind, handed):
+            return RunnerResult("ruff", ToolState.OK, raw="", stderr="boom", returncode=2)
+        if kind == "probe":
+            return RunnerResult("ruff", ToolState.OK, returncode=0,
+                                raw="\n".join(str(self.root / f) for f in handed))
+        hit = self.hits if kind == "own" else (*self.hits, *self.hidden)
+        items = [_item(self.root / f, 1) for f in handed if f in hit]
+        return RunnerResult("ruff", ToolState.OK, raw=json.dumps(items),
+                            returncode=1 if items else 0, duration_s=2.0)
+
+    def handed(self, kind):
+        return [argv[argv.index("--") + 1:] for argv in self.calls if self.kind(argv) == kind]
+
+
+def _batched(tmp_path, monkeypatch, fake, files, **kw):
+    """A budget that fits two of `files` on the own check's line (the files
+    are the same length), measured on the resolved program."""
+    monkeypatch.setattr(ruff.toolpath, "resolve", lambda name: _EXE)
+    monkeypatch.setattr(ruff, "run_subprocess", fake)
+    ctx = RunContext(root=tmp_path, files=[*files, "README.md"], **kw)
+    budget = cmd_line_length([str(_EXE), *ruff._build_argv(ctx, files[:2])[1:]])
+    monkeypatch.setattr(ruff, "_line_budget", lambda: budget)
+    return ctx, budget
+
+
+def _every_file_once(batches, files):
+    return [f for batch in batches for f in batch] == files
+
+
+def test_a_long_file_list_is_linted_in_launches_that_fit_the_line(tmp_path, monkeypatch):
+    files = [f"src/m{i}.py" for i in range(5)]
+    fake = _BatchedRuff(tmp_path, hits=("src/m0.py", "src/m4.py"))
+    ctx, budget = _batched(tmp_path, monkeypatch, fake, files)
+
+    result = ruff.run(ctx)
+
+    assert fake.handed("own") == [files[:2], files[2:4], files[4:]], "every file once, in order"
+    assert len(fake.handed("probe")) > 1 and _every_file_once(fake.handed("probe"), files)
+    for argv in fake.calls:
+        assert cmd_line_length([str(_EXE), *argv[1:]]) <= budget
+    own = [argv for argv in fake.calls if fake.kind(argv) == "own"]
+    assert all(argv[:argv.index("--") + 1] == ruff._build_argv(ctx, []) for argv in own)
+    assert (result.state, result.returncode, result.duration_s) == (ToolState.OK, 1, 6.0)
+    assert result.examined == frozenset(files)
+    assert [(f.file, f.line) for f in ruff.parse(result, ctx)] == [
+        ("src/m0.py", 1), ("src/m4.py", 1)]
+
+
+def test_a_list_that_fits_one_line_is_one_launch_with_ruffs_own_report(tmp_path, monkeypatch):
+    files = ["src/m0.py", "src/m1.py"]
+    fake = _BatchedRuff(tmp_path, hits=("src/m0.py",))
+    ctx, _ = _batched(tmp_path, monkeypatch, fake, files)
+
+    result = ruff.run(ctx)
+
+    assert fake.handed("own") == [files] and fake.handed("probe") == [files]
+    assert result.raw == json.dumps([_item(tmp_path / "src/m0.py", 1)]), "untouched"
+
+
+def test_no_budget_is_one_launch_however_long_the_list(tmp_path, monkeypatch):
+    files = [f"src/m{i}.py" for i in range(40)]
+    fake = _BatchedRuff(tmp_path)
+    ctx, _ = _batched(tmp_path, monkeypatch, fake, files)
+    monkeypatch.setattr(ruff, "_line_budget", lambda: None)
+
+    ruff.run(ctx)
+
+    assert fake.handed("own") == [files] and fake.handed("probe") == [files]
+
+
+def test_one_degraded_launch_degrades_the_whole_lint(tmp_path, monkeypatch):
+    files = [f"src/m{i}.py" for i in range(5)]
+    fake = _BatchedRuff(tmp_path, hits=("src/m0.py",),
+                        fail=lambda kind, handed: kind == "own" and "src/m2.py" in handed)
+    ctx, _ = _batched(tmp_path, monkeypatch, fake, files)
+
+    result = ruff.run(ctx)
+
+    assert (result.tool, result.state, result.returncode) == ("ruff", ToolState.CRASHED, 2)
+    assert ruff.parse(result, ctx) == []
+    assert fake.handed("own") == [files[:2], files[2:4]], "nothing is launched after the failure"
+    assert fake.handed("probe") == []
+
+
+def test_one_failed_probe_launch_vouches_for_nothing(tmp_path, monkeypatch):
+    """What ruff examined is proved by every probe launch or by none: half a
+    proof would resolve findings in files nothing vouched for."""
+    files = [f"src/m{i}.py" for i in range(5)]
+    fake = _BatchedRuff(tmp_path, hits=("src/m0.py",),
+                        fail=lambda kind, handed: kind == "probe" and "src/m4.py" in handed)
+    ctx, _ = _batched(tmp_path, monkeypatch, fake, files)
+
+    result = ruff.run(ctx)
+
+    assert result.state is ToolState.OK
+    assert result.examined == frozenset()
+    assert [(f.file, f.line) for f in ruff.parse(result, ctx)] == [("src/m0.py", 1)]
+
+
+def test_the_second_pass_is_launched_in_lines_that_fit_too(tmp_path, monkeypatch):
+    files = [f"src/m{i}.py" for i in range(5)]
+    fake = _BatchedRuff(tmp_path, hits=("src/m0.py",), hidden=("src/m1.py", "src/m4.py"))
+    ctx, budget = _batched(tmp_path, monkeypatch, fake, files, inline_pass=True,
+                           ruff_block_rules=("S105", "S106"))
+
+    result = ruff.run(ctx)
+
+    assert len(fake.handed("second")) > 1 and _every_file_once(fake.handed("second"), files)
+    for argv in fake.calls:
+        assert cmd_line_length([str(_EXE), *argv[1:]]) <= budget
+    own, second = result.sub_results
+    assert (second.tool, second.state, second.examined) == (
+        inline.RUFF, ToolState.OK, frozenset(files))
+    assert [(f.tool, f.file) for f in ruff.parse(result, ctx)] == [
+        ("ruff", "src/m0.py"), (inline.RUFF, "src/m1.py"), (inline.RUFF, "src/m4.py")]
+
+
+def test_one_degraded_launch_degrades_the_second_pass_under_its_label_only(tmp_path, monkeypatch):
+    files = [f"src/m{i}.py" for i in range(5)]
+    fake = _BatchedRuff(tmp_path, hidden=("src/m1.py",),
+                        fail=lambda kind, handed: kind == "second" and "src/m4.py" in handed)
+    ctx, _ = _batched(tmp_path, monkeypatch, fake, files, inline_pass=True,
+                      ruff_block_rules=("S105",))
+
+    own, second = ruff.run(ctx).sub_results
+
+    assert (own.tool, own.state) == ("ruff", ToolState.OK)
+    assert (second.tool, second.state, second.examined) == (
+        inline.RUFF, ToolState.CRASHED, frozenset())
+
+
+def test_a_code_a_later_launch_rejects_is_dropped_from_every_launch(tmp_path, monkeypatch):
+    """The unknown-selector retry starts the pass again without the code, so
+    no launch's hits are counted twice and none keeps the dropped code."""
+    files = [f"src/m{i}.py" for i in range(5)]
+    inner = _BatchedRuff(tmp_path, hidden=("src/m0.py", "src/m4.py"))
+
+    def picky(argv, cwd, timeout_s, env=None):
+        handed = argv[argv.index("--") + 1:]
+        if "--isolated" in argv and "S9999" in argv[argv.index("--select") + 1] \
+                and "src/m4.py" in handed:
+            inner.calls.append(list(argv))
+            return RunnerResult("ruff", ToolState.OK, raw="", returncode=2, stderr=(
+                "error: Unknown rule selector `S9999` in `select` from the CLI"))
+        return inner(argv, cwd, timeout_s, env)
+
+    ctx, _ = _batched(tmp_path, monkeypatch, picky, files, inline_pass=True,
+                      ruff_block_rules=("S105", "S9999"))
+
+    result = ruff.run(ctx)
+
+    own, second = result.sub_results
+    assert second.state is ToolState.OK and "S9999" in second.stderr
+    assert [(f.tool, f.file) for f in ruff.parse(result, ctx)] == [
+        (inline.RUFF, "src/m0.py"), (inline.RUFF, "src/m4.py")]
+
+
+def test_ruff_batches_under_the_launchers_budget(monkeypatch):
+    from aramid.runners import base
+    monkeypatch.setattr(base, "_WIN", True)
+    assert ruff._line_budget() == 30000
+    monkeypatch.setattr(base, "_WIN", False)
+    assert ruff._line_budget() is None
+
+
+def test_a_second_pass_launch_that_wrote_no_json_is_the_one_reported(tmp_path, monkeypatch):
+    """An exit 0 over output that is not a report is not a verdict either,
+    and it is that launch the label's log holds, not a merge of the rest."""
+    files = [f"src/m{i}.py" for i in range(5)]
+    inner = _BatchedRuff(tmp_path, hidden=("src/m0.py",))
+
+    def garbled(argv, cwd, timeout_s, env=None):
+        if "--isolated" in argv and "src/m4.py" in argv:
+            return RunnerResult("ruff", ToolState.OK, raw="warning: not json", returncode=0)
+        return inner(argv, cwd, timeout_s, env)
+
+    ctx, _ = _batched(tmp_path, monkeypatch, garbled, files, inline_pass=True,
+                      ruff_block_rules=("S105",))
+
+    own, second = ruff.run(ctx).sub_results
+
+    assert own.state is ToolState.OK
+    assert (second.tool, second.state, second.raw) == (
+        inline.RUFF, ToolState.CRASHED, "warning: not json")
+    assert second.examined == frozenset()

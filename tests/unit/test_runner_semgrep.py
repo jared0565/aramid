@@ -706,3 +706,203 @@ def test_a_second_pass_whose_kill_hangs_never_costs_semgrep_its_own_result(
     assert own.state is ToolState.OK
     assert (second.tool, second.state) == (inline.SEMGREP, ToolState.TIMEOUT)
     assert [f.tool for f in semgrep.parse(result, ctx)] == ["semgrep"]
+
+
+# --- a file list longer than one command line -------------------------------
+#
+# Windows starts no program whose command line is over 32,766 characters. A
+# whole-tree gate on a 937-file repo handed semgrep about 38,800 on one line:
+# it was never started, the gate read `semgrep (crashed (exit 0))`, and the
+# BLOCK-tier scanner was degraded on every `--all` run there (2026-11-27).
+
+from aramid.runners.base import cmd_line_length  # noqa: E402
+
+_EXE = Path("C:/tools/semgrep.exe")
+
+
+class _BatchedSemgrep:
+    """Answers each launch from the files it was handed. `report` gives the
+    launch's stdout, or a RunnerResult, from (files handed, argv)."""
+
+    def __init__(self, report):
+        self.report, self.calls = report, []
+
+    def __call__(self, argv, cwd, timeout_s, env=None):
+        self.calls.append(list(argv))
+        answer = self.report(argv[argv.index("--") + 1:], argv)
+        if isinstance(answer, RunnerResult):
+            return answer
+        return RunnerResult("semgrep", ToolState.OK, raw=answer, returncode=1, duration_s=2.0)
+
+    def handed(self, second=False):
+        return [argv[argv.index("--") + 1:] for argv in self.calls
+                if ("--disable-nosem" in argv) is second]
+
+
+def _batched(tmp_path, monkeypatch, fake, files, fit=2, **kw):
+    """A budget that fits `fit` of `files` on one line (the files are the same
+    length), measured as the launcher measures: on the resolved program. With
+    the inline pass on it is the second pass's line that fits `fit`; its
+    prefix is the longer one, so the own run's launches fit as well."""
+    monkeypatch.setattr(semgrep.toolpath, "resolve", lambda name: _EXE)
+    monkeypatch.setattr(semgrep, "run_subprocess", fake)
+    ctx = RunContext(root=tmp_path, files=list(files), **kw)
+    prefix = [str(_EXE), *semgrep._build_argv(
+        ctx, [], disable_nosem=bool(kw.get("inline_pass")))[1:]]
+    budget = cmd_line_length([*prefix, *files[:fit]])
+    monkeypatch.setattr(semgrep, "_line_budget", lambda: budget)
+    return ctx, budget
+
+
+def test_a_long_file_list_is_scanned_in_launches_that_fit_the_line(tmp_path, monkeypatch):
+    files = [f"src/m{i}.py" for i in range(5)]
+    fake = _BatchedSemgrep(lambda handed, argv: _sem_report(
+        *[_sem_item(3, path=f) for f in handed if f in ("src/m0.py", "src/m4.py")],
+        scanned=handed))
+    ctx, budget = _batched(tmp_path, monkeypatch, fake, files)
+
+    result = semgrep.run(ctx)
+
+    assert fake.handed() == [files[:2], files[2:4], files[4:]], "every file once, in order"
+    for argv in fake.calls:
+        assert cmd_line_length([str(_EXE), *argv[1:]]) <= budget
+        assert argv[:argv.index("--") + 1] == semgrep._build_argv(ctx, [])
+    assert (result.state, result.returncode, result.duration_s) == (ToolState.OK, 1, 6.0)
+    assert result.examined == frozenset(files)
+    assert [(f.file, f.line) for f in semgrep.parse(result, ctx)] == [
+        ("src/m0.py", 3), ("src/m4.py", 3)]
+
+
+def test_a_list_that_fits_one_line_is_one_launch_with_semgreps_own_report(tmp_path, monkeypatch):
+    files = ["src/m0.py", "src/m1.py"]
+    raw = _sem_report(_sem_item(3, path="src/m0.py"), scanned=files)
+    fake = _BatchedSemgrep(lambda handed, argv: raw)
+    ctx, _ = _batched(tmp_path, monkeypatch, fake, files)
+
+    result = semgrep.run(ctx)
+
+    assert fake.handed() == [files]
+    assert result.raw == raw, "untouched: what semgrep wrote"
+
+
+def test_no_budget_is_one_launch_however_long_the_list(tmp_path, monkeypatch):
+    files = [f"src/m{i}.py" for i in range(40)]
+    fake = _BatchedSemgrep(lambda handed, argv: _sem_report(scanned=handed))
+    ctx, _ = _batched(tmp_path, monkeypatch, fake, files)
+    monkeypatch.setattr(semgrep, "_line_budget", lambda: None)
+
+    semgrep.run(ctx)
+
+    assert fake.handed() == [files]
+
+
+def test_one_degraded_launch_degrades_the_whole_scan(tmp_path, monkeypatch):
+    """A launch that did not report vouches for nothing, and neither do the
+    launches beside it: the label is one verdict over one file set."""
+    files = [f"src/m{i}.py" for i in range(5)]
+    fake = _BatchedSemgrep(lambda handed, argv: (
+        RunnerResult("semgrep", ToolState.OK, raw="", stderr="boom", returncode=2)
+        if "src/m2.py" in handed else _sem_report(_sem_item(3, path=handed[0]), scanned=handed)))
+    ctx, _ = _batched(tmp_path, monkeypatch, fake, files)
+
+    result = semgrep.run(ctx)
+
+    assert (result.tool, result.state, result.returncode) == ("semgrep", ToolState.CRASHED, 2)
+    assert result.examined == frozenset()
+    assert semgrep.parse(result, ctx) == []
+    assert fake.handed() == [files[:2], files[2:4]], "nothing is launched after the failure"
+
+
+def test_a_launch_with_no_report_keeps_the_others_findings_and_vouches_for_nothing(
+        tmp_path, monkeypatch):
+    files = [f"src/m{i}.py" for i in range(4)]
+    fake = _BatchedSemgrep(lambda handed, argv: (
+        "" if "src/m2.py" in handed else _sem_report(_sem_item(3, path=handed[0]), scanned=handed)))
+    ctx, _ = _batched(tmp_path, monkeypatch, fake, files)
+
+    result = semgrep.run(ctx)
+
+    assert result.state is ToolState.OK
+    assert result.examined == frozenset(), "no report is not an old semgrep"
+    assert [(f.file, f.line) for f in semgrep.parse(result, ctx)] == [("src/m0.py", 3)]
+
+
+def test_an_old_semgrep_without_paths_cannot_report_across_launches(tmp_path, monkeypatch):
+    files = [f"src/m{i}.py" for i in range(4)]
+    fake = _BatchedSemgrep(lambda handed, argv: (
+        json.dumps({"results": [], "errors": []}) if "src/m2.py" in handed
+        else _sem_report(scanned=handed)))
+    ctx, _ = _batched(tmp_path, monkeypatch, fake, files)
+
+    assert semgrep.run(ctx).examined is None
+
+
+def test_a_file_one_launch_could_not_parse_is_not_vouched_for(tmp_path, monkeypatch):
+    files = ["src/m0.py", "src/m1.py", "src/syntaxerr.py", "src/m3.py"]
+    fake = _BatchedSemgrep(lambda handed, argv: _sem_report(
+        scanned=handed, errors=[_SYNTAX_ERROR] if "src/syntaxerr.py" in handed else ()))
+    monkeypatch.setattr(semgrep.toolpath, "resolve", lambda name: _EXE)
+    monkeypatch.setattr(semgrep, "run_subprocess", fake)
+    ctx = RunContext(root=tmp_path, files=files)
+    prefix = [str(_EXE), *semgrep._build_argv(ctx, [])[1:]]
+    monkeypatch.setattr(semgrep, "_line_budget",
+                        lambda: cmd_line_length([*prefix, *files[:3]]) - 1)
+
+    result = semgrep.run(ctx)
+
+    assert len(fake.handed()) > 1
+    assert result.examined == frozenset({"src/m0.py", "src/m1.py", "src/m3.py"})
+
+
+def _nosem_tree(tmp_path, files):
+    (tmp_path / "src").mkdir()
+    for f in files:
+        (tmp_path / f).write_text("x = 1  # nosemgrep\n", encoding="utf-8")
+
+
+def test_the_second_pass_is_launched_in_lines_that_fit_too(tmp_path, monkeypatch):
+    files = [f"src/m{i}.py" for i in range(5)]
+    _nosem_tree(tmp_path, files)
+
+    def report(handed, argv):
+        hidden = [_sem_item(1, path=f) for f in handed if f in ("src/m1.py", "src/m4.py")]
+        return _sem_report(*(hidden if "--disable-nosem" in argv else ()), scanned=handed)
+
+    fake = _BatchedSemgrep(report)
+    ctx, budget = _batched(tmp_path, monkeypatch, fake, files, inline_pass=True)
+
+    result = semgrep.run(ctx)
+
+    assert fake.handed(second=True) == [files[:2], files[2:4], files[4:]]
+    for argv in fake.calls:
+        assert cmd_line_length([str(_EXE), *argv[1:]]) <= budget
+    own, second = result.sub_results
+    assert (second.tool, second.state, second.examined) == (
+        inline.SEMGREP, ToolState.OK, frozenset(files))
+    assert [(f.tool, f.file) for f in semgrep.parse(result, ctx)] == [
+        (inline.SEMGREP, "src/m1.py"), (inline.SEMGREP, "src/m4.py")]
+
+
+def test_one_degraded_launch_degrades_the_second_pass_under_its_label_only(tmp_path, monkeypatch):
+    files = [f"src/m{i}.py" for i in range(4)]
+    _nosem_tree(tmp_path, files)
+
+    def report(handed, argv):
+        if "--disable-nosem" in argv and "src/m2.py" in handed:
+            return RunnerResult("semgrep", ToolState.OK, raw="", returncode=2)
+        return _sem_report(scanned=handed)
+
+    ctx, _ = _batched(tmp_path, monkeypatch, _BatchedSemgrep(report), files, inline_pass=True)
+
+    own, second = semgrep.run(ctx).sub_results
+    assert (own.tool, own.state) == ("semgrep", ToolState.OK)
+    assert (second.tool, second.state, second.examined) == (
+        inline.SEMGREP, ToolState.CRASHED, frozenset())
+
+
+def test_semgrep_batches_under_the_launchers_budget(monkeypatch):
+    from aramid.runners import base
+    monkeypatch.setattr(base, "_WIN", True)
+    assert semgrep._line_budget() == 30000
+    monkeypatch.setattr(base, "_WIN", False)
+    assert semgrep._line_budget() is None

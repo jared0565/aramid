@@ -11,7 +11,7 @@ from dataclasses import replace
 from pathlib import Path
 
 from aramid.normalizer import RawFinding
-from aramid.runners.base import (CMD_EXE_LINE_LIMIT, RunnerResult, ToolState, cmd_line_length,
+from aramid.runners.base import (CMD_EXE_LINE_LIMIT, RunnerResult, ToolState, batches,
                                  run_subprocess)
 from aramid.runners._util import json_or_crashed, relativize
 
@@ -68,27 +68,8 @@ def _line_budget(binp: Path) -> int | None:
     return None
 
 
-def _batches(prefix: list[str], files: list[str], budget: int | None) -> list[list[str]]:
-    """`files` split, in order, so that every `prefix + batch` stays within
-    `budget` as `base.cmd_line_length` counts it -- the exact line
-    CreateProcess receives, quoting included, in the UTF-16 units cmd.exe
-    counts, as the launcher measures it. A file that alone does not fit gets
-    a batch of its own; the launcher refuses that one, visibly."""
-    if budget is None:
-        return [files]
-    out: list[list[str]] = []
-    batch: list[str] = []
-    length = cmd_line_length(prefix)
-    for f in files:
-        cost = 1 + cmd_line_length([f])     # a space, then the quoted path
-        if batch and length + cost > budget:
-            out.append(batch)
-            batch, length = [], cmd_line_length(prefix)
-        batch.append(f)
-        length += cost
-    if batch:
-        out.append(batch)
-    return out
+# The split is the launcher's own, shared with every runner that batches.
+_batches = batches
 
 
 def _reported_an_error(data) -> bool:

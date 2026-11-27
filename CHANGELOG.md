@@ -12,6 +12,22 @@ to publish a tag that disagrees with it.
 
 ## [Unreleased]
 
+- Fixed: on Windows, a whole-tree gate (`--all`, `--gate all`, `rebaseline`)
+  over a large repo could not run semgrep at all. aramid hands semgrep every
+  file in the gate's set on one command line, and Windows starts no program
+  whose line is over 32,766 characters: a 937-file repo built one of about
+  38,800, semgrep was never started, and the gate read `semgrep (crashed
+  (exit 0))` with the BLOCK-tier scan degraded. semgrep and ruff now scan a
+  list that long in several launches and report once, as eslint already did.
+  A push that carries a few files was never affected.
+
+- A program whose command line is over that limit is now refused before it
+  is launched, and the tool's log says so: `not started: its command line is
+  N characters, over the 32,766 Windows allows any program`. Before, the log
+  held only `[WinError 206] The filename or extension is too long`. mypy
+  still gets its Python files on one line, because it checks them as one
+  program; a list that long reads as this refusal.
+
 ## [0.20.23] — 2026-11-26
 
 No dependency changed, and nothing `aramid init` writes changed. Anything
