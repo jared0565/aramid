@@ -462,3 +462,18 @@ def test_the_park_notice_of_a_repo_that_never_gated_claims_no_green_row(tmp_path
         "not count toward 1.0 readiness. The drain still walks it. Its first gate run counts "
         "it and restarts the streak. To take it out for good: `aramid fleet deregister b`. "
         "This notice clears itself when the repo gates.")
+
+
+def test_compaction_keeps_the_last_row_of_a_repo_however_old():
+    # Breaks if compaction deletes a quiet repo's only evidence (drain review
+    # 362c0c): a red repo would then read as "no rows" and could park.
+    old_red = _row(R_B, 200, red=("resolvers_ok",), run_id="b-last")
+    older = _row(R_B, 220, run_id="b-older")
+    _seed(_entries_rows([older, old_red, _row(R_A, 1, armed=ARMED)]))
+    v = _judge()
+    kept = [json.loads(ln)["run_id"] for ln in
+            fleet.health_path().read_text(encoding="utf-8").splitlines()]
+    assert "b-last" in kept and "b-older" not in kept
+    key_b = next(k for k, r in v["repos"].items() if r["name"] == "b")
+    assert v["repos"][key_b]["green"] is False and v["repos"][key_b]["parked"] is False
+    assert _judge(LATER)["repos"][key_b]["rows"] == 1      # still there after the rewrite

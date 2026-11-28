@@ -243,3 +243,52 @@ def test_a_parked_repo_without_a_date_still_renders():
     assert fleet.readiness_line(v).endswith("versions 2/2; parked: d")
     assert "        (parked -- its next gate run restarts the streak)" in fleet.render_report(
         v, P, now=NOW).splitlines()
+
+
+# --- the 180-day row window never takes a repo's last row (drain review 362c0c) --
+
+def test_a_red_row_older_than_the_row_window_still_holds_its_repo_in_the_count():
+    # Breaks if the 180-day cutoff drops a repo's only row: red would then read
+    # as "no rows" and park once the registration is older than the window.
+    rows = _abc() + [_row(R_D, 200, red=("resolvers_ok",))]
+    v = fleet.judge(rows, REG4, P, NOW, registered_at={R_D: _at(300)})
+    d = v["repos"][R_D]
+    assert (d["rows"], d["parked"], d["stale"], d["green"]) == (1, False, True, False)
+    assert v["verdict"] == "not-ready"
+    assert v["reasons"] == ["d: resolvers_ok", "stale: d (200.0d) -- window 7d"]
+    assert v["fleet"]["active_repos"] == ["a", "b", "c", "d"]
+
+
+def test_a_green_row_older_than_the_row_window_keeps_its_repo_parked_by_that_row():
+    # Breaks if a long-parked repo falls back to "no rows" and blocks for ever
+    # when the registry gives no readable time.
+    rows = _abc() + [_row(R_D, 200)]
+    v = fleet.judge(rows, REG4, P, NOW)
+    d = v["repos"][R_D]
+    assert (d["rows"], d["parked"], d["parked_since"]) == (1, True, _at(193)[:19] + "+00:00")
+    assert v["verdict"] == "ready"
+
+
+def test_only_the_newest_row_survives_the_row_window():
+    # Breaks if every old row of a quiet repo is kept, not just its last.
+    rows = _abc() + [_row(R_D, 220, red=("resolvers_ok",)), _row(R_D, 200)]
+    assert fleet.judge(rows, REG4, P, NOW)["repos"][R_D]["rows"] == 1
+
+
+# --- boundaries the drain's mutants survived (846e3b, 857efa) ----------------
+
+def test_a_one_day_window_is_a_window():
+    # Breaks if `max_row_age_days > 0` becomes `> 1`: a 1-day window would park nothing.
+    one = fleet.Policy(max_row_age_days=1)
+    rows = sum((_weekly(k, 20, 0, ARMED) for k in (R_A, R_B, R_C)), []) + [_row(R_D, 2)]
+    v = fleet.judge(rows, REG4, one, NOW)
+    assert v["repos"][R_D]["parked"] is True
+    assert v["repos"][R_D]["parked_since"] == "2026-09-19T12:00:00+00:00"
+
+
+def test_a_repo_registered_exactly_the_window_ago_is_still_waiting():
+    # Breaks if `<=` becomes `<` in the waiting rule: A1's boundary, for registrations.
+    v = fleet.judge(_abc(), REG4, P, NOW, registered_at={R_D: _at(7)})
+    assert v["reasons"] == ["no rows: d"] and v["repos"][R_D]["parked"] is False
+    v = fleet.judge(_abc(), REG4, P, NOW, registered_at={R_D: _at(7.01)})
+    assert v["repos"][R_D]["parked"] is True

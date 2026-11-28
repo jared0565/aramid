@@ -415,7 +415,7 @@ def judge(rows: list[dict], registered: dict[str, str], policy: Policy, now: str
     live = []
     for r in rows:
         at = _parse(r.get("at"))
-        if at is None or at < cutoff:
+        if at is None:
             continue
         if r.get("repo") not in registered:
             # Interop round 343: a row from an unregistered linked worktree
@@ -427,6 +427,13 @@ def judge(rows: list[dict], registered: dict[str, str], policy: Policy, now: str
                  "from_worktree": r.get("name") or r.get("repo")}
         live.append((at, r))
     live.sort(key=lambda p: p[0])
+    # Rows older than ROW_WINDOW_DAYS are not judged -- except a repo's
+    # newest row, however old. Without it a repo silent that long reads as
+    # "no rows": a red one would then park (A2 forbids it; drain review
+    # 362c0c, 2026-11-28) and a green one would block or change its
+    # `parked_since`. `_maybe_compact` keeps the same row in the store.
+    newest_at = {r["repo"]: at for at, r in live}
+    live = [(at, r) for at, r in live if at >= cutoff or at == newest_at[r["repo"]]]
 
     latest: dict[str, dict] = {}
 
@@ -774,6 +781,12 @@ def _post_defects(rows: list[dict], registered: dict[str, str], policy: Policy,
                 notices.clear(n["id"], reason="defect absent from latest row", now=now)
 
 
+def _row_owners(row: dict) -> list[str]:
+    """The registry keys a stored row can count for: its own repo and, for a
+    row written in a linked worktree, the main checkout (`judge`)."""
+    return [k for k in (row.get("repo"), row.get("worktree_of")) if isinstance(k, str)]
+
+
 def _maybe_compact(previous: dict | None, now: str) -> str | None:
     """Rewrite the store without rows older than ROW_WINDOW_DAYS, at most
     once per COMPACT_EVERY_H, tmp + replace, under the drain lock the caller
@@ -787,7 +800,11 @@ def _maybe_compact(previous: dict | None, now: str) -> str | None:
     outright rather than merely leave it unjudged. A line this build cannot
     read -- it fails to parse, its schema is newer, or its `at` is missing
     or unparsable -- is always kept verbatim; only a row this build CAN
-    read, and whose `at` is older than the window, is dropped."""
+    read, and whose `at` is older than the window, is dropped.
+
+    One old row per repo is kept as well: its newest, by `repo` and by
+    `worktree_of`, since `judge` reads that row whatever its age (a repo's
+    last evidence must not expire into "no rows"; drain review 362c0c)."""
     last = (previous or {}).get("compacted_at")
     now_dt, last_dt = _parse(now), _parse(last) if last else None
     if last_dt is not None and now_dt is not None and now_dt - last_dt < timedelta(hours=COMPACT_EVERY_H):
@@ -801,23 +818,33 @@ def _maybe_compact(previous: dict | None, now: str) -> str | None:
         return last
     keep_lines: list[str] = []
     dropped = 0
+    parsed: list[tuple[str, dict | None, datetime | None]] = []
+    newest: dict[str, datetime] = {}
     for line in text.splitlines():
         if not line.strip():
             continue
         try:
             obj = json.loads(line)
         except json.JSONDecodeError:
-            keep_lines.append(line)
+            parsed.append((line, None, None))
             continue
         version = obj.get("schema_version") if isinstance(obj, dict) else None
         if not isinstance(version, int) or isinstance(version, bool) or version > SCHEMA_VERSION:
-            keep_lines.append(line)          # unreadable shape: age cannot be judged
+            parsed.append((line, None, None))    # unreadable shape: age cannot be judged
             continue
-        at_dt = _parse(obj.get("at")) if isinstance(obj, dict) else None
-        if at_dt is None or at_dt >= cutoff:
+        at_dt = _parse(obj.get("at"))
+        parsed.append((line, obj, at_dt))
+        if at_dt is not None:
+            for owner in _row_owners(obj):
+                if owner not in newest or at_dt > newest[owner]:
+                    newest[owner] = at_dt
+    for line, obj, at_dt in parsed:
+        if obj is None or at_dt is None or at_dt >= cutoff:
             keep_lines.append(line)
-            continue
-        dropped += 1
+        elif any(newest.get(owner) == at_dt for owner in _row_owners(obj)):
+            keep_lines.append(line)              # a repo's last row never expires
+        else:
+            dropped += 1
     if dropped or not p.exists():
         try:
             tmp = p.with_name(p.name + ".tmp")
