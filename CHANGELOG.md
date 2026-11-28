@@ -12,6 +12,8 @@ to publish a tag that disagrees with it.
 
 ## [Unreleased]
 
+## [0.21.0] — 2026-11-28
+
 Nothing here touches the compatibility surface (user guide section 13): the
 fleet verdict, the readiness line and `fleet.toml` are outside it. What
 changes for an existing machine is how `aramid fleet` reads.
@@ -43,6 +45,11 @@ changes for an existing machine is how `aramid fleet` reads.
 - Added: a `repo-parked` notice when a repo parks. It clears itself when the
   repo gates again or is deregistered. `readiness-reached` names the active
   repos and lists the parked ones separately.
+- Changed: the daily clean-up of fleet rows keeps each repo's newest row
+  (and each worktree's) however old it is, and the judgement reads it.
+  Before, a row older than 180 days was dropped, so a repo silent that
+  long looked like one that had never run a gate. With parking, a repo
+  whose last row was red could then have parked.
 
 ## [0.20.24] — 2026-11-27
 
@@ -7494,7 +7501,8 @@ Stated plainly because each one changes how you should deploy this:
 - **PyPI publishing is not set up.** Install from a GitHub Release artifact or
   from git; `pip install aramid` does not work.
 
-[Unreleased]: https://github.com/jared0565/aramid/compare/v0.20.24...HEAD
+[Unreleased]: https://github.com/jared0565/aramid/compare/v0.21.0...HEAD
+[0.21.0]: https://github.com/jared0565/aramid/releases/tag/v0.21.0
 [0.20.24]: https://github.com/jared0565/aramid/releases/tag/v0.20.24
 [0.20.23]: https://github.com/jared0565/aramid/releases/tag/v0.20.23
 [0.20.22]: https://github.com/jared0565/aramid/releases/tag/v0.20.22

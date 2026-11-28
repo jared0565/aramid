@@ -41,8 +41,8 @@ def test_the_guide_and_the_gate_describe_parked_repos():
                    "its next gate run restarts the streak"):
         assert needle in guide, needle
     assert "every active registered repo" in _read("RELEASING.md")
-    unreleased = _read("CHANGELOG.md").split("## [Unreleased]", 1)[1].split("\n## [", 1)[0]
-    assert "parked" in unreleased and "min_active_repos" in unreleased
+    entry = _read("CHANGELOG.md").split("## [0.21.0]", 1)[1].split("\n## [", 1)[0]
+    assert "parked" in entry and "min_active_repos" in entry
 
 
 def test_changelog_records_the_feature():
