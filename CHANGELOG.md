@@ -12,6 +12,12 @@ to publish a tag that disagrees with it.
 
 ## [Unreleased]
 
+- Fixed: the daily clean-up of fleet rows keeps a main checkout's own
+  newest row when a registered linked worktree of it has a newer one.
+  In 0.21.0 the worktree's row stood in for it, so with both silent for
+  more than 180 days the main checkout's last row was deleted and it
+  read as a repo that had never run a gate.
+
 ## [0.21.0] — 2026-11-28
 
 Nothing here touches the compatibility surface (user guide section 13): the

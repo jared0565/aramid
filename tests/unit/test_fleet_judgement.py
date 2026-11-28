@@ -477,3 +477,22 @@ def test_compaction_keeps_the_last_row_of_a_repo_however_old():
     key_b = next(k for k, r in v["repos"].items() if r["name"] == "b")
     assert v["repos"][key_b]["green"] is False and v["repos"][key_b]["parked"] is False
     assert _judge(LATER)["repos"][key_b]["rows"] == 1      # still there after the rewrite
+
+
+def test_compaction_keeps_a_main_checkouts_last_row_beside_its_worktrees():
+    # Breaks if a registered linked worktree's newer row stands in for its
+    # main checkout's own last row at compaction (drain review 866a2e): the
+    # judge counts that row for the worktree only, so the main checkout would
+    # read as "no rows" and its red row would be gone.
+    main_red = _row(R_A, 300, red=("resolvers_ok",), run_id="main-last")
+    wt_green = _row(R_B, 200, run_id="wt-last")
+    rows = _entries_rows([main_red, wt_green])
+    wt_green["worktree_of"] = main_red["repo"]
+    _seed(rows)
+    v = _judge()
+    kept = [json.loads(ln)["run_id"] for ln in
+            fleet.health_path().read_text(encoding="utf-8").splitlines()]
+    assert sorted(kept) == ["main-last", "wt-last"]
+    key_a = next(k for k, r in v["repos"].items() if r["name"] == "a")
+    again = _judge(LATER)["repos"][key_a]
+    assert again["rows"] == 1 and again["green"] is False and again["parked"] is False

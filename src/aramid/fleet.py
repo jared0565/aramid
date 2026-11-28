@@ -781,10 +781,15 @@ def _post_defects(rows: list[dict], registered: dict[str, str], policy: Policy,
                 notices.clear(n["id"], reason="defect absent from latest row", now=now)
 
 
-def _row_owners(row: dict) -> list[str]:
-    """The registry keys a stored row can count for: its own repo and, for a
-    row written in a linked worktree, the main checkout (`judge`)."""
-    return [k for k in (row.get("repo"), row.get("worktree_of")) if isinstance(k, str)]
+def _row_owners(row: dict) -> list[tuple[str, str]]:
+    """The registry keys a stored row can count for, each with the way it
+    counts: `repo`, its own, and `worktree_of`, the main checkout of a row
+    written in a linked worktree (`judge`). The two are kept apart so a
+    worktree's row never stands in for the main checkout's own newest row:
+    with both registered the judge counts it for the worktree only (drain
+    review 866a2e)."""
+    return [(field, row[field]) for field in ("repo", "worktree_of")
+            if isinstance(row.get(field), str)]
 
 
 def _maybe_compact(previous: dict | None, now: str) -> str | None:
@@ -819,7 +824,7 @@ def _maybe_compact(previous: dict | None, now: str) -> str | None:
     keep_lines: list[str] = []
     dropped = 0
     parsed: list[tuple[str, dict | None, datetime | None]] = []
-    newest: dict[str, datetime] = {}
+    newest: dict[tuple[str, str], datetime] = {}
     for line in text.splitlines():
         if not line.strip():
             continue
